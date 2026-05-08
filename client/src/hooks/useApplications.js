@@ -5,8 +5,8 @@ import apiClient from '../utils/api';
 const cache = new Map();
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
-function getCacheKey(page, limit, search, status, year, gender, firstGen, transfer) {
-  return `applications:${page}:${limit}:${search}:${status}:${year}:${gender}:${firstGen}:${transfer}`;
+function getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning) {
+  return `applications:${page}:${limit}:${search}:${status}:${year}:${gender}:${firstGen}:${transfer}:${returning}`;
 }
 
 function getFromCache(key) {
@@ -42,6 +42,7 @@ export function useApplications(options = {}) {
     gender = null,
     firstGen = null,
     transfer = null,
+    returning = null,
     enabled = true,
   } = options;
 
@@ -53,7 +54,7 @@ export function useApplications(options = {}) {
   const fetchApplications = useCallback(async (skipCache = false) => {
     if (!enabled) return;
 
-    const cacheKey = getCacheKey(page, limit, search, status, year, gender, firstGen, transfer);
+    const cacheKey = getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning);
 
     // Check cache first
     if (!skipCache) {
@@ -77,6 +78,7 @@ export function useApplications(options = {}) {
       if (gender) params.append('gender', gender);
       if (firstGen) params.append('firstGen', firstGen);
       if (transfer) params.append('transfer', transfer);
+      if (returning) params.append('returning', returning);
 
       const response = await apiClient.get(`/applications?${params.toString()}`);
 
@@ -115,7 +117,7 @@ export function useApplications(options = {}) {
         setLoading(false);
       }
     }
-  }, [page, limit, search, status, year, gender, firstGen, transfer, enabled]);
+  }, [page, limit, search, status, year, gender, firstGen, transfer, returning, enabled]);
 
   useEffect(() => {
     isMounted.current = true;
