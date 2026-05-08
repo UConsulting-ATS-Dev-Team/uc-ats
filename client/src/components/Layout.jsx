@@ -15,11 +15,19 @@ import {
   CalendarDaysIcon,
   UserGroupIcon as UserGroupIcon2,
   ChatBubbleLeftRightIcon,
-  ChatBubbleOvalLeftEllipsisIcon
+  ChatBubbleOvalLeftEllipsisIcon,
+  LightBulbIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
+import FeatureRequestModal from './FeatureRequestModal';
 import '../styles/Layout.css';
+
+const FEATURE_REQUEST_NAV = {
+  name: 'Request a feature',
+  icon: LightBulbIcon,
+  isFeatureRequest: true,
+};
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -27,6 +35,7 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [messageModalOpen, setMessageModalOpen] = useState(false);
+  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -42,6 +51,7 @@ const Layout = ({ children }) => {
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Recruitment Resources and Timeline', href: '/recruitment-resources', icon: ClipboardDocumentListIcon },
+      FEATURE_REQUEST_NAV,
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
@@ -55,9 +65,11 @@ const Layout = ({ children }) => {
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
+      FEATURE_REQUEST_NAV,
     ] : [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
+      FEATURE_REQUEST_NAV,
     ])
   ];
 
@@ -123,10 +135,28 @@ const Layout = ({ children }) => {
                 const Icon = item.icon;
                 const current = isCurrentPath(item.href);
                 
+                if (item.isFeatureRequest) {
+                  return (
+                    <button
+                      key={item.name}
+                      type="button"
+                      onClick={() => {
+                        setFeatureRequestOpen(true);
+                        setSidebarOpen(false);
+                      }}
+                      className="nav-item"
+                    >
+                      <Icon className="nav-icon" />
+                      {item.name}
+                    </button>
+                  );
+                }
+
                 if (item.isAction) {
                   return (
                     <button
                       key={item.name}
+                      type="button"
                       onClick={() => {
                         setMessageModalOpen(true);
                         setSidebarOpen(false);
@@ -177,6 +207,10 @@ const Layout = ({ children }) => {
       <MessageAdminModal 
         open={messageModalOpen} 
         onClose={() => setMessageModalOpen(false)} 
+      />
+      <FeatureRequestModal
+        open={featureRequestOpen}
+        onClose={() => setFeatureRequestOpen(false)}
       />
     </div>
   );
