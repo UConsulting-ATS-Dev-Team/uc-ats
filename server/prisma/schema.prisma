@@ -39,6 +39,8 @@ model User {
   memberEventRsvp            MemberEventRsvp[]
   resumeScores               ResumeScore[]
   videoScores                VideoScore[]
+  conversationParticipants   ConversationParticipant[]       @relation("ConversationParticipantUser")
+  sentMessages               Message[]                       @relation("MessageSender")
 
   @@map("users")
 }
@@ -589,6 +591,57 @@ model BehavioralQuestion {
   @@index([groupId])
   @@index([createdBy])
   @@map("behavioral_questions")
+}
+
+model Conversation {
+  id           String                    @id @default(uuid())
+  contextType  ConversationContextType
+  contextId    String?
+  title        String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@unique([contextType, contextId])
+  @@index([contextType, contextId])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid())
+  conversationId String
+  userId         String
+  joinedAt       DateTime     @default(now())
+  lastReadAt     DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation("ConversationParticipantUser", fields: [userId], references: [id])
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  senderId       String
+  body           String
+  createdAt      DateTime     @default(now())
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+enum ConversationContextType {
+  INTERVIEW
+  APPLICATION
+  CYCLE
+  DIRECT_MESSAGE
 }
 
 enum UserRole {

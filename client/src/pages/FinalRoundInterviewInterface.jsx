@@ -19,6 +19,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import '../styles/FinalRoundInterviewInterface.css';
 
 export default function FinalRoundInterviewInterface() {
@@ -838,6 +839,7 @@ export default function FinalRoundInterviewInterface() {
             title={preview.title}
           />
         )}
+        <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
       </div>
     </AccessControl>
   );

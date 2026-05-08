@@ -8,6 +8,7 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import '../styles/InterviewInterface.css';
 
 export default function InterviewInterface() {
@@ -639,6 +640,7 @@ export default function InterviewInterface() {
           </div>
         </div>
       )}
+      <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
     </div>
     </AccessControl>
   );

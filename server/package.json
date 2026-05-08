@@ -21,6 +21,7 @@
     "@google-cloud/local-auth": "^3.0.1",
     "@googleapis/forms": "^2.5.1",
     "@prisma/client": "^6.11.1",
+    "@supabase/supabase-js": "^2.105.3",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "date-fns": "^3.0.0",
