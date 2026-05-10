@@ -300,6 +300,70 @@ router.get('/', async (req, res) => {
     if (transfer === 'false') whereClause.isTransferStudent = false;
     if (statusFilter) whereClause.status = statusFilter;
 
+    // Returning is a computed value, so resolve it before count/pagination.
+    // This keeps page sizes, totals, and page counts aligned with the filter.
+    if (returning === 'true' || returning === 'false') {
+      const matchingApplications = await prisma.application.findMany({
+        where: whereClause,
+        select: {
+          id: true,
+          candidateId: true,
+          studentId: true
+        }
+      });
+
+      const candidateIds = [...new Set(matchingApplications.map(app => app.candidateId).filter(Boolean))];
+      const studentIds = [...new Set(matchingApplications.map(app => app.studentId).filter(Boolean))];
+
+      const [pastAppCountsByCandidateId, pastAppCountsByStudentId] = await Promise.all([
+        candidateIds.length > 0
+          ? prisma.application.groupBy({
+              by: ['candidateId'],
+              where: {
+                candidateId: { in: candidateIds },
+                cycleId: { not: activeCycle.id }
+              },
+              _count: { id: true }
+            })
+          : [],
+        studentIds.length > 0
+          ? prisma.application.groupBy({
+              by: ['studentId'],
+              where: {
+                studentId: { in: studentIds },
+                cycleId: { not: activeCycle.id }
+              },
+              _count: { id: true }
+            })
+          : []
+      ]);
+
+      const pastAppCountMapByCandidateId = new Map(
+        pastAppCountsByCandidateId.map(p => [p.candidateId, p._count.id])
+      );
+      const pastAppCountMapByStudentId = new Map(
+        pastAppCountsByStudentId.map(p => [p.studentId, p._count.id])
+      );
+
+      const shouldReturnReturningApplicants = returning === 'true';
+      const matchingApplicationIds = matchingApplications
+        .filter(application => {
+          let pastApplicationCount = 0;
+          if (application.candidateId && pastAppCountMapByCandidateId.has(application.candidateId)) {
+            pastApplicationCount = pastAppCountMapByCandidateId.get(application.candidateId);
+          } else if (application.studentId && pastAppCountMapByStudentId.has(application.studentId)) {
+            pastApplicationCount = pastAppCountMapByStudentId.get(application.studentId);
+          }
+
+          return shouldReturnReturningApplicants
+            ? pastApplicationCount > 0
+            : pastApplicationCount === 0;
+        })
+        .map(application => application.id);
+
+      whereClause.id = { in: matchingApplicationIds };
+    }
+
     // Get total count and paginated applications in parallel
     const [total, applications] = await Promise.all([
       prisma.application.count({ where: whereClause }),

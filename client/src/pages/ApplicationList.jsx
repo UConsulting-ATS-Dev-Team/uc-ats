@@ -73,20 +73,13 @@ export default function ApplicationList() {
     gender: appliedFilters.gender || null,
     firstGen: appliedFilters.firstGen || null,
     transfer: appliedFilters.transfer || null,
+    returning: appliedFilters.returning || null,
   });
 
-  // Transform applications data - apply client-side filter for returning (not supported server-side)
+  // Transform applications data
   const applicants = useMemo(() => {
-    let data = rawApplications || [];
-    // Filter by returning status client-side (computed field)
-    if (appliedFilters.returning) {
-      data = data.filter(app =>
-        (appliedFilters.returning === 'true' && app.isReturningApplicant) ||
-        (appliedFilters.returning === 'false' && !app.isReturningApplicant)
-      );
-    }
-    return data;
-  }, [rawApplications, appliedFilters.returning]);
+    return rawApplications || [];
+  }, [rawApplications]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -226,8 +219,8 @@ export default function ApplicationList() {
             />
           </div>
           <div className="results-count">
-            {appliedFilters.returning ? applicants.length : (pagination?.total || applicants.length)} candidate{(appliedFilters.returning ? applicants.length : (pagination?.total || applicants.length)) !== 1 ? 's' : ''}
-            {pagination && !appliedFilters.returning && pagination.totalPages > 1 && ` (page ${pagination.page} of ${pagination.totalPages})`}
+            {pagination?.total ?? applicants.length} candidate{(pagination?.total ?? applicants.length) !== 1 ? 's' : ''}
+            {pagination && pagination.totalPages > 1 && ` (page ${pagination.page} of ${pagination.totalPages})`}
           </div>
         </div>
       </div>
