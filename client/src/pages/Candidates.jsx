@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { 
+import {
   MagnifyingGlassIcon,
-  FunnelIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  ArrowTopRightOnSquareIcon
+  FunnelIcon
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
@@ -25,8 +22,6 @@ export default function Candidates() {
     firstGen: '',
     transfer: ''
   });
-  const [expandedId, setExpandedId] = useState(null);
-  const [scoreCache, setScoreCache] = useState({}); // key: candidateId -> { resume, cover, video }
   const [attendanceByAppId, setAttendanceByAppId] = useState({}); // key: applicationId -> array of attended keys
 
   useEffect(() => {
@@ -112,34 +107,6 @@ export default function Candidates() {
   };
 
   
-
-  const toggleExpand = async (app) => {
-    setExpandedId(prev => (prev === app.id ? null : app.id));
-    // Lazy-load averages when expanding
-    if (!scoreCache[app.candidateId]) {
-      try {
-        const cycleIdParam = app.cycleId ? `?cycleId=${app.cycleId}` : '';
-        const [resumeScores, coverScores, videoScores] = await Promise.allSettled([
-          apiClient.get(`/review-teams/resume-scores/${app.candidateId}${cycleIdParam}`),
-          apiClient.get(`/review-teams/cover-letter-scores/${app.candidateId}${cycleIdParam}`),
-          apiClient.get(`/review-teams/video-scores/${app.candidateId}${cycleIdParam}`)
-        ]);
-        const avg = (arr, key) => {
-          const list = Array.isArray(arr) ? arr : [];
-          const values = list.map(s => parseFloat(s[key] ?? s.overallScore ?? 0)).filter(v => !isNaN(v));
-          if (values.length === 0) return null;
-          const total = values.reduce((sum, v) => sum + v, 0);
-          return Math.round((total / values.length) * 10) / 10;
-        };
-        const resume = resumeScores.status === 'fulfilled' ? avg(resumeScores.value, 'overallScore') : null;
-        const cover = coverScores.status === 'fulfilled' ? avg(coverScores.value, 'overallScore') : null;
-        const video = videoScores.status === 'fulfilled' ? avg(videoScores.value, 'overallScore') : null;
-        setScoreCache(prev => ({ ...prev, [app.candidateId]: { resume, cover, video } }));
-      } catch (e) {
-        // Ignore; leave scores as null
-      }
-    }
-  };
 
   const getBadgeClass = (status) => {
     const s = (status || '').toUpperCase();
@@ -240,16 +207,12 @@ export default function Candidates() {
                 <th>Major / Year / GPA</th>
                 <th>Attendance</th>
                 <th>Referrals</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
               {normalized.map(app => {
-                const isExpanded = expandedId === app.id;
-                const scores = scoreCache[app.candidateId] || {};
                 return (
-                  <React.Fragment key={app.id}>
-                    <tr className="applications-row">
+                  <tr key={app.id} className="applications-row">
                       <td>
                         <div className="applicant-cell">
                           {app.headshotUrl ? (
@@ -291,39 +254,7 @@ export default function Candidates() {
                         )}
                       </td>
                       <td>N/A</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button className="btn-secondary small" onClick={() => toggleExpand(app)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {isExpanded ? 'Hide Details' : 'View Details'} {isExpanded ? <ChevronUpIcon className="btn-icon" /> : <ChevronDownIcon className="btn-icon" />}
-                        </button>
-                      </td>
                     </tr>
-                    {isExpanded && (
-                      <tr className="applications-details-row">
-                        <td colSpan={6}>
-                          <div className="details-grid">
-                            <div className="details-header">
-                              <div>Document</div>
-                              <div>Notes</div>
-                              <div style={{ textAlign: 'right' }}>Score</div>
-                            </div>
-                            {[{ key: 'resume', label: 'Resume', url: app.resumeUrl }, { key: 'cover', label: 'Cover Letter', url: app.coverLetterUrl }, { key: 'video', label: 'Video', url: app.videoUrl }].map(row => (
-                              <div key={row.key} className="details-row">
-                                <div>
-                                  <a href={row.url || '#'} target="_blank" rel="noreferrer" onClick={(e) => { if (!row.url) e.preventDefault(); }} className={`doc-link ${row.url ? '' : 'disabled'}`}>
-                                    {row.label} {row.url ? <ArrowTopRightOnSquareIcon style={{ width: 16, height: 16 }} /> : null}
-                                  </a>
-                                </div>
-                                <div className="doc-notes">—</div>
-                                <div style={{ textAlign: 'right' }}>
-                                  <span className="score-bubble">{scores[row.key] != null ? scores[row.key] : '—'}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
                 );
               })}
             </tbody>
