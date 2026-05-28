@@ -1,6 +1,6 @@
 import express from 'express';
-import prisma from '../prismaClient.js'; 
-import { requireAuth } from '../middleware/auth.js';
+import prisma from '../prismaClient.js';
+import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 import { getFormQuestions, getResponses } from '../services/google/forms.js';
 import config from '../config.js';
 
@@ -126,7 +126,7 @@ router.get('/test-google-api', async (req, res) => {
 router.use(requireAuth);
 
 // Create manual application
-router.post('/manual', async (req, res) => {
+router.post('/manual', requireAdmin, async (req, res) => {
   try {
     
     const {
@@ -482,7 +482,7 @@ router.get('/', async (req, res) => {
 });
 
 // Comments: list for an application
-router.get('/:id/comments', async (req, res) => {
+router.get('/:id/comments', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const comments = await prisma.comment.findMany({
@@ -498,7 +498,7 @@ router.get('/:id/comments', async (req, res) => {
 });
 
 // Get latest grades for an application and user (for the old grading system compatibility)
-router.get('/:id/grades/latest', async (req, res) => {
+router.get('/:id/grades/latest', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -541,7 +541,7 @@ router.get('/:id/grades/latest', async (req, res) => {
 });
 
 // Get average grades for an application (for the old grading system compatibility)
-router.get('/:id/grades/average', async (req, res) => {
+router.get('/:id/grades/average', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -615,7 +615,7 @@ router.get('/:id/grades/average', async (req, res) => {
 });
 
 // Save grades for an application (for the old grading system compatibility)
-router.post('/:id/grades', async (req, res) => {
+router.post('/:id/grades', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -679,7 +679,7 @@ router.post('/:id/grades', async (req, res) => {
 });
 
 // Comments: add to an application
-router.post('/:id/comments', async (req, res) => {
+router.post('/:id/comments', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const { content } = req.body;
@@ -798,6 +798,20 @@ router.get('/:id', async (req, res) => {
 
     if (!application) {
       return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'MEMBER') {
+      const ownsByEmail = req.user.email && (
+        application.email === req.user.email ||
+        application.candidate?.email === req.user.email
+      );
+      const ownsByStudentId = req.user.studentId && (
+        application.studentId === req.user.studentId ||
+        application.candidate?.studentId === req.user.studentId
+      );
+      if (!ownsByEmail && !ownsByStudentId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     }
 
     // Fetch past applications for this applicant (excluding current application)

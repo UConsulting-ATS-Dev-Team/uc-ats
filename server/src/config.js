@@ -16,18 +16,32 @@ if (process.env.FORM_CONFIG_PATH) {
   }
 }
 
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET is required. Set it in the environment before starting the server.');
+}
+
+if (!process.env.MEMBER_REGISTRATION_TOKEN) {
+  throw new Error('MEMBER_REGISTRATION_TOKEN is required. Set it in the environment before starting the server.');
+}
+
+const isProduction = process.env.NODE_ENV === 'production';
+
 const config = {
   port: process.env.PORT || 3001,
-  jwtSecret: process.env.JWT_SECRET || 'fallback-secret-key', 
+  jwtSecret: process.env.JWT_SECRET,
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
+
+  memberRegistrationToken: process.env.MEMBER_REGISTRATION_TOKEN,
 
   dbUrl: process.env.DATABASE_URL,
   gCloudKeyPath: process.env.GOOGLE_CLOUD_KEY_PATH ? path.resolve(process.env.GOOGLE_CLOUD_KEY_PATH) : null,
-  
-  // Base URL for file serving - defaults based on environment
-  baseUrl: process.env.BASE_URL || (process.env.NODE_ENV === 'production' ? 'https://uconsultingats.com' : 'http://localhost:3001'),
-  
-  // Client URL for frontend links (password reset, etc.) - defaults based on environment
-  clientUrl: process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? 'https://uconsultingats.com' : 'http://localhost:5173'),
+
+  baseUrl: process.env.BASE_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:3001'),
+  clientUrl: process.env.CLIENT_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173'),
+
+  corsOrigin: process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
+    : (isProduction ? ['https://uconsultingats.com'] : ['http://localhost:5173']),
 
   form: formConfig,
 };
