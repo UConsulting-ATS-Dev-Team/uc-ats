@@ -762,7 +762,7 @@ export default function CandidateManagement() {
                 </FormControl>
             </Stack>
 
-            <TableContainer component={Paper}>
+            <TableContainer component={Paper} className="responsive-table">
                 <Table>
                     <TableHead>
                         <TableRow>
@@ -792,13 +792,13 @@ export default function CandidateManagement() {
                                                 : 'action.hover'
                                         }
                                     }}>
-                                    <TableCell sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.name}</TableCell>
-                                    <TableCell sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.email}</TableCell>
-                                    <TableCell>
+                                    <TableCell data-label="Name" sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.name}</TableCell>
+                                    <TableCell data-label="Email" sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.email}</TableCell>
+                                    <TableCell data-label="Current Round">
                                         <StatusIndicator status={candidate.status} />
                                     </TableCell>
-                                    <TableCell sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.gpa}</TableCell>
-                                    <TableCell>
+                                    <TableCell data-label="Cumulative GPA" sx={{ opacity: isFinalized ? 0.8 : 1 }}>{candidate.gpa}</TableCell>
+                                    <TableCell data-label="Approval Status">
                                         <TableCell>
                                             <ApprovalIndicator
                                                 approved={candidate.approved}
@@ -808,7 +808,7 @@ export default function CandidateManagement() {
                                             />
                                         </TableCell>
                                     </TableCell>
-                                    <TableCell>
+                                    <TableCell data-label="Actions">
                                         <Stack direction="row" spacing={1}>
                                             <IconButton
                                                 size="small"

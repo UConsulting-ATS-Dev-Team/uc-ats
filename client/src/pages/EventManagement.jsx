@@ -444,9 +444,10 @@ export default function EventManagement() {
           },
         },
       }}>
-        <TableContainer 
-          component={Paper} 
-          sx={{ 
+        <TableContainer
+          component={Paper}
+          className="responsive-table"
+          sx={{
             minWidth: 'max-content',
             width: 'max-content',
             overflow: 'visible'
@@ -455,16 +456,16 @@ export default function EventManagement() {
           <Table sx={{ minWidth: 1400, width: 'max-content' }}>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ minWidth: 200 }}>Event Name</TableCell>
-              <TableCell sx={{ minWidth: 150 }}>Start Date</TableCell>
-              <TableCell sx={{ minWidth: 150 }}>End Date</TableCell>
-              <TableCell sx={{ minWidth: 120 }}>Location</TableCell>
-              <TableCell sx={{ minWidth: 100 }}>Cycle</TableCell>
-              <TableCell sx={{ minWidth: 140 }}>Show to Candidates</TableCell>
-              <TableCell sx={{ minWidth: 200 }}>RSVP</TableCell>
-              <TableCell sx={{ minWidth: 200 }}>Attendance</TableCell>
-              <TableCell sx={{ minWidth: 200 }}>Member RSVP</TableCell>
-              <TableCell align="right" sx={{ minWidth: 120 }}>Actions</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Event Name</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 150 } }}>Start Date</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 150 } }}>End Date</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 120 } }}>Location</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 100 } }}>Cycle</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 140 } }}>Show to Candidates</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>RSVP</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Attendance</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member RSVP</TableCell>
+              <TableCell align="right" sx={{ minWidth: { xs: 'auto', md: 120 } }}>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -484,20 +485,20 @@ export default function EventManagement() {
               
                 return (
                   <TableRow key={event.id}>
-                  <TableCell>{event.eventName}</TableCell>
-                  <TableCell>{formatDateTime(event.eventStartDate)}</TableCell>
-                  <TableCell>{formatDateTime(event.eventEndDate)}</TableCell>
-                  <TableCell>{event.eventLocation || '-'}</TableCell>
-                  <TableCell>{getCycleName(event.cycleId)}</TableCell>
-                  <TableCell>
-                    <Chip 
-                      label={event.showToCandidates ? 'Yes' : 'No'} 
-                      size="small" 
-                      color={event.showToCandidates ? 'success' : 'default'} 
+                  <TableCell data-label="Event Name">{event.eventName}</TableCell>
+                  <TableCell data-label="Start Date">{formatDateTime(event.eventStartDate)}</TableCell>
+                  <TableCell data-label="End Date">{formatDateTime(event.eventEndDate)}</TableCell>
+                  <TableCell data-label="Location">{event.eventLocation || '-'}</TableCell>
+                  <TableCell data-label="Cycle">{getCycleName(event.cycleId)}</TableCell>
+                  <TableCell data-label="Show to Candidates">
+                    <Chip
+                      label={event.showToCandidates ? 'Yes' : 'No'}
+                      size="small"
+                      color={event.showToCandidates ? 'success' : 'default'}
                       variant="outlined"
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="RSVP">
                     <Stack spacing={1} alignItems="flex-start">
                       {event.rsvpForm ? (
                         <>
@@ -530,7 +531,7 @@ export default function EventManagement() {
                       )}
                     </Stack>
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="Attendance">
                     <Stack spacing={1} alignItems="flex-start">
                       {event.attendanceForm ? (
                         <>
@@ -563,7 +564,7 @@ export default function EventManagement() {
                       )}
                     </Stack>
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="Member RSVP">
                     <Stack spacing={1} alignItems="flex-start">
                       {event.memberRsvpUrl ? (
                         <>
@@ -596,7 +597,7 @@ export default function EventManagement() {
                       )}
                     </Stack>
                   </TableCell>
-                  <TableCell align="right">
+                  <TableCell data-label="Actions" align="right">
                     <Stack direction="row" spacing={1}>
                       <Tooltip title="Add to Google Calendar">
                         <IconButton

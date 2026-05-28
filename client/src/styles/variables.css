@@ -93,3 +93,58 @@
     min-height: var(--touch-target-min);
   }
 }
+
+/* Responsive table → card list transformation on mobile.
+   Opt in by adding className="responsive-table" to a <TableContainer> (or any
+   wrapper around the <table>). Each body <td> needs data-label="Column Name"
+   for the field label. Header row is hidden and each row becomes a card. */
+@media (max-width: 768px) {
+  .responsive-table table,
+  .responsive-table thead,
+  .responsive-table tbody,
+  .responsive-table tr,
+  .responsive-table td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .responsive-table thead {
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+  }
+
+  .responsive-table tr {
+    border: 1px solid var(--border-light);
+    border-radius: var(--border-radius);
+    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--bg-white);
+  }
+
+  .responsive-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.5rem 0;
+    border: none;
+    text-align: right;
+    min-height: auto;
+    height: auto !important;
+  }
+
+  .responsive-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: left;
+    flex-shrink: 0;
+  }
+
+  .responsive-table td:empty,
+  .responsive-table td[data-label=""] {
+    display: none;
+  }
+}
