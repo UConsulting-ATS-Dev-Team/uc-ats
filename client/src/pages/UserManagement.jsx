@@ -232,7 +232,7 @@ const UserManagement = () => {
       minWidth: 0
     }}>
                   {/* Header */}
-          <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+          <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" spacing={{ xs: 2, md: 0 }} mb={2}>
             <Box>
               <Typography variant="h4" gutterBottom>
                 User Management
@@ -241,7 +241,7 @@ const UserManagement = () => {
                 Manage user accounts, roles, and permissions
               </Typography>
             </Box>
-            <Stack direction="row" spacing={2}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ width: { xs: '100%', md: 'auto' } }}>
               <Button
                 variant="outlined"
                 startIcon={<ContentCopyIcon />}

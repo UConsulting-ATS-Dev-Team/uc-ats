@@ -231,7 +231,7 @@ export default function Candidates() {
           <p>Try adjusting your search or filters.</p>
         </div>
       ) : (
-        <div className="applications-table-wrapper">
+        <div className="applications-table-wrapper responsive-table">
           <table className="applications-table">
             <thead>
               <tr>
@@ -250,7 +250,7 @@ export default function Candidates() {
                 return (
                   <React.Fragment key={app.id}>
                     <tr className="applications-row">
-                      <td>
+                      <td data-label="Applicant">
                         <div className="applicant-cell">
                           {app.headshotUrl ? (
                             <img
@@ -269,11 +269,11 @@ export default function Candidates() {
                           </div>
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <span className={getBadgeClass(app.status)}>{(app.status || '').replace('_', ' ')}</span>
                       </td>
-                      <td>{app.major} • {app.year} • GPA: {app.gpa}</td>
-                      <td>
+                      <td data-label="Major / Year / GPA">{app.major} • {app.year} • GPA: {app.gpa}</td>
+                      <td data-label="Attendance">
                         {attendanceByAppId[app.id] ? (
                           <div className="attendance-inline">
                             {attendanceByAppId[app.id].includes('Info Session') && (
@@ -290,8 +290,8 @@ export default function Candidates() {
                           <span style={{ color: '#94a3b8' }}>—</span>
                         )}
                       </td>
-                      <td>N/A</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td data-label="Referrals">N/A</td>
+                      <td data-label="" style={{ textAlign: 'right' }}>
                         <button className="btn-secondary small" onClick={() => toggleExpand(app)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           {isExpanded ? 'Hide Details' : 'View Details'} {isExpanded ? <ChevronUpIcon className="btn-icon" /> : <ChevronDownIcon className="btn-icon" />}
                         </button>
