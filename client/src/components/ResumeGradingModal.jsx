@@ -7,6 +7,7 @@ import {
   Typography,
   TextField,
   Button,
+  IconButton,
   Grid,
   Paper,
   Rating,
@@ -25,10 +26,12 @@ import {
   Description as DocumentIcon
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
+import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 
 const ResumeGradingModal = ({ open, onClose, application }) => {
   const { user, token } = useAuth();
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -198,36 +201,44 @@ const ResumeGradingModal = ({ open, onClose, application }) => {
       onClose={onClose}
       maxWidth="lg"
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
         sx: {
-          height: '90vh',
-          maxHeight: '90vh'
+          height: { xs: '100%', md: '90vh' },
+          maxHeight: { xs: '100%', md: '90vh' }
         }
       }}
     >
-      <DialogTitle sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <DialogTitle sx={{
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
         borderBottom: 1,
-        borderColor: 'divider'
+        borderColor: 'divider',
+        gap: 1
       }}>
-        <Box>
-          <Typography variant="h6" component="div">
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h6" component="div" noWrap>
             Resume Grading - {application.name}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" noWrap>
             {application.major} • {application.year}
           </Typography>
         </Box>
-        <Button
-          onClick={onClose}
-          startIcon={<CloseIcon />}
-          variant="outlined"
-          size="small"
-        >
-          Close
-        </Button>
+        {isMobile ? (
+          <IconButton onClick={onClose} aria-label="close">
+            <CloseIcon />
+          </IconButton>
+        ) : (
+          <Button
+            onClick={onClose}
+            startIcon={<CloseIcon />}
+            variant="outlined"
+            size="small"
+          >
+            Close
+          </Button>
+        )}
       </DialogTitle>
 
       <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
