@@ -267,3 +267,83 @@ Modified files in current session:
 - [server/src/utils/eventDataMapper.js](server/src/utils/eventDataMapper.js) - Event response mapping logic
 
 Active branch: `main`
+
+
+---
+
+## Development Principles
+
+
+0. **Create Worktrees and PRs** Create a gitworktree per session. In that worktree, modify Claude.MD to adapt to the specific task that the worktree is dedicated to. Once all work is done, submit a PR request resolving to the issue number given to you. 
+1. **Ask before assuming.** If a requirement is ambiguous, ask a specific question before writing any code. Do NOT guess or pick a default silently.
+2. **No assumptions.** If a UI behavior, field mapping, or flow step is unclear, stop and ask.
+3. **No extra features.** Build exactly what is described. No added error handling, animations, helper abstractions, or UX improvements unless explicitly requested.
+4. **No comments** unless the WHY is non-obvious.
+5. **Never delete Limit records** — only update status.
+6. **Config over hardcoding.** Backend URL and all external keys go in `Config.swift`.
+7. **Test flows before declaring done.** Trace the full happy path before reporting complete.
+8. **Keep this file current.** When you add a screen, change a model, or shift architecture, update the relevant section (Implementation Status, Next Steps, file structure, design system, business rules) in the same change. Use judgement — concise updates only, don't let it overinflate.
+9. **Never write Django migrations by hand.** When a model changes, edit `models.py` and prompt the user to run `python manage.py makemigrations` (and then `migrate`). Do not author files under `Backend/stalemate/api/migrations/`.
+10. **Don't run `xcodebuild` from the CLI** to verify a feature is "done". Xcode and CLI builds share the same DerivedData / `build.db` and will deadlock with `database is locked` whenever the user has Xcode open. Trust the in-editor build the user runs themselves; if a compile check is genuinely needed, use the linter / type-check tools, or ask the user to build and paste errors. Only acceptable exception: a one-off pre-flight build right after major scaffolding (e.g. adding a new target) where the user explicitly is not in Xcode.
+
+# MUST FOLLOWS
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
