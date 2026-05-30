@@ -9,6 +9,7 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
+import { useCelebration } from '../context/CelebrationContext';
 import '../styles/InterviewInterface.css';
 
 export default function InterviewInterface() {
@@ -16,6 +17,8 @@ export default function InterviewInterface() {
   const [searchParams] = useSearchParams();
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
+  
+  const { triggerCelebration } = useCelebration();
   
   const [interview, setInterview] = useState(null);
   const [applications, setApplications] = useState([]);
@@ -225,6 +228,7 @@ export default function InterviewInterface() {
       });
       
       alert('Evaluation saved successfully');
+      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluation:', error);
       alert('Failed to save evaluation');
@@ -249,6 +253,7 @@ export default function InterviewInterface() {
       await Promise.all(promises);
       setAllEvaluationsSaved(true);
       setShowNextActionModal(true);
+      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert('Failed to save evaluations');
