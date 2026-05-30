@@ -488,10 +488,6 @@ export default function AssignedInterviews() {
     setBehavioralQuestionsConfig(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleViewDeliberations = () => {
-    navigate('/deliberations');
-  };
-
   const handleSelectInterview = (id) => {
     setSelectedInterviewId(id);
   };
@@ -1204,17 +1200,6 @@ export default function AssignedInterviews() {
                   >
                     <PlayIcon className="btn-icon" />
                     Start Interview
-                  </button>
-                  <button 
-                    className="btn-secondary interview-action-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedInterviewId(interview.id);
-                      handleViewDeliberations();
-                    }}
-                  >
-                    <EyeIcon className="btn-icon" />
-                    Deliberations
                   </button>
                 </div>
               </div>
