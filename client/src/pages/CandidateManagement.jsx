@@ -46,8 +46,12 @@ const adminAPI = {
         return await apiClient.get('/admin/stats');
     },
 
-    async fetchCandidates() {
-        return await apiClient.get('/admin/candidates');
+    async fetchCandidates(eventAttendanceEventId, eventRsvpEventId) {
+        const params = new URLSearchParams();
+        if (eventAttendanceEventId) params.append('eventAttendanceEventId', eventAttendanceEventId);
+        if (eventRsvpEventId) params.append('eventRsvpEventId', eventRsvpEventId);
+        const queryString = params.toString();
+        return await apiClient.get(`/admin/candidates${queryString ? '?' + queryString : ''}`);
     },
 
     async updateApproval(candidateId, approved) {
@@ -389,6 +393,9 @@ export default function CandidateManagement() {
 
     const [statusFilter, setStatusFilter] = useState('all');
     const [approvalFilter, setApprovalFilter] = useState('all');
+    const [eventAttendanceFilter, setEventAttendanceFilter] = useState('');
+    const [eventRsvpFilter, setEventRsvpFilter] = useState('');
+    const [events, setEvents] = useState([]);
 
     const [bulkAdvanceDialogOpen, setBulkAdvanceDialogOpen] = useState(false);
 
@@ -408,7 +415,7 @@ export default function CandidateManagement() {
 
             const [statsData, candidatesData] = await Promise.all([
                 adminAPI.fetchStats(),
-                adminAPI.fetchCandidates()
+                adminAPI.fetchCandidates(eventAttendanceFilter, eventRsvpFilter)
             ]);
 
             const transformedCandidates = candidatesData.map(app => ({
@@ -639,9 +646,22 @@ export default function CandidateManagement() {
             return 0;
         });
 
+    // Fetch events for filter dropdowns
+    useEffect(() => {
+        const fetchEvents = async () => {
+            try {
+                const data = await apiClient.get('/admin/events');
+                setEvents(data || []);
+            } catch (err) {
+                console.error('Error loading events:', err);
+            }
+        };
+        fetchEvents();
+    }, []);
+
     useEffect(() => {
         fetchDashboardData();
-    }, []);
+    }, [eventAttendanceFilter, eventRsvpFilter]);
 
     if (loading) {
         return (
@@ -731,7 +751,7 @@ export default function CandidateManagement() {
                 </Stack>
             </Stack>
 
-            <Stack direction="row" spacing={2} mb={3}>
+            <Stack direction="row" spacing={2} mb={3} flexWrap="wrap" useFlexGap>
                 <FormControl size="small" sx={{ minWidth: 150 }}>
                     <InputLabel>Round Filter</InputLabel>
                     <Select
@@ -758,6 +778,38 @@ export default function CandidateManagement() {
                         <MenuItem value="approved">Approved</MenuItem>
                         <MenuItem value="rejected">Rejected</MenuItem>
                         <MenuItem value="pending">Pending</MenuItem>
+                    </Select>
+                </FormControl>
+
+                <FormControl size="small" sx={{ minWidth: 180 }}>
+                    <InputLabel>Event Attendance</InputLabel>
+                    <Select
+                        value={eventAttendanceFilter}
+                        label="Event Attendance"
+                        onChange={(e) => setEventAttendanceFilter(e.target.value)}
+                    >
+                        <MenuItem value="">All</MenuItem>
+                        {events.map(event => (
+                            <MenuItem key={`att-${event.id}`} value={event.id}>
+                                Attended: {event.eventName}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+
+                <FormControl size="small" sx={{ minWidth: 180 }}>
+                    <InputLabel>Event RSVP</InputLabel>
+                    <Select
+                        value={eventRsvpFilter}
+                        label="Event RSVP"
+                        onChange={(e) => setEventRsvpFilter(e.target.value)}
+                    >
+                        <MenuItem value="">All</MenuItem>
+                        {events.map(event => (
+                            <MenuItem key={`rsvp-${event.id}`} value={event.id}>
+                                RSVP'd: {event.eventName}
+                            </MenuItem>
+                        ))}
                     </Select>
                 </FormControl>
             </Stack>

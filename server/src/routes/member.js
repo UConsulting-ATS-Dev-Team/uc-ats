@@ -133,10 +133,29 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
     // Search parameter
     const search = req.query.search?.trim() || '';
 
-    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}")`);
+    // Event attendance/RSVP filters
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
+    const eventRsvpEventId = req.query.eventRsvpEventId || '';
 
-    // Build where clause for search
+    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}", eventAttendance: "${eventAttendanceEventId}", eventRsvp: "${eventRsvpEventId}")`);
+
+    // Build where clause for search and event filters
     let whereClause = {};
+
+    // Event attendance filter
+    if (eventAttendanceEventId) {
+      whereClause.eventAttendance = {
+        some: { eventId: eventAttendanceEventId }
+      };
+    }
+
+    // Event RSVP filter
+    if (eventRsvpEventId) {
+      whereClause.eventRsvp = {
+        some: { eventId: eventRsvpEventId }
+      };
+    }
+
     if (search) {
       // Split search into words for full name matching
       const searchWords = search.split(/\s+/).filter(word => word.length > 0);

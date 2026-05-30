@@ -39,6 +39,8 @@ export function useCandidates(options = {}) {
     search = '',
     enabled = true,
     endpoint = '/admin/candidates',
+    eventAttendanceEventId = '',
+    eventRsvpEventId = '',
   } = options;
 
   const [data, setData] = useState({ candidates: [], pagination: null });
@@ -68,6 +70,8 @@ export function useCandidates(options = {}) {
       params.append('page', page.toString());
       params.append('limit', limit.toString());
       if (search) params.append('search', search);
+      if (eventAttendanceEventId) params.append('eventAttendanceEventId', eventAttendanceEventId);
+      if (eventRsvpEventId) params.append('eventRsvpEventId', eventRsvpEventId);
 
       const response = await apiClient.get(`${endpoint}?${params.toString()}`);
 
@@ -106,7 +110,7 @@ export function useCandidates(options = {}) {
         setLoading(false);
       }
     }
-  }, [page, limit, search, enabled, endpoint]);
+  }, [page, limit, search, enabled, endpoint, eventAttendanceEventId, eventRsvpEventId]);
 
   useEffect(() => {
     isMounted.current = true;

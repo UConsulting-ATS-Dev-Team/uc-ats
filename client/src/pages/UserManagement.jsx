@@ -51,6 +51,8 @@ const UserManagement = () => {
   const [showImageModal, setShowImageModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('ALL');
+  const [memberEventRsvpFilter, setMemberEventRsvpFilter] = useState('');
+  const [events, setEvents] = useState([]);
 
   // Form states
   const [createForm, setCreateForm] = useState({
@@ -69,6 +71,21 @@ const UserManagement = () => {
 
   const [imageFile, setImageFile] = useState(null);
 
+  // Fetch events for filter dropdown
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        const data = await apiClient.get('/admin/events');
+        setEvents(data || []);
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
+    if (user?.role === 'ADMIN') {
+      fetchEvents();
+    }
+  }, [user]);
+
   useEffect(() => {
     if (user?.role === 'ADMIN') {
       fetchUsers();
@@ -80,7 +97,11 @@ const UserManagement = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await apiClient.get('/admin/users');
+      const params = new URLSearchParams();
+      if (roleFilter !== 'ALL') params.append('role', roleFilter);
+      if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
+      const queryString = params.toString();
+      const response = await apiClient.get(`/admin/users${queryString ? '?' + queryString : ''}`);
       setUsers(response);
     } catch (err) {
       setError('Failed to fetch users');
@@ -202,11 +223,17 @@ const UserManagement = () => {
     setShowImageModal(true);
   };
 
+  // Re-fetch when filters change
+  useEffect(() => {
+    if (user?.role === 'ADMIN') {
+      fetchUsers();
+    }
+  }, [roleFilter, memberEventRsvpFilter]);
+
   const filteredUsers = users.filter(userItem => {
     const matchesSearch = userItem.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          userItem.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole = roleFilter === 'ALL' || userItem.role === roleFilter;
-    return matchesSearch && matchesRole;
+    return matchesSearch;
   });
 
   const getRoleColor = (role) => {
@@ -332,7 +359,7 @@ const UserManagement = () => {
                   size="small"
                 />
               </Grid>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Filter by Role</InputLabel>
                   <Select
@@ -344,6 +371,23 @@ const UserManagement = () => {
                     <MenuItem value="USER">User</MenuItem>
                     <MenuItem value="MEMBER">Member</MenuItem>
                     <MenuItem value="ADMIN">Admin</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Member Event RSVP</InputLabel>
+                  <Select
+                    value={memberEventRsvpFilter}
+                    label="Member Event RSVP"
+                    onChange={(e) => setMemberEventRsvpFilter(e.target.value)}
+                  >
+                    <MenuItem value="">All</MenuItem>
+                    {events.map(event => (
+                      <MenuItem key={`mrsvp-${event.id}`} value={event.id}>
+                        RSVP'd: {event.eventName}
+                      </MenuItem>
+                    ))}
                   </Select>
                 </FormControl>
               </Grid>
