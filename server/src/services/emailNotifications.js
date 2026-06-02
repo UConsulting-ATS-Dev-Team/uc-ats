@@ -1,7 +1,17 @@
 import nodemailer from 'nodemailer';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
 
-// Create reusable transporter object using SMTP transport
+// Escape candidate-controlled strings before interpolating into HTML email bodies.
+const escapeHtml = (value) => {
+  if (value === null || value === undefined) return value;
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
 const createTransporter = () => {
   return nodemailer.createTransport({
     service: 'Gmail',
@@ -14,8 +24,12 @@ const createTransporter = () => {
 
 // Email templates
 const createRSVPConfirmationEmail = (candidateName, eventName, eventDate, eventLocation) => {
+  const subjectName = eventName;
+  candidateName = escapeHtml(candidateName);
+  eventName = escapeHtml(eventName);
+  eventLocation = escapeHtml(eventLocation);
   return {
-    subject: `RSVP Confirmation - ${eventName}`,
+    subject: `RSVP Confirmation - ${subjectName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
@@ -58,8 +72,12 @@ const createRSVPConfirmationEmail = (candidateName, eventName, eventDate, eventL
 };
 
 const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, eventLocation) => {
+  const subjectName = eventName;
+  candidateName = escapeHtml(candidateName);
+  eventName = escapeHtml(eventName);
+  eventLocation = escapeHtml(eventLocation);
   return {
-    subject: `Attendance Confirmation - ${eventName}`,
+    subject: `Attendance Confirmation - ${subjectName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
@@ -167,8 +185,11 @@ export const formatEventDate = (date) => {
 
 // Create acceptance email template
 const createAcceptanceEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Congratulations! You've Advanced to Coffee Chats - ${currentCycleName}`,
+    subject: `Congratulations! You've Advanced to Coffee Chats - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #28a745; padding: 20px; text-align: center; color: white;">
@@ -217,8 +238,11 @@ const createAcceptanceEmail = (candidateName, currentCycleName) => {
 
 // Create rejection email template
 const createRejectionEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Update on Your Application - ${currentCycleName}`,
+    subject: `Update on Your Application - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
@@ -311,8 +335,11 @@ export const sendRejectionEmail = async (candidateEmail, candidateName, currentC
 
 // Create coffee chat acceptance email template (advancing to first round)
 const createCoffeeChatAcceptanceEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Congratulations! You've Advanced to First Round Interviews - ${currentCycleName}`,
+    subject: `Congratulations! You've Advanced to First Round Interviews - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #007bff; padding: 20px; text-align: center; color: white;">
@@ -362,8 +389,11 @@ const createCoffeeChatAcceptanceEmail = (candidateName, currentCycleName) => {
 
 // Create coffee chat rejection email template
 const createCoffeeChatRejectionEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Update on Your Application - ${currentCycleName}`,
+    subject: `Update on Your Application - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
@@ -420,8 +450,11 @@ const createCoffeeChatRejectionEmail = (candidateName, currentCycleName) => {
 
 // Create first round acceptance email template (advancing to final round)
 const createFirstRoundAcceptanceEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Congratulations! You've Advanced to Final Round - ${currentCycleName}`,
+    subject: `Congratulations! You've Advanced to Final Round - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #007bff; padding: 20px; text-align: center; color: white;">
@@ -470,8 +503,11 @@ const createFirstRoundAcceptanceEmail = (candidateName, currentCycleName) => {
 
 // Create first round rejection email template
 const createFirstRoundRejectionEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Update on Your Application - ${currentCycleName}`,
+    subject: `Update on Your Application - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
@@ -557,8 +593,11 @@ export const sendCoffeeChatRejectionEmail = async (candidateEmail, candidateName
 
 // Create final round acceptance email template
 const createFinalAcceptanceEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `🎉 Congratulations! You've Been Accepted to UConsulting - ${currentCycleName}`,
+    subject: `🎉 Congratulations! You've Been Accepted to UConsulting - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #28a745; padding: 20px; text-align: center; color: white;">
@@ -612,8 +651,11 @@ const createFinalAcceptanceEmail = (candidateName, currentCycleName) => {
 
 // Create final round rejection email template
 const createFinalRejectionEmail = (candidateName, currentCycleName) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
   return {
-    subject: `Update on Your Application - ${currentCycleName}`,
+    subject: `Update on Your Application - ${subjectCycle}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
@@ -745,6 +787,11 @@ export const sendFinalRejectionEmail = async (candidateEmail, candidateName, cur
 
 // Create meeting signup confirmation email template
 const createMeetingSignupConfirmationEmail = (candidateName, memberName, location, startTime, endTime) => {
+  candidateName = escapeHtml(candidateName);
+  memberName = escapeHtml(memberName);
+  location = escapeHtml(location);
+  startTime = escapeHtml(startTime);
+  endTime = escapeHtml(endTime);
   const formatDateTime = (date) => {
     return formatEmailDateTime(date);
   };
@@ -827,6 +874,14 @@ export const sendMeetingSignupConfirmation = async (candidateEmail, candidateNam
 
 // Create meeting signup notification email template for members
 const createMeetingSignupNotificationEmail = (memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
+  const subjectCandidate = candidateName;
+  memberName = escapeHtml(memberName);
+  candidateName = escapeHtml(candidateName);
+  candidateEmail = escapeHtml(candidateEmail);
+  studentId = escapeHtml(studentId);
+  location = escapeHtml(location);
+  startTime = escapeHtml(startTime);
+  endTime = escapeHtml(endTime);
   const formatDateTime = (date) => {
     return formatEmailDateTime(date);
   };
@@ -836,7 +891,7 @@ const createMeetingSignupNotificationEmail = (memberName, candidateName, candida
   };
 
   return {
-    subject: `New GTKUC Signup - ${candidateName} signed up for your slot`,
+    subject: `New GTKUC Signup - ${subjectCandidate} signed up for your slot`,
     html: `
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
@@ -905,6 +960,11 @@ export const sendMeetingSignupNotification = async (memberEmail, memberName, can
 
 // Create meeting cancellation email template
 const createMeetingCancellationEmail = (candidateName, memberName, location, startTime, endTime) => {
+  candidateName = escapeHtml(candidateName);
+  memberName = escapeHtml(memberName);
+  location = escapeHtml(location);
+  startTime = escapeHtml(startTime);
+  endTime = escapeHtml(endTime);
   const formatDateTime = (date) => {
     return formatEmailDateTime(date);
   };

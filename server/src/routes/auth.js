@@ -83,8 +83,9 @@ router.post('/register', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.status(201).json({
@@ -92,7 +93,7 @@ router.post('/register', async (req, res) => {
       user: userWithoutPassword,
       token
     });
-    
+
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Failed to create user' });
@@ -128,8 +129,9 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.json({
@@ -137,7 +139,7 @@ router.post('/login', async (req, res) => {
       user: userWithoutPassword,
       token
     });
-    
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
@@ -202,20 +204,15 @@ router.post('/forgot-password', async (req, res) => {
     });
 
     const resetLink = `${config.clientUrl}/reset-password?token=${resetToken}`;
-    console.log('Sending email to:', email);
-    console.log('Using user:', process.env.EMAIL_USER);
-    console.log('Reset link:', resetLink);
     await transporter.sendMail({
       from: `"UConsulting ATS" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Reset Your Password',
       html: `<p>You requested a password reset.</p>
              <p><a href="${resetLink}">Click here to reset your password</a></p>`
-    }, (err, info) => {
+    }, (err) => {
       if (err) {
-        console.error('Email send error:', err);
-      } else {
-        console.log('Email sent successfully:', info.response);
+        console.error('Password reset email send failed');
       }
     });
 
@@ -270,10 +267,8 @@ router.post('/reset-password', async (req, res) => {
 router.post('/register-member', async (req, res) => {
   try {
     const { email, password, fullName, graduationClass, studentId, accessToken } = req.body;
-    
-    // Verify access token
-    const requiredToken = 'member-access-2024';
-    if (!accessToken || accessToken !== requiredToken) {
+
+    if (!accessToken || accessToken !== config.memberRegistrationToken) {
       return res.status(403).json({ error: 'Unauthorized access' });
     }
     
@@ -324,8 +319,9 @@ router.post('/register-member', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.status(201).json({

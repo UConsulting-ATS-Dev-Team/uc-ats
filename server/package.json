@@ -30,6 +30,7 @@
     "express": "^5.1.0",
     "google-auth-library": "^9.15.1",
     "googleapis": "^149.0.0",
+    "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "node-cron": "^4.0.7",
