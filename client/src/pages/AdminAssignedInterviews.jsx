@@ -466,10 +466,6 @@ export default function AdminAssignedInterviews() {
     setShowBehavioralQuestionsConfig(false);
   };
 
-  const handleViewDeliberations = () => {
-    navigate('/admin/deliberations');
-  };
-
   const handleEditInterview = (interviewId) => {
     const interview = interviews.find(i => i.id === interviewId);
     setEditedInterview({...interview});
@@ -1550,17 +1546,6 @@ export default function AdminAssignedInterviews() {
                   >
                     <PlayIcon className="btn-icon" />
                     Start Interview
-                  </button>
-                  <button 
-                    className="btn-secondary interview-action-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedInterviewId(interview.id);
-                      handleViewDeliberations();
-                    }}
-                  >
-                    <EyeIcon className="btn-icon" />
-                    Deliberations
                   </button>
                 </div>
               </div>
