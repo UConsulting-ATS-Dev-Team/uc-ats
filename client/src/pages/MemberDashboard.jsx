@@ -9,19 +9,12 @@ import {
   Chip,
   IconButton,
   Grid,
-  Card,
-  CardContent,
-  CardActions,
-  CircularProgress,
-  Alert
+  CircularProgress
 } from '@mui/material';
 import {
-  Check as CheckIcon,
   Schedule as ClockIcon,
   Description as DocumentTextIcon,
   OpenInNew as ArrowTopRightOnSquareIcon,
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
   Download as ArrowDownTrayIcon,
   Group as GroupIcon,
   Person as PersonIcon
@@ -56,56 +49,9 @@ export default function MemberDashboard() {
     }
   ]);
 
-  const [timelineEvents, setTimelineEvents] = useState([]);
   const [userTeam, setUserTeam] = useState(null);
   const [teamLoading, setTeamLoading] = useState(true);
-  const [loading, setLoading] = useState(true);
   const [tasksLoading, setTasksLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [timelineScrollPosition, setTimelineScrollPosition] = useState(0);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  // Fetch events from the current recruitment cycle
-  const fetchTimelineEvents = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      // Fetch all events from member endpoint (no admin auth required)
-      const events = await apiClient.get('/member/events');
-      
-      // Sort by start date and map to timeline format
-      const timelineEvents = events
-        .sort((a, b) => new Date(a.eventStartDate) - new Date(b.eventStartDate))
-        .map(event => {
-          const eventDate = new Date(event.eventStartDate);
-          const now = new Date();
-          const isCompleted = eventDate < now;
-          
-          return {
-            id: event.id,
-            title: event.eventName,
-            date: eventDate.toLocaleDateString('en-US', {
-              month: 'numeric',
-              day: 'numeric',
-              year: '2-digit'
-            }),
-            status: isCompleted ? 'completed' : 'pending',
-            eventStartDate: event.eventStartDate,
-            eventEndDate: event.eventEndDate,
-            eventLocation: event.eventLocation
-          };
-        });
-      
-      setTimelineEvents(timelineEvents);
-    } catch (err) {
-      console.error('Error fetching timeline events:', err);
-      setError('Failed to load recruitment timeline events');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Fetch user's team information
   const fetchUserTeam = async () => {
@@ -219,46 +165,10 @@ export default function MemberDashboard() {
     }
   };
 
-  const handleTimelineScroll = (direction) => {
-    const timelineContainer = document.getElementById('member-timeline-container');
-    if (!timelineContainer) return;
-
-    const scrollAmount = 200; // pixels to scroll
-    const newPosition = direction === 'left' 
-      ? timelineScrollPosition - scrollAmount 
-      : timelineScrollPosition + scrollAmount;
-
-    timelineContainer.scrollTo({
-      left: newPosition,
-      behavior: 'smooth'
-    });
-
-    setTimelineScrollPosition(newPosition);
-  };
-
-  const updateScrollButtons = () => {
-    const timelineContainer = document.getElementById('member-timeline-container');
-    if (!timelineContainer) return;
-
-    const { scrollLeft, scrollWidth, clientWidth } = timelineContainer;
-    setCanScrollLeft(scrollLeft > 0);
-    setCanScrollRight(scrollLeft < scrollWidth - clientWidth);
-    setTimelineScrollPosition(scrollLeft);
-  };
-
   useEffect(() => {
-    fetchTimelineEvents();
     fetchUserTeam();
     fetchMemberTasks();
   }, [user?.id]);
-
-  // Update scroll button states when timeline events change
-  useEffect(() => {
-    if (timelineEvents.length > 0) {
-      // Use setTimeout to ensure DOM is updated
-      setTimeout(updateScrollButtons, 100);
-    }
-  }, [timelineEvents]);
 
   const handleStartTask = (task) => {
     if (task.type === 'document') {
@@ -307,137 +217,6 @@ export default function MemberDashboard() {
           Welcome, {user?.fullName}.
         </Typography>
       </Box>
-
-      {/* Recruitment Timeline Section */}
-      <Paper sx={{ p: 3, mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Typography variant="h5" component="h2" sx={{ fontWeight: 700, color: 'primary.dark' }}>
-            Recruitment Timeline
-          </Typography>
-          <Button
-            variant="text"
-            endIcon={<ArrowTopRightOnSquareIcon />}
-            onClick={() => handleViewMore('timeline')}
-            sx={{ color: 'primary.main' }}
-          >
-            View More
-          </Button>
-        </Box>
-        
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-            {error}
-          </Alert>
-        )}
-        
-        {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : timelineEvents.length === 0 ? (
-          <Box sx={{ textAlign: 'center', p: 4 }}>
-            <Typography variant="body1" color="text.secondary">
-              No events found for the current recruitment cycle.
-            </Typography>
-          </Box>
-        ) : (
-          <Box sx={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <IconButton
-              onClick={() => handleTimelineScroll('left')}
-              disabled={!canScrollLeft}
-              sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'grey.300',
-                '&:hover': { bgcolor: 'primary.main', color: 'white' },
-                '&:disabled': { 
-                  bgcolor: 'grey.50', 
-                  color: 'grey.400',
-                  borderColor: 'grey.200'
-                }
-              }}
-            >
-              <ChevronLeftIcon />
-            </IconButton>
-            
-            <Box 
-              id="member-timeline-container"
-              sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                flex: 1, 
-                mx: 2, 
-                gap: 4, 
-                overflowX: 'auto',
-                scrollbarWidth: 'none', // Firefox
-                '&::-webkit-scrollbar': { display: 'none' } // Chrome, Safari
-              }}
-              onScroll={updateScrollButtons}
-            >
-              {timelineEvents.map((event, index) => (
-                <Box key={event.id} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 120 }}>
-                  <Box
-                    sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      mb: 1.5,
-                      bgcolor: event.status === 'completed' ? 'success.main' : 'grey.500',
-                      color: 'white',
-                      position: 'relative',
-                      zIndex: 2
-                    }}
-                  >
-                    {event.status === 'completed' ? <CheckIcon /> : <ClockIcon />}
-                  </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                      {event.title}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {event.date}
-                    </Typography>
-                  </Box>
-                  {index < timelineEvents.length - 1 && (
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        top: 20,
-                        left: '50%',
-                        width: 32,
-                        height: 2,
-                        bgcolor: 'grey.300',
-                        zIndex: 1
-                      }}
-                    />
-                  )}
-                </Box>
-              ))}
-            </Box>
-            
-            <IconButton
-              onClick={() => handleTimelineScroll('right')}
-              disabled={!canScrollRight}
-              sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'grey.300',
-                '&:hover': { bgcolor: 'primary.main', color: 'white' },
-                '&:disabled': { 
-                  bgcolor: 'grey.50', 
-                  color: 'grey.400',
-                  borderColor: 'grey.200'
-                }
-              }}
-            >
-              <ChevronRightIcon />
-            </IconButton>
-          </Box>
-        )}
-      </Paper>
 
       {/* Tasks and Resources Container */}
       <Grid container spacing={3}>

@@ -10,16 +10,8 @@ import {
   CardContent,
   CircularProgress,
   Alert,
-  IconButton,
   Chip
 } from '@mui/material';
-import {
-  Check as CheckIcon,
-  Schedule as ClockIcon,
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
-  OpenInNew as ArrowTopRightOnSquareIcon
-} from '@mui/icons-material';
 import {
   BarChart,
   Bar,
@@ -43,7 +35,6 @@ export default function Dashboard() {
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [timelineEvents, setTimelineEvents] = useState([]);
   const [demographicData, setDemographicData] = useState({
     majors: [],
     genders: [],
@@ -52,11 +43,7 @@ export default function Dashboard() {
     transferStudents: [],
     firstGeneration: []
   });
-  const [eventsLoading, setEventsLoading] = useState(false);
   const [demographicsLoading, setDemographicsLoading] = useState(false);
-  const [timelineScrollPosition, setTimelineScrollPosition] = useState(0);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
 
   const load = async () => {
     try {
@@ -86,72 +73,6 @@ export default function Dashboard() {
       setError(e.message || 'Failed to load dashboard data');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchTimelineEvents = async () => {
-    try {
-      setEventsLoading(true);
-      const events = await apiClient.get('/admin/events');
-      
-      // Handle case where events might be null or undefined
-      if (!events || !Array.isArray(events)) {
-        console.warn('No events data received or invalid format');
-        setTimelineEvents([]);
-        return;
-      }
-      
-      // Filter events by active cycle
-      let filteredEvents = events;
-      if (activeCycle) {
-        filteredEvents = events.filter(event => {
-          // Check if event belongs to the active cycle
-          if (event.cycleId === activeCycle.id) {
-            return true;
-          }
-          // Also check by date range if cycle has dates
-          if (activeCycle.startDate || activeCycle.endDate) {
-            const eventDate = new Date(event.eventStartDate);
-            const startDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-            const endDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-            
-            if (startDate && eventDate < startDate) return false;
-            if (endDate && eventDate > endDate) return false;
-            
-            return true;
-          }
-          return false;
-        });
-      }
-      
-      const timelineEvents = filteredEvents
-        .sort((a, b) => new Date(a.eventStartDate) - new Date(b.eventStartDate))
-        .map(event => {
-          const eventDate = new Date(event.eventStartDate);
-          const now = new Date();
-          const isCompleted = eventDate < now;
-          
-          return {
-            id: event.id,
-            title: event.eventName,
-            date: eventDate.toLocaleDateString('en-US', {
-              month: 'numeric',
-              day: 'numeric',
-              year: '2-digit'
-            }),
-            status: isCompleted ? 'completed' : 'pending',
-            eventStartDate: event.eventStartDate,
-            eventEndDate: event.eventEndDate,
-            eventLocation: event.eventLocation
-          };
-        });
-      
-      setTimelineEvents(timelineEvents);
-    } catch (err) {
-      console.error('Error fetching timeline events:', err);
-      setTimelineEvents([]); // Set empty array instead of showing error
-    } finally {
-      setEventsLoading(false);
     }
   };
 
@@ -258,19 +179,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (user) {
-      // Load stats/cycle and demographic data in parallel
-      // Note: fetchTimelineEvents depends on activeCycle, so it's triggered
-      // by the activeCycle useEffect below after load() completes
       Promise.all([load(), fetchDemographicData()]);
     }
   }, [user]);
-
-  // Fetch timeline events when active cycle is available
-  useEffect(() => {
-    if (user && activeCycle) {
-      fetchTimelineEvents();
-    }
-  }, [activeCycle]);
 
   // Listen for cycle activation events
   useEffect(() => {
@@ -278,7 +189,6 @@ export default function Dashboard() {
 
     const handleCycleActivated = async () => {
       // Reload dashboard data when a new cycle is activated
-      // load() will update activeCycle, which triggers fetchTimelineEvents via useEffect
       await Promise.all([load(), fetchDemographicData()]);
     };
 
@@ -288,46 +198,6 @@ export default function Dashboard() {
       window.removeEventListener('cycleActivated', handleCycleActivated);
     };
   }, [user]);
-
-  // Update scroll button states when timeline events change
-  useEffect(() => {
-    if (timelineEvents.length > 0) {
-      // Use setTimeout to ensure DOM is updated
-      setTimeout(updateScrollButtons, 100);
-    }
-  }, [timelineEvents]);
-
-  const handleViewMore = (section) => {
-    // TODO: Implement navigation to detailed views
-    console.log('View more:', section);
-  };
-
-  const handleTimelineScroll = (direction) => {
-    const timelineContainer = document.getElementById('timeline-container');
-    if (!timelineContainer) return;
-
-    const scrollAmount = 200; // pixels to scroll
-    const newPosition = direction === 'left' 
-      ? timelineScrollPosition - scrollAmount 
-      : timelineScrollPosition + scrollAmount;
-
-    timelineContainer.scrollTo({
-      left: newPosition,
-      behavior: 'smooth'
-    });
-
-    setTimelineScrollPosition(newPosition);
-  };
-
-  const updateScrollButtons = () => {
-    const timelineContainer = document.getElementById('timeline-container');
-    if (!timelineContainer) return;
-
-    const { scrollLeft, scrollWidth, clientWidth } = timelineContainer;
-    setCanScrollLeft(scrollLeft > 0);
-    setCanScrollRight(scrollLeft < scrollWidth - clientWidth);
-    setTimelineScrollPosition(scrollLeft);
-  };
 
   // Enhanced color schemes for charts
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF7C7C'];
@@ -362,10 +232,9 @@ export default function Dashboard() {
             variant="outlined" 
             onClick={() => {
               load();
-              fetchTimelineEvents();
               fetchDemographicData();
             }} 
-            disabled={loading || eventsLoading || demographicsLoading}
+            disabled={loading || demographicsLoading}
           >
             Refresh
           </Button>
@@ -407,131 +276,6 @@ export default function Dashboard() {
           <Typography variant="h6">{stats.currentRound?.replace('_', ' ') || '—'}</Typography>
         </Paper>
       </Stack>
-
-      {/* Recruitment Timeline Section */}
-      <Paper sx={{ p: 3, mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Typography variant="h5" component="h2" sx={{ fontWeight: 700, color: 'primary.dark' }}>
-            Recruitment Timeline
-          </Typography>
-          <Button
-            variant="text"
-            endIcon={<ArrowTopRightOnSquareIcon />}
-            onClick={() => handleViewMore('timeline')}
-            sx={{ color: 'primary.main' }}
-          >
-            View More
-          </Button>
-        </Box>
-        
-        {eventsLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : timelineEvents.length === 0 ? (
-          <Box sx={{ textAlign: 'center', p: 4 }}>
-            <Typography variant="body1" color="text.secondary">
-              No events found for the current recruitment cycle.
-            </Typography>
-          </Box>
-        ) : (
-          <Box sx={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <IconButton
-              onClick={() => handleTimelineScroll('left')}
-              disabled={!canScrollLeft}
-              sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'grey.300',
-                '&:hover': { bgcolor: 'primary.main', color: 'white' },
-                '&:disabled': { 
-                  bgcolor: 'grey.50', 
-                  color: 'grey.400',
-                  borderColor: 'grey.200'
-                }
-              }}
-            >
-              <ChevronLeftIcon />
-            </IconButton>
-            
-            <Box 
-              id="timeline-container"
-              sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                flex: 1, 
-                mx: 2, 
-                gap: 4, 
-                overflowX: 'auto',
-                scrollbarWidth: 'none', // Firefox
-                '&::-webkit-scrollbar': { display: 'none' } // Chrome, Safari
-              }}
-              onScroll={updateScrollButtons}
-            >
-              {timelineEvents.map((event, index) => (
-                <Box key={event.id} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 120 }}>
-                  <Box
-                    sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      mb: 1.5,
-                      bgcolor: event.status === 'completed' ? 'success.main' : 'grey.500',
-                      color: 'white',
-                      position: 'relative',
-                      zIndex: 2
-                    }}
-                  >
-                    {event.status === 'completed' ? <CheckIcon /> : <ClockIcon />}
-                  </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                      {event.title}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {event.date}
-                    </Typography>
-                  </Box>
-                  {index < timelineEvents.length - 1 && (
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        top: 20,
-                        left: '50%',
-                        width: 32,
-                        height: 2,
-                        bgcolor: 'grey.300',
-                        zIndex: 1
-                      }}
-                    />
-                  )}
-                </Box>
-              ))}
-            </Box>
-            
-            <IconButton
-              onClick={() => handleTimelineScroll('right')}
-              disabled={!canScrollRight}
-              sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'grey.300',
-                '&:hover': { bgcolor: 'primary.main', color: 'white' },
-                '&:disabled': { 
-                  bgcolor: 'grey.50', 
-                  color: 'grey.400',
-                  borderColor: 'grey.200'
-                }
-              }}
-            >
-              <ChevronRightIcon />
-            </IconButton>
-          </Box>
-        )}
-      </Paper>
 
       {/* Enhanced Demographic Charts Section */}
       <Typography variant="h5" component="h2" sx={{ 

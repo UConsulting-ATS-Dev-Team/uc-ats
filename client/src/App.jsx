@@ -25,7 +25,6 @@ import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
 import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
-import RecruitmentResources from './pages/RecruitmentResources';
 import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
 import UserManagement from './pages/UserManagement';
@@ -221,16 +220,6 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
-      
-      <Route
-        path="/recruitment-resources"
-        element={
-          <ProtectedRoute>
-            <RecruitmentResources />
-          </ProtectedRoute>
-        }
-      />
-      
       
       <Route
         path="/interviews/:id"
