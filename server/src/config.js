@@ -44,6 +44,12 @@ const config = {
     : (isProduction ? ['https://uconsultingats.com'] : ['http://localhost:5173']),
 
   form: formConfig,
+
+  /** Fine-grained PAT with Issues write on the ATS repo */
+  githubFeatureRequestToken: process.env.GITHUB_FEATURE_REQUEST_TOKEN || null,
+  /** owner/repo for GitHub Issues API (defaults to primary product repo) */
+  githubFeatureRequestRepo:
+    process.env.GITHUB_FEATURE_REQUEST_REPO || 'uconsulting/uc-ats',
 };
 
 export default config;
