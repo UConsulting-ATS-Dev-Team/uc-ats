@@ -843,12 +843,34 @@
     align-items: flex-start;
     gap: 1rem;
   }
-  
+
   .info-grid {
     grid-template-columns: 1fr;
   }
-  
+
   .detail-sidebar {
     max-width: none;
   }
-} 
+}
+
+@media (max-width: 900px) {
+  .average-grades-container {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .average-grade {
+    flex: 1 1 calc(50% - 0.75rem);
+    min-width: 0;
+  }
+
+  .candidate-header {
+    flex-wrap: wrap;
+  }
+
+  .name-and-status {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+}

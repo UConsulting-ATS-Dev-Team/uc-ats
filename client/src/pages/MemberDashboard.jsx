@@ -301,7 +301,7 @@ export default function MemberDashboard() {
 
         {/* Resources Section */}
         <Grid size={{ xs: 12, md: 6 }}>
-          <Paper sx={{ height: 'fit-content', mr: -8.5 }}>
+          <Paper sx={{ height: 'fit-content', mr: { xs: 0, md: -8.5 } }}>
             <Box
               sx={{
                 bgcolor: 'primary.main',

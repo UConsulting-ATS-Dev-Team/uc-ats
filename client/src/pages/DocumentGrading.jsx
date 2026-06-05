@@ -669,7 +669,7 @@ export default function DocumentGrading() {
             <Typography color="error">{error}</Typography>
           </Box>
         ) : (
-          <TableContainer>
+          <TableContainer className="responsive-table">
             <Table>
               <TableHead>
                 <TableRow>
@@ -684,7 +684,7 @@ export default function DocumentGrading() {
                   const currentGradingData = generateGradingData(
                     tabValue === 0 ? 'resume' : tabValue === 1 ? 'coverLetter' : 'video'
                   );
-                  
+
                   if (currentGradingData.length === 0) {
                     return (
                       <TableRow>
@@ -699,7 +699,7 @@ export default function DocumentGrading() {
 
                   return currentGradingData.map((row) => (
                     <TableRow key={row.id} hover>
-                      <TableCell>
+                      <TableCell data-label="Candidate">
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {row.candidate}
                         </Typography>
@@ -707,7 +707,7 @@ export default function DocumentGrading() {
                           {row.application?.major} • {row.application?.year}
                         </Typography>
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-label="Document">
                         <Button
                           variant="outlined"
                           size="small"
@@ -719,14 +719,14 @@ export default function DocumentGrading() {
                           {row.document}
                         </Button>
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-label="Flag">
                         {(() => {
                           const documentType = tabValue === 0 ? 'resume' : tabValue === 1 ? 'coverLetter' : 'video';
                           const isFlagged = row.application[`${documentType}Flagged`];
-                          
+
                           return (
                             <Tooltip title={isFlagged ? `Flagged: ${isFlagged.reason}` : "Flag document for review"}>
-                              <IconButton 
+                              <IconButton
                                 size="small"
                                 onClick={() => handleFlagDocument(row.application, documentType)}
                                 disabled={!row.hasDocument || isFlagged}
@@ -738,7 +738,7 @@ export default function DocumentGrading() {
                           );
                         })()}
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-label="Status">
                         <Chip
                           label={getStatusText(row.status)}
                           color={getStatusColor(row.status)}

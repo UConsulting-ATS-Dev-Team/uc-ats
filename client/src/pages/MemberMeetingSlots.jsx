@@ -835,7 +835,7 @@ export default function MemberMeetingSlots() {
                         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2 }}>
                           Signups ({slot.signups.length})
                         </Typography>
-                        <TableContainer>
+                        <TableContainer className="responsive-table">
                           <Table size="small">
                             <TableHead>
                               <TableRow>
@@ -849,29 +849,29 @@ export default function MemberMeetingSlots() {
                             <TableBody>
                               {slot.signups.map((signup) => (
                                 <TableRow key={signup.id}>
-                                  <TableCell>
+                                  <TableCell data-label="Name">
                                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
                                       {signup.fullName}
                                     </Typography>
                                   </TableCell>
-                                  <TableCell>
+                                  <TableCell data-label="Email">
                                     <Typography variant="body2" color="text.secondary">
                                       {signup.email}
                                     </Typography>
                                   </TableCell>
-                                  <TableCell>
+                                  <TableCell data-label="Student ID">
                                     <Typography variant="body2" color="text.secondary">
                                       {signup.studentId || '-'}
                                     </Typography>
                                   </TableCell>
-                                  <TableCell align="center">
+                                  <TableCell data-label="Attended" align="center">
                                     <Checkbox
                                       checked={signup.attended}
                                       onChange={(e) => setAttendance(signup.id, e.target.checked)}
                                       color="success"
                                     />
                                   </TableCell>
-                                  <TableCell align="center">
+                                  <TableCell data-label="Actions" align="center">
                                     <Tooltip title="Remove candidate from this timeslot">
                                       <IconButton
                                         size="small"

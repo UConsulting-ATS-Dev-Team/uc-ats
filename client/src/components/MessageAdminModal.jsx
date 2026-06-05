@@ -6,15 +6,18 @@ import {
   DialogActions,
   TextField,
   Button,
+  IconButton,
   Box,
   Typography,
   Alert,
   CircularProgress
 } from '@mui/material';
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 
 const MessageAdminModal = ({ open, onClose }) => {
+  const isMobile = useIsMobile();
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -63,38 +66,35 @@ const MessageAdminModal = ({ open, onClose }) => {
   };
 
   return (
-    <Dialog 
-      open={open} 
+    <Dialog
+      open={open}
       onClose={handleClose}
       maxWidth="sm"
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
         sx: {
-          borderRadius: 2,
+          borderRadius: { xs: 0, md: 2 },
           boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
         }
       }}
     >
-      <DialogTitle sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <DialogTitle sx={{
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
         pb: 1
       }}>
         <Typography variant="h6" component="span" sx={{ fontWeight: 600 }}>
           Message an Admin
         </Typography>
-        <Button
+        <IconButton
           onClick={handleClose}
           disabled={loading}
-          sx={{ 
-            minWidth: 'auto', 
-            p: 1,
-            '&:hover': { backgroundColor: 'grey.100' }
-          }}
+          aria-label="close"
         >
           <XMarkIcon style={{ width: '1.25rem', height: '1.25rem' }} />
-        </Button>
+        </IconButton>
       </DialogTitle>
 
       <DialogContent sx={{ pt: 2 }}>

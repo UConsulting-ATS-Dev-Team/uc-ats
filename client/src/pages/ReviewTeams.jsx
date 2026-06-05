@@ -608,11 +608,11 @@ export default function ReviewTeams() {
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
       <Box>
       {/* Header */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={3}>
+      <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" spacing={{ xs: 2, md: 0 }} mb={3}>
         <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main' }}>
           Review Teams
         </Typography>
-        <Stack direction="row" spacing={2}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ flexWrap: 'wrap', width: { xs: '100%', md: 'auto' } }}>
           <Button
             variant="outlined"
             startIcon={<ArrowPathIcon style={{ width: '1.25rem', height: '1.25rem' }} />}

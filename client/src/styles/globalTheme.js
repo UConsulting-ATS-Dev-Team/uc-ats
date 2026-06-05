@@ -76,12 +76,15 @@ const globalTheme = createTheme({
   components: {
     MuiButton: {
       styleOverrides: {
-        root: {
+        root: ({ theme }) => ({
           borderRadius: '0.5rem',
           textTransform: 'none',
           fontWeight: 500,
           padding: '0.5rem 1rem',
-        },
+          [theme.breakpoints.down('md')]: {
+            minHeight: 44,
+          },
+        }),
         contained: {
           backgroundColor: '#042742',
           color: '#ffffff',
@@ -160,6 +163,18 @@ const globalTheme = createTheme({
           fontFamily: 'Montserrat, sans-serif',
           fontWeight: 300,
         },
+      },
+    },
+    MuiIconButton: {
+      styleOverrides: {
+        root: ({ theme, ownerState }) => ({
+          [theme.breakpoints.down('md')]: {
+            ...(ownerState?.size !== 'small' && {
+              minWidth: 44,
+              minHeight: 44,
+            }),
+          },
+        }),
       },
     },
   },

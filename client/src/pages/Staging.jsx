@@ -2271,16 +2271,16 @@ export default function Staging() {
                 </Box>
               </Box>
 
-              <TableContainer component={Paper}>
-                <Table stickyHeader sx={{ tableLayout: 'fixed', minWidth: 900 }}>
+              <TableContainer component={Paper} className="responsive-table">
+                <Table stickyHeader sx={{ tableLayout: { xs: 'auto', md: 'fixed' }, minWidth: { xs: 'auto', md: 900 } }}>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ width: 220 }}>Candidate</TableCell>
-                      <TableCell sx={{ width: 100 }}>Score</TableCell>
-                      <TableCell sx={{ width: 150 }}>Grading</TableCell>
-                      <TableCell sx={{ width: 180 }}>Attendance</TableCell>
-                      <TableCell sx={{ width: 140 }}>Decision</TableCell>
-                      <TableCell sx={{ width: 110 }}>Actions</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 220 } }}>Candidate</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 100 } }}>Score</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 150 } }}>Grading</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 180 } }}>Attendance</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 140 } }}>Decision</TableCell>
+                      <TableCell sx={{ width: { xs: 'auto', md: 110 } }}>Actions</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -2290,7 +2290,7 @@ export default function Staging() {
                       
                       return (
                         <TableRow key={candidate.id} hover>
-                          <TableCell>
+                          <TableCell data-label="Candidate">
                             <Box display="flex" alignItems="center" gap={1} sx={{ overflow: 'hidden' }}>
                               <AuthenticatedImage
                                 src={candidate.headshotUrl}
@@ -2325,16 +2325,16 @@ export default function Staging() {
                               </Box>
                             </Box>
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Score">
                             <ScoreDisplay score={getScoreForTab(candidate, currentTab)} />
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Grading">
                             <GradingStatusDisplay candidate={candidate} gradingData={gradingData} />
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Attendance">
                             <AttendanceDisplay attendance={candidate.attendance} events={events} />
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Decision">
                             <FormControl size="small" fullWidth>
                               <Select
                                 value={displayDecision}
@@ -2361,7 +2361,7 @@ export default function Staging() {
                               </Select>
                             </FormControl>
                           </TableCell>
-                          <TableCell>
+                          <TableCell data-label="Actions">
                             <Button
                               size="small"
                               onClick={() => {
