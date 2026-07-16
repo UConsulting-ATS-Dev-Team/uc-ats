@@ -25,6 +25,7 @@
     "@tabler/icons-react": "^3.33.0",
     "canvas-confetti": "^1.9.4",
     "date-fns-tz": "^3.2.0",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0",
