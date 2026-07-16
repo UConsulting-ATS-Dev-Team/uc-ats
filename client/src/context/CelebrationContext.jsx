@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useCallback, useRef, useState } from 'react';
+import { isPreviewActive } from '../utils/previewMode';
 
 const CelebrationContext = createContext(null);
 
@@ -61,6 +62,8 @@ export const CelebrationProvider = ({ children }) => {
   const fallbackTimeout = useRef(null);
 
   const triggerCelebration = useCallback(() => {
+    // Never let a celebration pop over the exhibit during candidate preview.
+    if (isPreviewActive()) return;
     // Try canvas-confetti first
     try {
       // Dynamically import to avoid issues if the module fails to load

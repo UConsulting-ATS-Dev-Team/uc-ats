@@ -26,6 +26,8 @@ import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
 import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
+import Cases from './pages/Cases';
+import CaseTagging from './pages/CaseTagging';
 import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
 import UserManagement from './pages/UserManagement';
@@ -134,6 +136,24 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReviewTeams />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/cases"
+        element={
+          <ProtectedRoute>
+            <Cases />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/cases/:id/tags"
+        element={
+          <ProtectedRoute>
+            <CaseTagging />
           </ProtectedRoute>
         }
       />
