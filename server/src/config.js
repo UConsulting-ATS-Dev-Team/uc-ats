@@ -36,6 +36,11 @@ const config = {
   dbUrl: process.env.DATABASE_URL,
   gCloudKeyPath: process.env.GOOGLE_CLOUD_KEY_PATH ? path.resolve(process.env.GOOGLE_CLOUD_KEY_PATH) : null,
 
+  /** ID of the shared Google Calendar the service account has Editor access to (its address, e.g. abc123@group.calendar.google.com). Calendar invites are disabled if unset. */
+  googleCalendarId: process.env.GOOGLE_CALENDAR_ID || null,
+  /** When set, calendar invites are redirected to this single address instead of real members/admins. Unset to go live. */
+  calendarInviteTestEmail: process.env.CALENDAR_INVITE_TEST_EMAIL || null,
+
   baseUrl: process.env.BASE_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:3001'),
   clientUrl: process.env.CLIENT_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173'),
 
