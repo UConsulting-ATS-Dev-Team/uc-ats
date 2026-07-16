@@ -16,7 +16,8 @@ import {
   UserGroupIcon as UserGroupIcon2,
   ChatBubbleLeftRightIcon,
   ChatBubbleOvalLeftEllipsisIcon,
-  LightBulbIcon
+  LightBulbIcon,
+  PresentationChartBarIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -58,6 +59,7 @@ const Layout = ({ children }) => {
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
