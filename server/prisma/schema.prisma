@@ -50,7 +50,11 @@ model User {
 =======
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+<<<<<<< HEAD
 >>>>>>> 55b1757d (changes)
+=======
+  eventInvitations           EventInvitee[]
+>>>>>>> b9663103 (starting an event sends automatic gcals; unable to test rn)
 
   @@map("users")
 }
@@ -312,11 +316,13 @@ model Events {
   createdAt             DateTime          @default(now())
   memberRsvpUrl         String?
   showToCandidates      Boolean           @default(false)
-  googleCalendarEventId String?
   copiedFromCycleId     String?
   copiedFromEventId     String?
   copiedByUserId        String?
   copiedAt              DateTime?
+  googleCalendarEventId String?
+  calendarSyncStatus    String?
+  calendarSyncError     String?
   eventAttendance       EventAttendance[]
   eventRsvp             EventRsvp[]
   cycle                 RecruitingCycle   @relation(fields: [cycleId], references: [id])

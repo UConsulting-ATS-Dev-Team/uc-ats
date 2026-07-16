@@ -26,6 +26,7 @@ import {
   Switch,
   FormControlLabel,
   Checkbox,
+  Autocomplete,
 } from '@mui/material';
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
@@ -310,6 +311,15 @@ export default function EventManagement() {
     } finally {
       setCopyCommitLoading(false);
 >>>>>>> 17414cb4 (feat: admin cycle-portable event copy with preview and explicit commit (#113))
+    }
+  };
+
+  const fetchMembers = async () => {
+    try {
+      const data = await apiClient.get('/admin/users?role=MEMBER');
+      setMembers(data);
+    } catch (e) {
+      console.error('Failed to fetch members:', e);
     }
   };
 
