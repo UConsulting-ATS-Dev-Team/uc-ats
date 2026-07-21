@@ -22,6 +22,7 @@ import {
   CircularProgress,
   Alert,
   Tooltip,
+  Autocomplete,
 } from '@mui/material';
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
@@ -31,6 +32,7 @@ import { formatInLA } from '../../../server/src/utils/timezoneUtils';
 export default function EventManagement() {
   const [events, setEvents] = useState([]);
   const [cycles, setCycles] = useState([]);
+  const [members, setMembers] = useState([]); // MEMBER-role users, for the invitee picker (ADMINs are always invited automatically)
   const [eventStats, setEventStats] = useState({}); // Store RSVP/attendance counts
   const [loading, setLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState({});
@@ -49,7 +51,8 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
-    cycleId: ''
+    cycleId: '',
+    memberInviteeIds: []
   });
   const [editForm, setEditForm] = useState({
     eventName: '',
@@ -60,7 +63,8 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
-    cycleId: ''
+    cycleId: '',
+    memberInviteeIds: []
   });
 
   function formatForDateTimeLocal(date, timeZone) {
@@ -108,6 +112,15 @@ export default function EventManagement() {
     }
   };
 
+  const fetchMembers = async () => {
+    try {
+      const data = await apiClient.get('/admin/users?role=MEMBER');
+      setMembers(data);
+    } catch (e) {
+      console.error('Failed to fetch members:', e);
+    }
+  };
+
   const createEvent = async () => {
     try {
       setError('');
@@ -118,12 +131,12 @@ export default function EventManagement() {
         return;
       }
 
-      await apiClient.post('/admin/events', {
+      const created = await apiClient.post('/admin/events', {
         ...form,
         eventStartDate: new Date(form.eventStartDate).toISOString(),
         eventEndDate: new Date(form.eventEndDate).toISOString(),
       });
-      
+
       setCreateOpen(false);
       setForm({
         eventName: '',
@@ -134,9 +147,16 @@ export default function EventManagement() {
         attendanceForm: '',
         showToCandidates: false,
         memberRsvpUrl: '',
-        cycleId: ''
+        cycleId: '',
+        memberInviteeIds: []
       });
-      
+
+      if (created?.calendarError) {
+        setError(`Event created, but the calendar invite failed to send: ${created.calendarError}`);
+      } else {
+        setSuccessMessage('Event created and calendar invites sent to admins and selected members.');
+      }
+
       await fetchEvents();
     } catch (e) {
       setError(e.message || 'Failed to create event');
@@ -168,7 +188,8 @@ export default function EventManagement() {
       attendanceForm: event.attendanceForm || '',
       showToCandidates: event.showToCandidates,
       memberRsvpUrl: event.memberRsvpUrl || '',
-      cycleId: event.cycleId
+      cycleId: event.cycleId,
+      memberInviteeIds: (event.invitees || []).map((i) => i.userId)
     });
     setEditOpen(true);
   };
@@ -177,27 +198,47 @@ export default function EventManagement() {
     try {
       setEditLoading(true);
       setError('');
-      
+
       // Validate required fields
       if (!editForm.eventName || !editForm.eventStartDate || !editForm.eventEndDate || !editForm.cycleId) {
         setError('Please fill in all required fields');
         return;
       }
 
-      await apiClient.patch(`/admin/events/${selectedEvent.id}`, {
+      const updated = await apiClient.patch(`/admin/events/${selectedEvent.id}`, {
         ...editForm,
         eventStartDate: new Date(editForm.eventStartDate).toISOString(),
         eventEndDate: new Date(editForm.eventEndDate).toISOString(),
       });
-      
+
       setEditOpen(false);
       setSelectedEvent(null);
       await fetchEvents();
-      setSuccessMessage('Event updated successfully!');
+
+      if (updated?.calendarError) {
+        setError(`Event updated, but the calendar invite failed to sync: ${updated.calendarError}`);
+      } else {
+        setSuccessMessage('Event updated and calendar invite synced!');
+      }
     } catch (e) {
       setError(e.message || 'Failed to update event');
     } finally {
       setEditLoading(false);
+    }
+  };
+
+  const syncCalendarInvite = async (eventId) => {
+    try {
+      setSyncLoading(prev => ({ ...prev, [`${eventId}-calendar`]: true }));
+      setError('');
+      setSuccessMessage('');
+
+      const result = await apiClient.post(`/admin/events/${eventId}/sync-calendar-invite`);
+      setSuccessMessage(`Calendar invite sent to ${result.attendeeCount} recipient(s).`);
+    } catch (e) {
+      setError(e.message || 'Failed to sync calendar invite');
+    } finally {
+      setSyncLoading(prev => ({ ...prev, [`${eventId}-calendar`]: false }));
     }
   };
 
@@ -291,7 +332,8 @@ export default function EventManagement() {
   useEffect(() => {
     fetchEvents();
     fetchCycles();
-    
+    fetchMembers();
+
     // Listen for cycle activation events and refresh when a new cycle is activated
     const handleCycleActivated = () => {
       setError('');
@@ -610,6 +652,24 @@ export default function EventManagement() {
                           </svg>
                         </IconButton>
                       </Tooltip>
+                      <Tooltip title={event.googleCalendarEventId ? 'Resend calendar invite to admins/members' : 'Send calendar invite to admins/members'}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            color={event.googleCalendarEventId ? 'success' : 'warning'}
+                            disabled={syncLoading[`${event.id}-calendar`]}
+                            onClick={() => syncCalendarInvite(event.id)}
+                          >
+                            {syncLoading[`${event.id}-calendar`] ? (
+                              <CircularProgress size={16} />
+                            ) : (
+                              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                                <path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                              </svg>
+                            )}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                       <Tooltip title="Edit Event">
                         <IconButton
                           size="small"
@@ -734,6 +794,22 @@ export default function EventManagement() {
               <MenuItem value="false">No - Internal Event Only</MenuItem>
               <MenuItem value="true">Yes - Show to Candidates</MenuItem>
             </TextField>
+
+            <Autocomplete
+              multiple
+              options={members}
+              getOptionLabel={(m) => `${m.fullName} (${m.email})`}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              value={members.filter((m) => form.memberInviteeIds.includes(m.id))}
+              onChange={(e, selected) => setForm({ ...form, memberInviteeIds: selected.map((m) => m.id) })}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Invite Members to Calendar Event"
+                  helperText="All admins are always invited automatically. Select which members should also get a Google Calendar invite."
+                />
+              )}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -838,12 +914,28 @@ export default function EventManagement() {
               <MenuItem value="false">No - Internal Event Only</MenuItem>
               <MenuItem value="true">Yes - Show to Candidates</MenuItem>
             </TextField>
+
+            <Autocomplete
+              multiple
+              options={members}
+              getOptionLabel={(m) => `${m.fullName} (${m.email})`}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              value={members.filter((m) => editForm.memberInviteeIds.includes(m.id))}
+              onChange={(e, selected) => setEditForm({ ...editForm, memberInviteeIds: selected.map((m) => m.id) })}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Invite Members to Calendar Event"
+                  helperText="All admins are always invited automatically. Select which members should also get a Google Calendar invite. Saving re-syncs the calendar invite for everyone above."
+                />
+              )}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditOpen(false)}>Cancel</Button>
-          <Button 
-            onClick={updateEvent} 
+          <Button
+            onClick={updateEvent}
             variant="contained"
             disabled={editLoading}
           >

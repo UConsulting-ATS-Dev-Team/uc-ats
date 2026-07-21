@@ -41,6 +41,7 @@ model User {
   videoScores                VideoScore[]
   conversationParticipants   ConversationParticipant[]       @relation("ConversationParticipantUser")
   sentMessages               Message[]                       @relation("MessageSender")
+  eventInvitations           EventInvitee[]
 
   @@map("users")
 }
@@ -275,23 +276,39 @@ model VideoScore {
 }
 
 model Events {
-  id               String            @id @default(uuid())
-  eventName        String
-  eventStartDate   DateTime
-  eventEndDate     DateTime
-  eventLocation    String?
-  rsvpForm         String?
-  attendanceForm   String?
-  cycleId          String
-  createdAt        DateTime          @default(now())
-  memberRsvpUrl    String?
-  showToCandidates Boolean           @default(false)
-  eventAttendance  EventAttendance[]
-  eventRsvp        EventRsvp[]
-  cycle            RecruitingCycle   @relation(fields: [cycleId], references: [id])
-  memberEventRsvp  MemberEventRsvp[]
+  id                    String            @id @default(uuid())
+  eventName             String
+  eventStartDate        DateTime
+  eventEndDate          DateTime
+  eventLocation         String?
+  rsvpForm              String?
+  attendanceForm        String?
+  cycleId               String
+  createdAt             DateTime          @default(now())
+  memberRsvpUrl         String?
+  showToCandidates      Boolean           @default(false)
+  googleCalendarEventId String?
+  eventAttendance       EventAttendance[]
+  eventRsvp             EventRsvp[]
+  cycle                 RecruitingCycle   @relation(fields: [cycleId], references: [id])
+  memberEventRsvp       MemberEventRsvp[]
+  invitees              EventInvitee[]
 
   @@map("events")
+}
+
+// Manually-selected MEMBER invitees for an event's Google Calendar invite.
+// ADMINs are always invited automatically and don't need a row here.
+model EventInvitee {
+  id        String   @id @default(uuid())
+  eventId   String
+  userId    String
+  createdAt DateTime @default(now())
+  event     Events   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("event_invitees")
 }
 
 model EventRsvp {

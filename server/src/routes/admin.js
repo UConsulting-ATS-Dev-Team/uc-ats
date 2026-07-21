@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from '../services/emailNotifications.js';
+import { createCalendarEvent, updateCalendarEvent, cancelCalendarEvent } from '../services/google/calendar.js';
 
 const router = express.Router();
 
@@ -1325,6 +1326,71 @@ router.get('/profile', async (req, res) => {
 
 // Event Management Routes
 
+// Resolves who should receive the Google Calendar invite for an event: every ADMIN (always)
+// plus whichever MEMBERs were manually selected as invitees for this specific event.
+async function getEventAttendeeEmails(eventId) {
+  const [admins, invitees] = await Promise.all([
+    prisma.user.findMany({ where: { role: 'ADMIN' }, select: { email: true } }),
+    prisma.eventInvitee.findMany({ where: { eventId }, select: { user: { select: { email: true } } } })
+  ]);
+  const emails = new Set([...admins.map((a) => a.email), ...invitees.map((i) => i.user.email)]);
+  return [...emails];
+}
+
+// Filters a list of candidate invitee IDs down to real MEMBER-role users, so candidates/admins
+// can't be added to the invitee join table (admins are already always invited).
+async function resolveMemberInviteeIds(memberInviteeIds) {
+  if (!Array.isArray(memberInviteeIds) || memberInviteeIds.length === 0) return [];
+  const members = await prisma.user.findMany({
+    where: { id: { in: memberInviteeIds }, role: 'MEMBER' },
+    select: { id: true }
+  });
+  return members.map((m) => m.id);
+}
+
+async function setEventInvitees(eventId, memberInviteeIds) {
+  const validIds = await resolveMemberInviteeIds(memberInviteeIds);
+  await prisma.$transaction([
+    prisma.eventInvitee.deleteMany({ where: { eventId } }),
+    ...(validIds.length
+      ? [prisma.eventInvitee.createMany({ data: validIds.map((userId) => ({ eventId, userId })) })]
+      : [])
+  ]);
+  return validIds;
+}
+
+// Creates or updates the Google Calendar invite for an event. Never throws — a calendar/API
+// failure shouldn't block event create/update; callers get back { googleCalendarEventId, calendarError }.
+async function syncEventCalendarInvite(event) {
+  try {
+    const [attendeeEmails, cycle] = await Promise.all([
+      getEventAttendeeEmails(event.id),
+      prisma.recruitingCycle.findUnique({ where: { id: event.cycleId }, select: { name: true } })
+    ]);
+
+    const eventDetails = {
+      eventName: event.eventName,
+      eventLocation: event.eventLocation,
+      eventStartDate: event.eventStartDate,
+      eventEndDate: event.eventEndDate,
+      cycleName: cycle?.name
+    };
+
+    const googleCalendarEventId = event.googleCalendarEventId
+      ? await updateCalendarEvent(event.googleCalendarEventId, eventDetails, attendeeEmails)
+      : await createCalendarEvent(eventDetails, attendeeEmails);
+
+    if (googleCalendarEventId && googleCalendarEventId !== event.googleCalendarEventId) {
+      await prisma.events.update({ where: { id: event.id }, data: { googleCalendarEventId } });
+    }
+
+    return { googleCalendarEventId, attendeeCount: attendeeEmails.length };
+  } catch (error) {
+    console.error(`[Calendar] Failed to sync invite for event ${event.id}:`, error);
+    return { googleCalendarEventId: event.googleCalendarEventId || null, calendarError: error.message };
+  }
+}
+
 // Get all events
 router.get('/events', async (req, res) => {
   try {
@@ -1341,6 +1407,9 @@ router.get('/events', async (req, res) => {
       include: {
         cycle: {
           select: { name: true, isActive: true }
+        },
+        invitees: {
+          select: { userId: true, user: { select: { id: true, fullName: true, email: true } } }
         }
       }
     });
@@ -1364,7 +1433,8 @@ router.post('/events', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
-      cycleId
+      cycleId,
+      memberInviteeIds
     } = req.body;
 
     // Validate required fields
@@ -1395,7 +1465,13 @@ router.post('/events', async (req, res) => {
       }
     });
 
-    res.status(201).json(event);
+    await setEventInvitees(event.id, memberInviteeIds);
+
+    // Every ADMIN + the selected MEMBER invitees automatically get a Google Calendar invite.
+    // This never throws, so a calendar/API hiccup doesn't block the event itself from being created.
+    const calendarResult = await syncEventCalendarInvite(event);
+
+    res.status(201).json({ ...event, ...calendarResult });
   } catch (error) {
     console.error('[POST /api/admin/events]', error);
     res.status(500).json({ error: 'Failed to create event' });
@@ -1416,7 +1492,15 @@ router.delete('/events/:id', async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Delete the event
+    // Cancel the Google Calendar invite (notifies attendees it's off) before deleting the event.
+    // Best-effort — a calendar failure shouldn't block deleting the event record.
+    try {
+      await cancelCalendarEvent(event.googleCalendarEventId);
+    } catch (calendarError) {
+      console.error(`[Calendar] Failed to cancel invite for event ${id}:`, calendarError);
+    }
+
+    // Delete the event (cascades to EventInvitee rows)
     await prisma.events.delete({
       where: { id }
     });
@@ -1441,7 +1525,8 @@ router.patch('/events/:id', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
-      cycleId
+      cycleId,
+      memberInviteeIds
     } = req.body;
 
     // Check if event exists
@@ -1480,10 +1565,40 @@ router.patch('/events/:id', async (req, res) => {
       }
     });
 
-    res.json(updatedEvent);
+    if (memberInviteeIds !== undefined) {
+      await setEventInvitees(id, memberInviteeIds);
+    }
+
+    // Re-sync (or lazily create, for events that predate this feature) the Google Calendar
+    // invite so relevant members/admins see the update. Never blocks the event update itself.
+    const calendarResult = await syncEventCalendarInvite(updatedEvent);
+
+    res.json({ ...updatedEvent, ...calendarResult });
   } catch (error) {
     console.error('[PATCH /api/admin/events/:id]', error);
     res.status(500).json({ error: 'Failed to update event' });
+  }
+});
+
+// Manually (re)send the Google Calendar invite for an event without changing any other fields.
+// Useful for backfilling events created before this feature existed, and for controlled testing.
+router.post('/events/:id/sync-calendar-invite', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const event = await prisma.events.findUnique({ where: { id } });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const calendarResult = await syncEventCalendarInvite(event);
+    if (calendarResult.calendarError) {
+      return res.status(502).json(calendarResult);
+    }
+    res.json(calendarResult);
+  } catch (error) {
+    console.error(`[POST /api/admin/events/${req.params.id}/sync-calendar-invite]`, error);
+    res.status(500).json({ error: 'Failed to sync calendar invite' });
   }
 });
 
