@@ -69,11 +69,29 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       return res.json([]);
     }
 
+    // Event attendance/RSVP filters
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
+    const eventRsvpEventId = req.query.eventRsvpEventId || '';
+
+    const whereClause = { cycleId: activeCycle.id };
+
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: { some: { eventId: eventAttendanceEventId } }
+      };
+    }
+
+    if (eventRsvpEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventRsvp: { some: { eventId: eventRsvpEventId } }
+      };
+    }
+
     // Get all applications for the active cycle
     const applications = await prisma.application.findMany({
-      where: {
-        cycleId: activeCycle.id
-      },
+      where: whereClause,
       include: {
         candidate: {
           select: {

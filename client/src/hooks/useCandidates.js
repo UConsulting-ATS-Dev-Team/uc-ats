@@ -5,8 +5,8 @@ import apiClient from '../utils/api';
 const cache = new Map();
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
-function getCacheKey(endpoint, page, limit, search) {
-  return `${endpoint}:${page}:${limit}:${search}`;
+function getCacheKey(endpoint, page, limit, search, eventAttendanceEventId, eventRsvpEventId) {
+  return `${endpoint}:${page}:${limit}:${search}:${eventAttendanceEventId}:${eventRsvpEventId}`;
 }
 
 function getFromCache(key) {
@@ -51,7 +51,7 @@ export function useCandidates(options = {}) {
   const fetchCandidates = useCallback(async (skipCache = false) => {
     if (!enabled) return;
 
-    const cacheKey = getCacheKey(endpoint, page, limit, search);
+    const cacheKey = getCacheKey(endpoint, page, limit, search, eventAttendanceEventId, eventRsvpEventId);
 
     // Check cache first
     if (!skipCache) {

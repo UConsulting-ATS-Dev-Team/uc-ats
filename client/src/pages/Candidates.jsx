@@ -23,11 +23,14 @@ export default function Candidates() {
     year: '',
     gender: '',
     firstGen: '',
-    transfer: ''
+    transfer: '',
+    eventAttendanceEventId: '',
+    eventRsvpEventId: ''
   });
   const [expandedId, setExpandedId] = useState(null);
   const [scoreCache, setScoreCache] = useState({}); // key: candidateId -> { resume, cover, video }
   const [attendanceByAppId, setAttendanceByAppId] = useState({}); // key: applicationId -> array of attended keys
+  const [events, setEvents] = useState([]);
 
   useEffect(() => {
     const load = async () => {
@@ -35,7 +38,11 @@ export default function Candidates() {
       setLoading(true);
       try {
         // Use member endpoint to get all applications, not just assigned ones
-        const data = await apiClient.get('/member/all-applications');
+        const params = new URLSearchParams();
+        if (filters.eventAttendanceEventId) params.append('eventAttendanceEventId', filters.eventAttendanceEventId);
+        if (filters.eventRsvpEventId) params.append('eventRsvpEventId', filters.eventRsvpEventId);
+        const queryString = params.toString();
+        const data = await apiClient.get(`/member/all-applications${queryString ? '?' + queryString : ''}`);
         console.log('Fetched all applications data:', data);
         console.log('Number of applications:', data?.length || 0);
         setApplications(Array.isArray(data) ? data : []);
@@ -47,6 +54,21 @@ export default function Candidates() {
       }
     };
     load();
+  }, [user?.id, filters.eventAttendanceEventId, filters.eventRsvpEventId]);
+
+  // Fetch events (for the event attendance/RSVP filter dropdowns) once on mount
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        const data = await apiClient.get('/admin/events');
+        setEvents(data || []);
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
+    if (user?.id) {
+      fetchEvents();
+    }
   }, [user?.id]);
 
   const normalized = useMemo(() => {
@@ -215,6 +237,18 @@ export default function Candidates() {
           <option value="">Transfer: All</option>
           <option value="true">Transfer: Yes</option>
           <option value="false">Transfer: No</option>
+        </select>
+        <select className="filter-select" value={filters.eventAttendanceEventId} onChange={(e) => onFilterChange('eventAttendanceEventId', e.target.value)}>
+          <option value="">Event Attendance: All</option>
+          {events.map(event => (
+            <option key={`att-${event.id}`} value={event.id}>Attended: {event.eventName}</option>
+          ))}
+        </select>
+        <select className="filter-select" value={filters.eventRsvpEventId} onChange={(e) => onFilterChange('eventRsvpEventId', e.target.value)}>
+          <option value="">Event RSVP: All</option>
+          {events.map(event => (
+            <option key={`rsvp-${event.id}`} value={event.id}>RSVP'd: {event.eventName}</option>
+          ))}
         </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <FunnelIcon style={{ width: 20, height: 20, color: '#64748b' }} />
