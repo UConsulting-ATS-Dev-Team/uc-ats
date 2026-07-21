@@ -39,6 +39,7 @@ import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
+import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import NotFound from './pages/NotFound';
@@ -335,6 +336,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MemberMeetingSlots />
+          </ProtectedRoute>
+        }
+      />
+      {/* Admin GTKUC slot + attendance management */}
+      <Route
+        path="/admin/meeting-slots"
+        element={
+          <ProtectedRoute>
+            <AdminMeetingSlots />
           </ProtectedRoute>
         }
       />
