@@ -15,7 +15,7 @@ async function getCalendarClient() {
 }
 
 function buildEventResource({ eventName, eventLocation, eventStartDate, eventEndDate, cycleName }, attendeeEmails) {
-  const description = `UConsulting Event: ${eventName}${cycleName ? `\nCycle: ${cycleName}` : ''}\n\nThis is a UConsulting recruitment event. You're receiving this invite because you're a relevant UConsulting member, admin, or an RSVP'd candidate.`;
+  const description = `UConsulting Event: ${eventName}${cycleName ? `\nCycle: ${cycleName}` : ''}\n\nThis is a UConsulting recruitment event. You're receiving this invite because you're a relevant UConsulting member or admin.`;
 
   return {
     summary: eventName,
