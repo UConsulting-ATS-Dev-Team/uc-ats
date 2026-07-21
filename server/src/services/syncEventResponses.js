@@ -3,6 +3,7 @@ import { getResponses } from './google/forms.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { transformEventFormResponse, createDynamicEventMapping } from '../utils/eventDataMapper.js'
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from './emailNotifications.js'
+import { syncEventCalendarInvite } from './google/eventCalendarSync.js'
 
 // Transform event form responses using configuration-based mapping
 function transformEventResponse(response, eventId, formType) {
@@ -271,8 +272,18 @@ export async function syncEventRSVP(eventId) {
     }
 
     console.log(`RSVP sync complete for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
+
+    // Newly-RSVP'd candidates join the same Google Calendar invite admins/members get. Sync once
+    // for the whole batch rather than per-candidate. Best-effort — never blocks the RSVP sync.
+    if (successCount > 0) {
+      const calendarResult = await syncEventCalendarInvite(event);
+      if (calendarResult.calendarError) {
+        console.error(`[Calendar] Failed to add new RSVP'd candidates to invite for event ${eventId}:`, calendarResult.calendarError);
+      }
+    }
+
     return { processed: totalProcessed, errors: errorCount };
-    
+
   } catch (error) {
     console.error(`Error syncing RSVP for event ${eventId}:`, error);
     throw error;
