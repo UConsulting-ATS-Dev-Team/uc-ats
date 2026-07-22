@@ -1,8 +1,97 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// Admin audit of each reviewer's grading contribution within their assigned team.
+router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true },
+      select: { id: true }
+    });
+
+    if (!activeCycle) {
+      return res.json([]);
+    }
+
+    const groups = await prisma.groups.findMany({
+      where: { cycleId: activeCycle.id },
+      select: {
+        id: true,
+        assignedCandidates: {
+          select: {
+            id: true,
+            applications: {
+              where: { cycleId: activeCycle.id },
+              orderBy: { submittedAt: 'desc' },
+              take: 1,
+              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+            }
+          }
+        },
+        memberOneUser: { select: { id: true, fullName: true, email: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true } }
+      }
+    });
+
+    const candidateIds = groups.flatMap(group => group.assignedCandidates.map(candidate => candidate.id));
+    const scoreFilter = {
+      candidateId: { in: candidateIds },
+      cycleId: activeCycle.id,
+      assignedGroupId: { not: null }
+    };
+
+    const [resumeScores, coverLetterScores, videoScores] = await Promise.all([
+      prisma.resumeScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } }),
+      prisma.coverLetterScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } }),
+      prisma.videoScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } })
+    ]);
+
+    const countScores = (scores, groupId, evaluatorId) => scores.filter(score =>
+      score.assignedGroupId === groupId && score.evaluatorId === evaluatorId
+    ).length;
+
+    res.json(groups.map(group => {
+      const applications = group.assignedCandidates
+        .map(candidate => candidate.applications[0])
+        .filter(Boolean);
+      const eligible = {
+        resume: applications.filter(application => Boolean(application.resumeUrl)).length,
+        coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+        video: applications.filter(application => Boolean(application.videoUrl)).length
+      };
+
+      const members = [group.memberOneUser, group.memberTwoUser, group.memberThreeUser]
+        .filter(Boolean)
+        .map(member => {
+          const completed = {
+            resume: countScores(resumeScores, group.id, member.id),
+            coverLetter: countScores(coverLetterScores, group.id, member.id),
+            video: countScores(videoScores, group.id, member.id)
+          };
+          const completedTotal = completed.resume + completed.coverLetter + completed.video;
+          const expectedTotal = eligible.resume + eligible.coverLetter + eligible.video;
+
+          return {
+            ...member,
+            completed,
+            eligible,
+            completedTotal,
+            expectedTotal,
+            completionPercent: expectedTotal ? Math.round((completedTotal / expectedTotal) * 100) : 0
+          };
+        });
+
+      return { groupId: group.id, members };
+    }));
+  } catch (error) {
+    console.error('Error fetching reviewer contributions:', error);
+    res.status(500).json({ error: 'Failed to fetch reviewer contributions' });
+  }
+});
 
 // Get all groups with their members and assigned candidates
 router.get('/', requireAuth, async (req, res) => {
