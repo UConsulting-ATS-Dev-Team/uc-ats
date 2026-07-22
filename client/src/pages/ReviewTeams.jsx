@@ -206,6 +206,7 @@ export default function ReviewTeams() {
   const [availableApplications, setAvailableApplications] = useState([]);
   const [clickedApplicationId, setClickedApplicationId] = useState(null);
   const [editMode, setEditMode] = useState(false);
+  const [contributionsByTeam, setContributionsByTeam] = useState({});
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -247,11 +248,13 @@ export default function ReviewTeams() {
         setLoading(true);
         
         // Load teams, available applications, and users in parallel
-        const [teamsResponse, applicationsResponse, usersResponse] = await Promise.all([
+        const requests = [
           apiClient.get('/review-teams'),
           apiClient.get('/review-teams/available-applications'),
           apiClient.get('/review-teams/users')
-        ]);
+        ];
+        if (user.role === 'ADMIN') requests.push(apiClient.get('/review-teams/contributions'));
+        const [teamsResponse, applicationsResponse, usersResponse, contributionsResponse] = await Promise.all(requests);
 
         console.log('Teams response:', teamsResponse);
         console.log('Applications response:', applicationsResponse);
@@ -260,6 +263,7 @@ export default function ReviewTeams() {
         setTeams(teamsResponse);
         setAvailableApplications(applicationsResponse);
         setUsers(usersResponse);
+        setContributionsByTeam(Object.fromEntries((contributionsResponse || []).map(team => [team.groupId, team.members])));
       } catch (err) {
         console.error('Error loading data:', err);
         setError('Failed to load teams data');
@@ -563,14 +567,17 @@ export default function ReviewTeams() {
   const refreshData = async () => {
     try {
       setLoading(true);
-      const [teamsResponse, applicationsResponse, usersResponse] = await Promise.all([
+      const requests = [
         apiClient.get('/review-teams'),
         apiClient.get('/review-teams/available-applications'),
         apiClient.get('/review-teams/users')
-      ]);
+      ];
+      if (user.role === 'ADMIN') requests.push(apiClient.get('/review-teams/contributions'));
+      const [teamsResponse, applicationsResponse, usersResponse, contributionsResponse] = await Promise.all(requests);
       setTeams(teamsResponse);
       setAvailableApplications(applicationsResponse);
       setUsers(usersResponse);
+      setContributionsByTeam(Object.fromEntries((contributionsResponse || []).map(team => [team.groupId, team.members])));
       setError('');
     } catch (err) {
       console.error('Error refreshing data:', err);
@@ -862,34 +869,105 @@ export default function ReviewTeams() {
               {/* Team Members */}
               <Box mb={3}>
                 <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-                  Team members:
+                  {user.role === 'ADMIN' ? 'Individual reviewer progress:' : 'Team members:'}
                 </Typography>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  {team.members.map((member) => (
-                    <Chip
-                      key={member.id}
-                      label={member.name}
-                      avatar={
-                        <Avatar
-                          sx={{
-                            bgcolor: 'primary.main',
-                            color: 'white',
-                            fontSize: '0.75rem'
-                          }}
-                          src={member.avatar}
+                {user.role === 'ADMIN' ? (
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
+                      gap: 2
+                    }}
+                  >
+                    {team.members.map((member) => {
+                      const contribution = (contributionsByTeam[team.id] || [])
+                        .find(item => item.id === member.id);
+
+                      return (
+                        <Paper
+                          key={member.id}
+                          variant="outlined"
+                          sx={{ px: 2.5, pt: 2.5, pb: 1.25, backgroundColor: 'grey.50' }}
                         >
-                          {!member.avatar && member.name.split(' ').map(n => n[0]).join('')}
-                        </Avatar>
-                      }
-                      onDelete={editMode ? () => handleRemoveMemberFromTeam(team.id, member.id) : undefined}
-                      sx={{
-                        backgroundColor: 'rgba(4, 39, 66, 0.08)',
-                        '& .MuiChip-label': {
-                          fontWeight: 500
+                            <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: '0.75rem' }}>
+                                  {member.name.split(' ').map(name => name[0]).join('')}
+                                </Avatar>
+                                <Box>
+                                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                    {member.name}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    {contribution?.completedTotal || 0}/{contribution?.expectedTotal || 0} total grades
+                                  </Typography>
+                                </Box>
+                              </Stack>
+                              {editMode && (
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  title="Remove team member"
+                                  onClick={() => handleRemoveMemberFromTeam(team.id, member.id)}
+                                >
+                                  <TrashIcon style={{ width: '1rem', height: '1rem' }} />
+                                </IconButton>
+                              )}
+                            </Stack>
+
+                            {[
+                              ['Resume', 'resume'],
+                              ['Cover letter', 'coverLetter'],
+                              ['Video', 'video']
+                            ].map(([label, key]) => {
+                              const completed = contribution?.completed?.[key] || 0;
+                              const expected = contribution?.eligible?.[key] || 0;
+                              const percent = expected ? Math.round((completed / expected) * 100) : 0;
+
+                              return (
+                                <Box key={key} mb={1.25}>
+                                  <Stack direction="row" justifyContent="space-between" mb={0.5}>
+                                    <Typography variant="body2">{label}</Typography>
+                                    <Typography variant="body2" color="text.secondary">
+                                      {completed}/{expected}
+                                    </Typography>
+                                  </Stack>
+                                  <LinearProgress
+                                    variant="determinate"
+                                    value={Math.min(percent, 100)}
+                                    sx={{ height: 6, borderRadius: 3 }}
+                                  />
+                                </Box>
+                              );
+                            })}
+
+                            <Chip
+                              size="small"
+                              color={(contribution?.completionPercent || 0) === 100 ? 'success' : 'primary'}
+                              label={`${contribution?.completionPercent || 0}% complete`}
+                              sx={{ fontWeight: 600 }}
+                            />
+                        </Paper>
+                      );
+                    })}
+                  </Box>
+                ) : (
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    {team.members.map((member) => (
+                      <Chip
+                        key={member.id}
+                        label={member.name}
+                        avatar={
+                          <Avatar src={member.avatar}>
+                            {!member.avatar && member.name.split(' ').map(name => name[0]).join('')}
+                          </Avatar>
                         }
-                      }}
-                    />
-                  ))}
+                        sx={{ backgroundColor: 'rgba(4, 39, 66, 0.08)' }}
+                      />
+                    ))}
+                  </Stack>
+                )}
+                <Box sx={{ mt: 1 }}>
                   <IconButton
                     size="small"
                     onClick={() => handleAddMember(team.id)}
@@ -910,7 +988,7 @@ export default function ReviewTeams() {
                   >
                     <UserPlusIcon style={{ width: '1rem', height: '1rem' }} />
                   </IconButton>
-                </Stack>
+                </Box>
               </Box>
 
               <Divider sx={{ my: 2 }} />
