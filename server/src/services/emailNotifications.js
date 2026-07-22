@@ -836,9 +836,9 @@ const createMeetingSignupConfirmationEmail = (candidateName, memberName, locatio
           </div>
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            If you need to cancel or reschedule, please contact us at <strong>uconsultingla@gmail.com</strong> as soon as possible.
+            Need to cancel or change your time slot? You can manage everything by logging into your <a href="https://uconsultingats.com" style="color: #007bff;">ATS account</a>.
           </p>
-          
+
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
             We look forward to meeting you!
           </p>
@@ -926,7 +926,7 @@ const createMeetingSignupNotificationEmail = (memberName, candidateName, candida
           </div>
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            You can view and manage all your meeting slots in the <a href="https://uconsultingats.com/member/meeting-slots" style="color: #007bff;">Member Dashboard</a>.
+            You can manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a>.
           </p>
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
@@ -1007,9 +1007,8 @@ const createMeetingCancellationEmail = (candidateName, memberName, location, sta
           
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
-            <p style="color: #666; margin: 8px 0;">• You can sign up for other available meeting slots</p>
-            <p style="color: #666; margin: 8px 0;">• Visit our <a href="https://uconsultingats.com/meet" style="color: #007bff;">meeting signup page</a> to see available slots</p>
-            <p style="color: #666; margin: 8px 0;">• If you have any questions, please contact us at <strong>uconsultingla@gmail.com</strong></p>
+            <p style="color: #666; margin: 8px 0;">• You can sign up for another available meeting slot</p>
+            <p style="color: #666; margin: 8px 0;">• Manage everything by logging into your <a href="https://uconsultingats.com" style="color: #007bff;">ATS account</a></p>
             <p style="color: #666; margin: 8px 0;">• We apologize for any inconvenience this may cause</p>
           </div>
           
@@ -1111,6 +1110,93 @@ export const sendMeetingCancellationEmail = async (candidateEmail, candidateName
     return result;
   } catch (error) {
     console.error('Error in sendMeetingCancellationEmail:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Create meeting cancellation email template directed at the HOST member.
+// Two variants: whole slot cancelled (candidateName omitted) vs. a single
+// candidate's signup cancelled (candidateName provided).
+const createMeetingCancellationMemberEmail = (memberName, location, startTime, endTime, options = {}) => {
+  const candidateName = options.candidateName ? escapeHtml(options.candidateName) : null;
+  const signupCount = Number.isInteger(options.signupCount) ? options.signupCount : null;
+  memberName = escapeHtml(memberName);
+  location = escapeHtml(location);
+  startTime = escapeHtml(startTime);
+  endTime = escapeHtml(endTime);
+  const formatDateTime = (date) => formatEmailDateTime(date);
+  const formatTime = (date) => formatEmailTime(date);
+
+  const intro = candidateName
+    ? `${candidateName} has cancelled their signup for one of your Get to Know UC meeting slots.`
+    : `One of your Get to Know UC meeting slots has been cancelled by an administrator.`;
+
+  const impactLine = candidateName
+    ? `<p style="color: #666; margin: 8px 0;">• This spot is now open again for other candidates to sign up</p>`
+    : `<p style="color: #666; margin: 8px 0;">• ${signupCount ? `${signupCount} signed-up candidate(s) have` : 'Any signed-up candidates have'} been notified of the cancellation</p>`;
+
+  return {
+    subject: `Get to Know UC - Meeting Cancelled`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
+          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">Meeting Cancelled</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Hi ${memberName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            ${intro}
+          </p>
+
+          <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
+            <h4 style="color: #721c24; margin: 0 0 15px 0;">Cancelled Meeting Details</h4>
+            ${candidateName ? `<p style="color: #721c24; margin: 8px 0;"><strong>Candidate:</strong> ${candidateName}</p>` : ''}
+            <p style="color: #721c24; margin: 8px 0;"><strong>Date & Time:</strong> ${formatDateTime(startTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatTime(startTime)} - ${formatTime(endTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+          </div>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
+            ${impactLine}
+            <p style="color: #666; margin: 8px 0;">• Manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+// Send meeting cancellation email to the HOST member.
+export const sendMeetingCancellationToMember = async (memberEmail, memberName, location, startTime, endTime, options = {}) => {
+  try {
+    const emailContent = createMeetingCancellationMemberEmail(memberName, location, startTime, endTime, options);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Meeting cancellation email sent to host member ${memberEmail}`);
+    } else {
+      console.error(`Failed to send meeting cancellation email to host member ${memberEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendMeetingCancellationToMember:', error);
     return { success: false, error: error.message };
   }
 };

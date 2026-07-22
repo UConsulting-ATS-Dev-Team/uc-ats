@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 
 const router = express.Router();
@@ -982,22 +983,26 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
     if (existingSlot.signups.length > 0) {
       const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
       
-      // Send cancellation emails to all signups
-      const emailPromises = existingSlot.signups.map(async (signup) => {
-        try {
-          await sendMeetingCancellationEmail(
+      // Send cancellation emails to all signups (and log each communication)
+      const emailPromises = existingSlot.signups.map((signup) =>
+        sendAndLogMeetingCommunication(
+          () => sendMeetingCancellationEmail(
             signup.email,
             signup.fullName,
             memberName,
             existingSlot.location,
             existingSlot.startTime,
             existingSlot.endTime
-          );
-        } catch (emailError) {
-          console.error(`Failed to send cancellation email to ${signup.email}:`, emailError);
-          // Don't fail the deletion if email fails, just log the error
-        }
-      });
+          ),
+          {
+            slotId: existingSlot.id,
+            signupId: signup.id,
+            type: 'CANCELLATION',
+            recipient: signup.email,
+            subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+          }
+        )
+      );
       
       // Wait for all emails to be sent (or fail)
       await Promise.allSettled(emailPromises);
@@ -1052,22 +1057,27 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to delete this signup' });
     }
 
-    // Send cancellation email to the signup
+    // Send cancellation email to the signup (and log the communication).
+    // Logged before deletion; the log survives with signupId set null (slot remains).
     const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
 
-    try {
-      await sendMeetingCancellationEmail(
+    await sendAndLogMeetingCommunication(
+      () => sendMeetingCancellationEmail(
         signup.email,
         signup.fullName,
         memberName,
         signup.slot.location,
         signup.slot.startTime,
         signup.slot.endTime
-      );
-    } catch (emailError) {
-      console.error(`Failed to send cancellation email to ${signup.email}:`, emailError);
-      // Don't fail the deletion if email fails, just log the error
-    }
+      ),
+      {
+        slotId: signup.slotId,
+        signupId: signup.id,
+        type: 'CANCELLATION',
+        recipient: signup.email,
+        subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+      }
+    );
 
     // Delete the signup
     await prisma.meetingSignup.delete({

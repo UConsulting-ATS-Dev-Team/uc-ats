@@ -3,7 +3,9 @@ import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
-import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from '../services/emailNotifications.js';
+import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { localInputToUTC } from '../utils/timezoneUtils.js';
 
 const router = express.Router();
 
@@ -5135,6 +5137,316 @@ router.delete('/applications/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/applications/:id]', error);
     res.status(500).json({ error: 'Failed to delete application' });
+  }
+});
+
+// ===========================================================================
+// Get to Know UC (GTKUC) meeting-slot administration
+// Admin-wide management of every member's slots, signups, attendance, and the
+// communications log. All routes are already protected by requireAuth +
+// requireAdmin via router.use() at the top of this file.
+// ===========================================================================
+
+// Admin: list ALL meeting slots (across every member) with host details,
+// signups, and the communications log. Clients compute slot count / attendance
+// rate from this payload (optionally after filtering by cycle client-side).
+router.get('/meeting-slots', async (req, res) => {
+  try {
+    const slots = await prisma.meetingSlot.findMany({
+      orderBy: { startTime: 'asc' },
+      include: {
+        member: {
+          select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true }
+        },
+        signups: {
+          orderBy: { createdAt: 'asc' }
+        },
+        communications: {
+          orderBy: { sentAt: 'desc' }
+        }
+      }
+    });
+
+    // Convenience aggregate stats over the full (unfiltered) set.
+    const totalSlots = slots.length;
+    const totalSignups = slots.reduce((sum, s) => sum + s.signups.length, 0);
+    const attendedSignups = slots.reduce(
+      (sum, s) => sum + s.signups.filter((su) => su.attended).length,
+      0
+    );
+    const totalCapacity = slots.reduce((sum, s) => sum + (s.capacity || 0), 0);
+
+    res.json({
+      slots,
+      stats: {
+        totalSlots,
+        totalSignups,
+        attendedSignups,
+        totalCapacity,
+        attendanceRate: totalSignups > 0 ? attendedSignups / totalSignups : 0
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/meeting-slots]', error);
+    res.status(500).json({ error: 'Failed to fetch meeting slots' });
+  }
+});
+
+// Admin: create a meeting slot on behalf of any member (defaults to self).
+router.post('/meeting-slots', async (req, res) => {
+  try {
+    const { memberId, location, startTime, endTime, capacity } = req.body || {};
+    if (!location || !startTime) {
+      return res.status(400).json({ error: 'Location and start time are required' });
+    }
+
+    const hostId = memberId || req.user.id;
+    const host = await prisma.user.findUnique({ where: { id: hostId } });
+    if (!host) {
+      return res.status(400).json({ error: 'Host member not found' });
+    }
+
+    const slot = await prisma.meetingSlot.create({
+      data: {
+        memberId: hostId,
+        location,
+        startTime: localInputToUTC(startTime),
+        endTime: endTime ? localInputToUTC(endTime) : null,
+        capacity: Number.isInteger(capacity) ? capacity : 2
+      },
+      include: {
+        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
+        signups: true,
+        communications: { orderBy: { sentAt: 'desc' } }
+      }
+    });
+
+    res.json(slot);
+  } catch (error) {
+    console.error('[POST /api/admin/meeting-slots]', error);
+    res.status(500).json({ error: 'Failed to create meeting slot' });
+  }
+});
+
+// Admin: update any meeting slot (full override — including host and time).
+router.put('/meeting-slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { memberId, location, startTime, endTime, capacity } = req.body || {};
+
+    const existingSlot = await prisma.meetingSlot.findUnique({ where: { id } });
+    if (!existingSlot) {
+      return res.status(404).json({ error: 'Meeting slot not found' });
+    }
+
+    if (memberId !== undefined && memberId !== existingSlot.memberId) {
+      const host = await prisma.user.findUnique({ where: { id: memberId } });
+      if (!host) {
+        return res.status(400).json({ error: 'Host member not found' });
+      }
+    }
+
+    const updateData = {};
+    if (memberId !== undefined) updateData.memberId = memberId;
+    if (location !== undefined) updateData.location = location;
+    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
+    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
+    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
+
+    const updatedSlot = await prisma.meetingSlot.update({
+      where: { id },
+      data: updateData,
+      include: {
+        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
+        signups: { orderBy: { createdAt: 'asc' } },
+        communications: { orderBy: { sentAt: 'desc' } }
+      }
+    });
+
+    res.json(updatedSlot);
+  } catch (error) {
+    console.error('[PUT /api/admin/meeting-slots/:id]', error);
+    res.status(500).json({ error: 'Failed to update meeting slot' });
+  }
+});
+
+// Admin: delete any meeting slot; notify + log cancellation for every signup.
+router.delete('/meeting-slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingSlot = await prisma.meetingSlot.findUnique({
+      where: { id },
+      include: { signups: true, member: { select: { fullName: true, email: true } } }
+    });
+
+    if (!existingSlot) {
+      return res.status(404).json({ error: 'Meeting slot not found' });
+    }
+
+    const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
+
+    // Notify everyone involved: all signed-up candidates AND the host member.
+    const notifications = [];
+
+    if (existingSlot.signups.length > 0) {
+      existingSlot.signups.forEach((signup) => {
+        notifications.push(
+          sendAndLogMeetingCommunication(
+            () => sendMeetingCancellationEmail(
+              signup.email,
+              signup.fullName,
+              memberName,
+              existingSlot.location,
+              existingSlot.startTime,
+              existingSlot.endTime
+            ),
+            {
+              slotId: existingSlot.id,
+              signupId: signup.id,
+              type: 'CANCELLATION',
+              recipient: signup.email,
+              subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+            }
+          )
+        );
+      });
+    }
+
+    // Notify the host member their slot was cancelled.
+    if (existingSlot.member?.email) {
+      notifications.push(
+        sendAndLogMeetingCommunication(
+          () => sendMeetingCancellationToMember(
+            existingSlot.member.email,
+            memberName,
+            existingSlot.location,
+            existingSlot.startTime,
+            existingSlot.endTime,
+            { signupCount: existingSlot.signups.length }
+          ),
+          {
+            slotId: existingSlot.id,
+            signupId: null,
+            type: 'CANCELLATION',
+            recipient: existingSlot.member.email,
+            subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
+          }
+        )
+      );
+    }
+
+    await Promise.allSettled(notifications);
+
+    // Cascade-delete signups and the slot. The slot's communications rows are
+    // removed with it (onDelete: Cascade) — moot once the slot itself is gone.
+    await prisma.$transaction(async (tx) => {
+      await tx.meetingSignup.deleteMany({ where: { slotId: id } });
+      await tx.meetingSlot.delete({ where: { id } });
+    });
+
+    const recipientCount = existingSlot.signups.length + (existingSlot.member?.email ? 1 : 0);
+    const message = recipientCount > 0
+      ? `Meeting slot deleted. Cancellation emails sent to ${existingSlot.signups.length} candidate(s) and the host member.`
+      : 'Meeting slot deleted successfully.';
+
+    res.json({ message });
+  } catch (error) {
+    console.error('[DELETE /api/admin/meeting-slots/:id]', error);
+    res.status(500).json({ error: 'Failed to delete meeting slot' });
+  }
+});
+
+// Admin: mark attendance for any signup. Setting attended=true feeds the
+// existing dynamic candidate-scoring bonus (read from attended elsewhere).
+router.patch('/meeting-signups/:id/attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { attended } = req.body || {};
+
+    const signup = await prisma.meetingSignup.findUnique({ where: { id } });
+    if (!signup) {
+      return res.status(404).json({ error: 'Signup not found' });
+    }
+
+    const updated = await prisma.meetingSignup.update({
+      where: { id },
+      data: { attended: Boolean(attended) }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/meeting-signups/:id/attendance]', error);
+    res.status(500).json({ error: 'Failed to update attendance' });
+  }
+});
+
+// Admin: delete any signup; notify + log cancellation (slot remains, so the
+// communication persists with signupId set null).
+router.delete('/meeting-signups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const signup = await prisma.meetingSignup.findUnique({
+      where: { id },
+      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
+    });
+
+    if (!signup) {
+      return res.status(404).json({ error: 'Signup not found' });
+    }
+
+    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+
+    // Notify the candidate their signup was cancelled...
+    await sendAndLogMeetingCommunication(
+      () => sendMeetingCancellationEmail(
+        signup.email,
+        signup.fullName,
+        memberName,
+        signup.slot.location,
+        signup.slot.startTime,
+        signup.slot.endTime
+      ),
+      {
+        slotId: signup.slotId,
+        signupId: signup.id,
+        type: 'CANCELLATION',
+        recipient: signup.email,
+        subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+      }
+    );
+
+    // ...and notify the host member the spot reopened.
+    if (signup.slot.member?.email) {
+      await sendAndLogMeetingCommunication(
+        () => sendMeetingCancellationToMember(
+          signup.slot.member.email,
+          memberName,
+          signup.slot.location,
+          signup.slot.startTime,
+          signup.slot.endTime,
+          { candidateName: signup.fullName }
+        ),
+        {
+          slotId: signup.slotId,
+          signupId: signup.id,
+          type: 'CANCELLATION',
+          recipient: signup.slot.member.email,
+          subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
+        }
+      );
+    }
+
+    await prisma.meetingSignup.delete({ where: { id } });
+
+    res.json({
+      message: 'Signup deleted successfully. Cancellation email sent.',
+      deletedSignup: { id: signup.id, fullName: signup.fullName, email: signup.email }
+    });
+  } catch (error) {
+    console.error('[DELETE /api/admin/meeting-signups/:id]', error);
+    res.status(500).json({ error: 'Failed to delete signup' });
   }
 });
 
