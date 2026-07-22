@@ -1,5 +1,10 @@
 import nodemailer from 'nodemailer';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
+
+// Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+// are picked up automatically from the environment by the AWS SDK credential chain.
+const sesClient = new SESv2Client({ region: process.env.AWS_REGION });
 
 // Escape candidate-controlled strings before interpolating into HTML email bodies.
 const escapeHtml = (value) => {
@@ -13,12 +18,10 @@ const escapeHtml = (value) => {
 };
 
 const createTransporter = () => {
+  // Send through the Amazon SES v2 API over HTTPS (port 443) rather than SMTP,
+  // so email works regardless of the host's outbound SMTP port policy.
   return nodemailer.createTransport({
-    service: 'Gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
+    SES: { sesClient, SendEmailCommand }
   });
 };
 
@@ -125,7 +128,8 @@ const sendEmail = async (to, subject, html) => {
     const transporter = createTransporter();
     
     const mailOptions = {
-      from: `"UConsulting ATS" <${process.env.EMAIL_USER}>`,
+      from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
+      replyTo: process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,
       html: html
@@ -1026,6 +1030,70 @@ const createMeetingCancellationEmail = (candidateName, memberName, location, sta
       </div>
     `
   };
+};
+
+// Create password reset email template
+const createPasswordResetEmail = (resetLink) => {
+  // resetLink is server-generated (BASE/CLIENT URL + token), not user-controlled,
+  // so it is safe to embed directly in the href.
+  return {
+    subject: 'Reset Your Password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">Password Reset Request</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            You requested a password reset for your UConsulting ATS account.
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Click the button below to choose a new password. This link expires in 30 minutes.
+          </p>
+
+          <p style="text-align: center; margin: 30px 0;">
+            <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Reset Password</a>
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            If you didn't request this, you can safely ignore this email — your password will not change.
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting ATS Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+// Send password reset email
+export const sendPasswordResetEmail = async (email, resetLink) => {
+  try {
+    const emailContent = createPasswordResetEmail(resetLink);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Password reset email sent to ${email}`);
+    } else {
+      console.error(`Failed to send password reset email to ${email}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendPasswordResetEmail:', error);
+    return { success: false, error: error.message };
+  }
 };
 
 // Send meeting cancellation email
