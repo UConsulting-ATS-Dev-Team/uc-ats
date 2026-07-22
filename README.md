@@ -4,6 +4,10 @@ A comprehensive application tracking system for UConsulting's recruitment proces
 
 ## Features
 
+### Google Drive
+- Contains the pre-ATS system for reference
+- https://drive.google.com/drive/u/1/folders/1UMwhIFc0NXgGV52ZzqWn2qPLOdKrEys2
+
 ### Core Functionality
 - **Application Management**: Track and review candidate applications
 - **Review Teams**: Assign applications to review teams for evaluation
