@@ -1,6 +1,8 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { sendMeetingSignupConfirmation, sendMeetingSignupNotification } from '../services/emailNotifications.js';
+import { requireAuth } from '../middleware/auth.js';
+import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 
 const router = express.Router();
 
@@ -38,14 +40,21 @@ router.get('/meeting-slots', async (req, res) => {
   }
 });
 
-// Public: sign up for a meeting slot
-router.post('/meeting-slots/:id/signup', async (req, res) => {
+// Sign up for a meeting slot. Requires an account: identity comes from the
+// authenticated user, not the request body, so candidates can't book on behalf
+// of someone else. The /meet page stays public to browse; booking is gated.
+router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { fullName, email, studentId } = req.body || {};
+
+    // Identity is taken from the signed-in account. studentId falls back to the
+    // request body only if the account doesn't have one on file.
+    const fullName = req.user.fullName;
+    const email = req.user.email;
+    const studentId = req.user.studentId || (req.body?.studentId || '').trim() || null;
 
     if (!fullName || !email || !studentId) {
-      return res.status(400).json({ error: 'Name, email, and student ID are required' });
+      return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
     }
 
     // Get the active recruiting cycle to check for cycle-specific signups
@@ -124,25 +133,29 @@ router.post('/meeting-slots/:id/signup', async (req, res) => {
       }
     });
 
-    // Send confirmation email to candidate
-    try {
-      await sendMeetingSignupConfirmation(
+    // Send confirmation email to candidate (and log the communication)
+    await sendAndLogMeetingCommunication(
+      () => sendMeetingSignupConfirmation(
         email,
         fullName,
         slot.member?.fullName || 'UC Consulting Member',
         slot.location,
         slot.startTime,
         slot.endTime
-      );
-    } catch (emailError) {
-      console.error('Failed to send confirmation email:', emailError);
-      // Don't fail the signup if email fails, just log the error
-    }
+      ),
+      {
+        slotId: slot.id,
+        signupId: signup.id,
+        type: 'CONFIRMATION',
+        recipient: email,
+        subject: MEETING_COMM_SUBJECTS.CONFIRMATION,
+      }
+    );
 
-    // Send notification email to member
-    try {
-      if (slot.member?.email) {
-        await sendMeetingSignupNotification(
+    // Send notification email to member (and log the communication)
+    if (slot.member?.email) {
+      await sendAndLogMeetingCommunication(
+        () => sendMeetingSignupNotification(
           slot.member.email,
           slot.member.fullName || 'UC Consulting Member',
           fullName,
@@ -151,11 +164,15 @@ router.post('/meeting-slots/:id/signup', async (req, res) => {
           slot.location,
           slot.startTime,
           slot.endTime
-        );
-      }
-    } catch (emailError) {
-      console.error('Failed to send notification email to member:', emailError);
-      // Don't fail the signup if email fails, just log the error
+        ),
+        {
+          slotId: slot.id,
+          signupId: signup.id,
+          type: 'HOST_NOTIFICATION',
+          recipient: slot.member.email,
+          subject: MEETING_COMM_SUBJECTS.HOST_NOTIFICATION(fullName),
+        }
+      );
     }
 
     res.json({ 
@@ -172,6 +189,79 @@ router.post('/meeting-slots/:id/signup', async (req, res) => {
     }
     console.error('[POST /api/meeting-slots/:id/signup]', error);
     res.status(500).json({ error: 'Failed to create signup' });
+  }
+});
+
+// Authenticated: list the signed-in user's own meeting signups (matched by
+// account email) with slot + host details, so the /meet page can show and
+// cancel their booking.
+router.get('/meeting-signups/mine', requireAuth, async (req, res) => {
+  try {
+    const signups = await prisma.meetingSignup.findMany({
+      where: { email: { equals: req.user.email, mode: 'insensitive' } },
+      include: {
+        slot: {
+          include: { member: { select: { fullName: true, email: true } } }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(signups);
+  } catch (error) {
+    console.error('[GET /api/meeting-signups/mine]', error);
+    res.status(500).json({ error: 'Failed to fetch your signups' });
+  }
+});
+
+// Authenticated: cancel your own meeting signup. Notifies the host member that
+// the spot reopened and logs the communication.
+router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const signup = await prisma.meetingSignup.findUnique({
+      where: { id },
+      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
+    });
+
+    if (!signup) {
+      return res.status(404).json({ error: 'Signup not found' });
+    }
+
+    // Ownership: a user may only cancel a signup made under their own email.
+    if (signup.email.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({ error: 'You can only cancel your own signup' });
+    }
+
+    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+
+    // Notify the host member their slot spot reopened (and log it).
+    if (signup.slot.member?.email) {
+      await sendAndLogMeetingCommunication(
+        () => sendMeetingCancellationToMember(
+          signup.slot.member.email,
+          memberName,
+          signup.slot.location,
+          signup.slot.startTime,
+          signup.slot.endTime,
+          { candidateName: signup.fullName }
+        ),
+        {
+          slotId: signup.slotId,
+          signupId: signup.id,
+          type: 'CANCELLATION',
+          recipient: signup.slot.member.email,
+          subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
+        }
+      );
+    }
+
+    await prisma.meetingSignup.delete({ where: { id } });
+
+    res.json({ message: 'Your signup has been cancelled.' });
+  } catch (error) {
+    console.error('[DELETE /api/meeting-signups/:id]', error);
+    res.status(500).json({ error: 'Failed to cancel signup' });
   }
 });
 

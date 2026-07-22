@@ -41,7 +41,12 @@ model User {
   videoScores                VideoScore[]
   conversationParticipants   ConversationParticipant[]       @relation("ConversationParticipantUser")
   sentMessages               Message[]                       @relation("MessageSender")
+<<<<<<< HEAD
   eventInvitations           EventInvitee[]
+=======
+  createdCases               Case[]                          @relation("CaseCreator")
+  caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+>>>>>>> 55b1757d (changes)
 
   @@map("users")
 }
@@ -110,6 +115,7 @@ model Application {
   firstRoundEvaluations FirstRoundInterviewEvaluation[]
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
+  caseAssignments       CaseAssignment[]
 
   @@map("applications")
 }
@@ -133,6 +139,7 @@ model RecruitingCycle {
   referrals           Referral[]
   resumeScores        ResumeScore[]
   videoScores         VideoScore[]
+  cases               Case[]
 
   @@map("recruiting_cycles")
 }
@@ -446,6 +453,7 @@ model Interview {
   evaluations           InterviewEvaluation[]
   creator               User                            @relation("InterviewCreator", fields: [createdBy], references: [id])
   cycle                 RecruitingCycle                 @relation(fields: [cycleId], references: [id])
+  caseAssignments       CaseAssignment[]
 
   @@map("interviews")
 }
@@ -568,27 +576,47 @@ model MeetingSlot {
   location  String
   startTime DateTime
   endTime   DateTime?
-  capacity  Int             @default(2)
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
-  signups   MeetingSignup[]
-  member    User            @relation(fields: [memberId], references: [id])
+  capacity       Int                    @default(2)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  signups        MeetingSignup[]
+  member         User                   @relation(fields: [memberId], references: [id])
+  communications MeetingCommunication[]
 
   @@map("meeting_slots")
 }
 
 model MeetingSignup {
-  id        String      @id @default(uuid())
-  slotId    String
-  fullName  String
-  email     String
-  studentId String?
-  attended  Boolean     @default(false)
-  createdAt DateTime    @default(now())
-  slot      MeetingSlot @relation(fields: [slotId], references: [id])
+  id             String                 @id @default(uuid())
+  slotId         String
+  fullName       String
+  email          String
+  studentId      String?
+  attended       Boolean                @default(false)
+  createdAt      DateTime               @default(now())
+  slot           MeetingSlot            @relation(fields: [slotId], references: [id])
+  communications MeetingCommunication[]
 
   @@unique([slotId, email])
   @@map("meeting_signups")
+}
+
+model MeetingCommunication {
+  id        String                   @id @default(uuid())
+  slotId    String
+  signupId  String?
+  type      MeetingCommunicationType
+  recipient String
+  subject   String
+  status    String                   @default("SENT")
+  error     String?
+  sentAt    DateTime                 @default(now())
+  slot      MeetingSlot              @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  signup    MeetingSignup?           @relation(fields: [signupId], references: [id], onDelete: SetNull)
+
+  @@index([slotId])
+  @@index([signupId])
+  @@map("meeting_communications")
 }
 
 model BehavioralQuestion {
@@ -661,6 +689,61 @@ enum ConversationContextType {
   DIRECT_MESSAGE
 }
 
+model Case {
+  id             String           @id @default(uuid())
+  title          String
+  description    String?
+  status         CaseStatus       @default(DRAFT)
+  cycleId        String?
+  createdBy      String
+  pdfStoragePath String?
+  pageCount      Int              @default(0)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  cycle          RecruitingCycle? @relation(fields: [cycleId], references: [id])
+  creator        User             @relation("CaseCreator", fields: [createdBy], references: [id])
+  pages          CasePage[]
+  assignments    CaseAssignment[]
+
+  @@map("cases")
+}
+
+model CasePage {
+  id               String       @id @default(uuid())
+  caseId           String
+  pageNumber       Int
+  imageStoragePath String
+  pageType         CasePageType @default(NORMAL)
+  exhibitLabel     String?
+  width            Int?
+  height           Int?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  case             Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, pageNumber])
+  @@map("case_pages")
+}
+
+model CaseAssignment {
+  id            String      @id @default(uuid())
+  caseId        String
+  interviewId   String
+  applicationId String
+  assignedBy    String
+  overriddenBy  String?
+  overriddenAt  DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  case          Case        @relation(fields: [caseId], references: [id])
+  interview     Interview   @relation(fields: [interviewId], references: [id])
+  application   Application @relation(fields: [applicationId], references: [id])
+  assigner      User        @relation("CaseAssigner", fields: [assignedBy], references: [id])
+
+  @@unique([interviewId, applicationId])
+  @@map("case_assignments")
+}
+
 enum UserRole {
   USER
   ADMIN
@@ -704,4 +787,23 @@ enum InterviewDecision {
   UNSURE
   MAYBE_NO
   NO
+}
+
+enum CaseStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CasePageType {
+  NORMAL
+  EXHIBIT
+  INTERVIEWER_ONLY
+}
+
+enum MeetingCommunicationType {
+  CONFIRMATION
+  HOST_NOTIFICATION
+  CANCELLATION
+  REMINDER
 }
