@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
 import { useCandidates } from '../hooks/useCandidates';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/CandidateList.css';
 
@@ -24,12 +25,14 @@ export default function CandidateList() {
   const [pendingFilters, setPendingFilters] = useState({
     group: '',
     createdDate: '',
-    cycle: ''
+    cycle: '',
+    eventAttendanceEventId: ''
   });
   const [appliedFilters, setAppliedFilters] = useState({
     group: '',
     createdDate: '',
-    cycle: ''
+    cycle: '',
+    eventAttendanceEventId: ''
   });
 
   // Check if there are unapplied filter or search changes
@@ -44,7 +47,7 @@ export default function CandidateList() {
 
   // Clear all filters
   const handleClearFilters = useCallback(() => {
-    const emptyFilters = { group: '', createdDate: '', cycle: '' };
+    const emptyFilters = { group: '', createdDate: '', cycle: '', eventAttendanceEventId: '' };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setPendingSearch('');
@@ -64,7 +67,8 @@ export default function CandidateList() {
     limit,
     search: appliedSearch,
     endpoint: '/member/all-candidates',
-    enabled: !!user?.id
+    enabled: !!user?.id,
+    eventAttendanceEventId: appliedFilters.eventAttendanceEventId
   });
 
   // Transform candidates data - apply client-side filters that aren't supported server-side
@@ -105,6 +109,7 @@ export default function CandidateList() {
     return data;
   }, [rawCandidates, appliedFilters]);
 
+  const [events, setEvents] = useState([]);
   const [cycles, setCycles] = useState([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingCandidate, setEditingCandidate] = useState(null);
@@ -112,7 +117,7 @@ export default function CandidateList() {
 
   const isAdmin = user?.role === 'ADMIN';
 
-  // Fetch cycles separately (they don't change often)
+  // Fetch cycles and events separately (they don't change often)
   useEffect(() => {
     const fetchCycles = async () => {
       try {
@@ -122,8 +127,17 @@ export default function CandidateList() {
         console.error('Error loading cycles:', err);
       }
     };
+    const fetchEvents = async () => {
+      try {
+        const eventsData = await apiClient.get('/member/events');
+        setEvents((eventsData || []).filter((event) => isPointEligibleEvent(event.eventName)));
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
     if (user?.id) {
       fetchCycles();
+      fetchEvents();
     }
   }, [user?.id]);
 
@@ -304,6 +318,19 @@ export default function CandidateList() {
           {cycles.map(cycle => (
             <option key={cycle.id} value={cycle.id}>
               Cycle: {cycle.name}{cycle.isActive ? ' (Active)' : ''}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="filter-select"
+          value={pendingFilters.eventAttendanceEventId}
+          onChange={(e) => handleFilterChange('eventAttendanceEventId', e.target.value)}
+        >
+          <option value="">Event Attendance: All</option>
+          {events.map(event => (
+            <option key={`att-${event.id}`} value={event.id}>
+              Attended: {event.eventName}
             </option>
           ))}
         </select>

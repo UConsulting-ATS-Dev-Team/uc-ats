@@ -70,11 +70,21 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       return res.json([]);
     }
 
+    // Event attendance filter
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
+
+    const whereClause = { cycleId: activeCycle.id };
+
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: { some: { eventId: eventAttendanceEventId } }
+      };
+    }
+
     // Get all applications for the active cycle
     const applications = await prisma.application.findMany({
-      where: {
-        cycleId: activeCycle.id
-      },
+      where: whereClause,
       include: {
         candidate: {
           select: {
@@ -134,10 +144,21 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
     // Search parameter
     const search = req.query.search?.trim() || '';
 
-    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}")`);
+    // Event attendance filter
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
 
-    // Build where clause for search
+    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}", eventAttendance: "${eventAttendanceEventId}")`);
+
+    // Build where clause for search and event filters
     let whereClause = {};
+
+    // Event attendance filter
+    if (eventAttendanceEventId) {
+      whereClause.eventAttendance = {
+        some: { eventId: eventAttendanceEventId }
+      };
+    }
+
     if (search) {
       // Split search into words for full name matching
       const searchWords = search.split(/\s+/).filter(word => word.length > 0);
