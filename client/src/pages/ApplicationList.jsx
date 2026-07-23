@@ -9,6 +9,7 @@ import EditApplicationModal from '../components/EditApplicationModal';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import { useApplications } from '../hooks/useApplications';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/ApplicationList.css';
 
@@ -26,7 +27,8 @@ export default function ApplicationList() {
     firstGen: '',
     transfer: '',
     decision: '',
-    returning: ''
+    returning: '',
+    eventAttendanceEventId: ''
   });
   const [appliedFilters, setAppliedFilters] = useState({
     year: '',
@@ -34,8 +36,10 @@ export default function ApplicationList() {
     firstGen: '',
     transfer: '',
     decision: '',
-    returning: ''
+    returning: '',
+    eventAttendanceEventId: ''
   });
+  const [events, setEvents] = useState([]);
 
   // Check if there are unapplied filter or search changes
   const hasUnappliedFilters = JSON.stringify(pendingFilters) !== JSON.stringify(appliedFilters) || pendingSearch !== appliedSearch;
@@ -49,7 +53,7 @@ export default function ApplicationList() {
 
   // Clear all filters
   const handleClearFilters = useCallback(() => {
-    const emptyFilters = { year: '', gender: '', firstGen: '', transfer: '', decision: '', returning: '' };
+    const emptyFilters = { year: '', gender: '', firstGen: '', transfer: '', decision: '', returning: '', eventAttendanceEventId: '' };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setPendingSearch('');
@@ -74,6 +78,7 @@ export default function ApplicationList() {
     firstGen: appliedFilters.firstGen || null,
     transfer: appliedFilters.transfer || null,
     returning: appliedFilters.returning || null,
+    eventAttendanceEventId: appliedFilters.eventAttendanceEventId || null,
   });
 
   // Transform applications data
@@ -87,6 +92,22 @@ export default function ApplicationList() {
   const [deletingApplication, setDeletingApplication] = useState(null);
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
+
+  // Fetch events (for the event attendance filter dropdown), restricted to the events
+  // candidates actually get credit for attending
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        const data = await apiClient.get('/admin/events');
+        setEvents((data || []).filter((event) => isPointEligibleEvent(event.eventName)));
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
+    if (user?.id) {
+      fetchEvents();
+    }
+  }, [user?.id]);
 
   // Preload images when applications change
   useEffect(() => {
@@ -292,6 +313,17 @@ export default function ApplicationList() {
           <option value="">Returning: All</option>
           <option value="true">Returning: Yes</option>
           <option value="false">Returning: No</option>
+        </select>
+
+        <select
+          className="filter-select"
+          value={pendingFilters.eventAttendanceEventId}
+          onChange={(e) => handleFilterChange('eventAttendanceEventId', e.target.value)}
+        >
+          <option value="">Event Attendance: All</option>
+          {events.map(event => (
+            <option key={`att-${event.id}`} value={event.id}>Attended: {event.eventName}</option>
+          ))}
         </select>
 
         <button

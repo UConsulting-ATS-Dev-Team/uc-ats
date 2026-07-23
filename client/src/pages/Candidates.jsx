@@ -9,6 +9,7 @@ import {
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import '../styles/ApplicationList.css';
 
 export default function Candidates() {
@@ -24,8 +25,7 @@ export default function Candidates() {
     gender: '',
     firstGen: '',
     transfer: '',
-    eventAttendanceEventId: '',
-    eventRsvpEventId: ''
+    eventAttendanceEventId: ''
   });
   const [expandedId, setExpandedId] = useState(null);
   const [scoreCache, setScoreCache] = useState({}); // key: candidateId -> { resume, cover, video }
@@ -40,7 +40,6 @@ export default function Candidates() {
         // Use member endpoint to get all applications, not just assigned ones
         const params = new URLSearchParams();
         if (filters.eventAttendanceEventId) params.append('eventAttendanceEventId', filters.eventAttendanceEventId);
-        if (filters.eventRsvpEventId) params.append('eventRsvpEventId', filters.eventRsvpEventId);
         const queryString = params.toString();
         const data = await apiClient.get(`/member/all-applications${queryString ? '?' + queryString : ''}`);
         console.log('Fetched all applications data:', data);
@@ -54,14 +53,14 @@ export default function Candidates() {
       }
     };
     load();
-  }, [user?.id, filters.eventAttendanceEventId, filters.eventRsvpEventId]);
+  }, [user?.id, filters.eventAttendanceEventId]);
 
-  // Fetch events (for the event attendance/RSVP filter dropdowns) once on mount
+  // Fetch events (for the event attendance filter dropdown) once on mount
   useEffect(() => {
     const fetchEvents = async () => {
       try {
         const data = await apiClient.get('/admin/events');
-        setEvents(data || []);
+        setEvents((data || []).filter((event) => isPointEligibleEvent(event.eventName)));
       } catch (err) {
         console.error('Error loading events:', err);
       }
@@ -242,12 +241,6 @@ export default function Candidates() {
           <option value="">Event Attendance: All</option>
           {events.map(event => (
             <option key={`att-${event.id}`} value={event.id}>Attended: {event.eventName}</option>
-          ))}
-        </select>
-        <select className="filter-select" value={filters.eventRsvpEventId} onChange={(e) => onFilterChange('eventRsvpEventId', e.target.value)}>
-          <option value="">Event RSVP: All</option>
-          {events.map(event => (
-            <option key={`rsvp-${event.id}`} value={event.id}>RSVP'd: {event.eventName}</option>
           ))}
         </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>

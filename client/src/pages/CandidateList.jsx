@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
 import { useCandidates } from '../hooks/useCandidates';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/CandidateList.css';
 
@@ -25,15 +26,13 @@ export default function CandidateList() {
     group: '',
     createdDate: '',
     cycle: '',
-    eventAttendanceEventId: '',
-    eventRsvpEventId: ''
+    eventAttendanceEventId: ''
   });
   const [appliedFilters, setAppliedFilters] = useState({
     group: '',
     createdDate: '',
     cycle: '',
-    eventAttendanceEventId: '',
-    eventRsvpEventId: ''
+    eventAttendanceEventId: ''
   });
 
   // Check if there are unapplied filter or search changes
@@ -48,7 +47,7 @@ export default function CandidateList() {
 
   // Clear all filters
   const handleClearFilters = useCallback(() => {
-    const emptyFilters = { group: '', createdDate: '', cycle: '', eventAttendanceEventId: '', eventRsvpEventId: '' };
+    const emptyFilters = { group: '', createdDate: '', cycle: '', eventAttendanceEventId: '' };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setPendingSearch('');
@@ -69,8 +68,7 @@ export default function CandidateList() {
     search: appliedSearch,
     endpoint: '/member/all-candidates',
     enabled: !!user?.id,
-    eventAttendanceEventId: appliedFilters.eventAttendanceEventId,
-    eventRsvpEventId: appliedFilters.eventRsvpEventId
+    eventAttendanceEventId: appliedFilters.eventAttendanceEventId
   });
 
   // Transform candidates data - apply client-side filters that aren't supported server-side
@@ -132,7 +130,7 @@ export default function CandidateList() {
     const fetchEvents = async () => {
       try {
         const eventsData = await apiClient.get('/admin/events');
-        setEvents(eventsData || []);
+        setEvents((eventsData || []).filter((event) => isPointEligibleEvent(event.eventName)));
       } catch (err) {
         console.error('Error loading events:', err);
       }
@@ -333,19 +331,6 @@ export default function CandidateList() {
           {events.map(event => (
             <option key={`att-${event.id}`} value={event.id}>
               Attended: {event.eventName}
-            </option>
-          ))}
-        </select>
-
-        <select
-          className="filter-select"
-          value={pendingFilters.eventRsvpEventId}
-          onChange={(e) => handleFilterChange('eventRsvpEventId', e.target.value)}
-        >
-          <option value="">Event RSVP: All</option>
-          {events.map(event => (
-            <option key={`rsvp-${event.id}`} value={event.id}>
-              RSVP'd: {event.eventName}
             </option>
           ))}
         </select>

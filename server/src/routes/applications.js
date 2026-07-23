@@ -256,7 +256,7 @@ router.get('/', async (req, res) => {
 
     // Search and filter parameters
     const search = req.query.search?.trim() || '';
-    const { year, gender, firstGen, transfer, status: statusFilter, returning } = req.query;
+    const { year, gender, firstGen, transfer, status: statusFilter, returning, eventAttendanceEventId } = req.query;
 
     // Optional: scope to active recruiting cycle if one exists
     const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
@@ -299,6 +299,14 @@ router.get('/', async (req, res) => {
     if (transfer === 'true') whereClause.isTransferStudent = true;
     if (transfer === 'false') whereClause.isTransferStudent = false;
     if (statusFilter) whereClause.status = statusFilter;
+
+    // Event attendance filter (via candidate relation)
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: { some: { eventId: eventAttendanceEventId } }
+      };
+    }
 
     // Returning is a computed value, so resolve it before count/pagination.
     // This keeps page sizes, totals, and page counts aligned with the filter.

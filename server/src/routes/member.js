@@ -69,9 +69,8 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       return res.json([]);
     }
 
-    // Event attendance/RSVP filters
+    // Event attendance filter
     const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
-    const eventRsvpEventId = req.query.eventRsvpEventId || '';
 
     const whereClause = { cycleId: activeCycle.id };
 
@@ -79,13 +78,6 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       whereClause.candidate = {
         ...(whereClause.candidate || {}),
         eventAttendance: { some: { eventId: eventAttendanceEventId } }
-      };
-    }
-
-    if (eventRsvpEventId) {
-      whereClause.candidate = {
-        ...(whereClause.candidate || {}),
-        eventRsvp: { some: { eventId: eventRsvpEventId } }
       };
     }
 
@@ -151,11 +143,10 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
     // Search parameter
     const search = req.query.search?.trim() || '';
 
-    // Event attendance/RSVP filters
+    // Event attendance filter
     const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
-    const eventRsvpEventId = req.query.eventRsvpEventId || '';
 
-    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}", eventAttendance: "${eventAttendanceEventId}", eventRsvp: "${eventRsvpEventId}")`);
+    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}", eventAttendance: "${eventAttendanceEventId}")`);
 
     // Build where clause for search and event filters
     let whereClause = {};
@@ -164,13 +155,6 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
     if (eventAttendanceEventId) {
       whereClause.eventAttendance = {
         some: { eventId: eventAttendanceEventId }
-      };
-    }
-
-    // Event RSVP filter
-    if (eventRsvpEventId) {
-      whereClause.eventRsvp = {
-        some: { eventId: eventRsvpEventId }
       };
     }
 
