@@ -59,7 +59,7 @@ export default function Candidates() {
   useEffect(() => {
     const fetchEvents = async () => {
       try {
-        const data = await apiClient.get('/admin/events');
+        const data = await apiClient.get('/member/events');
         setEvents((data || []).filter((event) => isPointEligibleEvent(event.eventName)));
       } catch (err) {
         console.error('Error loading events:', err);

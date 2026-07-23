@@ -129,7 +129,7 @@ export default function CandidateList() {
     };
     const fetchEvents = async () => {
       try {
-        const eventsData = await apiClient.get('/admin/events');
+        const eventsData = await apiClient.get('/member/events');
         setEvents((eventsData || []).filter((event) => isPointEligibleEvent(event.eventName)));
       } catch (err) {
         console.error('Error loading events:', err);
