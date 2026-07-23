@@ -5,8 +5,8 @@ import apiClient from '../utils/api';
 const cache = new Map();
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
-function getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning) {
-  return `applications:${page}:${limit}:${search}:${status}:${year}:${gender}:${firstGen}:${transfer}:${returning}`;
+function getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning, eventAttendanceEventId) {
+  return `applications:${page}:${limit}:${search}:${status}:${year}:${gender}:${firstGen}:${transfer}:${returning}:${eventAttendanceEventId}`;
 }
 
 function getFromCache(key) {
@@ -43,6 +43,7 @@ export function useApplications(options = {}) {
     firstGen = null,
     transfer = null,
     returning = null,
+    eventAttendanceEventId = null,
     enabled = true,
   } = options;
 
@@ -54,7 +55,7 @@ export function useApplications(options = {}) {
   const fetchApplications = useCallback(async (skipCache = false) => {
     if (!enabled) return;
 
-    const cacheKey = getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning);
+    const cacheKey = getCacheKey(page, limit, search, status, year, gender, firstGen, transfer, returning, eventAttendanceEventId);
 
     // Check cache first
     if (!skipCache) {
@@ -79,6 +80,7 @@ export function useApplications(options = {}) {
       if (firstGen) params.append('firstGen', firstGen);
       if (transfer) params.append('transfer', transfer);
       if (returning) params.append('returning', returning);
+      if (eventAttendanceEventId) params.append('eventAttendanceEventId', eventAttendanceEventId);
 
       const response = await apiClient.get(`/applications?${params.toString()}`);
 
@@ -117,7 +119,7 @@ export function useApplications(options = {}) {
         setLoading(false);
       }
     }
-  }, [page, limit, search, status, year, gender, firstGen, transfer, returning, enabled]);
+  }, [page, limit, search, status, year, gender, firstGen, transfer, returning, eventAttendanceEventId, enabled]);
 
   useEffect(() => {
     isMounted.current = true;

@@ -137,7 +137,7 @@ router.get('/candidates', async (req, res) => {
 
     // Search and filter parameters
     const search = req.query.search?.trim() || '';
-    const { year, gender, firstGen, transfer, status: statusFilter } = req.query;
+    const { year, gender, firstGen, transfer, status: statusFilter, eventAttendanceEventId, eventRsvpEventId } = req.query;
 
     // Scope to active cycle if present
     const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
@@ -166,6 +166,26 @@ router.get('/candidates', async (req, res) => {
     if (transfer === 'false') whereClause.isTransferStudent = false;
     if (statusFilter) whereClause.status = statusFilter;
 
+    // Event attendance filter (via candidate relation)
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: {
+          some: { eventId: eventAttendanceEventId }
+        }
+      };
+    }
+
+    // Event RSVP filter (via candidate relation)
+    if (eventRsvpEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventRsvp: {
+          some: { eventId: eventRsvpEventId }
+        }
+      };
+    }
+
     // Fetch paginated data and total count in parallel
     const [candidates, total] = await Promise.all([
       prisma.application.findMany({
@@ -192,7 +212,6 @@ router.get('/candidates', async (req, res) => {
         hasPrevPage: page > 1
       }
     });
-    res.json(candidates);
   } catch (error) {
     console.error('[GET /api/admin/candidates]', error);
     res.status(500).json({ error: 'Failed to fetch candidates' });
@@ -381,10 +400,10 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
-// Get all users (with optional role filter)
+// Get all users (with optional role and event RSVP filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role } = req.query;
+    const { role, memberEventRsvpEventId } = req.query;
     
     // Map INTERVIEWER to MEMBER role since that's what we have in the enum
     let whereClause = {};
@@ -392,6 +411,13 @@ router.get('/users', async (req, res) => {
       whereClause = { role: 'MEMBER' };
     } else if (role) {
       whereClause = { role };
+    }
+
+    // Member event RSVP filter
+    if (memberEventRsvpEventId) {
+      whereClause.memberEventRsvp = {
+        some: { eventId: memberEventRsvpEventId }
+      };
     }
     
     const users = await prisma.user.findMany({

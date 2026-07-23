@@ -40,14 +40,20 @@ import globalTheme from '../styles/globalTheme';
 import '../styles/CandidateManagement.css';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import { Pagination } from '../components/Pagination';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 
 const adminAPI = {
     async fetchStats() {
         return await apiClient.get('/admin/stats');
     },
 
-    async fetchCandidates() {
-        return await apiClient.get('/admin/candidates');
+    async fetchCandidates(page, limit, eventAttendanceEventId) {
+        const params = new URLSearchParams();
+        params.append('page', page.toString());
+        params.append('limit', limit.toString());
+        if (eventAttendanceEventId) params.append('eventAttendanceEventId', eventAttendanceEventId);
+        return await apiClient.get(`/admin/candidates?${params.toString()}`);
     },
 
     async updateApproval(candidateId, approved) {
@@ -389,6 +395,12 @@ export default function CandidateManagement() {
 
     const [statusFilter, setStatusFilter] = useState('all');
     const [approvalFilter, setApprovalFilter] = useState('all');
+    const [eventAttendanceFilter, setEventAttendanceFilter] = useState('');
+    const [events, setEvents] = useState([]);
+
+    const [page, setPage] = useState(1);
+    const [limit, setLimit] = useState(10);
+    const [pagination, setPagination] = useState(null);
 
     const [bulkAdvanceDialogOpen, setBulkAdvanceDialogOpen] = useState(false);
 
@@ -406,10 +418,13 @@ export default function CandidateManagement() {
         try {
             setLoading(true);
 
-            const [statsData, candidatesData] = await Promise.all([
+            const [statsData, candidatesResponse] = await Promise.all([
                 adminAPI.fetchStats(),
-                adminAPI.fetchCandidates()
+                adminAPI.fetchCandidates(page, limit, eventAttendanceFilter)
             ]);
+
+            const candidatesData = candidatesResponse.data || [];
+            setPagination(candidatesResponse.pagination || null);
 
             const transformedCandidates = candidatesData.map(app => ({
                 id: app.id,
@@ -639,9 +654,32 @@ export default function CandidateManagement() {
             return 0;
         });
 
+    // Fetch events for filter dropdown
+    useEffect(() => {
+        const fetchEvents = async () => {
+            try {
+                const data = await apiClient.get('/member/events');
+                setEvents((data || []).filter((event) => isPointEligibleEvent(event.eventName)));
+            } catch (err) {
+                console.error('Error loading events:', err);
+            }
+        };
+        fetchEvents();
+    }, []);
+
     useEffect(() => {
         fetchDashboardData();
-    }, []);
+    }, [eventAttendanceFilter, page, limit]);
+
+    const handleEventAttendanceFilterChange = (value) => {
+        setEventAttendanceFilter(value);
+        setPage(1);
+    };
+
+    const handleLimitChange = (newLimit) => {
+        setLimit(newLimit);
+        setPage(1);
+    };
 
     if (loading) {
         return (
@@ -731,7 +769,7 @@ export default function CandidateManagement() {
                 </Stack>
             </Stack>
 
-            <Stack direction="row" spacing={2} mb={3}>
+            <Stack direction="row" spacing={2} mb={3} flexWrap="wrap" useFlexGap>
                 <FormControl size="small" sx={{ minWidth: 150 }}>
                     <InputLabel>Round Filter</InputLabel>
                     <Select
@@ -758,6 +796,22 @@ export default function CandidateManagement() {
                         <MenuItem value="approved">Approved</MenuItem>
                         <MenuItem value="rejected">Rejected</MenuItem>
                         <MenuItem value="pending">Pending</MenuItem>
+                    </Select>
+                </FormControl>
+
+                <FormControl size="small" sx={{ minWidth: 180 }}>
+                    <InputLabel>Event Attendance</InputLabel>
+                    <Select
+                        value={eventAttendanceFilter}
+                        label="Event Attendance"
+                        onChange={(e) => handleEventAttendanceFilterChange(e.target.value)}
+                    >
+                        <MenuItem value="">All</MenuItem>
+                        {events.map(event => (
+                            <MenuItem key={`att-${event.id}`} value={event.id}>
+                                Attended: {event.eventName}
+                            </MenuItem>
+                        ))}
                     </Select>
                 </FormControl>
             </Stack>
@@ -900,6 +954,18 @@ export default function CandidateManagement() {
                     </TableBody>
                 </Table>
             </TableContainer>
+
+            {pagination && (
+                <Pagination
+                    page={page}
+                    totalPages={pagination.totalPages}
+                    total={pagination.total}
+                    limit={limit}
+                    onPageChange={setPage}
+                    onLimitChange={handleLimitChange}
+                    loading={loading}
+                />
+            )}
 
             <Dialog open={bulkAdvanceDialogOpen} onClose={() => setBulkAdvanceDialogOpen(false)}>
                 <DialogTitle sx={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', }}>Advance Round</DialogTitle>
