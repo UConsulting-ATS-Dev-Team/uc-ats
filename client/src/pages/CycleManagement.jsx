@@ -23,9 +23,7 @@ import {
 import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
-import OfferLetterTemplateDialog from '../components/OfferLetterTemplateDialog';
-import CycleOfferLetterPreviewDialog from '../components/CycleOfferLetterPreviewDialog';
-import CycleOfferLetterSenderDialog from '../components/CycleOfferLetterSenderDialog';
+import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
 
 export default function CycleManagement() {
   const [cycles, setCycles] = useState([]);
@@ -34,9 +32,7 @@ export default function CycleManagement() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
-  const [templateCycleId, setTemplateCycleId] = useState(null);
-  const [previewCycleId, setPreviewCycleId] = useState(null);
-  const [senderCycleId, setSenderCycleId] = useState(null);
+  const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
   const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
   const [submitting, setSubmitting] = useState(false);
 
@@ -190,14 +186,8 @@ export default function CycleManagement() {
                         <EditIcon />
                       </IconButton>
                     </Tooltip>
-                    <Button size="small" variant="outlined" onClick={() => setTemplateCycleId(c.id)}>
-                      Offer Letter
-                    </Button>
-                    <Button size="small" variant="outlined" onClick={() => setPreviewCycleId(c.id)}>
-                      Preview
-                    </Button>
-                    <Button size="small" variant="outlined" onClick={() => setSenderCycleId(c.id)}>
-                      Send Offer Letters
+                    <Button size="small" variant="outlined" onClick={() => setOfferLetterCycleId(c.id)}>
+                      Offer Letters
                     </Button>
                     {!c.isActive && (
                       <Button size="small" variant="outlined" onClick={() => activateCycle(c.id)}>Activate</Button>
@@ -325,22 +315,10 @@ export default function CycleManagement() {
         </DialogActions>
       </Dialog>
 
-      <OfferLetterTemplateDialog
-        cycleId={templateCycleId}
-        open={Boolean(templateCycleId)}
-        onClose={() => setTemplateCycleId(null)}
-      />
-
-      <CycleOfferLetterPreviewDialog
-        cycleId={previewCycleId}
-        open={Boolean(previewCycleId)}
-        onClose={() => setPreviewCycleId(null)}
-      />
-
-      <CycleOfferLetterSenderDialog
-        cycleId={senderCycleId}
-        open={Boolean(senderCycleId)}
-        onClose={() => setSenderCycleId(null)}
+      <CycleOfferLetterDialog
+        cycleId={offerLetterCycleId}
+        open={Boolean(offerLetterCycleId)}
+        onClose={() => setOfferLetterCycleId(null)}
       />
     </Box>
     </AccessControl>

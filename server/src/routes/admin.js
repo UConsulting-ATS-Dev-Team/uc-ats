@@ -4826,7 +4826,7 @@ router.post('/cycles/:cycleId/offer-letter-template/signature', signatureUpload.
 router.post('/cycles/:cycleId/offer-letter-preview', async (req, res) => {
   try {
     const { cycleId } = req.params;
-    const { position, startDate, responseDeadline, sampleFirstName, sampleLastName } = req.body;
+    const { responseDeadline, sampleFirstName, sampleLastName } = req.body;
 
     const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
     if (!cycle) {
@@ -4836,8 +4836,6 @@ router.post('/cycles/:cycleId/offer-letter-preview', async (req, res) => {
     const { template, signatureBuffer } = await loadAndValidateTemplate(cycleId);
     const deadline = responseDeadline?.trim() || template.responseDeadline || '';
     const offerDetails = {
-      position,
-      startDate,
       responseDeadline: deadline
     };
 
