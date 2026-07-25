@@ -2419,6 +2419,7 @@ router.get('/applications', async (req, res) => {
         },
         select: {
           id: true,
+          name: true,
           memberOne: true,
           memberTwo: true,
           memberThree: true,
@@ -2611,7 +2612,7 @@ router.get('/applications', async (req, res) => {
         videoUrl: app.videoUrl,
         headshotUrl: app.headshotUrl,
         groupId: assignedGroup?.id || null,
-        groupName: assignedGroup ? `Team ${assignedGroup.id.slice(-4)}` : 'Unknown Team',
+        groupName: assignedGroup?.name || (assignedGroup ? `Team ${assignedGroup.id.slice(-4)}` : 'Unknown Team'),
         hasResumeScore: resumeStatus.completed,
         hasCoverLetterScore: coverLetterStatus.completed,
         hasVideoScore: videoStatus.completed,
