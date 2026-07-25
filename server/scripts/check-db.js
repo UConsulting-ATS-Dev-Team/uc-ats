@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 
 function enhanceDatabaseUrl(url) {
@@ -12,7 +13,7 @@ function enhanceDatabaseUrl(url) {
   return urlObj.toString();
 }
 
-function parseConnection(urlStr) {
+export function parseConnection(urlStr) {
   try {
     const url = new URL(urlStr);
     return {
@@ -30,7 +31,7 @@ function parseConnection(urlStr) {
   }
 }
 
-function classifyError(error, info) {
+export function classifyError(error, info) {
   const message = (error && error.message) || String(error);
 
   if (message.includes('Environment variable not found: DATABASE_URL')) {
@@ -109,7 +110,7 @@ function classifyError(error, info) {
   };
 }
 
-async function check(label, urlStr) {
+export async function check(label, urlStr) {
   if (!urlStr) {
     console.error(`[${label}] not set.`);
     return false;
@@ -148,16 +149,11 @@ async function check(label, urlStr) {
   }
 }
 
-async function main() {
+export async function main() {
   const databaseOk = await check('DATABASE_URL', process.env.DATABASE_URL);
-
-  if (process.env.DIRECT_URL) {
-    await check('DIRECT_URL', process.env.DIRECT_URL);
-  } else {
-    console.log('[DIRECT_URL] not set. Prisma migrations and introspection require it; set it to the same session pooler or to a direct host if your environment has IPv6.');
-  }
-
-  process.exit(databaseOk ? 0 : 1);
+  const directOk = await check('DIRECT_URL', process.env.DIRECT_URL);
+  return databaseOk && directOk ? 0 : 1;
 }
 
-main();
+const exitCode = await main();
+process.exit(exitCode);
