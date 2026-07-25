@@ -47,7 +47,7 @@ function emptyTemplate() {
     signatureLabel: 'Signature',
     printedNameLabel: 'Printed Name',
     officialOfferLabel: 'OFFICIAL OFFER LETTER',
-    confidentialityLabel: 'U C STRICTLY CONFIDENTIAL',
+    confidentialityLabel: 'STRICTLY CONFIDENTIAL',
     signaturePath: ''
   };
 }
