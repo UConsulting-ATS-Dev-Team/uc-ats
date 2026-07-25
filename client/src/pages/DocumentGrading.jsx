@@ -115,7 +115,6 @@ export default function DocumentGrading() {
   const [genderFilter, setGenderFilter] = useState('all');
   const [firstGenFilter, setFirstGenFilter] = useState('all');
   const [transferFilter, setTransferFilter] = useState('all');
-  const [teamFilter, setTeamFilter] = useState('all');
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -237,18 +236,6 @@ export default function DocumentGrading() {
       .filter(year => year && year !== 'N/A')
   )].sort((a, b) => b - a); // Sort descending (newest first)
 
-  // Get unique teams from authorized applications for filter dropdown
-  const availableTeams = [...new Map(
-    (Array.isArray(applications) ? applications : [])
-      .map(app => {
-        const value = app.groupId || 'unknown';
-        const label = app.groupName || 'Uncategorized';
-        return [value, label];
-      })
-  ).entries()]
-    .sort((a, b) => a[1].localeCompare(b[1]))
-    .map(([value, label]) => ({ value, label }));
-
   // Filter and sort applications based on current filters
   const filteredApplications = (Array.isArray(applications) ? applications : []).filter(app => {
     const matchesSearch = app.studentId.toString().includes(searchTerm) ||
@@ -277,10 +264,8 @@ export default function DocumentGrading() {
     const matchesTransfer = transferFilter === 'all' ||
                            (transferFilter === 'yes' && app.isTransferStudent) ||
                            (transferFilter === 'no' && !app.isTransferStudent);
-    const appTeamValue = app.groupId || 'unknown';
-    const matchesTeam = teamFilter === 'all' || appTeamValue === teamFilter;
 
-    return matchesSearch && matchesStatus && matchesYear && matchesGender && matchesFirstGen && matchesTransfer && matchesTeam;
+    return matchesSearch && matchesStatus && matchesYear && matchesGender && matchesFirstGen && matchesTransfer;
   });
 
   // Sort applications
@@ -646,22 +631,6 @@ export default function DocumentGrading() {
               <MenuItem value="all">All</MenuItem>
               <MenuItem value="yes">Yes</MenuItem>
               <MenuItem value="no">No</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Team</InputLabel>
-            <Select
-              value={teamFilter}
-              label="Team"
-              onChange={(e) => setTeamFilter(e.target.value)}
-            >
-              <MenuItem value="all">All Teams</MenuItem>
-              {availableTeams.map(team => (
-                <MenuItem key={team.value} value={team.value}>
-                  {team.label}
-                </MenuItem>
-              ))}
             </Select>
           </FormControl>
         </Box>

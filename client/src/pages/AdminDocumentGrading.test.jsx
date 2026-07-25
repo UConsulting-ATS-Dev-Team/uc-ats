@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import DocumentGrading from './DocumentGrading';
+import AdminDocumentGrading from './AdminDocumentGrading';
 import apiClient from '../utils/api';
 
 vi.mock('../components/AccessControl', () => ({
@@ -10,7 +10,7 @@ vi.mock('../components/AccessControl', () => ({
 
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'member-1', role: 'MEMBER', fullName: 'Test Member' },
+    user: { id: 'admin-1', role: 'ADMIN', fullName: 'Test Admin' },
   }),
 }));
 
@@ -26,8 +26,6 @@ const mockApplications = [
   {
     id: 'app-1',
     candidateId: 'cand-1',
-    cycleId: 'cycle-1',
-    studentId: 12345,
     name: 'Alice Anderson',
     major: 'Computer Science',
     year: '2027',
@@ -41,17 +39,29 @@ const mockApplications = [
     resumeUrl: 'https://example.com/resume1.pdf',
     coverLetterUrl: 'https://example.com/cover1.pdf',
     videoUrl: 'https://example.com/video1.mp4',
+    headshotUrl: null,
     groupId: 'group-a',
     groupName: 'Team A1B2',
     hasResumeScore: false,
     hasCoverLetterScore: false,
     hasVideoScore: false,
+    resumeMissingGrades: 0,
+    coverLetterMissingGrades: 0,
+    videoMissingGrades: 0,
+    resumeTotalMembers: 0,
+    coverLetterTotalMembers: 0,
+    videoTotalMembers: 0,
+    groupMembers: [],
+    resumeCompletedEvaluators: [],
+    coverLetterCompletedEvaluators: [],
+    videoCompletedEvaluators: [],
+    resumeFlagged: null,
+    coverLetterFlagged: null,
+    videoFlagged: null,
   },
   {
     id: 'app-2',
     candidateId: 'cand-2',
-    cycleId: 'cycle-1',
-    studentId: 67890,
     name: 'Ben Baker',
     major: 'Economics',
     year: '2026',
@@ -65,17 +75,29 @@ const mockApplications = [
     resumeUrl: 'https://example.com/resume2.pdf',
     coverLetterUrl: 'https://example.com/cover2.pdf',
     videoUrl: 'https://example.com/video2.mp4',
+    headshotUrl: null,
     groupId: 'group-b',
     groupName: 'Team C3D4',
     hasResumeScore: true,
-    hasCoverLetterScore: false,
-    hasVideoScore: false,
+    hasCoverLetterScore: true,
+    hasVideoScore: true,
+    resumeMissingGrades: 0,
+    coverLetterMissingGrades: 0,
+    videoMissingGrades: 0,
+    resumeTotalMembers: 0,
+    coverLetterTotalMembers: 0,
+    videoTotalMembers: 0,
+    groupMembers: [],
+    resumeCompletedEvaluators: [],
+    coverLetterCompletedEvaluators: [],
+    videoCompletedEvaluators: [],
+    resumeFlagged: null,
+    coverLetterFlagged: null,
+    videoFlagged: null,
   },
   {
     id: 'app-3',
     candidateId: 'cand-3',
-    cycleId: 'cycle-1',
-    studentId: 11111,
     name: 'Casey Chen',
     major: 'Mathematics',
     year: '2027',
@@ -89,11 +111,25 @@ const mockApplications = [
     resumeUrl: 'https://example.com/resume3.pdf',
     coverLetterUrl: null,
     videoUrl: null,
+    headshotUrl: null,
     groupId: null,
-    groupName: null,
+    groupName: 'Unknown Team',
     hasResumeScore: false,
     hasCoverLetterScore: false,
     hasVideoScore: false,
+    resumeMissingGrades: 0,
+    coverLetterMissingGrades: 0,
+    videoMissingGrades: 0,
+    resumeTotalMembers: 0,
+    coverLetterTotalMembers: 0,
+    videoTotalMembers: 0,
+    groupMembers: [],
+    resumeCompletedEvaluators: [],
+    coverLetterCompletedEvaluators: [],
+    videoCompletedEvaluators: [],
+    resumeFlagged: null,
+    coverLetterFlagged: null,
+    videoFlagged: null,
   },
 ];
 
@@ -114,17 +150,28 @@ function selectTeamOption(name) {
   fireEvent.click(option);
 }
 
-describe('DocumentGrading team filter', () => {
+describe('AdminDocumentGrading team filter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiClient.get.mockResolvedValue(mockApplications);
+    apiClient.get.mockImplementation((endpoint) => {
+      if (endpoint === '/admin/cycles/active') {
+        return Promise.resolve(null);
+      }
+      if (endpoint === '/admin/applications') {
+        return Promise.resolve(mockApplications);
+      }
+      if (endpoint.startsWith('/review-teams/member-applications/')) {
+        return Promise.resolve(mockApplications);
+      }
+      return Promise.resolve([]);
+    });
   });
 
   it('loads applications and renders the Team filter options', async () => {
-    renderWithRouter(<DocumentGrading />);
+    renderWithRouter(<AdminDocumentGrading />);
 
     await waitFor(() => {
-      expect(apiClient.get).toHaveBeenCalledWith('/review-teams/member-applications/member-1');
+      expect(apiClient.get).toHaveBeenCalledWith('/admin/applications');
     });
 
     await waitFor(() => {
@@ -137,11 +184,11 @@ describe('DocumentGrading team filter', () => {
     expect(screen.getByRole('option', { name: 'All Teams' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Team A1B2' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Team C3D4' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Uncategorized' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Unknown Team' })).toBeInTheDocument();
   });
 
   it('filters results by selected team and restoring All Teams shows all results', async () => {
-    renderWithRouter(<DocumentGrading />);
+    renderWithRouter(<AdminDocumentGrading />);
 
     await waitFor(() => {
       expect(screen.getAllByRole('row').length).toBeGreaterThanOrEqual(4);
@@ -150,38 +197,46 @@ describe('DocumentGrading team filter', () => {
     selectTeamOption('Team A1B2');
 
     await waitFor(() => {
-      expect(screen.getByText('Student 12345')).toBeInTheDocument();
-      expect(screen.queryByText('Student 67890')).not.toBeInTheDocument();
-      expect(screen.queryByText('Student 11111')).not.toBeInTheDocument();
+      expect(screen.getByText('Alice Anderson')).toBeInTheDocument();
+      expect(screen.queryByText('Ben Baker')).not.toBeInTheDocument();
+      expect(screen.queryByText('Casey Chen')).not.toBeInTheDocument();
     });
 
     selectTeamOption('All Teams');
 
     await waitFor(() => {
-      expect(screen.getByText('Student 67890')).toBeInTheDocument();
-      expect(screen.getByText('Student 11111')).toBeInTheDocument();
+      expect(screen.getByText('Ben Baker')).toBeInTheDocument();
+      expect(screen.getByText('Casey Chen')).toBeInTheDocument();
     });
   });
 
-  it('handles applications without a team as Uncategorized', async () => {
-    renderWithRouter(<DocumentGrading />);
+  it('handles applications without a team as Unknown Team', async () => {
+    renderWithRouter(<AdminDocumentGrading />);
 
     await waitFor(() => {
       expect(screen.getAllByRole('row').length).toBeGreaterThanOrEqual(4);
     });
 
-    selectTeamOption('Uncategorized');
+    selectTeamOption('Unknown Team');
 
     await waitFor(() => {
-      expect(screen.getByText('Student 11111')).toBeInTheDocument();
-      expect(screen.queryByText('Student 12345')).not.toBeInTheDocument();
-      expect(screen.queryByText('Student 67890')).not.toBeInTheDocument();
+      expect(screen.getByText('Casey Chen')).toBeInTheDocument();
+      expect(screen.queryByText('Alice Anderson')).not.toBeInTheDocument();
+      expect(screen.queryByText('Ben Baker')).not.toBeInTheDocument();
     });
   });
 
   it('renders the error state when the API fails', async () => {
-    apiClient.get.mockRejectedValue(new Error('Network error'));
-    renderWithRouter(<DocumentGrading />);
+    apiClient.get.mockImplementation((endpoint) => {
+      if (endpoint === '/admin/cycles/active') {
+        return Promise.resolve(null);
+      }
+      if (endpoint === '/admin/applications') {
+        return Promise.reject(new Error('Network error'));
+      }
+      return Promise.resolve([]);
+    });
+    renderWithRouter(<AdminDocumentGrading />);
 
     await waitFor(() => {
       expect(screen.getByText(/Failed to load applications/i)).toBeInTheDocument();
