@@ -33,9 +33,17 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import globalTheme from '../styles/globalTheme';
 
-function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisAngle = 0 }) {
+function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisAngle = 0, limit }) {
   const theme = useTheme();
   const total = data.reduce((sum, item) => sum + item.value, 0);
+
+  const hasOther = typeof limit === 'number' && limit > 0 && data.length > limit;
+  const otherValue = hasOther
+    ? data.slice(limit - 1).reduce((sum, item) => sum + item.value, 0)
+    : 0;
+  const displayData = hasOther
+    ? [...data.slice(0, limit - 1), { name: 'Other', value: otherValue }]
+    : data;
 
   const chartColors = [
     theme.palette.primary.main,
@@ -48,12 +56,15 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
     theme.palette.secondary.light,
   ];
 
-  const chartBody = data.length > 0 ? (
+  const getColor = (item, index) =>
+    item.name === 'Other' ? theme.palette.grey[500] : chartColors[index % chartColors.length];
+
+  const chartBody = displayData.length > 0 ? (
     <>
       <Box sx={{ height: 280, width: '100%' }}>
         <ResponsiveContainer width="100%" height="100%">
           {type === 'bar' ? (
-            <BarChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: xAxisAngle ? 70 : 40 }}>
+            <BarChart data={displayData} margin={{ top: 20, right: 20, left: 0, bottom: xAxisAngle ? 70 : 40 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={alpha(theme.palette.divider, 0.5)} />
               <XAxis
                 dataKey="name"
@@ -71,15 +82,15 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
               />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                 <LabelList dataKey="value" position="top" fill={theme.palette.text.primary} fontSize={12} />
-                {data.map((_, index) => (
-                  <Cell key={`cell-${index}`} fill={chartColors[index % chartColors.length]} />
+                {displayData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={getColor(entry, index)} />
                 ))}
               </Bar>
             </BarChart>
           ) : (
             <PieChart>
               <Pie
-                data={data}
+                data={displayData}
                 dataKey="value"
                 nameKey="name"
                 cx="50%"
@@ -91,8 +102,8 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
                 labelLine={false}
                 label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
               >
-                {data.map((_, index) => (
-                  <Cell key={`cell-${index}`} fill={chartColors[index % chartColors.length]} />
+                {displayData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={getColor(entry, index)} />
                 ))}
               </Pie>
               <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
@@ -102,8 +113,8 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
         </ResponsiveContainer>
       </Box>
       <Stack direction="row" flexWrap="wrap" gap={1} mt={2} justifyContent="center">
-        {data.map((item, index) => {
-          const color = chartColors[index % chartColors.length];
+        {displayData.map((item, index) => {
+          const color = getColor(item, index);
           const pct = total > 0 ? ((item.value / total) * 100).toFixed(0) : 0;
           return (
             <Chip
@@ -453,10 +464,11 @@ export default function Dashboard() {
                 <DemographicChartCard
                   title="Applications by Major"
                   icon={BarChartIcon}
-                  data={demographicData.majors.slice(0, 8)}
+                  data={demographicData.majors}
                   type="bar"
                   emptyText="No major data available"
                   xAxisAngle={-45}
+                  limit={8}
                 />
               </Grid>
 
