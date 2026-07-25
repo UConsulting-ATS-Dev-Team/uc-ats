@@ -13,9 +13,8 @@ import {
   uploadSignature,
   getSignatureBuffer,
   getSignatureSignedUrl,
+  sendOfferLetterToCandidate,
   findLatestOfferLetterSend,
-  createOfferLetterSendRecord,
-  updateOfferLetterSendRecord,
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 
@@ -4706,7 +4705,6 @@ router.post('/applications/:id/offer-letter-preview', async (req, res) => {
 
 // Send offer letter to a Final Round accepted candidate
 router.post('/applications/:id/send-offer-letter', async (req, res) => {
-  let sendRecord = null;
   try {
     const { id } = req.params;
     const { position, startDate, responseDeadline, additionalNotes, force } = req.body;
@@ -4718,65 +4716,34 @@ router.post('/applications/:id/send-offer-letter', async (req, res) => {
     }
     const { application } = validation;
 
-    // Idempotent duplicate-send guard using a durable offer-letter send record.
-    if (!force) {
-      const latestSend = await findLatestOfferLetterSend(id);
-      if (latestSend && (latestSend.status === 'sent' || latestSend.status === 'pending')) {
-        return res.status(409).json({
-          error: 'An offer letter has already been sent or is in progress for this application. Use force=true to resend.'
-        });
-      }
-    }
-
     const { template, signatureBuffer } = await loadAndValidateTemplate(application.cycleId);
     const deadline = responseDeadline?.trim() || template.responseDeadline || '';
     const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
 
-    // Create an immutable audit record before attempting delivery.
-    sendRecord = await createOfferLetterSendRecord(
+    const result = await sendOfferLetterToCandidate(
       application,
       application.cycle,
       template,
+      signatureBuffer,
       offerDetails,
       userId,
       force
     );
 
-    const pdfBuffer = await generateOfferLetterPdf(application, application.cycle, template, offerDetails, signatureBuffer);
-
-    const emailResult = await sendOfferLetter(
-      application.email,
-      `${application.firstName} ${application.lastName}`,
-      application.cycle?.name || 'UConsulting',
-      offerDetails,
-      pdfBuffer,
-      'UConsulting-Offer-Letter.pdf'
-    );
-
-    if (!emailResult.success) {
-      await updateOfferLetterSendRecord(id, sendRecord.id, { status: 'failed', error: emailResult.error });
-      return res.status(500).json({
-        error: 'Failed to send offer letter',
-        details: emailResult.error
-      });
+    if (result.alreadySent) {
+      return res.status(409).json({ error: result.error });
     }
-
-    await updateOfferLetterSendRecord(id, sendRecord.id, { status: 'sent', messageId: emailResult.messageId });
+    if (!result.success) {
+      return res.status(500).json({ error: 'Failed to send offer letter', details: result.error });
+    }
 
     res.json({
       success: true,
-      messageId: emailResult.messageId,
+      messageId: result.messageId,
       message: 'Offer letter sent successfully'
     });
   } catch (error) {
     console.error('[POST /api/admin/applications/:id/send-offer-letter]', error);
-    if (sendRecord) {
-      try {
-        await updateOfferLetterSendRecord(sendRecord.applicationId, sendRecord.id, { status: 'failed', error: error.message });
-      } catch (auditError) {
-        console.error('[send-offer-letter] failed to update audit record:', auditError);
-      }
-    }
     const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
     res.status(status).json({ error: error.message || 'Failed to send offer letter' });
   }
@@ -4852,6 +4819,160 @@ router.post('/cycles/:cycleId/offer-letter-template/signature', signatureUpload.
   } catch (error) {
     console.error('[POST /api/admin/cycles/:cycleId/offer-letter-template/signature]', error);
     res.status(500).json({ error: 'Failed to upload signature', details: error.message });
+  }
+});
+
+// Preview the offer letter for a cycle using a sample candidate
+router.post('/cycles/:cycleId/offer-letter-preview', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { position, startDate, responseDeadline, sampleFirstName, sampleLastName } = req.body;
+
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = {
+      position,
+      startDate,
+      responseDeadline: deadline
+    };
+
+    const application = {
+      id: 'sample',
+      firstName: sampleFirstName?.trim() || 'Sample',
+      lastName: sampleLastName?.trim() || 'Candidate',
+      email: 'sample@example.com'
+    };
+
+    const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, offerDetails, signatureBuffer);
+    res.json({
+      filename: 'UConsulting-Offer-Letter-Preview.pdf',
+      pdf: pdfBuffer.toString('base64')
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-preview]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to generate offer letter preview' });
+  }
+});
+
+// List Final Round accepted candidates for a cycle with their offer-letter send status
+router.get('/cycles/:cycleId/offer-letter-candidates', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const applications = await prisma.application.findMany({
+      where: {
+        cycleId,
+        status: 'ACCEPTED',
+        OR: [
+          { finalRoundDecision: 'yes' },
+          { currentRound: '5' }
+        ]
+      },
+      include: { candidate: true }
+    });
+
+    const candidates = await Promise.all(
+      applications.map(async (app) => {
+        const latestSend = await findLatestOfferLetterSend(app.id);
+        return {
+          applicationId: app.id,
+          firstName: app.firstName,
+          lastName: app.lastName,
+          email: app.email,
+          status: latestSend?.status || 'not_sent',
+          sentAt: latestSend?.createdAt || null,
+          messageId: latestSend?.messageId || null
+        };
+      })
+    );
+
+    res.json({ cycleId, cycleName: cycle.name, candidates });
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-candidates]', error);
+    res.status(500).json({ error: 'Failed to load offer letter candidates', details: error.message });
+  }
+});
+
+// Send offer letters to multiple Final Round accepted candidates in a cycle
+router.post('/cycles/:cycleId/send-offer-letters', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { applicationIds, position, startDate, responseDeadline, force } = req.body;
+    const userId = req.user?.id;
+
+    if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
+      return res.status(400).json({ error: 'At least one candidate must be selected' });
+    }
+    if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
+      return res.status(400).json({ error: 'Position and response deadline are required' });
+    }
+
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = { position, startDate, responseDeadline: deadline };
+
+    const results = [];
+    for (const applicationId of applicationIds) {
+      const application = await prisma.application.findUnique({
+        where: { id: applicationId },
+        include: { candidate: true }
+      });
+
+      if (!application) {
+        results.push({ applicationId, success: false, error: 'Application not found' });
+        continue;
+      }
+
+      if (!isFinalRoundAccepted(application)) {
+        results.push({ applicationId, success: false, error: 'Not a Final Round accepted candidate' });
+        continue;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!application.email || !emailRegex.test(application.email)) {
+        results.push({ applicationId, success: false, error: 'Invalid candidate email address' });
+        continue;
+      }
+
+      const result = await sendOfferLetterToCandidate(
+        application,
+        cycle,
+        template,
+        signatureBuffer,
+        offerDetails,
+        userId,
+        force
+      );
+
+      results.push({
+        applicationId,
+        success: result.success,
+        alreadySent: result.alreadySent || false,
+        messageId: result.messageId || null,
+        error: result.error || null
+      });
+    }
+
+    res.json({ results });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/send-offer-letters]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to send offer letters' });
   }
 });
 

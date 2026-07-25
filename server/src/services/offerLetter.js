@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import pdfmake from 'pdfmake';
 import supabase, { isSupabaseAvailable } from '../supabaseClient.js';
+import { sendOfferLetter } from './emailNotifications.js';
 
 // Lock down pdfmake so it does not try to fetch external URLs.
 if (pdfmake.setUrlAccessPolicy) {
@@ -252,6 +253,61 @@ export async function updateOfferLetterSendRecord(applicationId, sendId, { statu
   // Keep the latest pointer in sync so duplicate checks are accurate.
   await uploadJson(SEND_BUCKET, latestSendPath(applicationId), updated, false);
   return updated;
+}
+
+export async function sendOfferLetterToCandidate(application, cycle, template, signatureBuffer, offerDetails, approverUserId, force = false) {
+  const applicationId = application.id;
+
+  if (!force) {
+    const latestSend = await findLatestOfferLetterSend(applicationId);
+    if (latestSend && (latestSend.status === 'sent' || latestSend.status === 'pending')) {
+      return {
+        success: false,
+        alreadySent: true,
+        error: 'An offer letter has already been sent or is in progress for this application. Use force=true to resend.'
+      };
+    }
+  }
+
+  let sendRecord;
+  try {
+    sendRecord = await createOfferLetterSendRecord(application, cycle, template, offerDetails, approverUserId, force);
+
+    const deadline = offerDetails.responseDeadline || template.responseDeadline || '';
+    const pdfOfferDetails = {
+      position: offerDetails.position,
+      startDate: offerDetails.startDate,
+      responseDeadline: deadline,
+      additionalNotes: offerDetails.additionalNotes
+    };
+    const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, pdfOfferDetails, signatureBuffer);
+
+    const emailResult = await sendOfferLetter(
+      application.email,
+      `${application.firstName} ${application.lastName}`,
+      cycle?.name || 'UConsulting',
+      pdfOfferDetails,
+      pdfBuffer,
+      'UConsulting-Offer-Letter.pdf'
+    );
+
+    if (!emailResult.success) {
+      await updateOfferLetterSendRecord(applicationId, sendRecord.id, { status: 'failed', error: emailResult.error });
+      return { success: false, error: emailResult.error };
+    }
+
+    await updateOfferLetterSendRecord(applicationId, sendRecord.id, { status: 'sent', messageId: emailResult.messageId });
+    return { success: true, messageId: emailResult.messageId };
+  } catch (error) {
+    if (sendRecord) {
+      try {
+        await updateOfferLetterSendRecord(applicationId, sendRecord.id, { status: 'failed', error: error.message });
+      } catch (auditError) {
+        console.error('[sendOfferLetterToCandidate] failed to update audit record:', auditError);
+      }
+    }
+    return { success: false, error: error.message };
+  }
 }
 
 export async function generateOfferLetterPdf(application, cycle, template, offerDetails, signatureBuffer) {
