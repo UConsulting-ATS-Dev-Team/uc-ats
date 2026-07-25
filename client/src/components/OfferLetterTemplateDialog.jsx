@@ -44,10 +44,16 @@ export default function OfferLetterTemplateDialog({ cycleId, open, onClose }) {
     setLoading(true);
     apiClient
       .get(`/admin/cycles/${cycleId}/offer-letter-template`)
-      .then((data) => {
-        if (!cancelled) {
-          setTemplate({ ...emptyTemplate(), ...data });
-          if (data.signatureUrl) setSignaturePreview(data.signatureUrl);
+      .then(async (data) => {
+        if (cancelled) return;
+        setTemplate({ ...emptyTemplate(), ...data });
+        if (data.signaturePath) {
+          try {
+            const sig = await apiClient.get(`/admin/cycles/${cycleId}/offer-letter-template/signature`);
+            setSignaturePreview(sig.signedUrl);
+          } catch (e) {
+            console.warn('Failed to load signature preview:', e);
+          }
         }
       })
       .catch((e) => {

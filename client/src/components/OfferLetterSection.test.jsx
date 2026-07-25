@@ -14,10 +14,18 @@ const baseApplication = {
   cycleId: 'cycle-1'
 };
 
-const defaultTemplate = {
+const readyTemplate = {
   responseDeadline: 'Friday, January 23rd at 11:59 PM',
   signaturePath: 'cycle-1/signature.png',
+  presidentName: 'President Name',
   terms: ['Term 1']
+};
+
+const incompleteTemplate = {
+  responseDeadline: '',
+  signaturePath: '',
+  presidentName: '',
+  terms: []
 };
 
 const sentComment = {
@@ -27,11 +35,21 @@ const sentComment = {
   user: { fullName: 'Admin User' }
 };
 
+const previewResponse = { pdf: 'SGVsbG8gV29ybGQh' };
+
+function setupApiClient(template, postImpl) {
+  apiClient.get = vi.fn((endpoint) => {
+    if (endpoint.includes('/offer-letter-template')) {
+      return Promise.resolve(template);
+    }
+    return Promise.reject(new Error('Unexpected GET'));
+  });
+  apiClient.post = vi.fn(postImpl);
+}
+
 describe('OfferLetterSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiClient.get = vi.fn().mockResolvedValue(defaultTemplate);
-    apiClient.post = vi.fn();
   });
 
   afterEach(() => {
@@ -50,6 +68,7 @@ describe('OfferLetterSection', () => {
   });
 
   it('shows send status and a send button for an admin with a Final Round accepted candidate', async () => {
+    setupApiClient(readyTemplate, vi.fn());
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/admin/cycles/cycle-1/offer-letter-template'));
     expect(screen.getByText('Offer Letter')).toBeInTheDocument();
@@ -58,15 +77,19 @@ describe('OfferLetterSection', () => {
   });
 
   it('shows the last sent timestamp when an offer letter has already been sent', async () => {
+    setupApiClient(readyTemplate, vi.fn());
     render(<OfferLetterSection application={baseApplication} comments={[sentComment]} isAdmin />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     expect(screen.getByText(/Offer letter sent on/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resend Offer Letter' })).toBeInTheDocument();
   });
 
-  it('sends an offer letter with required fields and calls onSent on success', async () => {
+  it('previews and sends an offer letter after approval', async () => {
     const onSent = vi.fn();
-    apiClient.post.mockResolvedValue({ success: true, messageId: 'msg-123' });
+    setupApiClient(readyTemplate, (endpoint) => {
+      if (endpoint.includes('/offer-letter-preview')) return Promise.resolve(previewResponse);
+      return Promise.resolve({ success: true, messageId: 'msg-123' });
+    });
 
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin onSent={onSent} />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
@@ -75,27 +98,31 @@ describe('OfferLetterSection', () => {
     fireEvent.change(screen.getByLabelText(/Position/i), { target: { value: 'Associate' } });
     fireEvent.change(screen.getByLabelText(/Response Deadline/i), { target: { value: 'August 15, 2026' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Offer Letter' }));
 
-    await waitFor(() => {
-      expect(apiClient.post).toHaveBeenCalledWith(
-        '/admin/applications/app-1/send-offer-letter',
-        expect.objectContaining({
-          position: 'Associate',
-          responseDeadline: 'August 15, 2026'
-        })
-      );
-    });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
+      '/admin/applications/app-1/offer-letter-preview',
+      expect.objectContaining({ position: 'Associate', responseDeadline: 'August 15, 2026' })
+    ));
+
+    await waitFor(() => expect(screen.getByText('Offer Letter Preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Approve & Send Offer Letter' }));
+
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
+      '/admin/applications/app-1/send-offer-letter',
+      expect.objectContaining({ position: 'Associate', responseDeadline: 'August 15, 2026' })
+    ));
 
     await waitFor(() => expect(onSent).toHaveBeenCalled());
     expect(screen.getByText('Offer letter sent successfully.')).toBeInTheDocument();
   });
 
-  it('validates required fields before sending', async () => {
+  it('validates required fields before previewing', async () => {
+    setupApiClient(readyTemplate, vi.fn());
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Offer Letter' }));
 
     await waitFor(() => {
       expect(screen.getByText('Position is required')).toBeInTheDocument();
@@ -104,7 +131,10 @@ describe('OfferLetterSection', () => {
   });
 
   it('displays an error when the backend reports a duplicate send', async () => {
-    apiClient.post.mockRejectedValue(new Error('Offer letter has already been sent'));
+    setupApiClient(readyTemplate, (endpoint) => {
+      if (endpoint.includes('/offer-letter-preview')) return Promise.resolve(previewResponse);
+      return Promise.reject(new Error('Offer letter has already been sent'));
+    });
 
     render(<OfferLetterSection application={baseApplication} comments={[sentComment]} isAdmin />);
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
@@ -113,6 +143,9 @@ describe('OfferLetterSection', () => {
     fireEvent.change(screen.getByLabelText(/Position/i), { target: { value: 'Associate' } });
     fireEvent.change(screen.getByLabelText(/Response Deadline/i), { target: { value: 'August 15, 2026' } });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Offer Letter' }));
+    await waitFor(() => expect(screen.getByText('Offer Letter Preview')).toBeInTheDocument());
+
     fireEvent.click(screen.getByRole('button', { name: 'Resend Offer Letter' }));
 
     await waitFor(() => {
@@ -120,11 +153,11 @@ describe('OfferLetterSection', () => {
     });
   });
 
-  it('warns when no president signature is configured', async () => {
-    apiClient.get.mockResolvedValue({ ...defaultTemplate, signaturePath: '' });
+  it('warns when the offer letter template is not ready', async () => {
+    setupApiClient(incompleteTemplate, vi.fn());
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
     await waitFor(() =>
-      expect(screen.getByText(/No president signature is configured/)).toBeInTheDocument()
+      expect(screen.getByText(/Offer letter template is not ready/)).toBeInTheDocument()
     );
   });
 });

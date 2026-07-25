@@ -12,8 +12,10 @@ import {
   saveOfferLetterTemplate,
   uploadSignature,
   getSignatureBuffer,
-  getSignatureBufferForCycle,
-  getSignaturePublicUrl,
+  getSignatureSignedUrl,
+  findLatestOfferLetterSend,
+  createOfferLetterSendRecord,
+  updateOfferLetterSendRecord,
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 
@@ -4613,67 +4615,133 @@ router.post('/process-final-decisions', async (req, res) => {
   }
 });
 
+// Shared validation for offer-letter send/preview
+function isFinalRoundAccepted(application) {
+  return (
+    application.status === 'ACCEPTED' &&
+    (application.finalRoundDecision === 'yes' || application.currentRound === '5')
+  );
+}
+
+async function validateSendRequest(id, body) {
+  const { position, responseDeadline } = body;
+
+  const application = await prisma.application.findUnique({
+    where: { id },
+    include: { candidate: true, cycle: true }
+  });
+
+  if (!application) {
+    return { error: 'Application not found', status: 404 };
+  }
+
+  if (!application.candidate) {
+    return { error: 'No candidate associated with application', status: 400 };
+  }
+
+  if (!isFinalRoundAccepted(application)) {
+    return { error: 'Offer letters can only be sent to Final Round accepted candidates', status: 400 };
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!application.email || !emailRegex.test(application.email)) {
+    return { error: 'Invalid candidate email address', status: 400 };
+  }
+
+  if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
+    return { error: 'Position and response deadline are required', status: 400 };
+  }
+
+  return { application };
+}
+
+async function loadAndValidateTemplate(cycleId) {
+  const template = await getOfferLetterTemplate(cycleId);
+
+  if (!template.presidentName || !template.presidentName.trim()) {
+    throw new Error('Offer letter template is missing the president name');
+  }
+  if (!template.signaturePath) {
+    throw new Error('Offer letter template is missing the president signature');
+  }
+  if (!template.terms || template.terms.length === 0) {
+    throw new Error('Offer letter template is missing terms/expectations');
+  }
+
+  const signatureBuffer = await getSignatureBuffer(template.signaturePath);
+  if (!signatureBuffer) {
+    throw new Error('President signature image could not be loaded');
+  }
+
+  return { template, signatureBuffer };
+}
+
+// Preview the generated offer-letter PDF for a Final Round accepted candidate
+router.post('/applications/:id/offer-letter-preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { position, startDate, responseDeadline, additionalNotes } = req.body;
+
+    const validation = await validateSendRequest(id, { position, responseDeadline });
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+    const { application } = validation;
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(application.cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
+    const pdfBuffer = await generateOfferLetterPdf(application, application.cycle, template, offerDetails, signatureBuffer);
+
+    res.json({
+      filename: 'UConsulting-Offer-Letter-Preview.pdf',
+      pdf: pdfBuffer.toString('base64')
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/applications/:id/offer-letter-preview]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to generate offer letter preview' });
+  }
+});
+
 // Send offer letter to a Final Round accepted candidate
 router.post('/applications/:id/send-offer-letter', async (req, res) => {
+  let sendRecord = null;
   try {
     const { id } = req.params;
     const { position, startDate, responseDeadline, additionalNotes, force } = req.body;
     const userId = req.user?.id;
 
-    const application = await prisma.application.findUnique({
-      where: { id },
-      include: { candidate: true, cycle: true }
-    });
-
-    if (!application) {
-      return res.status(404).json({ error: 'Application not found' });
+    const validation = await validateSendRequest(id, { position, responseDeadline });
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
     }
+    const { application } = validation;
 
-    if (!application.candidate) {
-      return res.status(400).json({ error: 'No candidate associated with application' });
-    }
-
-    // Only Final Round accepted candidates are eligible
-    const isFinalRoundAccepted = (
-      application.status === 'ACCEPTED' &&
-      (application.finalRoundDecision === 'yes' || application.currentRound === '5')
-    );
-    if (!isFinalRoundAccepted) {
-      return res.status(400).json({ error: 'Offer letters can only be sent to Final Round accepted candidates' });
-    }
-
-    // Validate recipient email
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!application.email || !emailRegex.test(application.email)) {
-      return res.status(400).json({ error: 'Invalid candidate email address' });
-    }
-
-    // Validate required offer content
-    if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
-      return res.status(400).json({ error: 'Position and response deadline are required' });
-    }
-
-    // Prevent accidental duplicate sends unless explicitly forced
+    // Idempotent duplicate-send guard using a durable offer-letter send record.
     if (!force) {
-      const existingOfferComment = await prisma.comment.findFirst({
-        where: {
-          applicationId: id,
-          content: { startsWith: '[OFFER_LETTER_SENT]' }
-        }
-      });
-      if (existingOfferComment) {
+      const latestSend = await findLatestOfferLetterSend(id);
+      if (latestSend && (latestSend.status === 'sent' || latestSend.status === 'pending')) {
         return res.status(409).json({
-          error: 'Offer letter has already been sent for this application. Use force=true to resend.'
+          error: 'An offer letter has already been sent or is in progress for this application. Use force=true to resend.'
         });
       }
     }
 
-    // Load cycle-specific offer-letter template and signature
-    const template = await getOfferLetterTemplate(application.cycleId);
+    const { template, signatureBuffer } = await loadAndValidateTemplate(application.cycleId);
     const deadline = responseDeadline?.trim() || template.responseDeadline || '';
-    const signatureBuffer = await getSignatureBuffer(template.signaturePath);
-
     const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
+
+    // Create an immutable audit record before attempting delivery.
+    sendRecord = await createOfferLetterSendRecord(
+      application,
+      application.cycle,
+      template,
+      offerDetails,
+      userId,
+      force
+    );
+
     const pdfBuffer = await generateOfferLetterPdf(application, application.cycle, template, offerDetails, signatureBuffer);
 
     const emailResult = await sendOfferLetter(
@@ -4686,20 +4754,14 @@ router.post('/applications/:id/send-offer-letter', async (req, res) => {
     );
 
     if (!emailResult.success) {
+      await updateOfferLetterSendRecord(id, sendRecord.id, { status: 'failed', error: emailResult.error });
       return res.status(500).json({
         error: 'Failed to send offer letter',
         details: emailResult.error
       });
     }
 
-    // Record the send using the existing comment audit path
-    await prisma.comment.create({
-      data: {
-        applicationId: id,
-        userId,
-        content: `[OFFER_LETTER_SENT] Offer letter sent to ${application.email} for position ${position.trim()}.${emailResult.messageId ? ` Message ID: ${emailResult.messageId}` : ''}`
-      }
-    });
+    await updateOfferLetterSendRecord(id, sendRecord.id, { status: 'sent', messageId: emailResult.messageId });
 
     res.json({
       success: true,
@@ -4708,20 +4770,46 @@ router.post('/applications/:id/send-offer-letter', async (req, res) => {
     });
   } catch (error) {
     console.error('[POST /api/admin/applications/:id/send-offer-letter]', error);
-    res.status(500).json({ error: 'Failed to send offer letter', details: error.message });
+    if (sendRecord) {
+      try {
+        await updateOfferLetterSendRecord(sendRecord.applicationId, sendRecord.id, { status: 'failed', error: error.message });
+      } catch (auditError) {
+        console.error('[send-offer-letter] failed to update audit record:', auditError);
+      }
+    }
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to send offer letter' });
   }
 });
 
-// Get or create the offer-letter template for a recruiting cycle
+// Get the offer-letter template for a recruiting cycle
 router.get('/cycles/:cycleId/offer-letter-template', async (req, res) => {
   try {
     const { cycleId } = req.params;
     const template = await getOfferLetterTemplate(cycleId);
-    const publicUrl = getSignaturePublicUrl(template.signaturePath);
-    res.json({ ...template, signatureUrl: publicUrl });
+    res.json(template);
   } catch (error) {
     console.error('[GET /api/admin/cycles/:cycleId/offer-letter-template]', error);
     res.status(500).json({ error: 'Failed to load offer letter template', details: error.message });
+  }
+});
+
+// Get a short-lived signed URL for the president signature image
+router.get('/cycles/:cycleId/offer-letter-template/signature', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const template = await getOfferLetterTemplate(cycleId);
+    if (!template.signaturePath) {
+      return res.status(404).json({ error: 'No signature configured for this cycle' });
+    }
+    const signedUrl = await getSignatureSignedUrl(template.signaturePath, 300);
+    if (!signedUrl) {
+      return res.status(404).json({ error: 'Signature not found' });
+    }
+    res.json({ signedUrl });
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-template/signature]', error);
+    res.status(500).json({ error: 'Failed to get signature URL', details: error.message });
   }
 });
 

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import pdfmake from 'pdfmake';
 import supabase, { isSupabaseAvailable } from '../supabaseClient.js';
 
@@ -28,6 +29,7 @@ pdfmake.addFonts({
 
 const TEMPLATE_BUCKET = 'offer-letter-templates';
 const SIGNATURE_BUCKET = 'signatures';
+const SEND_BUCKET = 'offer-letter-sends';
 
 export const DEFAULT_TEMPLATE = {
   introText:
@@ -37,7 +39,7 @@ export const DEFAULT_TEMPLATE = {
   terms: [
     'Attend all Accelerator Program workshops and events',
     'Complete ~3 coffee chats with current/new members per week throughout the quarter',
-    'Participate on a client project during Spring 2026 and at least one more during your time in UC'
+    'Participate on a client project during the upcoming quarter and at least one more during your time in UC'
   ],
   closingText:
     'If you choose to accept, please return a signed PDF copy to uconsultingla@gmail.com by {{responseDeadline}}.\n\nWe look forward to having you on the team!',
@@ -54,15 +56,27 @@ export const DEFAULT_TEMPLATE = {
   confidentialityLabel: 'U C STRICTLY CONFIDENTIAL'
 };
 
-function templatePath(cycleId) {
-  return `${cycleId}.json`;
+function latestTemplatePath(cycleId) {
+  return `${cycleId}/latest.json`;
+}
+
+function versionedTemplatePath(cycleId, versionId) {
+  return `${cycleId}/${versionId}.json`;
 }
 
 function signaturePath(cycleId, ext) {
   return `${cycleId}/signature${ext}`;
 }
 
-async function ensureBucket(name, isPublic = true) {
+function sendRecordPath(applicationId, sendId) {
+  return `sends/${applicationId}/${sendId}.json`;
+}
+
+function latestSendPath(applicationId) {
+  return `sends/${applicationId}/latest.json`;
+}
+
+async function ensureBucket(name, isPublic = false) {
   if (!isSupabaseAvailable()) return;
   try {
     const { data, error } = await supabase.storage.getBucket(name);
@@ -80,6 +94,28 @@ async function ensureBucket(name, isPublic = true) {
   }
 }
 
+async function uploadJson(bucket, path, payload, isPublic = false) {
+  await ensureBucket(bucket, isPublic);
+  const { error } = await supabase.storage
+    .from(bucket)
+    .upload(path, Buffer.from(JSON.stringify(payload, null, 2)), {
+      contentType: 'application/json',
+      upsert: true
+    });
+  if (error) throw error;
+}
+
+async function downloadJson(bucket, path) {
+  try {
+    const { data, error } = await supabase.storage.from(bucket).download(path);
+    if (error || !data) return null;
+    const text = await data.text();
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
 function substitutePlaceholders(text, values) {
   return Object.entries(values).reduce(
     (acc, [key, value]) => acc.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value || ''),
@@ -91,40 +127,23 @@ export async function getOfferLetterTemplate(cycleId) {
   if (!isSupabaseAvailable()) {
     return JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
   }
-  await ensureBucket(TEMPLATE_BUCKET, true);
-  try {
-    const { data, error } = await supabase.storage
-      .from(TEMPLATE_BUCKET)
-      .download(templatePath(cycleId));
-    if (error || !data) {
-      if (error?.message?.includes('not found') || error?.message?.includes('Not found')) {
-        return JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
-      }
-      console.warn('[getOfferLetterTemplate] download error:', error?.message);
-      return JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
-    }
-    const text = await data.text();
-    return { ...DEFAULT_TEMPLATE, ...JSON.parse(text) };
-  } catch (e) {
-    console.warn('[getOfferLetterTemplate] parse error:', e.message);
-    return JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
+  const record = await downloadJson(TEMPLATE_BUCKET, latestTemplatePath(cycleId));
+  if (record) {
+    return { ...DEFAULT_TEMPLATE, ...record };
   }
+  return JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
 }
 
 export async function saveOfferLetterTemplate(cycleId, template) {
   if (!isSupabaseAvailable()) {
     throw new Error('Supabase storage is not configured');
   }
-  await ensureBucket(TEMPLATE_BUCKET, true);
-  const payload = JSON.stringify(template, null, 2);
-  const { error } = await supabase.storage
-    .from(TEMPLATE_BUCKET)
-    .upload(templatePath(cycleId), Buffer.from(payload), {
-      contentType: 'application/json',
-      upsert: true
-    });
-  if (error) throw error;
-  return template;
+  const versionId = randomUUID();
+  const payload = { ...template, versionId, savedAt: new Date().toISOString() };
+  // Keep an immutable version history and a mutable "latest" pointer.
+  await uploadJson(TEMPLATE_BUCKET, versionedTemplatePath(cycleId, versionId), payload, false);
+  await uploadJson(TEMPLATE_BUCKET, latestTemplatePath(cycleId), payload, false);
+  return payload;
 }
 
 export async function uploadSignature(cycleId, buffer, contentType) {
@@ -133,7 +152,7 @@ export async function uploadSignature(cycleId, buffer, contentType) {
   }
   const ext = contentType === 'image/jpeg' ? '.jpg' : contentType === 'image/webp' ? '.webp' : '.png';
   const path = signaturePath(cycleId, ext);
-  await ensureBucket(SIGNATURE_BUCKET, true);
+  await ensureBucket(SIGNATURE_BUCKET, false);
   const { error } = await supabase.storage
     .from(SIGNATURE_BUCKET)
     .upload(path, buffer, { contentType, upsert: true });
@@ -154,26 +173,85 @@ export async function getSignatureBuffer(signaturePath) {
   }
 }
 
-export async function getSignatureBufferForCycle(cycleId) {
-  if (!isSupabaseAvailable()) return null;
-  // Try common extensions for this cycle.
-  for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
-    const buffer = await getSignatureBuffer(signaturePath(cycleId, ext));
-    if (buffer) return { buffer, contentType: extToContentType(ext) };
-  }
-  return null;
-}
-
-function extToContentType(ext) {
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  if (ext === '.webp') return 'image/webp';
-  return 'image/png';
-}
-
-export function getSignaturePublicUrl(signaturePath) {
+export async function getSignatureSignedUrl(signaturePath, expiresIn = 300) {
   if (!signaturePath || !isSupabaseAvailable()) return null;
-  const { data } = supabase.storage.from(SIGNATURE_BUCKET).getPublicUrl(signaturePath);
-  return data?.publicUrl || null;
+  try {
+    const { data, error } = await supabase.storage
+      .from(SIGNATURE_BUCKET)
+      .createSignedUrl(signaturePath, expiresIn);
+    if (error) {
+      console.warn('[getSignatureSignedUrl] error:', error.message);
+      return null;
+    }
+    return data?.signedUrl || null;
+  } catch (e) {
+    console.warn('[getSignatureSignedUrl] error:', e.message);
+    return null;
+  }
+}
+
+export async function findLatestOfferLetterSend(applicationId) {
+  if (!isSupabaseAvailable()) return null;
+  return downloadJson(SEND_BUCKET, latestSendPath(applicationId));
+}
+
+export async function createOfferLetterSendRecord(application, cycle, template, offerDetails, approverUserId, force = false) {
+  if (!isSupabaseAvailable()) {
+    throw new Error('Supabase storage is not configured');
+  }
+
+  const sendId = randomUUID();
+  const applicationId = application.id;
+  const record = {
+    id: sendId,
+    idempotencyKey: sendId,
+    applicationId,
+    candidateEmail: application.email,
+    candidateName: `${application.firstName} ${application.lastName}`,
+    position: offerDetails.position,
+    startDate: offerDetails.startDate,
+    responseDeadline: offerDetails.responseDeadline,
+    cycleId: cycle?.id || application.cycleId,
+    cycleName: cycle?.name || 'UConsulting',
+    templateSnapshot: { ...template },
+    signaturePath: template.signaturePath,
+    presidentName: template.presidentName,
+    presidentTitle: template.presidentTitle,
+    approverUserId,
+    force,
+    status: 'pending',
+    messageId: null,
+    provider: 'ses',
+    error: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  await ensureBucket(SEND_BUCKET, false);
+  await uploadJson(SEND_BUCKET, sendRecordPath(applicationId, sendId), record, false);
+  await uploadJson(SEND_BUCKET, latestSendPath(applicationId), record, false);
+  return record;
+}
+
+export async function updateOfferLetterSendRecord(applicationId, sendId, { status, messageId, error }) {
+  if (!isSupabaseAvailable()) return;
+  const path = sendRecordPath(applicationId, sendId);
+  const existing = await downloadJson(SEND_BUCKET, path);
+  if (!existing) {
+    console.warn(`[updateOfferLetterSendRecord] record not found: ${path}`);
+    return;
+  }
+  const updated = {
+    ...existing,
+    status,
+    messageId: messageId || existing.messageId,
+    error: error || existing.error,
+    updatedAt: new Date().toISOString()
+  };
+  await uploadJson(SEND_BUCKET, path, updated, false);
+  // Keep the latest pointer in sync so duplicate checks are accurate.
+  await uploadJson(SEND_BUCKET, latestSendPath(applicationId), updated, false);
+  return updated;
 }
 
 export async function generateOfferLetterPdf(application, cycle, template, offerDetails, signatureBuffer) {
@@ -310,7 +388,6 @@ export async function generateOfferLetterPdf(application, cycle, template, offer
 }
 
 function extToContentTypeFromBuffer(buffer) {
-  // Simple magic number checks for common image formats
   if (buffer.length >= 4) {
     if (buffer[0] === 0x89 && buffer[1] === 0x50) return 'image/png';
     if (buffer[0] === 0xFF && buffer[1] === 0xD8) return 'image/jpeg';
