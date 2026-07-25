@@ -3,7 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
-import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
+import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 
@@ -4588,6 +4588,95 @@ router.post('/process-final-decisions', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/process-final-decisions]', error);
     res.status(500).json({ error: 'Failed to process final round decisions', details: error.message });
+  }
+});
+
+// Send offer letter to a Final Round accepted candidate
+router.post('/applications/:id/send-offer-letter', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { position, startDate, responseDeadline, additionalNotes, force } = req.body;
+    const userId = req.user?.id;
+
+    const application = await prisma.application.findUnique({
+      where: { id },
+      include: { candidate: true, cycle: true }
+    });
+
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (!application.candidate) {
+      return res.status(400).json({ error: 'No candidate associated with application' });
+    }
+
+    // Only Final Round accepted candidates are eligible
+    const isFinalRoundAccepted = (
+      application.status === 'ACCEPTED' &&
+      (application.finalRoundDecision === 'yes' || application.currentRound === '5')
+    );
+    if (!isFinalRoundAccepted) {
+      return res.status(400).json({ error: 'Offer letters can only be sent to Final Round accepted candidates' });
+    }
+
+    // Validate recipient email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!application.email || !emailRegex.test(application.email)) {
+      return res.status(400).json({ error: 'Invalid candidate email address' });
+    }
+
+    // Validate required offer content
+    if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
+      return res.status(400).json({ error: 'Position and response deadline are required' });
+    }
+
+    // Prevent accidental duplicate sends unless explicitly forced
+    if (!force) {
+      const existingOfferComment = await prisma.comment.findFirst({
+        where: {
+          applicationId: id,
+          content: { startsWith: '[OFFER_LETTER_SENT]' }
+        }
+      });
+      if (existingOfferComment) {
+        return res.status(409).json({
+          error: 'Offer letter has already been sent for this application. Use force=true to resend.'
+        });
+      }
+    }
+
+    const emailResult = await sendOfferLetter(
+      application.email,
+      `${application.firstName} ${application.lastName}`,
+      application.cycle?.name || 'UConsulting',
+      { position, startDate, responseDeadline, additionalNotes }
+    );
+
+    if (!emailResult.success) {
+      return res.status(500).json({
+        error: 'Failed to send offer letter',
+        details: emailResult.error
+      });
+    }
+
+    // Record the send using the existing comment audit path
+    await prisma.comment.create({
+      data: {
+        applicationId: id,
+        userId,
+        content: `[OFFER_LETTER_SENT] Offer letter sent to ${application.email} for position ${position.trim()}.${emailResult.messageId ? ` Message ID: ${emailResult.messageId}` : ''}`
+      }
+    });
+
+    res.json({
+      success: true,
+      messageId: emailResult.messageId,
+      message: 'Offer letter sent successfully'
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/applications/:id/send-offer-letter]', error);
+    res.status(500).json({ error: 'Failed to send offer letter', details: error.message });
   }
 });
 
