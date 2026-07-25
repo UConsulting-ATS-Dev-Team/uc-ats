@@ -165,4 +165,46 @@ describe('Dashboard demographics UI', () => {
     // Each endpoint should be called twice (mount + click)
     expect(apiClient.get).toHaveBeenCalledTimes(6);
   });
+
+  it('aggregates majors beyond the display limit into an Other chip', async () => {
+    const applications = Array.from({ length: 10 }, (_, i) => ({
+      major: `Major ${i}`,
+      gender: 'Woman',
+      gpa: '3.50',
+      year: '2027',
+      isTransferStudent: false,
+      isFirstGeneration: false,
+    }));
+
+    apiClient.get = vi.fn((endpoint) => {
+      if (endpoint === '/admin/stats') {
+        return Promise.resolve({ totalApplicants: 10, tasks: 0, candidates: 10, currentRound: 'SUBMITTED' });
+      }
+      if (endpoint === '/admin/cycles/active') {
+        return Promise.resolve(null);
+      }
+      if (endpoint === '/admin/applications') {
+        return Promise.resolve(applications);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderWithRouter(<Dashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('10 applications analyzed')).toBeInTheDocument();
+    });
+
+    // Top 7 majors displayed individually (10% each)
+    for (let i = 0; i < 7; i++) {
+      expect(await screen.findByText(new RegExp(`^Major ${i}: 1`, 'i'))).toBeInTheDocument();
+    }
+
+    // Remaining 3 majors are aggregated as Other (30%)
+    expect(await screen.findByText(/^Other: 3 \(30%\)/i)).toBeInTheDocument();
+
+    // Hidden majors should not appear as separate chips
+    expect(screen.queryByText(/^Major 7: 1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Major 9: 1/i)).not.toBeInTheDocument();
+  });
 });
