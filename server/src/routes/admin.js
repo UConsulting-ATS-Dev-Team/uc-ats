@@ -6,6 +6,7 @@ import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { syncInterviewCalendarEvent, cancelInterviewCalendarEvent } from '../services/interviewCalendar.js';
 
 const router = express.Router();
 
@@ -1795,7 +1796,9 @@ router.post('/interviews', async (req, res) => {
       }
     });
 
-    res.json(interview);
+    const calendarSync = await syncInterviewCalendarEvent(interview.id, { reason: 'interview created' });
+
+    res.json({ ...interview, calendarSync });
   } catch (error) {
     console.error('[POST /api/admin/interviews]', {
       message: error?.message,
@@ -1824,6 +1827,10 @@ router.delete('/interviews/:id', async (req, res) => {
     if (!interview) {
       return res.status(404).json({ error: 'Interview not found' });
     }
+
+    // Withdraw the calendar invite before the row (and its stored event ID) disappears
+    await cancelInterviewCalendarEvent(id);
+
     // Delete dependent records first to satisfy FK constraints
     const ops = [];
     if (prisma.interviewAssignment?.deleteMany) {
@@ -2073,11 +2080,32 @@ router.patch('/interviews/:id/config', async (req, res) => {
         cycle: true
       }
     });
-    
-    res.json(updatedInterview);
+
+    // The member groups in this config are the interviewer roster, so keep the invite in step
+    const calendarSync = await syncInterviewCalendarEvent(id, { reason: 'roster updated' });
+
+    res.json({ ...updatedInterview, calendarSync });
   } catch (error) {
     console.error('[PATCH /api/admin/interviews/:id/config]', error);
     res.status(500).json({ error: 'Failed to update interview configuration' });
+  }
+});
+
+// Retry / force the Google Calendar invite for an interview
+router.post('/interviews/:id/calendar-sync', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    if (!interview) {
+      return res.status(404).json({ error: 'Interview not found' });
+    }
+
+    const calendarSync = await syncInterviewCalendarEvent(id, { reason: 'manual retry' });
+    res.json(calendarSync);
+  } catch (error) {
+    console.error('[POST /api/admin/interviews/:id/calendar-sync]', error);
+    res.status(500).json({ error: 'Failed to sync calendar invite' });
   }
 });
 

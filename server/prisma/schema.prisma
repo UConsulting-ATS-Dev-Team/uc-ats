@@ -426,6 +426,11 @@ model Interview {
   createdBy             String
   createdAt             DateTime                        @default(now())
   updatedAt             DateTime                        @updatedAt
+  calendarEventId       String?
+  calendarSyncStatus    CalendarSyncStatus              @default(NOT_SYNCED)
+  calendarSyncError     String?
+  calendarSyncedAt      DateTime?
+  calendarAttendees     String[]                        @default([])
   behavioralQuestions   BehavioralQuestion[]
   firstRoundEvaluations FirstRoundInterviewEvaluation[]
   actionItems           InterviewActionItem[]
@@ -779,6 +784,13 @@ enum CasePageType {
   NORMAL
   EXHIBIT
   INTERVIEWER_ONLY
+}
+
+enum CalendarSyncStatus {
+  NOT_SYNCED
+  SYNCED
+  FAILED
+  CANCELLED
 }
 
 enum MeetingCommunicationType {

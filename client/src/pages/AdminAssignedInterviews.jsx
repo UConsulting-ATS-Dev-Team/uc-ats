@@ -25,6 +25,13 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import '../styles/AdminAssignedInterviews.css';
 
+const CALENDAR_STATUS_LABELS = {
+  SYNCED: 'Interviewer invites sent',
+  FAILED: 'Calendar invite failed',
+  CANCELLED: 'Calendar invite cancelled',
+  NOT_SYNCED: 'No calendar invite yet'
+};
+
 // Application Group Card Component for Admin
 const AdminApplicationGroupCard = ({ group, interviewId }) => {
   const [applications, setApplications] = useState([]);
@@ -225,6 +232,7 @@ export default function AdminAssignedInterviews() {
   const [currentUser, setCurrentUser] = useState(null);
   
   // Search/filter states for groups management
+  const [calendarSyncingId, setCalendarSyncingId] = useState(null);
   const [memberGroupsSearch, setMemberGroupsSearch] = useState('');
   const [applicationGroupsSearch, setApplicationGroupsSearch] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState(new Set()); // Track collapsed group IDs
@@ -466,6 +474,33 @@ export default function AdminAssignedInterviews() {
     setShowBehavioralQuestionsConfig(false);
   };
 
+  // Applies the calendar fields the server returns after a create/roster save/retry
+  const applyCalendarSync = (interviewId, calendarSync) => {
+    if (!calendarSync) return;
+    setInterviews(prev => prev.map(iv => iv.id === interviewId ? {
+      ...iv,
+      calendarEventId: calendarSync.calendarEventId ?? iv.calendarEventId,
+      calendarSyncStatus: calendarSync.status,
+      calendarSyncError: calendarSync.error ?? null
+    } : iv));
+  };
+
+  const retryCalendarSync = async (interviewId) => {
+    setCalendarSyncingId(interviewId);
+    try {
+      const result = await apiClient.post(`/admin/interviews/${interviewId}/calendar-sync`, {});
+      applyCalendarSync(interviewId, result);
+      if (result.status !== 'SYNCED') {
+        alert(result.error || 'Calendar invite could not be sent.');
+      }
+    } catch (e) {
+      console.error('Failed to sync calendar invite', e);
+      alert(e.message || 'Failed to sync calendar invite');
+    } finally {
+      setCalendarSyncingId(null);
+    }
+  };
+
   const handleEditInterview = (interviewId) => {
     const interview = interviews.find(i => i.id === interviewId);
     setEditedInterview({...interview});
@@ -523,6 +558,9 @@ export default function AdminAssignedInterviews() {
       const created = await apiClient.post('/admin/interviews', payload);
       const next = [created, ...interviews];
       setInterviews(next);
+      if (created.calendarSync && created.calendarSync.status !== 'SYNCED' && created.calendarSync.error) {
+        alert(`Interview created, but the calendar invite was not sent: ${created.calendarSync.error}`);
+      }
       setSelectedInterviewId(created.id);
       setEditedInterview(null);
       setGroups([]);
@@ -668,7 +706,7 @@ export default function AdminAssignedInterviews() {
     const data = interviewData[interviewId];
     if (!data) return;
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
+      const response = await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
         type: 'full',
         config: data
       });
@@ -678,6 +716,7 @@ export default function AdminAssignedInterviews() {
           ? { ...iv, description: JSON.stringify(data) } 
           : iv
       ));
+      applyCalendarSync(interviewId, response?.calendarSync);
       alert('Interview data saved');
     } catch (e) {
       console.error('Failed to save interview data', e);
@@ -687,7 +726,7 @@ export default function AdminAssignedInterviews() {
 
   const persistInterviewConfig = async (interviewId, data, { silent = true } = {}) => {
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
+      const response = await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
         type: 'full',
         config: data
       });
@@ -696,6 +735,7 @@ export default function AdminAssignedInterviews() {
           ? { ...iv, description: JSON.stringify(data) } 
           : iv
       ));
+      applyCalendarSync(interviewId, response?.calendarSync);
       if (!silent) alert('Interview data saved');
     } catch (e) {
       console.error('Failed to persist interview config', e);
@@ -1118,6 +1158,30 @@ export default function AdminAssignedInterviews() {
                             <span>{interview.dresscode || 'No dress code specified'}</span>
                           )}
                         </div>
+
+                        <div className="detail-item">
+                          <CalendarIcon className="detail-icon" />
+                          <span>
+                            {CALENDAR_STATUS_LABELS[interview.calendarSyncStatus] || CALENDAR_STATUS_LABELS.NOT_SYNCED}
+                          </span>
+                          <button
+                            className="btn-secondary small"
+                            disabled={calendarSyncingId === interview.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              retryCalendarSync(interview.id);
+                            }}
+                            title="Create or refresh the Google Calendar invite for the assigned interviewers"
+                          >
+                            {calendarSyncingId === interview.id ? 'Sending…' : 'Send invites'}
+                          </button>
+                        </div>
+
+                        {interview.calendarSyncError && (
+                          <div className="detail-item calendar-sync-error">
+                            <span>{interview.calendarSyncError}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
