@@ -74,6 +74,7 @@ export async function syncInterviewCalendarEvent(interviewId, { reason = 'update
     payload = buildInterviewEventPayload({
       interview,
       attendeeEmails: resolveAttendees(attendees),
+      rosterSize: attendees.length,
       clientUrl: config.clientUrl
     });
   } catch (error) {

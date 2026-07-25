@@ -93,7 +93,9 @@ export function diffAttendees(previous = [], next = []) {
 
 // Interview.description holds internal JSON configuration, so nothing from it is ever copied into
 // the invite. Only operational session details go to interviewers' calendars.
-export function buildInterviewEventPayload({ interview, attendeeEmails = [], clientUrl }) {
+// `rosterSize` is the real interviewer count, which differs from `attendeeEmails` when
+// CALENDAR_INVITE_TEST_EMAIL redirects the invite to a single test address.
+export function buildInterviewEventPayload({ interview, attendeeEmails = [], rosterSize, clientUrl }) {
   if (!interview?.startDate || !interview?.endDate) {
     throw new Error('Interview is missing a start or end date');
   }
@@ -120,7 +122,7 @@ export function buildInterviewEventPayload({ interview, attendeeEmails = [], cli
   ];
   if (location) lines.push(isLink(location) ? `Video link: ${location}` : `Location: ${location}`);
   if (interview.dresscode) lines.push(`Dress code: ${sanitizeText(interview.dresscode)}`);
-  lines.push(`Interviewers invited: ${attendeeEmails.length}`);
+  lines.push(`Interviewers invited: ${rosterSize ?? attendeeEmails.length}`);
   if (clientUrl) lines.push('', `Candidate assignments and prep materials: ${clientUrl}/admin/assigned-interviews`);
   lines.push('', 'You are receiving this invite because you are assigned to this interview in the UConsulting ATS.');
 

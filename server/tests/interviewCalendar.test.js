@@ -43,6 +43,7 @@ test('event payload uses timezone-correct times, location and sanitized session 
   assert.deepEqual(payload.attendees, [{ email: 'a@ucla.edu' }, { email: 'b@ucla.edu' }]);
   assert.match(payload.description, /Session ID: 3f1c2b7e-9d4a-4d1e-8f52-6a0b1c2d3e4f/);
   assert.match(payload.description, /Dress code: Business formal/);
+  assert.match(payload.description, /Interviewers invited: 2/);
   assert.match(payload.description, /https:\/\/uconsultingats\.com\/admin\/assigned-interviews/);
   // The description column stores internal JSON config; none of it may leak into the invite.
   assert.doesNotMatch(payload.description, /memberIds|applicationGroups|internal only/);
@@ -56,6 +57,17 @@ test('event payload advertises a video link instead of a room when the location 
 
   assert.equal(payload.location, 'https://zoom.us/j/123456');
   assert.match(payload.description, /Video link: https:\/\/zoom\.us\/j\/123456/);
+});
+
+test('event payload reports the real roster size when invites are redirected to a test address', () => {
+  const payload = buildInterviewEventPayload({
+    interview: INTERVIEW,
+    attendeeEmails: ['qa@example.com'],
+    rosterSize: 2
+  });
+
+  assert.deepEqual(payload.attendees, [{ email: 'qa@example.com' }]);
+  assert.match(payload.description, /Interviewers invited: 2/);
 });
 
 test('event payload rejects missing or inverted interview times', () => {
