@@ -40,6 +40,7 @@
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.6",
     "pdfmake": "^0.3.11",
+    "sharp": "^0.35.3",
     "ws": "^8.21.1"
   },
   "devDependencies": {
