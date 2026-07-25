@@ -207,6 +207,8 @@ export default function ReviewTeams() {
   const [clickedApplicationId, setClickedApplicationId] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [contributionsByTeam, setContributionsByTeam] = useState({});
+  const [reminderPending, setReminderPending] = useState(new Set());
+  const [reminderResult, setReminderResult] = useState({});
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -564,6 +566,30 @@ export default function ReviewTeams() {
     }
   };
 
+  const getReminderKey = (teamId, memberId) => `${teamId}:${memberId}`;
+
+  const handleSendReminder = async (teamId, memberId) => {
+    const key = getReminderKey(teamId, memberId);
+    if (reminderPending.has(key)) return;
+
+    setReminderPending(prev => new Set(prev).add(key));
+    setReminderResult(prev => ({ ...prev, [key]: {} }));
+
+    try {
+      await apiClient.post(`/review-teams/${teamId}/reviewers/${memberId}/reminder`);
+      setReminderResult(prev => ({ ...prev, [key]: { success: true } }));
+    } catch (err) {
+      const message = err.message || 'Failed to send reminder';
+      setReminderResult(prev => ({ ...prev, [key]: { error: message } }));
+    } finally {
+      setReminderPending(prev => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   const refreshData = async () => {
     try {
       setLoading(true);
@@ -727,6 +753,7 @@ export default function ReviewTeams() {
               <IconButton
                 onClick={() => toggleTeamExpansion(team.id)}
                 size="small"
+                aria-label={isTeamExpanded(team.id) ? 'Collapse team' : 'Expand team'}
                 sx={{
                   color: 'primary.main',
                   '&:hover': {
@@ -941,12 +968,47 @@ export default function ReviewTeams() {
                               );
                             })}
 
-                            <Chip
-                              size="small"
-                              color={(contribution?.completionPercent || 0) === 100 ? 'success' : 'primary'}
-                              label={`${contribution?.completionPercent || 0}% complete`}
-                              sx={{ fontWeight: 600 }}
-                            />
+                            <Stack
+                              direction="row"
+                              alignItems="center"
+                              spacing={1}
+                              sx={{ mt: 1, flexWrap: 'wrap' }}
+                            >
+                              <Chip
+                                size="small"
+                                color={(contribution?.completionPercent || 0) === 100 ? 'success' : 'primary'}
+                                label={`${contribution?.completionPercent || 0}% complete`}
+                                sx={{ fontWeight: 600 }}
+                              />
+                              {user.role === 'ADMIN' && (() => {
+                                const reminderKey = getReminderKey(team.id, member.id);
+                                const isReminderPending = reminderPending.has(reminderKey);
+                                const reminderState = reminderResult[reminderKey] || {};
+
+                                return (
+                                  <>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      disabled={isReminderPending}
+                                      onClick={() => handleSendReminder(team.id, member.id)}
+                                    >
+                                      {isReminderPending ? 'Sending...' : 'Send reminder'}
+                                    </Button>
+                                    {reminderState.success && (
+                                      <Alert severity="success" sx={{ py: 0.25, px: 1, fontSize: '0.75rem' }}>
+                                        Reminder sent
+                                      </Alert>
+                                    )}
+                                    {reminderState.error && (
+                                      <Alert severity="error" sx={{ py: 0.25, px: 1, fontSize: '0.75rem' }}>
+                                        {reminderState.error}
+                                      </Alert>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </Stack>
                         </Paper>
                       );
                     })}
