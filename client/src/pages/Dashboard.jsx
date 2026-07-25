@@ -1,17 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  Box, 
-  Paper, 
-  Stack, 
-  Typography, 
-  Button, 
-  Grid, 
-  Card, 
+import {
+  Box,
+  Paper,
+  Stack,
+  Typography,
+  Button,
+  Grid,
+  Card,
   CardContent,
   CircularProgress,
   Alert,
   Chip
 } from '@mui/material';
+import { useTheme, ThemeProvider, alpha } from '@mui/material/styles';
+import { BarChart as BarChartIcon, DonutLarge as DonutLargeIcon } from '@mui/icons-material';
 import {
   BarChart,
   Bar,
@@ -23,11 +25,151 @@ import {
   PieChart,
   Pie,
   Cell,
-  ResponsiveContainer
+  ResponsiveContainer,
+  LabelList
 } from 'recharts';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import globalTheme from '../styles/globalTheme';
+
+function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisAngle = 0 }) {
+  const theme = useTheme();
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+
+  const chartColors = [
+    theme.palette.primary.main,
+    theme.palette.secondary.main,
+    theme.palette.success.main,
+    theme.palette.info.main,
+    theme.palette.warning.main,
+    theme.palette.error.main,
+    theme.palette.primary.light,
+    theme.palette.secondary.light,
+  ];
+
+  const chartBody = data.length > 0 ? (
+    <>
+      <Box sx={{ height: 280, width: '100%' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          {type === 'bar' ? (
+            <BarChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: xAxisAngle ? 70 : 40 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={alpha(theme.palette.divider, 0.5)} />
+              <XAxis
+                dataKey="name"
+                angle={xAxisAngle}
+                textAnchor={xAxisAngle ? 'end' : 'middle'}
+                height={xAxisAngle ? 70 : 30}
+                fontSize={12}
+                tick={{ fill: theme.palette.text.secondary }}
+                interval={0}
+              />
+              <YAxis allowDecimals={false} tick={{ fill: theme.palette.text.secondary }} />
+              <Tooltip
+                formatter={(value) => [`${value} application${value !== 1 ? 's' : ''}`, 'Count']}
+                contentStyle={{ borderRadius: theme.shape.borderRadius, border: 'none', boxShadow: theme.shadows[4] }}
+              />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                <LabelList dataKey="value" position="top" fill={theme.palette.text.primary} fontSize={12} />
+                {data.map((_, index) => (
+                  <Cell key={`cell-${index}`} fill={chartColors[index % chartColors.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          ) : (
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="45%"
+                outerRadius={80}
+                innerRadius={45}
+                stroke={theme.palette.background.paper}
+                strokeWidth={2}
+                labelLine={false}
+                label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+              >
+                {data.map((_, index) => (
+                  <Cell key={`cell-${index}`} fill={chartColors[index % chartColors.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
+              <Legend verticalAlign="bottom" height={36} />
+            </PieChart>
+          )}
+        </ResponsiveContainer>
+      </Box>
+      <Stack direction="row" flexWrap="wrap" gap={1} mt={2} justifyContent="center">
+        {data.map((item, index) => {
+          const color = chartColors[index % chartColors.length];
+          const pct = total > 0 ? ((item.value / total) * 100).toFixed(0) : 0;
+          return (
+            <Chip
+              key={item.name}
+              size="small"
+              label={`${item.name}: ${item.value} (${pct}%)`}
+              sx={{
+                bgcolor: alpha(color, 0.1),
+                color: 'text.primary',
+                border: `1px solid ${alpha(color, 0.4)}`,
+                fontWeight: 500,
+                maxWidth: '100%',
+              }}
+            />
+          );
+        })}
+      </Stack>
+    </>
+  ) : (
+    <Box
+      sx={{
+        height: 280,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        p: 3,
+        textAlign: 'center',
+      }}
+    >
+      <Icon color="disabled" sx={{ fontSize: 40, mb: 1 }} />
+      <Typography color="text.secondary" variant="body1" gutterBottom>
+        {emptyText}
+      </Typography>
+      <Typography color="text.disabled" variant="body2">
+        No data to display
+      </Typography>
+    </Box>
+  );
+
+  return (
+    <Card
+      sx={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 2,
+        boxShadow: 1,
+      }}
+    >
+      <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
+        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 2 }}>
+          <Box sx={{ color: 'primary.main', display: 'flex' }}>
+            <Icon />
+          </Box>
+          <Typography variant="h6" sx={{ fontWeight: 600, color: 'text.primary' }}>
+            {title}
+          </Typography>
+        </Stack>
+        {chartBody}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -44,6 +186,8 @@ export default function Dashboard() {
     firstGeneration: []
   });
   const [demographicsLoading, setDemographicsLoading] = useState(false);
+  const [demographicsError, setDemographicsError] = useState('');
+  const [applicationCount, setApplicationCount] = useState(0);
 
   const load = async () => {
     try {
@@ -79,11 +223,13 @@ export default function Dashboard() {
   const fetchDemographicData = async () => {
     try {
       setDemographicsLoading(true);
+      setDemographicsError('');
       const applications = await apiClient.get('/admin/applications');
       
       // Handle case where applications might be null or undefined
       if (!applications || !Array.isArray(applications)) {
         console.warn('No applications data received or invalid format');
+        setApplicationCount(0);
         setDemographicData({
           majors: [],
           genders: [],
@@ -95,6 +241,8 @@ export default function Dashboard() {
         return;
       }
       
+      setApplicationCount(applications.length);
+
       // Process demographic data
       const majors = {};
       const genders = {};
@@ -163,7 +311,8 @@ export default function Dashboard() {
       });
     } catch (err) {
       console.error('Error fetching demographic data:', err);
-      // Set empty demographic data instead of showing error
+      setDemographicsError('Failed to load demographic data. Please try refreshing.');
+      setApplicationCount(0);
       setDemographicData({
         majors: [],
         genders: [],
@@ -199,542 +348,171 @@ export default function Dashboard() {
     };
   }, [user]);
 
-  // Enhanced color schemes for charts
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF7C7C'];
-  const PIE_COLORS = ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#a8edea', '#ff9a9e', '#ffecd2'];
-  const BAR_COLORS = ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a'];
-
   if (!user) {
     return (
-      <Box>
-        <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography variant="h4" gutterBottom>
-            Authentication Required
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Please log in to view the dashboard.
-          </Typography>
-        </Paper>
-      </Box>
+      <ThemeProvider theme={globalTheme}>
+        <Box>
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <Typography variant="h4" gutterBottom>
+              Authentication Required
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Please log in to view the dashboard.
+            </Typography>
+          </Paper>
+        </Box>
+      </ThemeProvider>
     );
   }
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
-      <Box sx={{ maxWidth: 1200, mx: 'auto', p: 0 }}>
-      {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
-          <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
-            Admin Dashboard
-          </Typography>
-          <Button 
-            variant="outlined" 
-            onClick={() => {
-              load();
-              fetchDemographicData();
-            }} 
-            disabled={loading || demographicsLoading}
-          >
-            Refresh
-          </Button>
-        </Stack>
-      </Box>
-
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
-
-      {/* Stats Cards */}
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} mb={4}>
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">Active Cycle</Typography>
-          {activeCycle ? (
-            <>
-              <Typography variant="h6">{activeCycle.name}</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {activeCycle.startDate ? new Date(activeCycle.startDate).toLocaleDateString() : '—'}
-                {' '}to{' '}
-                {activeCycle.endDate ? new Date(activeCycle.endDate).toLocaleDateString() : '—'}
+    <ThemeProvider theme={globalTheme}>
+      <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+        <Box sx={{ maxWidth: 1200, mx: 'auto', p: 0 }}>
+          {/* Header */}
+          <Box sx={{ mb: 4 }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+              <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+                Admin Dashboard
               </Typography>
-            </>
-          ) : (
-            <Typography variant="body1">No active cycle</Typography>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  load();
+                  fetchDemographicData();
+                }}
+                disabled={loading || demographicsLoading}
+              >
+                Refresh
+              </Button>
+            </Stack>
+          </Box>
+
+          {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
+          {demographicsError && (
+            <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setDemographicsError('')}>
+              {demographicsError}
+            </Alert>
           )}
-        </Paper>
 
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">Total Candidates (cycle)</Typography>
-          <Typography variant="h4">{stats.totalApplicants}</Typography>
-        </Paper>
+          {/* Stats Cards */}
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} mb={4}>
+            <Paper sx={{ p: 2, flex: 1 }}>
+              <Typography variant="subtitle2" color="text.secondary">Active Cycle</Typography>
+              {activeCycle ? (
+                <>
+                  <Typography variant="h6">{activeCycle.name}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {activeCycle.startDate ? new Date(activeCycle.startDate).toLocaleDateString() : '—'}
+                    {' '}to{' '}
+                    {activeCycle.endDate ? new Date(activeCycle.endDate).toLocaleDateString() : '—'}
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body1">No active cycle</Typography>
+              )}
+            </Paper>
 
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">In Pipeline</Typography>
-          <Typography variant="h4">{stats.candidates}</Typography>
-        </Paper>
+            <Paper sx={{ p: 2, flex: 1 }}>
+              <Typography variant="subtitle2" color="text.secondary">Total Candidates (cycle)</Typography>
+              <Typography variant="h4">{stats.totalApplicants}</Typography>
+            </Paper>
 
-        <Paper sx={{ p: 2, flex: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">Current Stage</Typography>
-          <Typography variant="h6">{stats.currentRound?.replace('_', ' ') || '—'}</Typography>
-        </Paper>
-      </Stack>
+            <Paper sx={{ p: 2, flex: 1 }}>
+              <Typography variant="subtitle2" color="text.secondary">In Pipeline</Typography>
+              <Typography variant="h4">{stats.candidates}</Typography>
+            </Paper>
 
-      {/* Enhanced Demographic Charts Section */}
-      <Typography variant="h5" component="h2" sx={{ 
-        fontWeight: 700, 
-        color: 'primary.dark', 
-        mb: 4,
-        textAlign: 'center',
-        position: 'relative',
-        '&::after': {
-          content: '""',
-          position: 'absolute',
-          bottom: -8,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 60,
-          height: 3,
-          background: 'linear-gradient(90deg, #667eea, #764ba2)',
-          borderRadius: 2
-        }
-      }}>
-        Application Demographics
-      </Typography>
+            <Paper sx={{ p: 2, flex: 1 }}>
+              <Typography variant="subtitle2" color="text.secondary">Current Stage</Typography>
+              <Typography variant="h6">{stats.currentRound?.replace('_', ' ') || '—'}</Typography>
+            </Paper>
+          </Stack>
 
-      {demographicsLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-          <CircularProgress size={60} sx={{ color: '#667eea' }} />
+          {/* Demographics Section */}
+          <Box sx={{ mb: 4 }}>
+            <Stack direction="row" alignItems="center" gap={1.5} mb={1}>
+              <Box sx={{ width: 4, height: 28, bgcolor: 'primary.main', borderRadius: 1 }} />
+              <Typography variant="h5" component="h2" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                Application Demographics
+              </Typography>
+            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              {applicationCount > 0 ? `${applicationCount} applications analyzed` : 'No applications to analyze'}
+            </Typography>
+          </Box>
+
+          {demographicsLoading ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', p: 4 }}>
+              <CircularProgress size={40} sx={{ mb: 2 }} />
+              <Typography color="text.secondary">Loading demographics...</Typography>
+            </Box>
+          ) : (
+            <Grid container spacing={3}>
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="Applications by Major"
+                  icon={BarChartIcon}
+                  data={demographicData.majors.slice(0, 8)}
+                  type="bar"
+                  emptyText="No major data available"
+                  xAxisAngle={-45}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="GPA Distribution"
+                  icon={DonutLargeIcon}
+                  data={demographicData.gpaRanges}
+                  type="pie"
+                  emptyText="No GPA data available"
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="Gender Distribution"
+                  icon={DonutLargeIcon}
+                  data={demographicData.genders}
+                  type="pie"
+                  emptyText="No gender data available"
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="Graduation Years"
+                  icon={BarChartIcon}
+                  data={demographicData.graduationYears}
+                  type="bar"
+                  emptyText="No graduation year data available"
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="Transfer Students"
+                  icon={DonutLargeIcon}
+                  data={demographicData.transferStudents}
+                  type="pie"
+                  emptyText="No transfer student data available"
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, md: 6 }}>
+                <DemographicChartCard
+                  title="First Generation Students"
+                  icon={DonutLargeIcon}
+                  data={demographicData.firstGeneration}
+                  type="pie"
+                  emptyText="No first generation data available"
+                />
+              </Grid>
+            </Grid>
+          )}
         </Box>
-      ) : (
-        <Grid container spacing={4}>
-          {/* Majors Chart */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{ 
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{ 
-                  fontWeight: 600, 
-                  color: '#667eea',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #667eea, #764ba2)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  Applications by Major
-                </Typography>
-{demographicData.majors.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={demographicData.majors.slice(0, 8)} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis
-                        dataKey="name"
-                        angle={-45}
-                        textAnchor="end"
-                        height={80}
-                        fontSize={11}
-                        stroke="#666"
-                        tick={{ fill: '#666' }}
-                      />
-                      <YAxis
-                        stroke="#666"
-                        tick={{ fill: '#666' }}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                      />
-                      <Bar
-                        dataKey="value"
-                        radius={[4, 4, 0, 0]}
-                        fill="url(#majorGradient)"
-                      >
-                        {demographicData.majors.slice(0, 8).map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={BAR_COLORS[index % BAR_COLORS.length]} />
-                        ))}
-                      </Bar>
-                      <defs>
-                        <linearGradient id="majorGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#667eea" />
-                          <stop offset="100%" stopColor="#764ba2" />
-                        </linearGradient>
-                      </defs>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No application data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* GPA Distribution Chart */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{ 
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{ 
-                  fontWeight: 600, 
-                  color: '#f093fb',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #f093fb, #f5576c)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  GPA Distribution
-                </Typography>
-{demographicData.gpaRanges.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <PieChart>
-                      <Pie
-                        data={demographicData.gpaRanges}
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={90}
-                        innerRadius={50}
-                        fill="#8884d8"
-                        dataKey="value"
-                        stroke="#fff"
-                        strokeWidth={2}
-                        paddingAngle={2}
-                      >
-                        {demographicData.gpaRanges.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                        formatter={(value, name) => [`${value} (${((value / demographicData.gpaRanges.reduce((sum, item) => sum + item.value, 0)) * 100).toFixed(0)}%)`, name]}
-                      />
-                      <Legend layout="horizontal" verticalAlign="bottom" align="center" />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No GPA data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Gender Distribution */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{
-                  fontWeight: 600,
-                  color: '#4facfe',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #4facfe, #00f2fe)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  Gender Distribution
-                </Typography>
-                {demographicData.genders.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <PieChart>
-                      <Pie
-                        data={demographicData.genders}
-                        cx="50%"
-                        cy="45%"
-                        labelLine={false}
-                        label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
-                        outerRadius={80}
-                        innerRadius={35}
-                        fill="#8884d8"
-                        dataKey="value"
-                        stroke="#fff"
-                        strokeWidth={2}
-                      >
-                        {demographicData.genders.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                      />
-                      <Legend verticalAlign="bottom" height={36} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No gender data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Graduation Years */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{ 
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{ 
-                  fontWeight: 600, 
-                  color: '#43e97b',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #43e97b, #38f9d7)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  Graduation Years
-                </Typography>
-{demographicData.graduationYears.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={demographicData.graduationYears} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis
-                        dataKey="name"
-                        stroke="#666"
-                        tick={{ fill: '#666' }}
-                      />
-                      <YAxis
-                        stroke="#666"
-                        tick={{ fill: '#666' }}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                      />
-                      <Bar
-                        dataKey="value"
-                        radius={[4, 4, 0, 0]}
-                        fill="url(#yearGradient)"
-                      />
-                      <defs>
-                        <linearGradient id="yearGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#43e97b" />
-                          <stop offset="100%" stopColor="#38f9d7" />
-                        </linearGradient>
-                      </defs>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No graduation year data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Transfer Students */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{
-                  fontWeight: 600,
-                  color: '#fa709a',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #fa709a, #fee140)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  Transfer Students
-                </Typography>
-                {demographicData.transferStudents.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <PieChart>
-                      <Pie
-                        data={demographicData.transferStudents}
-                        cx="50%"
-                        cy="45%"
-                        labelLine={false}
-                        label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
-                        outerRadius={80}
-                        innerRadius={35}
-                        fill="#8884d8"
-                        dataKey="value"
-                        stroke="#fff"
-                        strokeWidth={2}
-                      >
-                        {demographicData.transferStudents.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                      />
-                      <Legend verticalAlign="bottom" height={36} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No transfer student data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* First Generation */}
-          <Grid item xs={12} md={6}>
-            <Card sx={{
-              borderRadius: 3,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-              transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.15)'
-              }
-            }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom sx={{
-                  fontWeight: 600,
-                  color: '#a8edea',
-                  mb: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  '&::before': {
-                    content: '""',
-                    width: 4,
-                    height: 24,
-                    background: 'linear-gradient(135deg, #a8edea, #fed6e3)',
-                    borderRadius: 2,
-                    mr: 2
-                  }
-                }}>
-                  First Generation Students
-                </Typography>
-                {demographicData.firstGeneration.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <PieChart>
-                      <Pie
-                        data={demographicData.firstGeneration}
-                        cx="50%"
-                        cy="45%"
-                        labelLine={false}
-                        label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
-                        outerRadius={80}
-                        innerRadius={35}
-                        fill="#8884d8"
-                        dataKey="value"
-                        stroke="#fff"
-                        strokeWidth={2}
-                      >
-                        {demographicData.firstGeneration.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'rgba(255,255,255,0.95)',
-                          border: 'none',
-                          borderRadius: 12,
-                          boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-                        }}
-                      />
-                      <Legend verticalAlign="bottom" height={36} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <Box sx={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Typography color="text.secondary">No first generation data available</Typography>
-                  </Box>
-                )}
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      )}
-    </Box>
-    </AccessControl>
+      </AccessControl>
+    </ThemeProvider>
   );
 }
