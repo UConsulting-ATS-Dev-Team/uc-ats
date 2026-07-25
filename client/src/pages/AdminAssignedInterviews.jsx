@@ -563,7 +563,6 @@ export default function AdminAssignedInterviews() {
       }
       setSelectedInterviewId(created.id);
       setEditedInterview(null);
-      setGroups([]);
       setCreateOpen(false);
       setNewInterview({ 
         title: '', 
