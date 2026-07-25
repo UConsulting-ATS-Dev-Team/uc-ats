@@ -315,16 +315,17 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   type="submit"
-                  disabled={previewing}
+                  disabled={!templateReady || previewing}
+                  title={templateReady ? '' : 'Configure president name and signature in Cycle Management before previewing'}
                   style={{
                     padding: '10px 16px',
-                    backgroundColor: previewing ? '#9ca3af' : '#3b82f6',
+                    backgroundColor: !templateReady || previewing ? '#9ca3af' : '#3b82f6',
                     color: 'white',
                     border: 'none',
                     borderRadius: '8px',
                     fontSize: '0.875rem',
                     fontWeight: '500',
-                    cursor: previewing ? 'not-allowed' : 'pointer'
+                    cursor: !templateReady || previewing ? 'not-allowed' : 'pointer'
                   }}
                 >
                   {previewing ? 'Generating Preview...' : 'Preview Offer Letter'}
