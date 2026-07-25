@@ -34,9 +34,10 @@ const AuthenticatedImage = ({ src, alt, style, onError, ...props }) => {
   };
 
   useEffect(() => {
-    if (!src) {
+    if (typeof src !== 'string' || !src.trim()) {
       setLoading(false);
       setError(true);
+      if (onError) onError(new Error('Invalid image source'));
       return;
     }
 
@@ -156,7 +157,7 @@ const AuthenticatedImage = ({ src, alt, style, onError, ...props }) => {
 
   if (error || !imageUrl) {
     return (
-      <div 
+      <div
         style={{
           ...style,
           display: 'flex',
@@ -173,11 +174,18 @@ const AuthenticatedImage = ({ src, alt, style, onError, ...props }) => {
     );
   }
 
+  const handleImageError = () => {
+    setError(true);
+    setLoading(false);
+    if (onError) onError(new Error('Image failed to load'));
+  };
+
   return (
-    <img 
-      src={imageUrl} 
-      alt={alt} 
+    <img
+      src={imageUrl}
+      alt={alt}
       style={style}
+      onError={handleImageError}
       {...props}
     />
   );
