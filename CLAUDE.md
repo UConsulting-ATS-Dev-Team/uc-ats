@@ -211,8 +211,8 @@ Key notification types in [emailNotifications.js](server/src/services/emailNotif
 ## Environment Variables
 
 Required in `server/.env`:
-- `DATABASE_URL` - PostgreSQL connection string (Supabase)
-- `DIRECT_URL` - Direct database URL (bypasses connection pooler for migrations)
+- `DATABASE_URL` - PostgreSQL connection string (Supabase). Use the IPv4 session pooler on port 5432 with username `postgres.<project-ref>`; the direct `db.<project-ref>.supabase.co` host is IPv6-only and will fail from IPv4-only environments.
+- `DIRECT_URL` - Direct database URL for Prisma migrations/introspection. In this setup it should also be the session pooler on port 5432; never use port 6543 (transaction mode) for migrations.
 - `GOOGLE_CLOUD_KEY_PATH` - Path to Google Cloud service account JSON
 - `JWT_SECRET` - Secret for JWT signing
 - `BASE_URL` - Server URL (http://localhost:3001 in dev)
@@ -256,6 +256,7 @@ const application = await prisma.application.findUnique({
 ## Testing & Debugging
 
 - **Health Check:** `GET /api/health` - Verifies DB connection
+- **Database Preflight:** `cd server && npm run check-db` - Diagnoses DATABASE_URL connection failures (IPv6 vs pooler, auth, missing project-ref, wrong port)
 - **Test Uploads:** `GET /api/test-uploads` - Checks file upload directory
 - **Prisma Studio:** `npx prisma studio` - GUI for database inspection
 - **Form Sync Logs:** Check server console for "Fetching new responses..." messages

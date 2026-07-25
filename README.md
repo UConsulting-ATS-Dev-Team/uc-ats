@@ -72,7 +72,12 @@ The system now includes a comprehensive interview management feature that allows
    cd server && npx prisma migrate deploy
    ```
 
-5. Start the development servers:
+5. Verify the database connection before running migrations:
+   ```bash
+   cd server && npm run check-db
+   ```
+
+6. Start the development servers:
    ```bash
    # Terminal 1 - Backend
    cd server && npm start
@@ -80,6 +85,34 @@ The system now includes a comprehensive interview management feature that allows
    # Terminal 2 - Frontend
    cd client && npm run dev
    ```
+
+## Database Connection
+
+This project uses Supabase PostgreSQL. The Supabase direct host (`db.<project-ref>.supabase.co`) is **IPv6-only**, and many development environments (including this Devin VM) have no IPv6 route. If you try to connect with the direct host, Prisma reports:
+
+```
+Error: P1001
+Can't reach database server at `db.<project-ref>.supabase.co:5432`
+Please make sure your database server is running at the configured address.
+```
+
+or, at the network layer, `Network is unreachable` / `EAI_AGAIN`.
+
+### Fix: use the Supabase session pooler
+
+Use the IPv4 session pooler on **port 5432** with a username of the form `postgres.<project-ref>`:
+
+```
+postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-us-east-2.pooler.supabase.com:5432/postgres
+```
+
+- `DATABASE_URL` should point to the session pooler (port 5432).
+- `DIRECT_URL` should also point to the session pooler (port 5432) unless your environment has IPv6 and you want to use the direct host.
+- **Never use port 6543** (transaction mode) for Prisma migrations — it breaks migrations.
+
+### Preflight check
+
+Run `cd server && npm run check-db` to test the connection. It prints the host and port it is checking and, on failure, explains whether the problem is an unreachable IPv6 host, an authentication error, a missing project reference in the username, or a wrong port.
 
 ## Usage
 
@@ -124,8 +157,9 @@ The system includes a comprehensive database schema with models for:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+4. Run `cd server && npm run check-db` to verify the database connection before testing
+5. Test thoroughly
+6. Submit a pull request
 
 ## License
 
