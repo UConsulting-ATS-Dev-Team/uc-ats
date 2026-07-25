@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
@@ -6,8 +7,29 @@ import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import {
+  getOfferLetterTemplate,
+  saveOfferLetterTemplate,
+  uploadSignature,
+  getSignatureBuffer,
+  getSignatureBufferForCycle,
+  getSignaturePublicUrl,
+  generateOfferLetterPdf
+} from '../services/offerLetter.js';
 
 const router = express.Router();
+
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Signature must be a PNG, JPEG, or WebP image'));
+    }
+  }
+});
 
 // Helper function to safely parse JSON fields that might be plain text
 const safeParseJsonField = (field) => {
@@ -4646,11 +4668,21 @@ router.post('/applications/:id/send-offer-letter', async (req, res) => {
       }
     }
 
+    // Load cycle-specific offer-letter template and signature
+    const template = await getOfferLetterTemplate(application.cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const signatureBuffer = await getSignatureBuffer(template.signaturePath);
+
+    const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
+    const pdfBuffer = await generateOfferLetterPdf(application, application.cycle, template, offerDetails, signatureBuffer);
+
     const emailResult = await sendOfferLetter(
       application.email,
       `${application.firstName} ${application.lastName}`,
       application.cycle?.name || 'UConsulting',
-      { position, startDate, responseDeadline, additionalNotes }
+      offerDetails,
+      pdfBuffer,
+      'UConsulting-Offer-Letter.pdf'
     );
 
     if (!emailResult.success) {
@@ -4677,6 +4709,61 @@ router.post('/applications/:id/send-offer-letter', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/applications/:id/send-offer-letter]', error);
     res.status(500).json({ error: 'Failed to send offer letter', details: error.message });
+  }
+});
+
+// Get or create the offer-letter template for a recruiting cycle
+router.get('/cycles/:cycleId/offer-letter-template', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const template = await getOfferLetterTemplate(cycleId);
+    const publicUrl = getSignaturePublicUrl(template.signaturePath);
+    res.json({ ...template, signatureUrl: publicUrl });
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-template]', error);
+    res.status(500).json({ error: 'Failed to load offer letter template', details: error.message });
+  }
+});
+
+// Save the offer-letter template for a recruiting cycle
+router.post('/cycles/:cycleId/offer-letter-template', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { introText, terms, closingText, checklist, presidentName, presidentTitle, responseDeadline, signatureLabel, printedNameLabel, officialOfferLabel, confidentialityLabel, signaturePath } = req.body;
+    const template = {
+      introText,
+      terms: Array.isArray(terms) ? terms.filter(Boolean) : [],
+      closingText,
+      checklist: Array.isArray(checklist) ? checklist.filter(Boolean) : [],
+      presidentName,
+      presidentTitle,
+      responseDeadline,
+      signatureLabel,
+      printedNameLabel,
+      officialOfferLabel,
+      confidentialityLabel,
+      signaturePath
+    };
+    const saved = await saveOfferLetterTemplate(cycleId, template);
+    res.json(saved);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-template]', error);
+    res.status(500).json({ error: 'Failed to save offer letter template', details: error.message });
+  }
+});
+
+// Upload the president signature image for a recruiting cycle
+router.post('/cycles/:cycleId/offer-letter-template/signature', signatureUpload.single('signature'), async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: 'Signature image is required' });
+    }
+    const result = await uploadSignature(cycleId, req.file.buffer, req.file.mimetype);
+    res.json({ path: result.path, contentType: result.contentType });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-template/signature]', error);
+    res.status(500).json({ error: 'Failed to upload signature', details: error.message });
   }
 });
 

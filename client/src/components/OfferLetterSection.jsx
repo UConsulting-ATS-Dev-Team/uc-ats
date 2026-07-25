@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import apiClient from '../utils/api';
 
 const OFFER_SENT_PREFIX = '[OFFER_LETTER_SENT]';
@@ -18,6 +18,8 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
     responseDeadline: '',
     additionalNotes: ''
   });
+  const [template, setTemplate] = useState(null);
+  const [templateLoading, setTemplateLoading] = useState(false);
   const [force, setForce] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -31,6 +33,32 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
     [comments]
   );
   const lastSent = sentComments[0];
+
+  useEffect(() => {
+    if (!isAdmin || !isFinalRoundAccepted(application) || !application?.cycleId) return;
+    let cancelled = false;
+    setTemplateLoading(true);
+    apiClient
+      .get(`/admin/cycles/${application.cycleId}/offer-letter-template`)
+      .then((data) => {
+        if (!cancelled) {
+          setTemplate(data);
+          setForm((prev) => ({
+            ...prev,
+            responseDeadline: data.responseDeadline || prev.responseDeadline
+          }));
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load offer letter template:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setTemplateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, application]);
 
   if (!isAdmin || !isFinalRoundAccepted(application)) {
     return null;
@@ -51,7 +79,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
 
   const closeForm = () => {
     setShowForm(false);
-    setForm({ position: '', startDate: '', responseDeadline: '', additionalNotes: '' });
+    setForm({ position: '', startDate: '', responseDeadline: template?.responseDeadline || '', additionalNotes: '' });
     setForce(false);
     setError(null);
     setSuccess(null);
@@ -82,7 +110,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
       };
       await apiClient.post(`/admin/applications/${application.id}/send-offer-letter`, payload);
       setSuccess(force ? 'Offer letter resent successfully.' : 'Offer letter sent successfully.');
-      setForm({ position: '', startDate: '', responseDeadline: '', additionalNotes: '' });
+      setForm({ position: '', startDate: '', responseDeadline: template?.responseDeadline || '', additionalNotes: '' });
       setForce(false);
       setTimeout(() => setShowForm(false), 1500);
       onSent?.();
@@ -129,6 +157,14 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
         ) : (
           <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
             No offer letter has been sent yet.
+          </div>
+        )}
+        {templateLoading && (
+          <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Loading template...</div>
+        )}
+        {template && !template.signaturePath && (
+          <div style={{ fontSize: '0.875rem', color: '#92400e', marginTop: '4px' }}>
+            No president signature is configured for this cycle. The PDF will be sent without a signature.
           </div>
         )}
       </div>
@@ -180,7 +216,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                 type="text"
                 value={form.responseDeadline}
                 onChange={handleChange('responseDeadline')}
-                placeholder="e.g. August 15, 2026"
+                placeholder="e.g. Friday, January 23rd at 11:59 PM"
                 style={inputStyle}
               />
             </label>
@@ -190,7 +226,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
               <textarea
                 value={form.additionalNotes}
                 onChange={handleChange('additionalNotes')}
-                placeholder="Any extra details to include in the offer letter..."
+                placeholder="Any extra details to include in the email body..."
                 style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }}
               />
             </label>

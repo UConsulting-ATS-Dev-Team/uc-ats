@@ -123,7 +123,7 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html) => {
+const sendEmail = async (to, subject, html, attachments = []) => {
   try {
     const transporter = createTransporter();
     
@@ -134,6 +134,10 @@ const sendEmail = async (to, subject, html) => {
       subject: subject,
       html: html
     };
+
+    if (attachments && attachments.length > 0) {
+      mailOptions.attachments = attachments;
+    }
 
     const info = await transporter.sendMail(mailOptions);
     console.log('Email sent successfully:', info.messageId);
@@ -790,7 +794,6 @@ export const sendFinalRejectionEmail = async (candidateEmail, candidateName, cur
 // Offer Letter specific email template
 
 const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) => {
-  const subjectCycle = currentCycleName;
   const { position, startDate, responseDeadline, additionalNotes } = offerDetails;
   candidateName = escapeHtml(candidateName);
   currentCycleName = escapeHtml(currentCycleName);
@@ -801,7 +804,7 @@ const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) =
     ? escapeHtml(additionalNotes).replace(/\n/g, '<br>')
     : '';
   return {
-    subject: `Offer Letter - UConsulting ${subjectCycle}`,
+    subject: `Offer Letter - UConsulting ${currentCycleName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #10b981; padding: 20px; text-align: center; color: white;">
@@ -824,7 +827,7 @@ const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) =
           </div>
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Please confirm your acceptance by replying to this email before the response deadline. If you have any questions, feel free to reach out.
+            Please review the attached PDF for the full official offer letter, sign it, and return it before the response deadline. If you have any questions, feel free to reach out.
           </p>
           
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
@@ -846,10 +849,13 @@ const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) =
 };
 
 // Send offer letter email
-export const sendOfferLetter = async (candidateEmail, candidateName, currentCycleName, offerDetails) => {
+export const sendOfferLetter = async (candidateEmail, candidateName, currentCycleName, offerDetails, attachmentBuffer = null, attachmentFilename = 'offer-letter.pdf') => {
   try {
     const emailContent = createOfferLetterEmail(candidateName, currentCycleName, offerDetails);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const attachments = attachmentBuffer
+      ? [{ filename: attachmentFilename, content: attachmentBuffer }]
+      : [];
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, attachments);
     
     if (result.success) {
       console.log(`Offer letter sent to ${candidateEmail} for cycle: ${currentCycleName}`);

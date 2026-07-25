@@ -10,7 +10,14 @@ const baseApplication = {
   email: 'jane@example.com',
   status: 'ACCEPTED',
   finalRoundDecision: 'yes',
-  currentRound: '5'
+  currentRound: '5',
+  cycleId: 'cycle-1'
+};
+
+const defaultTemplate = {
+  responseDeadline: 'Friday, January 23rd at 11:59 PM',
+  signaturePath: 'cycle-1/signature.png',
+  terms: ['Term 1']
 };
 
 const sentComment = {
@@ -23,6 +30,7 @@ const sentComment = {
 describe('OfferLetterSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    apiClient.get = vi.fn().mockResolvedValue(defaultTemplate);
     apiClient.post = vi.fn();
   });
 
@@ -41,15 +49,17 @@ describe('OfferLetterSection', () => {
     expect(screen.queryByText('Offer Letter')).not.toBeInTheDocument();
   });
 
-  it('shows send status and a send button for an admin with a Final Round accepted candidate', () => {
+  it('shows send status and a send button for an admin with a Final Round accepted candidate', async () => {
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/admin/cycles/cycle-1/offer-letter-template'));
     expect(screen.getByText('Offer Letter')).toBeInTheDocument();
     expect(screen.getByText('No offer letter has been sent yet.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send Offer Letter' })).toBeInTheDocument();
   });
 
-  it('shows the last sent timestamp when an offer letter has already been sent', () => {
+  it('shows the last sent timestamp when an offer letter has already been sent', async () => {
     render(<OfferLetterSection application={baseApplication} comments={[sentComment]} isAdmin />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     expect(screen.getByText(/Offer letter sent on/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resend Offer Letter' })).toBeInTheDocument();
   });
@@ -59,6 +69,7 @@ describe('OfferLetterSection', () => {
     apiClient.post.mockResolvedValue({ success: true, messageId: 'msg-123' });
 
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin onSent={onSent} />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
 
     fireEvent.change(screen.getByLabelText(/Position/i), { target: { value: 'Associate' } });
@@ -82,6 +93,7 @@ describe('OfferLetterSection', () => {
 
   it('validates required fields before sending', async () => {
     render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send Offer Letter' }));
 
@@ -95,6 +107,7 @@ describe('OfferLetterSection', () => {
     apiClient.post.mockRejectedValue(new Error('Offer letter has already been sent'));
 
     render(<OfferLetterSection application={baseApplication} comments={[sentComment]} isAdmin />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Resend Offer Letter' }));
 
     fireEvent.change(screen.getByLabelText(/Position/i), { target: { value: 'Associate' } });
@@ -105,5 +118,13 @@ describe('OfferLetterSection', () => {
     await waitFor(() => {
       expect(screen.getByText(/already been sent/)).toBeInTheDocument();
     });
+  });
+
+  it('warns when no president signature is configured', async () => {
+    apiClient.get.mockResolvedValue({ ...defaultTemplate, signaturePath: '' });
+    render(<OfferLetterSection application={baseApplication} comments={[]} isAdmin />);
+    await waitFor(() =>
+      expect(screen.getByText(/No president signature is configured/)).toBeInTheDocument()
+    );
   });
 });
