@@ -1200,3 +1200,82 @@ export const sendMeetingCancellationToMember = async (memberEmail, memberName, l
     return { success: false, error: error.message };
   }
 };
+
+// Reviewer grading reminder email templates
+
+const createReviewerReminderEmail = (reviewerName, teamName, cycleName, progress) => {
+  reviewerName = escapeHtml(reviewerName);
+  teamName = escapeHtml(teamName);
+  cycleName = escapeHtml(cycleName);
+  const { completed, eligible, completedTotal, expectedTotal, completionPercent, gradingUrl } = progress;
+  return {
+    subject: `Reminder: Submit your review grades - ${cycleName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">Review Reminder</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Hi ${reviewerName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            This is a friendly reminder to submit your remaining grades for <strong>${teamName}</strong> in the <strong>${cycleName}</strong> recruiting cycle.
+          </p>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 10px 0;">Your current progress</h4>
+            <p style="color: #666; margin: 5px 0;"><strong>Overall:</strong> ${completedTotal}/${expectedTotal} (${completionPercent}% complete)</p>
+            <p style="color: #666; margin: 5px 0;"><strong>Resume:</strong> ${completed.resume}/${eligible.resume}</p>
+            <p style="color: #666; margin: 5px 0;"><strong>Cover Letter:</strong> ${completed.coverLetter}/${eligible.coverLetter}</p>
+            <p style="color: #666; margin: 5px 0;"><strong>Video:</strong> ${completed.video}/${eligible.video}</p>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Please complete your evaluations in the ATS:
+          </p>
+
+          <p style="text-align: center; margin: 30px 0;">
+            <a href="${gradingUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Grade Applications</a>
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+// Send a reviewer reminder email with team/progress context and a link to the grading workflow.
+export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName, cycleName, progress) => {
+  try {
+    if (!reviewerEmail || !reviewerEmail.includes('@')) {
+      return { success: false, error: 'Invalid reviewer email address' };
+    }
+
+    const emailContent = createReviewerReminderEmail(reviewerName, teamName, cycleName, progress);
+    const result = await sendEmail(reviewerEmail, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Reviewer reminder sent to ${reviewerEmail} for team ${teamName}`);
+    } else {
+      console.error(`Failed to send reviewer reminder to ${reviewerEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendReviewerReminder:', error);
+    return { success: false, error: error.message };
+  }
+};
