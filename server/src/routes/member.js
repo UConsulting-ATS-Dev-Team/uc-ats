@@ -5,6 +5,11 @@ import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
 
 const router = express.Router();
 
@@ -231,7 +236,8 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
                 id: true,
                 memberOne: true,
                 memberTwo: true,
-                memberThree: true
+                memberThree: true,
+                groupMembers: { select: { userId: true } }
               }
             },
             applications: {
@@ -332,7 +338,8 @@ router.get('/candidate/:id', requireAuth, async (req, res) => {
             memberOne: true,
             memberTwo: true,
             memberThree: true,
-            createdAt: true
+            createdAt: true,
+            groupMembers: { select: { userId: true } }
           }
         },
         applications: {
@@ -410,31 +417,12 @@ router.get('/my-team', requireAuth, async (req, res) => {
         OR: [
           { memberOne: userId },
           { memberTwo: userId },
-          { memberThree: userId }
+          { memberThree: userId },
+          { groupMembers: { some: { userId } } }
         ]
       },
       include: {
-        memberOneUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
+        ...groupMemberUserInclude,
         assignedCandidates: {
           include: {
             applications: {
@@ -463,11 +451,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
     }
 
     // Transform the data to match the frontend expectations
-    const members = [
-      userTeam.memberOneUser,
-      userTeam.memberTwoUser,
-      userTeam.memberThreeUser
-    ].filter(Boolean);
+    const members = getGroupMemberUsers(userTeam);
 
     // Get all scoring data for the team's assigned candidates
     const candidateIds = userTeam.assignedCandidates.map(c => c.id);
@@ -503,11 +487,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
     ]);
 
     // Get team member IDs for progress calculation
-    const teamMemberIds = [
-      userTeam.memberOne,
-      userTeam.memberTwo,
-      userTeam.memberThree
-    ].filter(Boolean);
+    const teamMemberIds = getGroupMemberIds(userTeam);
 
     const applications = userTeam.assignedCandidates.map(candidate => {
       // Get the latest application for this candidate
@@ -1626,7 +1606,8 @@ router.post('/flag-document', requireAuth, async (req, res) => {
         OR: [
           { memberOne: flaggedBy },
           { memberTwo: flaggedBy },
-          { memberThree: flaggedBy }
+          { memberThree: flaggedBy },
+          { groupMembers: { some: { userId: flaggedBy } } }
         ],
         assignedCandidates: {
           some: {

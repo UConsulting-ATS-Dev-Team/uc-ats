@@ -287,9 +287,7 @@ export default function ReviewTeams() {
         const memberIds = newTeamData.selectedMembers.map(member => member.id);
         
         const newTeam = await apiClient.post('/review-teams', {
-          memberOne: memberIds[0] || null,
-          memberTwo: memberIds[1] || null,
-          memberThree: memberIds[2] || null,
+          memberIds,
           cycleId: activeCycle.id
         });
         
@@ -302,7 +300,7 @@ export default function ReviewTeams() {
         setNewTeamDialogOpen(false);
       } catch (err) {
         console.error('Error creating team:', err);
-        setError('Failed to create team');
+        setError(err.message || 'Failed to create team');
       }
     }
   };
@@ -355,22 +353,9 @@ export default function ReviewTeams() {
       const team = teams.find(t => t.id === selectedTeam);
       if (!team) return;
 
-      // Determine which member slot is available
-      let memberField = null;
-      if (!team.members || team.members.length === 0) {
-        memberField = 'memberOne';
-      } else if (team.members.length === 1) {
-        memberField = 'memberTwo';
-      } else if (team.members.length === 2) {
-        memberField = 'memberThree';
-      } else {
-        setError('Team already has maximum number of members');
-        return;
-      }
-
-      // Update the team with the new member
+      // Add the new member to the team
       await apiClient.put(`/review-teams/${selectedTeam}/members`, {
-        [memberField]: memberId
+        memberId
       });
 
       // Refresh the data
@@ -383,7 +368,7 @@ export default function ReviewTeams() {
       
     } catch (error) {
       console.error('Error adding team member:', error);
-      setError('Failed to add team member');
+      setError(error.message || 'Failed to add team member');
     }
   };
 
@@ -400,7 +385,7 @@ export default function ReviewTeams() {
       
     } catch (error) {
       console.error('Error removing team member:', error);
-      setError('Failed to remove team member');
+      setError(error.message || 'Failed to remove team member');
     }
   };
 
@@ -1033,20 +1018,19 @@ export default function ReviewTeams() {
                   <IconButton
                     size="small"
                     onClick={() => handleAddMember(team.id)}
-                    disabled={team.members && team.members.length >= 3}
                     sx={{
                       width: 32,
                       height: 32,
                       border: '1px dashed',
-                      borderColor: team.members && team.members.length >= 3 ? 'grey.300' : 'divider',
-                      color: team.members && team.members.length >= 3 ? 'grey.400' : 'text.secondary',
-                      cursor: team.members && team.members.length >= 3 ? 'not-allowed' : 'pointer',
+                      borderColor: 'divider',
+                      color: 'text.secondary',
+                      cursor: 'pointer',
                       '&:hover': {
-                        borderColor: team.members && team.members.length >= 3 ? 'grey.300' : 'primary.main',
-                        backgroundColor: team.members && team.members.length >= 3 ? 'transparent' : 'rgba(4, 39, 66, 0.04)'
+                        borderColor: 'primary.main',
+                        backgroundColor: 'rgba(4, 39, 66, 0.04)'
                       }
                     }}
-                    title={team.members && team.members.length >= 3 ? 'Team is full (max 3 members)' : 'Add team member'}
+                    title="Add team member"
                   >
                     <UserPlusIcon style={{ width: '1rem', height: '1rem' }} />
                   </IconButton>
@@ -1168,20 +1152,14 @@ export default function ReviewTeams() {
               getOptionLabel={(option) => option.fullName || ''}
               value={newTeamData.selectedMembers}
               onChange={(_, newValue) => {
-                // Limit to 3 members
-                const limitedValue = newValue.slice(0, 3);
-                setNewTeamData({ ...newTeamData, selectedMembers: limitedValue });
+                setNewTeamData({ ...newTeamData, selectedMembers: newValue });
               }}
               renderInput={(params) => (
                 <TextField
                   {...params}
                   label="Search and select team members"
                   placeholder="Type to search for members..."
-                  helperText={
-                    newTeamData.selectedMembers.length >= 3 
-                      ? "Maximum 3 team members selected" 
-                      : `Select up to 3 team members (${3 - newTeamData.selectedMembers.length} remaining)`
-                  }
+                  helperText="Select team members"
                 />
               )}
               renderOption={(props, option) => {
@@ -1236,7 +1214,6 @@ export default function ReviewTeams() {
                 ))
               }
               isOptionEqualToValue={(option, value) => option.id === value?.id}
-              limitTags={3}
               sx={{
                 '& .MuiAutocomplete-listbox': {
                   maxHeight: '200px'
