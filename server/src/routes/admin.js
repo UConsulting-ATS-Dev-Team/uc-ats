@@ -2557,6 +2557,7 @@ router.get('/applications', async (req, res) => {
         },
         select: {
           id: true,
+          name: true,
           memberOne: true,
           memberTwo: true,
           memberThree: true,
@@ -2725,6 +2726,10 @@ router.get('/applications', async (req, res) => {
       const coverLetterStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, coverLetterScores, 'coverLetter');
       const videoStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, videoScores, 'video');
       
+      const assignedGroup = app.candidate.assignedGroupId
+        ? groups.find(g => g.id === app.candidate.assignedGroupId)
+        : null;
+      
       transformedApplications.push({
         id: app.id,
         candidateId: app.candidateId,
@@ -2744,6 +2749,8 @@ router.get('/applications', async (req, res) => {
         coverLetterUrl: app.coverLetterUrl,
         videoUrl: app.videoUrl,
         headshotUrl: app.headshotUrl,
+        groupId: assignedGroup?.id || null,
+        groupName: assignedGroup?.name || (assignedGroup ? `Team ${assignedGroup.id.slice(-4)}` : 'Unknown Team'),
         hasResumeScore: resumeStatus.completed,
         hasCoverLetterScore: coverLetterStatus.completed,
         hasVideoScore: videoStatus.completed,
