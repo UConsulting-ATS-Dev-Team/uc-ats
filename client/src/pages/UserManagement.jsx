@@ -177,8 +177,8 @@ const UserManagement = () => {
       setImageFile(null);
       setSuccess('Profile image uploaded successfully!');
       fetchUsers();
-      if (response?.id === user?.id) {
-        updateUser(response);
+      if (response?.user?.id === user?.id) {
+        updateUser(response.user);
       }
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
