@@ -1,6 +1,8 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
+import config from '../config.js';
+import { sendReviewerReminder } from '../services/emailNotifications.js';
 
 const router = express.Router();
 
@@ -90,6 +92,126 @@ router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error fetching reviewer contributions:', error);
     res.status(500).json({ error: 'Failed to fetch reviewer contributions' });
+  }
+});
+
+// Send a grading reminder to a specific reviewer on a team.
+router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { groupId, reviewerId } = req.params;
+
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true },
+      select: { id: true, name: true }
+    });
+
+    if (!activeCycle) {
+      return res.status(400).json({ error: 'No active recruiting cycle' });
+    }
+
+    const group = await prisma.groups.findUnique({
+      where: { id: groupId },
+      select: {
+        id: true,
+        name: true,
+        cycleId: true,
+        memberOne: true,
+        memberTwo: true,
+        memberThree: true,
+        assignedCandidates: {
+          select: {
+            id: true,
+            applications: {
+              where: { cycleId: activeCycle.id },
+              orderBy: { submittedAt: 'desc' },
+              take: 1,
+              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (!group || group.cycleId !== activeCycle.id) {
+      return res.status(404).json({ error: 'Review team not found in the active cycle' });
+    }
+
+    const memberIds = [group.memberOne, group.memberTwo, group.memberThree].filter(Boolean);
+    if (!memberIds.includes(reviewerId)) {
+      return res.status(400).json({ error: 'Reviewer is not a member of this review team' });
+    }
+
+    const reviewer = await prisma.user.findUnique({
+      where: { id: reviewerId },
+      select: { id: true, fullName: true, email: true }
+    });
+
+    if (!reviewer) {
+      return res.status(404).json({ error: 'Reviewer not found' });
+    }
+
+    if (!reviewer.email || !reviewer.email.includes('@')) {
+      return res.status(400).json({ error: 'Reviewer does not have a valid email address' });
+    }
+
+    const candidateIds = group.assignedCandidates.map(candidate => candidate.id);
+
+    const scoreFilter = {
+      candidateId: { in: candidateIds },
+      cycleId: activeCycle.id,
+      evaluatorId: reviewerId,
+      assignedGroupId: groupId
+    };
+
+    const [resumeScores, coverLetterScores, videoScores] = await Promise.all([
+      prisma.resumeScore.findMany({ where: scoreFilter, select: { id: true } }),
+      prisma.coverLetterScore.findMany({ where: scoreFilter, select: { id: true } }),
+      prisma.videoScore.findMany({ where: scoreFilter, select: { id: true } })
+    ]);
+
+    const applications = group.assignedCandidates
+      .map(candidate => candidate.applications[0])
+      .filter(Boolean);
+
+    const eligible = {
+      resume: applications.filter(application => Boolean(application.resumeUrl)).length,
+      coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+      video: applications.filter(application => Boolean(application.videoUrl)).length
+    };
+
+    const completed = {
+      resume: resumeScores.length,
+      coverLetter: coverLetterScores.length,
+      video: videoScores.length
+    };
+
+    const completedTotal = completed.resume + completed.coverLetter + completed.video;
+    const expectedTotal = eligible.resume + eligible.coverLetter + eligible.video;
+    const completionPercent = expectedTotal ? Math.round((completedTotal / expectedTotal) * 100) : 0;
+
+    const result = await sendReviewerReminder(
+      reviewer.email,
+      reviewer.fullName,
+      group.name || `Team ${group.id.slice(-4)}`,
+      activeCycle.name || 'Current cycle',
+      {
+        completed,
+        eligible,
+        completedTotal,
+        expectedTotal,
+        completionPercent,
+        gradingUrl: `${config.clientUrl}/document-grading`
+      }
+    );
+
+    if (!result.success) {
+      return res.status(502).json({ error: 'Failed to send reminder email', details: result.error });
+    }
+
+    res.json({ message: 'Reminder sent successfully' });
+  } catch (error) {
+    console.error('Error sending reviewer reminder:', error);
+    res.status(500).json({ error: 'Failed to send reminder' });
   }
 });
 

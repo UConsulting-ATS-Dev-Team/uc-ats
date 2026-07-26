@@ -14,6 +14,7 @@ import '../styles/ApplicationList.css';
 
 export default function Candidates() {
   const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -319,12 +320,14 @@ export default function Candidates() {
                       </td>
                       <td data-label="Referrals">N/A</td>
                       <td data-label="" style={{ textAlign: 'right' }}>
-                        <button className="btn-secondary small" onClick={() => toggleExpand(app)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {isExpanded ? 'Hide Details' : 'View Details'} {isExpanded ? <ChevronUpIcon className="btn-icon" /> : <ChevronDownIcon className="btn-icon" />}
-                        </button>
+                        {isAdmin && (
+                          <button className="btn-secondary small" onClick={() => toggleExpand(app)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {isExpanded ? 'Hide Details' : 'View Details'} {isExpanded ? <ChevronUpIcon className="btn-icon" /> : <ChevronDownIcon className="btn-icon" />}
+                          </button>
+                        )}
                       </td>
                     </tr>
-                    {isExpanded && (
+                    {isAdmin && isExpanded && (
                       <tr className="applications-details-row">
                         <td colSpan={6}>
                           <div className="details-grid">
