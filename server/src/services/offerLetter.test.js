@@ -1,5 +1,4 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_TEMPLATE,
   generateOfferLetterPdf,
@@ -30,14 +29,14 @@ describe('offerLetter', () => {
     };
 
     const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, offerDetails, null);
-    assert.ok(Buffer.isBuffer(pdfBuffer));
-    assert.ok(pdfBuffer.length > 0);
-    assert.equal(pdfBuffer.toString('utf8', 0, 4), '%PDF');
+    expect(Buffer.isBuffer(pdfBuffer)).toBe(true);
+    expect(pdfBuffer.length).toBeGreaterThan(0);
+    expect(pdfBuffer.toString('utf8', 0, 4)).toBe('%PDF');
   });
 
   it('does not hard-code a specific quarter in the default terms', () => {
     const combined = `${DEFAULT_TEMPLATE.introText} ${DEFAULT_TEMPLATE.terms.join(' ')} ${DEFAULT_TEMPLATE.closingText}`;
-    assert.ok(!combined.includes('Spring 2026'), 'Default template should not hard-code Spring 2026');
+    expect(combined).not.toContain('Spring 2026');
   });
 
   it('substitutes candidate, position, cycle, and deadline placeholders into the PDF', async () => {
@@ -55,33 +54,27 @@ describe('offerLetter', () => {
     };
 
     const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, offerDetails, null);
-    assert.ok(pdfBuffer.length > 0);
-    assert.equal(pdfBuffer.toString('utf8', 0, 4), '%PDF');
+    expect(pdfBuffer.length).toBeGreaterThan(0);
+    expect(pdfBuffer.toString('utf8', 0, 4)).toBe('%PDF');
   });
 
   it('returns the default template when Supabase is not configured', async () => {
     const template = await getOfferLetterTemplate('missing-cycle');
-    assert.ok(template);
-    assert.equal(template.presidentName, '');
-    assert.ok(Array.isArray(template.terms));
+    expect(template).toBeTruthy();
+    expect(template.presidentName).toBe('');
+    expect(Array.isArray(template.terms)).toBe(true);
   });
 
   it('throws when saving a template without Supabase configured', async () => {
-    await assert.rejects(
-      () => saveOfferLetterTemplate('cycle-1', DEFAULT_TEMPLATE),
-      /Supabase storage is not configured/
-    );
+    await expect(() => saveOfferLetterTemplate('cycle-1', DEFAULT_TEMPLATE)).rejects.toThrow(/Supabase storage is not configured/);
   });
 
   it('throws when uploading a signature without Supabase configured', async () => {
-    await assert.rejects(
-      () => uploadSignature('cycle-1', Buffer.from('fake'), 'image/png'),
-      /Supabase storage is not configured/
-    );
+    await expect(() => uploadSignature('cycle-1', Buffer.from('fake'), 'image/png')).rejects.toThrow(/Supabase storage is not configured/);
   });
 
   it('returns null for the latest send when Supabase is not configured', async () => {
     const latest = await findLatestOfferLetterSend('app-1');
-    assert.equal(latest, null);
+    expect(latest).toBeNull();
   });
 });
