@@ -1117,45 +1117,118 @@ const createMeetingCancellationEmail = (candidateName, memberName, location, sta
 // Create password reset email template
 const createPasswordResetEmail = (resetLink) => {
   // resetLink is server-generated (BASE/CLIENT URL + token), not user-controlled,
-  // so it is safe to embed directly in the href.
+  // so it is safe to embed directly in the href and visible link text.
   return {
-    subject: 'Reset Your Password',
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
-        </div>
+    subject: 'Reset Your Password - UConsulting ATS',
+    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reset Your Password</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+              <h2 style="color: #042742; margin: 0;">UConsulting ATS</h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 30px 20px;">
+              <h3 style="color: #333; margin: 0 0 20px 0;">Password Reset Request</h3>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                You requested a password reset for your UConsulting ATS account.
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Click the button below to choose a new password. This link expires in 30 minutes.
+              </p>
+              <p style="text-align: center; margin: 30px 0;">
+                <a href="${resetLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Reset Password</a>
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                If the button doesn&apos;t work, copy and paste this link into your browser:
+              </p>
+              <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
+                <a href="${resetLink}" style="color: #0C74C1; text-decoration: underline;">${resetLink}</a>
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                If you didn&apos;t request this, you can safely ignore this email &mdash; your password will not change.
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Best regards,<br>
+                UConsulting ATS Team
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+  };
+};
 
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Password Reset Request</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            You requested a password reset for your UConsulting ATS account.
-          </p>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Click the button below to choose a new password. This link expires in 30 minutes.
-          </p>
-
-          <p style="text-align: center; margin: 30px 0;">
-            <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Reset Password</a>
-          </p>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            If you didn't request this, you can safely ignore this email — your password will not change.
-          </p>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting ATS Team
-          </p>
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
+// Create password reset confirmation email template
+const createPasswordResetConfirmationEmail = (fullName) => {
+  const firstName = escapeHtml(fullName?.trim().split(' ')[0] || 'there');
+  return {
+    subject: 'Your UConsulting ATS password has been reset',
+    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Password Reset Confirmation</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+              <h2 style="color: #042742; margin: 0;">UConsulting ATS</h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 30px 20px;">
+              <h3 style="color: #333; margin: 0 0 20px 0;">Password Reset Successful</h3>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Hi ${firstName},
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                The password for your UConsulting ATS account was just changed.
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                If you made this change, you can safely ignore this email. If you did not reset your password, please contact the UConsulting ATS team immediately so we can help secure your account.
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Best regards,<br>
+                UConsulting ATS Team
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
   };
 };
 
@@ -1174,6 +1247,29 @@ export const sendPasswordResetEmail = async (email, resetLink) => {
     return result;
   } catch (error) {
     console.error('Error in sendPasswordResetEmail:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Send password reset confirmation email
+export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
+  try {
+    if (!email) {
+      return { success: false, error: 'No recipient email provided' };
+    }
+
+    const emailContent = createPasswordResetConfirmationEmail(fullName);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Password reset confirmation email sent to ${email}`);
+    } else {
+      console.error(`Failed to send password reset confirmation email to ${email}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendPasswordResetConfirmationEmail:', error);
     return { success: false, error: error.message };
   }
 };
