@@ -120,7 +120,18 @@ export async function cancelInterviewCalendarEvent(interviewId) {
     select: { id: true, calendarEventId: true }
   });
 
-  if (!interview?.calendarEventId || !isCalendarConfigured()) return { status: 'NOT_SYNCED' };
+  if (!interview?.calendarEventId) return { status: 'NOT_SYNCED' };
+
+  // The stored event ID is the only handle on a live invite, so an unconfigured calendar (e.g.
+  // GOOGLE_CALENDAR_ID temporarily unset) must block cancellation rather than report "nothing to do".
+  if (!isCalendarConfigured()) {
+    const message = 'Google Calendar is not configured. Set GOOGLE_CALENDAR_ID back to the calendar that owns this invite so it can be withdrawn.';
+    await updateInterviewSyncFields(interviewId, {
+      calendarSyncStatus: 'FAILED',
+      calendarSyncError: `Interviewers still hold this invite — it could not be withdrawn: ${message}`
+    });
+    return { status: 'FAILED', error: message, calendarEventId: interview.calendarEventId };
+  }
 
   try {
     await withCalendarRetry(() => deleteEventById(interview.calendarEventId));

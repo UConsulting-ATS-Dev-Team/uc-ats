@@ -16,7 +16,7 @@ vi.mock('../src/services/google/calendar.js', () => ({
 }));
 
 const prisma = (await import('../src/prismaClient.js')).default;
-const { deleteEventById } = await import('../src/services/google/calendar.js');
+const { deleteEventById, isCalendarConfigured } = await import('../src/services/google/calendar.js');
 const { cancelInterviewCalendarEvent } = await import('../src/services/interviewCalendar.js');
 
 const INTERVIEW = { id: 'interview-1', calendarEventId: 'ucatsinterview1' };
@@ -26,7 +26,32 @@ const calendarError = (status) => Object.assign(new Error(`calendar ${status}`),
 describe('cancelInterviewCalendarEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isCalendarConfigured.mockReturnValue(true);
     prisma.interview.findUnique.mockResolvedValue({ ...INTERVIEW });
+  });
+
+  test('refuses to give up a live invite when the calendar is no longer configured', async () => {
+    isCalendarConfigured.mockReturnValue(false);
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('FAILED');
+    expect(result.error).toMatch(/GOOGLE_CALENDAR_ID/);
+    expect(result.calendarEventId).toBe(INTERVIEW.calendarEventId);
+    expect(deleteEventById).not.toHaveBeenCalled();
+    const { data } = prisma.interview.update.mock.calls[0][0];
+    expect(data.calendarSyncStatus).toBe('FAILED');
+    expect(data).not.toHaveProperty('calendarEventId');
+  });
+
+  test('reports nothing to cancel when no event was ever created', async () => {
+    isCalendarConfigured.mockReturnValue(false);
+    prisma.interview.findUnique.mockResolvedValue({ id: INTERVIEW.id, calendarEventId: null });
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('NOT_SYNCED');
+    expect(prisma.interview.update).not.toHaveBeenCalled();
   });
 
   test('reports FAILED and keeps the stored event ID when the provider rejects the cancellation', async () => {
