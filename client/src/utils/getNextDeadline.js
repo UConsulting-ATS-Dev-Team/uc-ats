@@ -1,16 +1,19 @@
-import { isValid } from 'date-fns';
+import { addDays, isValid, parseISO } from 'date-fns';
 import { fromZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Los_Angeles';
 
 /**
- * Parse a cycle's endDate as an application deadline.
+ * Parse a cycle's endDate as an application-deadline cutoff.
  *
  * Cycle endDate values are calendar dates collected from an <input type="date">,
- * but are stored as DateTime (usually UTC midnight). We therefore treat the
- * date portion as a day in the organization's timezone (America/Los_Angeles).
- * If a non-midnight timestamp is provided, we fall back to parsing it as an
- * absolute instant.
+ * but Prisma stores them as DateTime (UTC midnight). We therefore treat a plain
+ * date or a 00:00:00 timestamp as an all-day deadline ending at the end of the
+ * stated calendar day in the organization's timezone (America/Los_Angeles).
+ *
+ * If a meaningful time is provided (non-midnight) with an explicit offset/Z,
+ * we parse it as an absolute instant. Non-midnight times without an offset are
+ * interpreted as Los Angeles local time.
  */
 function parseApplicationDeadline(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') {
@@ -19,22 +22,51 @@ function parseApplicationDeadline(raw) {
 
   const value = raw.trim();
 
-  // Date-only values or explicit UTC midnights from Prisma DateTime.
-  const calendarDayPattern = /^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.\d+)?Z?)?$/;
-  const match = calendarDayPattern.exec(value);
+  // Matches:
+  //   2026-10-05
+  //   2026-10-05 10:00:00
+  //   2026-10-05T10:00:00
+  //   2026-10-05T10:00:00.000Z
+  //   2026-10-05T10:00:00-07:00
+  const isoPattern = /^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+  const match = isoPattern.exec(value);
+  if (!match) {
+    return null;
+  }
 
+  const datePart = match[1];
+  const timePart = match[2];
+  const offset = match[3];
+
+  // A bare date or a midnight timestamp is an all-day deadline in PT.
+  if (!timePart || timePart === '00:00:00') {
+    const startOfDay = fromZonedTime(datePart, TIMEZONE);
+    if (!isValid(startOfDay)) {
+      return null;
+    }
+    const cutoff = addDays(startOfDay, 1);
+    // Display as the very end of the deadline day so formatting stays on the
+    // correct calendar date while comparisons use the cutoff instant.
+    const displayDate = new Date(cutoff.getTime() - 1);
+    return { cutoff, date: displayDate, hasTime: false, raw: value };
+  }
+
+  const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
   let parsed;
-  if (match) {
-    parsed = fromZonedTime(match[1], TIMEZONE);
+
+  if (offset) {
+    // Absolute timestamp (Z or explicit offset).
+    parsed = parseISO(normalized);
   } else {
-    parsed = fromZonedTime(value, TIMEZONE);
+    // No offset: interpret as local to the organization's timezone.
+    parsed = fromZonedTime(normalized, TIMEZONE);
   }
 
   if (!isValid(parsed)) {
     return null;
   }
 
-  return { date: parsed, hasTime: false, raw: value };
+  return { cutoff: parsed, date: parsed, hasTime: true, raw: value };
 }
 
 /**
@@ -72,7 +104,7 @@ export function getNextDeadline(applications, now = new Date()) {
     }
 
     const parsed = parseApplicationDeadline(cycle.endDate);
-    if (parsed && parsed.date.getTime() > now.getTime()) {
+    if (parsed && parsed.cutoff.getTime() > now.getTime()) {
       candidates.push({
         ...parsed,
         label: 'Application deadline',
@@ -86,6 +118,6 @@ export function getNextDeadline(applications, now = new Date()) {
     return null;
   }
 
-  candidates.sort((a, b) => a.date.getTime() - b.date.getTime());
+  candidates.sort((a, b) => a.cutoff.getTime() - b.cutoff.getTime());
   return candidates[0];
 }
