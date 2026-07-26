@@ -54,14 +54,16 @@ export function buildCreateGroupData(name, cycleId, memberIds) {
   return data;
 }
 
+const userSelect = { id: true, fullName: true, email: true, profileImage: true };
+
 export const groupMemberUserInclude = {
-  memberOneUser: { select: { id: true, fullName: true, email: true } },
-  memberTwoUser: { select: { id: true, fullName: true, email: true } },
-  memberThreeUser: { select: { id: true, fullName: true, email: true } },
+  memberOneUser: { select: userSelect },
+  memberTwoUser: { select: userSelect },
+  memberThreeUser: { select: userSelect },
   groupMembers: {
     select: {
       userId: true,
-      user: { select: { id: true, fullName: true, email: true } },
+      user: { select: userSelect },
     },
   },
 };
