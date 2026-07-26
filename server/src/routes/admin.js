@@ -8,6 +8,11 @@ import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, send
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
+import {
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
   uploadSignature,
@@ -2466,6 +2471,12 @@ router.get('/applications', async (req, res) => {
               fullName: true,
               email: true
             }
+          },
+          groupMembers: {
+            select: {
+              userId: true,
+              user: { select: { id: true, fullName: true, email: true } }
+            }
           }
         }
       });
@@ -2566,11 +2577,7 @@ router.get('/applications', async (req, res) => {
       if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
       // Get all assigned team members with user info (filter out null/undefined)
-      const teamMembers = [
-        group.memberOneUser,
-        group.memberTwoUser,
-        group.memberThreeUser
-      ].filter(Boolean);
+      const teamMembers = getGroupMemberUsers(group);
       
       if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
@@ -2932,7 +2939,12 @@ router.get('/staging/candidates', async (req, res) => {
         id: true,
         memberOneUser: { select: { fullName: true } },
         memberTwoUser: { select: { fullName: true } },
-        memberThreeUser: { select: { fullName: true } }
+        memberThreeUser: { select: { fullName: true } },
+        groupMembers: {
+          select: {
+            user: { select: { fullName: true } }
+          }
+        }
       }
     });
     console.log('Review teams fetched:', allReviewTeams.length);
@@ -2994,11 +3006,7 @@ router.get('/staging/candidates', async (req, res) => {
     });
 
     allReviewTeams.forEach(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       reviewTeamsMap.set(team.id, {
         id: team.id,
@@ -3241,25 +3249,13 @@ router.get('/review-teams', async (req, res) => {
       select: {
         id: true,
         name: true,
-        memberOneUser: {
+        memberOneUser: { select: { id: true, fullName: true, email: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true } },
+        groupMembers: {
           select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true } }
           }
         }
       },
@@ -3268,11 +3264,7 @@ router.get('/review-teams', async (req, res) => {
 
     // Transform to include team name and member count
     const transformedTeams = reviewTeams.map(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       // Use the name from the database if it exists, otherwise generate a fallback name
       const teamName = team.name || (members.length > 0 
@@ -5246,9 +5238,7 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
               include: {
                 assignedGroup: {
                   include: {
-                    memberOneUser: true,
-                    memberTwoUser: true,
-                    memberThreeUser: true
+                    ...groupMemberUserInclude
                   }
                 }
               }
@@ -5269,13 +5259,7 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
 
     // Get the group members who should grade this document
     const group = flaggedDocument.application.candidate?.assignedGroup;
-    const groupMembers = [];
-    
-    if (group) {
-      if (group.memberOneUser) groupMembers.push(group.memberOneUser);
-      if (group.memberTwoUser) groupMembers.push(group.memberTwoUser);
-      if (group.memberThreeUser) groupMembers.push(group.memberThreeUser);
-    }
+    const groupMembers = group ? getGroupMemberUsers(group) : [];
 
     res.json({
       message: 'Document sent back to members for grading',
