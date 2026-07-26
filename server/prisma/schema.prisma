@@ -30,6 +30,7 @@ model User {
   memberOneGroups            Groups[]                        @relation("GroupMemberOne")
   memberThreeGroups          Groups[]                        @relation("GroupMemberThree")
   memberTwoGroups            Groups[]                        @relation("GroupMemberTwo")
+  groupMemberships           GroupMember[]
   completedActionItems       InterviewActionItem[]           @relation("InterviewActionItemCompletion")
   interviewAssignments       InterviewAssignment[]           @relation("InterviewAssignment")
   interviewEvaluations       InterviewEvaluation[]           @relation("InterviewEvaluator")
@@ -200,10 +201,24 @@ model Groups {
   memberOneUser      User?              @relation("GroupMemberOne", fields: [memberOne], references: [id])
   memberThreeUser    User?              @relation("GroupMemberThree", fields: [memberThree], references: [id])
   memberTwoUser      User?              @relation("GroupMemberTwo", fields: [memberTwo], references: [id])
+  groupMembers       GroupMember[]
   resumeScores       ResumeScore[]
   videoScores        VideoScore[]
 
   @@map("groups")
+}
+
+model GroupMember {
+  id        String   @id @default(uuid())
+  groupId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  group Groups @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@map("group_members")
 }
 
 model ResumeScore {
