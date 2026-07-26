@@ -72,7 +72,7 @@ export default function CandidateDashboard() {
     }
 
     const formatted = formatDeadline(deadline.date, deadline.hasTime);
-    return `${formatted} (${deadline.label} — ${deadline.cycleName || 'Unknown Cycle'})`;
+    return `${formatted} (${deadline.cycleName || 'Unknown Cycle'})`;
   };
 
   return (
@@ -87,7 +87,7 @@ export default function CandidateDashboard() {
         </div>
 
         <div className="next-deadline-banner" role="status" aria-live="polite" aria-atomic="true">
-          <span className="next-deadline-label">Next deadline</span>
+          <span className="next-deadline-label">Application deadline</span>
           <span className="next-deadline-value">{renderDeadlineValue()}</span>
         </div>
 

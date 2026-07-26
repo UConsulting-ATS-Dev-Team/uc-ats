@@ -16,23 +16,21 @@ function renderWithRouter(element) {
   return render(<MemoryRouter>{element}</MemoryRouter>);
 }
 
-describe('CandidateDashboard deadline card', () => {
+describe('CandidateDashboard application deadline card', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.token = 'test-token';
     apiClient.get = vi.fn();
   });
 
-  it('shows loading state then the next deadline from applications', async () => {
+  it('shows loading state then the application deadline from the cycle endDate', async () => {
     apiClient.get.mockResolvedValue([
       {
         id: 'app-1',
         cycle: {
           id: 'cycle-1',
           name: 'Fall 2026',
-          resumeDeadline: '2026-10-10',
-          coverLetterDeadline: '2026-10-05',
-          videoDeadline: '2026-10-15',
+          endDate: '2026-10-05T00:00:00.000Z',
         },
       },
     ]);
@@ -42,11 +40,11 @@ describe('CandidateDashboard deadline card', () => {
     expect(screen.getByText(/loading deadline/i)).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText(/October 5, 2026/)).toBeInTheDocument();
+      expect(screen.getByText(/Application deadline/i)).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Cover Letter/)).toBeInTheDocument();
-    expect(screen.getByText(/Fall 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Fall 2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/PDT|PST/)).toBeInTheDocument();
   });
 
   it('shows "No upcoming deadline posted" when the API returns no applications', async () => {
@@ -63,16 +61,22 @@ describe('CandidateDashboard deadline card', () => {
     expect(screen.getByRole('heading', { name: 'View Events' })).toBeInTheDocument();
   });
 
-  it('shows "No upcoming deadline posted" when all deadlines are malformed or past', async () => {
+  it('shows "No upcoming deadline posted" when the cycle endDate is malformed or past', async () => {
     apiClient.get.mockResolvedValue([
       {
         id: 'app-1',
         cycle: {
           id: 'cycle-1',
           name: 'Fall 2026',
-          resumeDeadline: 'Oct 4th, Morning',
-          coverLetterDeadline: '2020-01-01',
-          videoDeadline: null,
+          endDate: 'Oct 4th, Morning',
+        },
+      },
+      {
+        id: 'app-2',
+        cycle: {
+          id: 'cycle-2',
+          name: 'Old Cycle',
+          endDate: '2020-01-01T00:00:00.000Z',
         },
       },
     ]);

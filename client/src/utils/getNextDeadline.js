@@ -1,88 +1,67 @@
-import { parseISO, isValid } from 'date-fns';
-import { fromZonedTime } from 'date-fns-tz';
+import { isValid } from 'date-fns';
+import { fromZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Los_Angeles';
 
 /**
- * Parse a machine-orderable deadline string and return a Date if it is unambiguous.
- * Only ISO-8601-ish strings (YYYY-MM-DD, with optional time/timezone) are accepted.
- * Free-text values like "Oct 4th, Morning" are intentionally rejected.
+ * Parse a cycle's endDate as an application deadline.
+ *
+ * Cycle endDate values are calendar dates collected from an <input type="date">,
+ * but are stored as DateTime (usually UTC midnight). We therefore treat the
+ * date portion as a day in the organization's timezone (America/Los_Angeles).
+ * If a non-midnight timestamp is provided, we fall back to parsing it as an
+ * absolute instant.
  */
-function parseMachineDeadline(raw) {
+function parseApplicationDeadline(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') {
     return null;
   }
 
   const value = raw.trim();
 
-  // Matches:
-  //   2026-10-04
-  //   2026-10-04T10:00
-  //   2026-10-04 10:00:00
-  //   2026-10-04T10:00:00-07:00
-  //   2026-10-04T10:00:00Z
-  const machineDeadlinePattern = /^\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
-  if (!machineDeadlinePattern.test(value)) {
-    return null;
-  }
+  // Date-only values or explicit UTC midnights from Prisma DateTime.
+  const calendarDayPattern = /^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.\d+)?Z?)?$/;
+  const match = calendarDayPattern.exec(value);
 
-  const hasExplicitOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
-  const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
-
-  // Date-only and no-offset values are interpreted as Los Angeles time so that
-  // an admin entering "2026-10-05" means October 5th in the organization's zone.
-  // Explicit offsets/Z are parsed as absolute timestamps.
   let parsed;
-  if (hasExplicitOffset) {
-    parsed = parseISO(normalized);
+  if (match) {
+    parsed = fromZonedTime(match[1], TIMEZONE);
   } else {
-    parsed = fromZonedTime(normalized, TIMEZONE);
+    parsed = fromZonedTime(value, TIMEZONE);
   }
 
   if (!isValid(parsed)) {
     return null;
   }
 
-  const hasTime = /[T\s]\d{2}:\d{2}/.test(value);
-  return { date: parsed, hasTime, raw: value };
+  return { date: parsed, hasTime: false, raw: value };
 }
 
 /**
- * Format a deadline in America/Los_Angeles time.
- * Includes time and timezone abbreviation when the original string specified a time.
+ * Format a deadline in America/Los_Angeles time with an unambiguous timezone label.
+ * Includes the time when the original value has a meaningful time component.
  */
 export function formatDeadline(date, hasTime) {
   if (!date || !isValid(date)) {
     return '';
   }
 
-  const options = {
-    timeZone: TIMEZONE,
-    dateStyle: 'long',
-  };
+  const formatString = hasTime
+    ? "MMMM d, yyyy 'at' h:mm a z"
+    : "MMMM d, yyyy z";
 
-  if (hasTime) {
-    options.timeStyle = 'short';
-  }
-
-  return new Intl.DateTimeFormat('en-US', options).format(date);
+  return formatInTimeZone(date, TIMEZONE, formatString);
 }
 
 /**
- * Given a candidate's applications, return the next future, parseable deadline
- * from each application-linked RecruitingCycle.
+ * Given a candidate's applications, return the next future application deadline
+ * from each application-linked RecruitingCycle (using cycle.endDate).
  * Returns null when no unambiguous future deadline exists.
  */
 export function getNextDeadline(applications, now = new Date()) {
   if (!Array.isArray(applications)) {
     return null;
   }
-
-  const deadlineFields = [
-    { key: 'resumeDeadline', label: 'Resume' },
-    { key: 'coverLetterDeadline', label: 'Cover Letter' },
-    { key: 'videoDeadline', label: 'Video' },
-  ];
 
   const candidates = [];
 
@@ -92,16 +71,14 @@ export function getNextDeadline(applications, now = new Date()) {
       continue;
     }
 
-    for (const { key, label } of deadlineFields) {
-      const parsed = parseMachineDeadline(cycle[key]);
-      if (parsed && parsed.date.getTime() > now.getTime()) {
-        candidates.push({
-          ...parsed,
-          label,
-          cycleName: cycle.name,
-          cycleId: cycle.id,
-        });
-      }
+    const parsed = parseApplicationDeadline(cycle.endDate);
+    if (parsed && parsed.date.getTime() > now.getTime()) {
+      candidates.push({
+        ...parsed,
+        label: 'Application deadline',
+        cycleName: cycle.name,
+        cycleId: cycle.id,
+      });
     }
   }
 

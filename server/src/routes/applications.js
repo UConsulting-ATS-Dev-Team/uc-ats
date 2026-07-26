@@ -747,10 +747,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
             name: true,
             isActive: true,
             startDate: true,
-            endDate: true,
-            resumeDeadline: true,
-            coverLetterDeadline: true,
-            videoDeadline: true
+            endDate: true
           }
         }
       },

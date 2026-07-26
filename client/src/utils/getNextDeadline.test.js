@@ -9,115 +9,86 @@ describe('getNextDeadline', () => {
     cycle: {
       id: cycle.id || `cycle-${index}`,
       name: cycle.name || `Cycle ${index}`,
-      resumeDeadline: cycle.resumeDeadline ?? null,
-      coverLetterDeadline: cycle.coverLetterDeadline ?? null,
-      videoDeadline: cycle.videoDeadline ?? null,
+      endDate: cycle.endDate ?? null,
     },
   }));
 
-  it('returns the earliest future deadline across multiple deadlines', () => {
+  it('returns the earliest future application deadline across multiple cycles', () => {
     const applications = makeApplications([
-      {
-        name: 'Fall 2026',
-        resumeDeadline: '2026-10-05',
-        coverLetterDeadline: '2026-10-03',
-        videoDeadline: '2026-10-10',
-      },
+      { name: 'Fall 2026', endDate: '2026-10-10T00:00:00.000Z' },
+      { name: 'Winter 2027', endDate: '2026-10-05T00:00:00.000Z' },
     ]);
 
     const next = getNextDeadline(applications, now);
-    expect(next.label).toBe('Cover Letter');
-    expect(next.cycleName).toBe('Fall 2026');
-    expect(next.raw).toBe('2026-10-03');
-  });
-
-  it('returns a single future deadline', () => {
-    const applications = makeApplications([
-      { name: 'Winter 2027', resumeDeadline: '2026-11-15' },
-    ]);
-
-    const next = getNextDeadline(applications, now);
-    expect(next.label).toBe('Resume');
+    expect(next.label).toBe('Application deadline');
     expect(next.cycleName).toBe('Winter 2027');
+    expect(next.raw).toBe('2026-10-05T00:00:00.000Z');
   });
 
-  it('returns null when no deadlines are provided', () => {
+  it('returns a single future application deadline', () => {
+    const applications = makeApplications([
+      { name: 'Fall 2026', endDate: '2026-11-15T00:00:00.000Z' },
+    ]);
+
+    const next = getNextDeadline(applications, now);
+    expect(next.label).toBe('Application deadline');
+    expect(next.cycleName).toBe('Fall 2026');
+  });
+
+  it('returns null when no endDate is provided', () => {
     const applications = makeApplications([{ name: 'Spring 2027' }]);
     expect(getNextDeadline(applications, now)).toBeNull();
   });
 
-  it('ignores malformed prose deadlines and returns null', () => {
+  it('ignores malformed endDate values and returns null', () => {
     const applications = makeApplications([
-      { name: 'Fall 2026', resumeDeadline: 'Oct 4th, Morning' },
+      { name: 'Fall 2026', endDate: 'Oct 4th, Morning' },
     ]);
     expect(getNextDeadline(applications, now)).toBeNull();
   });
 
-  it('ignores past deadlines and returns null when all deadlines are past', () => {
+  it('ignores past endDate values and returns null', () => {
     const applications = makeApplications([
-      {
-        name: 'Fall 2025',
-        resumeDeadline: '2025-09-01',
-        coverLetterDeadline: '2025-09-02',
-        videoDeadline: '2025-09-03',
-      },
+      { name: 'Fall 2025', endDate: '2025-09-01T00:00:00.000Z' },
     ]);
     expect(getNextDeadline(applications, now)).toBeNull();
   });
 
   it('only considers deadlines from the provided applications (cycle isolation)', () => {
     const applications = makeApplications([
-      {
-        name: 'Cycle A',
-        resumeDeadline: '2026-10-02',
-      },
-      {
-        name: 'Cycle B',
-        coverLetterDeadline: '2026-10-04',
-      },
+      { name: 'Cycle A', endDate: '2026-10-02T00:00:00.000Z' },
+      { name: 'Cycle B', endDate: '2026-10-04T00:00:00.000Z' },
     ]);
 
     const next = getNextDeadline(applications, now);
-    expect(next.label).toBe('Resume');
     expect(next.cycleName).toBe('Cycle A');
   });
 
-  it('prefers an earlier deadline in a different cycle over a later one', () => {
+  it('handles a date-only endDate string', () => {
     const applications = makeApplications([
-      { name: 'Cycle A', resumeDeadline: '2026-10-08' },
-      { name: 'Cycle B', coverLetterDeadline: '2026-10-04' },
+      { name: 'Fall 2026', endDate: '2026-10-05' },
     ]);
 
     const next = getNextDeadline(applications, now);
-    expect(next.label).toBe('Cover Letter');
-    expect(next.cycleName).toBe('Cycle B');
-  });
-
-  it('handles date-time strings with timezone offsets', () => {
-    const applications = makeApplications([
-      { name: 'Fall 2026', resumeDeadline: '2026-10-01T12:00:00-07:00' },
-      { name: 'Fall 2026', coverLetterDeadline: '2026-10-01T20:00:00Z' },
-    ]);
-
-    const next = getNextDeadline(applications, now);
-    // 2026-10-01T12:00-07:00 is 19:00 UTC, earlier than 20:00 UTC
-    expect(next.label).toBe('Resume');
-    expect(next.hasTime).toBe(true);
+    expect(next.label).toBe('Application deadline');
+    expect(next.raw).toBe('2026-10-05');
   });
 });
 
 describe('formatDeadline', () => {
-  it('formats a date-only deadline without a time', () => {
+  it('formats a date-only deadline with a timezone label', () => {
     const date = new Date('2026-10-04T07:00:00.000Z');
     const formatted = formatDeadline(date, false);
     expect(formatted).toMatch(/October 4, 2026/);
-    expect(formatted).not.toMatch(/AM|PM|\d:\d{2}/);
+    expect(formatted).toMatch(/PDT|PST/);
+    expect(formatted).not.toMatch(/\d:\d{2}/);
   });
 
-  it('formats a deadline with time and timezone context', () => {
+  it('formats a time-bearing deadline with an unambiguous timezone label', () => {
     const date = new Date('2026-10-04T17:00:00.000Z');
     const formatted = formatDeadline(date, true);
     expect(formatted).toMatch(/October 4, 2026/);
     expect(formatted).toMatch(/10:00 AM/);
+    expect(formatted).toMatch(/PDT|PST/);
   });
 });
