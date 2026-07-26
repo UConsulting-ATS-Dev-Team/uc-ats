@@ -10,6 +10,7 @@ import {
 import {
   buildInterviewEventId,
   buildInterviewEventPayload,
+  calendarErrorStatus,
   collectAssignedUserIds,
   describeCalendarError,
   diffAttendees,
@@ -111,6 +112,8 @@ export async function syncInterviewCalendarEvent(interviewId, { reason = 'update
 }
 
 // Cancels the interview's calendar event (Google notifies attendees) and clears the stored ID.
+// A FAILED result means the event is still live on interviewers' calendars, so callers must not
+// destroy the interview row that holds the only copy of the provider event ID.
 export async function cancelInterviewCalendarEvent(interviewId) {
   const interview = await prisma.interview.findUnique({
     where: { id: interviewId },
@@ -122,8 +125,17 @@ export async function cancelInterviewCalendarEvent(interviewId) {
   try {
     await withCalendarRetry(() => deleteEventById(interview.calendarEventId));
   } catch (error) {
-    console.error(`[InterviewCalendar] Failed to cancel event for interview ${interviewId}:`, error?.message);
-    return { status: 'FAILED', error: describeCalendarError(error) };
+    const status = calendarErrorStatus(error);
+    // 404/410 means the event is already gone from Google; there is nothing left to withdraw.
+    if (status !== 404 && status !== 410) {
+      console.error(`[InterviewCalendar] Failed to cancel event for interview ${interviewId}:`, error?.message);
+      const message = describeCalendarError(error);
+      await updateInterviewSyncFields(interviewId, {
+        calendarSyncStatus: 'FAILED',
+        calendarSyncError: `Interviewers still hold this invite — it could not be withdrawn: ${message}`
+      });
+      return { status: 'FAILED', error: message, calendarEventId: interview.calendarEventId };
+    }
   }
 
   await updateInterviewSyncFields(interviewId, {

@@ -1851,8 +1851,16 @@ router.delete('/interviews/:id', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
 
-    // Withdraw the calendar invite before the row (and its stored event ID) disappears
-    await cancelInterviewCalendarEvent(id);
+    // Withdraw the calendar invite before the row (and its stored event ID) disappears. Deleting
+    // the row after a failed cancellation would leave a live event with no way to retry, so the
+    // interview stays until Google confirms the event is gone.
+    const calendarSync = await cancelInterviewCalendarEvent(id);
+    if (calendarSync.status === 'FAILED') {
+      return res.status(409).json({
+        error: `Interview not deleted: the calendar invite could not be withdrawn, so interviewers would keep a stale event. ${calendarSync.error} Retry the delete once this is resolved.`,
+        calendarSync
+      });
+    }
 
     // Delete dependent records first to satisfy FK constraints
     const ops = [];
