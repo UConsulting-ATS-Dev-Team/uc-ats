@@ -449,6 +449,7 @@ export async function generateOfferLetterPdf(application, cycle, template, offer
     { text: item, margin: [0, 0, 0, 8] }
   ]);
   bodyContent.push({
+    unbreakable: true,
     table: {
       widths: [20, '*'],
       body: checklistRows
@@ -470,6 +471,7 @@ export async function generateOfferLetterPdf(application, cycle, template, offer
   rightStack.push({ text: colorUConsulting(presidentTitle) });
 
   bodyContent.push({
+    unbreakable: true,
     margin: [0, 10, 0, 0],
     table: {
       widths: ['45%', '55%'],
