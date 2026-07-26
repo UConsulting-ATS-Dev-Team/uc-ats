@@ -409,6 +409,44 @@ describe('runSync', () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
+  it('applies the unambiguous matches when --skip-ambiguous is set', async () => {
+    const users = [
+      { id: 'u1', fullName: 'Alice Smith', profileImage: null },
+      { id: 'u1dup', fullName: 'Alice Smith', profileImage: null }, // ambiguous
+      { id: 'u2', fullName: 'Bob Jones', profileImage: null },
+    ];
+    const prisma = createPrisma(users);
+    const fetchFn = vi.fn(async (url) => {
+      if (typeof url === 'string' && url.includes('team')) {
+        return createMockResponse({
+          text: async () => applyFixtureHtml,
+          headers: new Map([['content-type', 'text/html']]),
+        });
+      }
+      return createMockResponse({
+        arrayBuffer: async () => Buffer.from('image-data'),
+        headers: new Map([['content-type', 'image/png']]),
+      });
+    });
+
+    const report = await runSync(
+      {
+        sourceUrl: 'https://example.com/team',
+        apply: true,
+        skipAmbiguous: true,
+        uploadDir: tmpDir,
+      },
+      { fetch: fetchFn, prisma, now: () => 1, random: () => 0 }
+    );
+
+    expect(report.ambiguous.length).toBe(1);
+    expect(report.uploaded.map((u) => u.userId)).toEqual(['u2']);
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'u2' } })
+    );
+  });
+
   it('reports skipped users when profileImage is already set and overwrite is false', async () => {
     const users = [
       { id: 'u1', fullName: 'Alice Smith', profileImage: '/api/uploads/profile-images/existing.png' },

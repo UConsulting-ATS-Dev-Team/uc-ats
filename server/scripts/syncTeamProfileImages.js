@@ -20,6 +20,7 @@ Usage: node scripts/syncTeamProfileImages.js [options]
 Options:
   --apply                 Apply updates (default is dry-run).
   --overwrite             Overwrite existing profileImage values.
+  --skip-ambiguous        Skip (instead of block on) names shared by multiple ATS users.
   --source-url <url>      Team page URL (default: ${DEFAULT_SOURCE_URL}).
   --html-file <path>      Use a locally saved copy of the team page instead of fetching.
   --upload-dir <path>     Directory for downloaded images (default: server/uploads/profile-images).
@@ -236,6 +237,7 @@ export async function runSync(options, deps = {}) {
     htmlFile,
     apply = false,
     overwrite = false,
+    skipAmbiguous = false,
     uploadDir,
   } = options;
 
@@ -295,6 +297,7 @@ export async function runSync(options, deps = {}) {
     sourceType,
     apply,
     overwrite,
+    skipAmbiguous,
     parsedRows: rows.length,
     candidates: candidates.length,
     conflicts,
@@ -307,7 +310,8 @@ export async function runSync(options, deps = {}) {
     errors: [],
   };
 
-  const blockingIssues = conflicts.length > 0 || matchResult.ambiguous.length > 0;
+  const blockingAmbiguous = skipAmbiguous ? [] : matchResult.ambiguous;
+  const blockingIssues = conflicts.length > 0 || blockingAmbiguous.length > 0;
 
   // 4. Apply changes only when explicitly requested and no blocking issues exist.
   if (apply) {
@@ -315,8 +319,11 @@ export async function runSync(options, deps = {}) {
       throw new Error('--apply requires a Prisma client. This script must be run with database access.');
     }
     if (blockingIssues) {
+      const ambiguousHint = blockingAmbiguous.length
+        ? ' Resolve them (or re-run with --skip-ambiguous to skip the ambiguous names).'
+        : ' Resolve them and re-run.';
       throw new Error(
-        `Cannot apply: ${conflicts.length} conflicting source name(s) and ${matchResult.ambiguous.length} ambiguous user match(es) found. Resolve them and re-run.`
+        `Cannot apply: ${conflicts.length} conflicting source name(s) and ${blockingAmbiguous.length} ambiguous user match(es) found.${ambiguousHint}`
       );
     }
     if (!uploadDir) {
@@ -379,7 +386,9 @@ function formatReport(report) {
   lines.push(`Unmatched website names: ${report.unmatchedSource.length}`);
   lines.push(`Unmatched ATS users: ${report.unmatchedUsers.length}`);
   lines.push(`Conflicting source names: ${report.conflicts.length}`);
-  lines.push(`Ambiguous user matches: ${report.ambiguous.length}`);
+  lines.push(
+    `Ambiguous user matches: ${report.ambiguous.length}${report.skipAmbiguous ? ' (skipped)' : ''}`
+  );
 
   if (report.conflicts.length) {
     lines.push('\nConflicting source rows (same normalized name, different image URLs):');
@@ -430,6 +439,7 @@ function parseArgs(argv) {
   const args = {
     apply: false,
     overwrite: false,
+    skipAmbiguous: false,
     sourceUrl: DEFAULT_SOURCE_URL,
     htmlFile: null,
     uploadDir: null,
@@ -445,6 +455,9 @@ function parseArgs(argv) {
         break;
       case '--overwrite':
         args.overwrite = true;
+        break;
+      case '--skip-ambiguous':
+        args.skipAmbiguous = true;
         break;
       case '--dry-run':
         args.apply = false;
@@ -502,7 +515,8 @@ async function main() {
   }
 
   const hasFatal =
-    (report.apply && (report.conflicts.length > 0 || report.ambiguous.length > 0)) ||
+    (report.apply &&
+      (report.conflicts.length > 0 || (!report.skipAmbiguous && report.ambiguous.length > 0))) ||
     report.errors.length > 0;
 
   process.exit(hasFatal ? 1 : 0);
