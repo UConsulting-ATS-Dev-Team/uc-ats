@@ -23,6 +23,7 @@ import {
 import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
 
 export default function CycleManagement() {
   const [cycles, setCycles] = useState([]);
@@ -31,6 +32,7 @@ export default function CycleManagement() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
+  const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
   const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
   const [submitting, setSubmitting] = useState(false);
 
@@ -184,6 +186,9 @@ export default function CycleManagement() {
                         <EditIcon />
                       </IconButton>
                     </Tooltip>
+                    <Button size="small" variant="outlined" onClick={() => setOfferLetterCycleId(c.id)}>
+                      Offer Letters
+                    </Button>
                     {!c.isActive && (
                       <Button size="small" variant="outlined" onClick={() => activateCycle(c.id)}>Activate</Button>
                     )}
@@ -309,6 +314,12 @@ export default function CycleManagement() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <CycleOfferLetterDialog
+        cycleId={offerLetterCycleId}
+        open={Boolean(offerLetterCycleId)}
+        onClose={() => setOfferLetterCycleId(null)}
+      />
     </Box>
     </AccessControl>
   );
