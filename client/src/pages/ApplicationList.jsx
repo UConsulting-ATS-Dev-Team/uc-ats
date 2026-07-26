@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import CandidateAvatar from '../components/CandidateAvatar';
+import MemberAvatar from '../components/MemberAvatar';
 import ImageCache from '../utils/imageCache';
 import AddApplicationModal from '../components/AddApplicationModal';
 import EditApplicationModal from '../components/EditApplicationModal';
@@ -377,6 +378,17 @@ export default function ApplicationList() {
                     </span>
                   </div>
                 </div>
+
+                {applicant.reviewTeam && applicant.reviewTeam.members?.length > 0 && (
+                  <div className="candidate-review-team">
+                    <span className="review-team-label">Review team</span>
+                    <div className="review-team-members">
+                      {applicant.reviewTeam.members.map((member) => (
+                        <MemberAvatar key={member.id} member={member} />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Link>
               {isAdmin && (
                 <div className="candidate-actions">

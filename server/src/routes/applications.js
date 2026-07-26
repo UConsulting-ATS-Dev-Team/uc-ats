@@ -2,6 +2,7 @@ import express from 'express';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 import { getFormQuestions, getResponses } from '../services/google/forms.js';
+import { getGroupMemberUsers, groupMemberUserInclude } from '../utils/groupMembers.js';
 import config from '../config.js';
 
 const router = express.Router();
@@ -470,10 +471,42 @@ router.get('/', async (req, res) => {
       };
     }));
 
+    // Attach review team members for each application
+    const candidateIdsForTeams = [...new Set(applications.map(app => app.candidateId).filter(Boolean))];
+    const assignedGroupIdsForCandidates = candidateIdsForTeams.length > 0
+      ? await prisma.candidate.findMany({
+          where: { id: { in: candidateIdsForTeams } },
+          select: { id: true, assignedGroupId: true }
+        })
+      : [];
+    const candidateGroupMap = new Map(assignedGroupIdsForCandidates.map(c => [c.id, c.assignedGroupId]));
+    const groupIdsForTeams = [...new Set(assignedGroupIdsForCandidates.map(c => c.assignedGroupId).filter(Boolean))];
+
+    const reviewTeams = groupIdsForTeams.length > 0
+      ? await prisma.groups.findMany({
+          where: { id: { in: groupIdsForTeams } },
+          include: groupMemberUserInclude
+        })
+      : [];
+    const reviewTeamMap = new Map(reviewTeams.map(team => {
+      const members = getGroupMemberUsers(team);
+      return [team.id, {
+        id: team.id,
+        name: team.name || `Team ${team.id.slice(-4)}`,
+        members
+      }];
+    }));
+
+    const applicationsWithTeams = applicationsWithAverages.map(application => {
+      const assignedGroupId = candidateGroupMap.get(application.candidateId);
+      const reviewTeam = assignedGroupId ? reviewTeamMap.get(assignedGroupId) || null : null;
+      return { ...application, reviewTeam };
+    });
+
     // Return with pagination metadata
     const totalPages = Math.ceil(total / limit);
     res.json({
-      data: applicationsWithAverages,
+      data: applicationsWithTeams,
       pagination: {
         page,
         limit,
