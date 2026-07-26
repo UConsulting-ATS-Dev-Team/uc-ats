@@ -13,7 +13,6 @@ import {
   Card, 
   CardContent, 
   CardActions, 
-  Avatar, 
   Chip, 
   Dialog, 
   DialogTitle, 
@@ -37,9 +36,10 @@ import {
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 
 const UserManagement = () => {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -133,11 +133,14 @@ const UserManagement = () => {
   const handleUpdateUser = async (e) => {
     e.preventDefault();
     try {
-      await apiClient.patch(`/users/${selectedUser.id}`, editForm);
+      const response = await apiClient.patch(`/users/${selectedUser.id}`, editForm);
       setShowEditModal(false);
       setSelectedUser(null);
       setSuccess('User information updated successfully!');
       fetchUsers();
+      if (response?.id === user?.id) {
+        updateUser(response);
+      }
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -174,6 +177,9 @@ const UserManagement = () => {
       setImageFile(null);
       setSuccess('Profile image uploaded successfully!');
       fetchUsers();
+      if (response?.user && response.user.id === user?.id) {
+        updateUser(response.user);
+      }
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -407,23 +413,11 @@ const UserManagement = () => {
                     <CardContent sx={{ flexGrow: 1, p: 1.5 }}>
                                           {/* User Header */}
                       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
-                        <Avatar
-                          key={`${userItem.id}-${userItem.profileImage || 'no-image'}`}
-                          src={userItem.profileImage ? `${userItem.profileImage}?t=${Date.now()}` : undefined}
-                          sx={{ 
-                            width: 48, 
-                            height: 48, 
-                            mr: 1.5,
-                            bgcolor: 'primary.main',
-                            fontSize: '1.25rem'
-                          }}
-                          onError={(e) => {
-                            // Hide the image and show the fallback initials
-                            e.target.style.display = 'none';
-                          }}
-                        >
-                          {userItem.fullName.charAt(0).toUpperCase()}
-                        </Avatar>
+                        <MemberAvatar
+                          member={userItem}
+                          size={48}
+                          style={{ marginRight: '12px' }}
+                        />
                         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                           <Typography variant="h6" noWrap sx={{ fontSize: '1rem' }}>
                             {userItem.fullName}

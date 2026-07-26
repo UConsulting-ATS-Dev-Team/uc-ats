@@ -22,6 +22,7 @@ import {
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
+import MemberAvatar from './MemberAvatar';
 import '../styles/Layout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -106,6 +107,7 @@ const Layout = ({ children }) => {
 
             {/* Right side - User info and logout */}
             <div className="nav-right">
+              <MemberAvatar member={user} size={32} />
               <div className="user-info">
                 <p className="user-name">{user?.fullName}</p>
                 <p className="user-role">

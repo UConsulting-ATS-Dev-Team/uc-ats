@@ -21,6 +21,7 @@ import {
 } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -428,22 +429,7 @@ export default function MemberDashboard() {
                           bgcolor: member.id === user?.id ? 'primary.50' : 'transparent'
                         }}
                       >
-                        <Box
-                          sx={{
-                            width: 40,
-                            height: 40,
-                            borderRadius: '50%',
-                            bgcolor: 'primary.main',
-                            color: 'white',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 600,
-                            fontSize: '0.875rem'
-                          }}
-                        >
-                          {member.name.split(' ').map(n => n[0]).join('')}
-                        </Box>
+                        <MemberAvatar member={member} size={40} />
                         <Box sx={{ flex: 1 }}>
                           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                             {member.name}

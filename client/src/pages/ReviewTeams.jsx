@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import MemberAvatar, { getInitials, getMemberDisplayName, getMemberImageUrl } from '../components/MemberAvatar';
 import {
   DndContext,
   closestCenter,
@@ -903,9 +904,7 @@ export default function ReviewTeams() {
                         >
                             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
                               <Stack direction="row" spacing={1} alignItems="center">
-                                <Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: '0.75rem' }}>
-                                  {member.name.split(' ').map(name => name[0]).join('')}
-                                </Avatar>
+                                <MemberAvatar member={member} size={34} />
                                 <Box>
                                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                                     {member.name}
@@ -1005,8 +1004,8 @@ export default function ReviewTeams() {
                         key={member.id}
                         label={member.name}
                         avatar={
-                          <Avatar src={member.avatar}>
-                            {!member.avatar && member.name.split(' ').map(name => name[0]).join('')}
+                          <Avatar src={getMemberImageUrl(member)} alt={getMemberDisplayName(member)}>
+                            {!getMemberImageUrl(member) && getInitials(getMemberDisplayName(member))}
                           </Avatar>
                         }
                         sx={{ backgroundColor: 'rgba(4, 39, 66, 0.08)' }}
@@ -1168,15 +1167,16 @@ export default function ReviewTeams() {
                   <Box component="li" key={key} {...otherProps}>
                     <Stack direction="row" alignItems="center" spacing={2}>
                       <Avatar
-                        sx={{ 
-                          width: 32, 
-                          height: 32, 
+                        sx={{
+                          width: 32,
+                          height: 32,
                           bgcolor: 'primary.main',
                           fontSize: '0.75rem'
                         }}
-                        src={option.profileImage}
+                        src={getMemberImageUrl(option)}
+                        alt={getMemberDisplayName(option)}
                       >
-                        {!option.profileImage && option.fullName.split(' ').map(n => n[0]).join('')}
+                        {!getMemberImageUrl(option) && getInitials(getMemberDisplayName(option))}
                       </Avatar>
                       <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="body2" sx={{ fontWeight: 500, noWrap: false }}>
@@ -1198,15 +1198,16 @@ export default function ReviewTeams() {
                     label={option.fullName}
                     avatar={
                       <Avatar
-                        sx={{ 
-                          width: 20, 
-                          height: 20, 
+                        sx={{
+                          width: 20,
+                          height: 20,
                           bgcolor: 'primary.main',
                           fontSize: '0.625rem'
                         }}
-                        src={option.profileImage}
+                        src={getMemberImageUrl(option)}
+                        alt={getMemberDisplayName(option)}
                       >
-                        {!option.profileImage && option.fullName.split(' ').map(n => n[0]).join('')}
+                        {!getMemberImageUrl(option) && getInitials(getMemberDisplayName(option))}
                       </Avatar>
                     }
                     size="small"
@@ -1313,9 +1314,7 @@ export default function ReviewTeams() {
                   >
                     <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
                       <Stack direction="row" spacing={2} alignItems="center">
-                        <Avatar sx={{ bgcolor: 'primary.main' }}>
-                          {user.fullName.split(' ').map(n => n[0]).join('')}
-                        </Avatar>
+                        <MemberAvatar member={user} size={40} />
                         <Box>
                           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                             {user.fullName}

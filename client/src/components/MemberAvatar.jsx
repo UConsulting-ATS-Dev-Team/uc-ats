@@ -4,35 +4,78 @@ import AuthenticatedImage from './AuthenticatedImage';
 export const getInitials = (fullName) => {
   const name = String(fullName || '').trim();
   if (!name) return '';
-  const parts = name.split(/\s+/);
+  const parts = name.split(/\s+/).filter(Boolean);
   const first = parts[0]?.charAt(0) || '';
   const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : '';
   return `${first}${last}`.toUpperCase();
 };
 
-const getDisplayName = (member) => {
-  return String(member?.fullName || '').trim() || 'Member';
+export const getMemberDisplayName = (member, fallback = 'Member') => {
+  const display = String(
+    member?.fullName ||
+    member?.name ||
+    member?.displayName ||
+    ''
+  ).trim();
+  return display || fallback;
+};
+
+export const getMemberImageUrl = (member) => {
+  const raw = member?.profileImage ?? member?.avatar ?? member?.profile_image ?? '';
+  return typeof raw === 'string' ? raw.trim() : '';
 };
 
 const isValidImageUrl = (profileImage) => {
   return typeof profileImage === 'string' && profileImage.trim().length > 0;
 };
 
-const MemberAvatar = ({ member }) => {
+const DEFAULT_BG = '#1976d2';
+const DEFAULT_COLOR = '#ffffff';
+
+const MemberAvatar = ({ member, size = 32, className = '', style = {} }) => {
   const [hasError, setHasError] = useState(false);
   const handleError = useCallback(() => setHasError(true), []);
 
-  const displayName = getDisplayName(member);
-  const initials = getInitials(member?.fullName);
-  const profileImage = member?.profileImage;
+  const displayName = getMemberDisplayName(member);
+  const initials = getInitials(getMemberDisplayName(member, ''));
+  const profileImage = getMemberImageUrl(member);
+
+  const baseStyle = {
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    ...style,
+  };
+
+  const fallbackStyle = {
+    ...baseStyle,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: DEFAULT_BG,
+    color: DEFAULT_COLOR,
+    fontSize: Math.max(10, size * 0.4),
+    fontWeight: 600,
+    lineHeight: 1,
+    overflow: 'hidden',
+    flexShrink: 0,
+  };
+
+  const imageStyle = {
+    ...baseStyle,
+    objectFit: 'cover',
+  };
+
+  const combinedClass = `member-avatar${className ? ` ${className}` : ''}`;
 
   if (!member || !isValidImageUrl(profileImage) || hasError) {
     return (
       <div
-        className="member-avatar-fallback"
+        className={`member-avatar-fallback${className ? ` ${className}` : ''}`}
         aria-label={displayName}
         title={displayName}
         role="img"
+        style={fallbackStyle}
       >
         {initials || '?'}
       </div>
@@ -43,8 +86,8 @@ const MemberAvatar = ({ member }) => {
     <AuthenticatedImage
       src={profileImage}
       alt={displayName}
-      className="member-avatar"
-      style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
+      className={combinedClass}
+      style={imageStyle}
       onError={handleError}
       title={displayName}
     />
