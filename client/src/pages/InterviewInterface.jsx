@@ -8,6 +8,7 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import DeliberationGuidance from '../components/DeliberationGuidance';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import { useCelebration } from '../context/CelebrationContext';
 import '../styles/InterviewInterface.css';
@@ -393,6 +394,8 @@ export default function InterviewInterface() {
           </button>
         </div>
       </div>
+
+      {interview?.interviewType === 'DELIBERATIONS' && <DeliberationGuidance />}
 
       {/* Applications Grid */}
       <div className="applications-grid">
