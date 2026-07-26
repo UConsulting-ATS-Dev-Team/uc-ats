@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import AuthenticatedImage from './AuthenticatedImage';
 
 export const getInitials = (fullName) => {
@@ -35,10 +35,19 @@ const DEFAULT_COLOR = '#ffffff';
 const MemberAvatar = ({ member, size = 32, className = '', style = {} }) => {
   const [hasError, setHasError] = useState(false);
   const handleError = useCallback(() => setHasError(true), []);
+  const didMountRef = useRef(false);
 
   const displayName = getMemberDisplayName(member);
   const initials = getInitials(getMemberDisplayName(member, ''));
   const profileImage = getMemberImageUrl(member);
+
+  useEffect(() => {
+    if (didMountRef.current) {
+      setHasError(false);
+    } else {
+      didMountRef.current = true;
+    }
+  }, [profileImage]);
 
   const baseStyle = {
     width: size,

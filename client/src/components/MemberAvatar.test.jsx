@@ -106,6 +106,38 @@ describe('MemberAvatar', () => {
     });
   });
 
+  it('resets image error when a new profileImage is supplied', async () => {
+    const { rerender } = render(
+      <MemberAvatar
+        member={{
+          id: 'member-5',
+          fullName: 'Eve Evans',
+          profileImage: 'error',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('EE')).toBeInTheDocument();
+      expect(screen.queryByTestId('member-image')).not.toBeInTheDocument();
+    });
+
+    rerender(
+      <MemberAvatar
+        member={{
+          id: 'member-5',
+          fullName: 'Eve Evans',
+          profileImage: '/api/uploads/profile-images/eve.png',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('member-image')).toBeInTheDocument();
+      expect(screen.queryByText('EE')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders a fallback when member is undefined', () => {
     const { container } = render(<MemberAvatar />);
 

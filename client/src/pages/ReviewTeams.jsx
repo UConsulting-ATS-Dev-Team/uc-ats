@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import MemberAvatar, { getInitials, getMemberDisplayName, getMemberImageUrl } from '../components/MemberAvatar';
+import MemberAvatar from '../components/MemberAvatar';
+import AuthenticatedAvatar from '../components/AuthenticatedAvatar';
 import {
   DndContext,
   closestCenter,
@@ -1004,9 +1005,7 @@ export default function ReviewTeams() {
                         key={member.id}
                         label={member.name}
                         avatar={
-                          <Avatar src={getMemberImageUrl(member)} alt={getMemberDisplayName(member)}>
-                            {!getMemberImageUrl(member) && getInitials(getMemberDisplayName(member))}
-                          </Avatar>
+                          <AuthenticatedAvatar member={member} size={24} />
                         }
                         sx={{ backgroundColor: 'rgba(4, 39, 66, 0.08)' }}
                       />
@@ -1166,18 +1165,7 @@ export default function ReviewTeams() {
                 return (
                   <Box component="li" key={key} {...otherProps}>
                     <Stack direction="row" alignItems="center" spacing={2}>
-                      <Avatar
-                        sx={{
-                          width: 32,
-                          height: 32,
-                          bgcolor: 'primary.main',
-                          fontSize: '0.75rem'
-                        }}
-                        src={getMemberImageUrl(option)}
-                        alt={getMemberDisplayName(option)}
-                      >
-                        {!getMemberImageUrl(option) && getInitials(getMemberDisplayName(option))}
-                      </Avatar>
+                      <AuthenticatedAvatar member={option} size={32} />
                       <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="body2" sx={{ fontWeight: 500, noWrap: false }}>
                           {option.fullName}
@@ -1197,18 +1185,7 @@ export default function ReviewTeams() {
                     key={option.id}
                     label={option.fullName}
                     avatar={
-                      <Avatar
-                        sx={{
-                          width: 20,
-                          height: 20,
-                          bgcolor: 'primary.main',
-                          fontSize: '0.625rem'
-                        }}
-                        src={getMemberImageUrl(option)}
-                        alt={getMemberDisplayName(option)}
-                      >
-                        {!getMemberImageUrl(option) && getInitials(getMemberDisplayName(option))}
-                      </Avatar>
+                      <AuthenticatedAvatar member={option} size={20} />
                     }
                     size="small"
                   />
