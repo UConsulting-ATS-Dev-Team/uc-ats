@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
-import AuthenticatedImage from '../components/AuthenticatedImage';
+import CandidateAvatar from '../components/CandidateAvatar';
 import ImageCache from '../utils/imageCache';
 import AddApplicationModal from '../components/AddApplicationModal';
 import EditApplicationModal from '../components/EditApplicationModal';
@@ -113,7 +113,7 @@ export default function ApplicationList() {
   useEffect(() => {
     if (applicants.length > 0) {
       const imageUrls = applicants
-        .filter(applicant => applicant.headshotUrl)
+        .filter(applicant => typeof applicant.headshotUrl === 'string' && applicant.headshotUrl.trim() !== '')
         .map(applicant => applicant.headshotUrl);
 
       if (imageUrls.length > 0) {
@@ -129,10 +129,6 @@ export default function ApplicationList() {
       }
     }
   }, [applicants]);
-
-  const getInitials = (firstName, lastName) => {
-    return `${firstName?.charAt(0) || ''}${lastName?.charAt(0) || ''}`.toUpperCase();
-  };
 
   const formatStatus = (status) => {
     return status.toLowerCase().replace('_', ' ');
@@ -362,23 +358,7 @@ export default function ApplicationList() {
                 <div className="candidate-header">
                   <div className="candidate-info">
                     {/* Profile Picture with fallback */}
-                    {applicant.headshotUrl ? (
-                      <AuthenticatedImage
-                        src={applicant.headshotUrl}
-                        alt={`${applicant.firstName} ${applicant.lastName}`}
-                        className="candidate-avatar"
-                        style={{
-                          width: '60px',
-                          height: '60px',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                    ) : (
-                      <div className="candidate-avatar-fallback">
-                        {getInitials(applicant.firstName, applicant.lastName)}
-                      </div>
-                    )}
+                    <CandidateAvatar applicant={applicant} />
                     <div className="candidate-details">
                       <h3>{applicant.firstName} {applicant.lastName}</h3>
                       <p className="candidate-meta">
