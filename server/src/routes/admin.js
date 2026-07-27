@@ -22,6 +22,14 @@ import {
   findLatestOfferLetterSend,
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
+import {
+  scheduleFeedbackRequest,
+  cancelPendingFeedbackRequest,
+  handleApplicationStatusChange,
+  processFeedbackJobs,
+  getFeedbackJobs,
+  retryFeedbackJob
+} from '../services/feedbackScheduler.js';
 
 const router = express.Router();
 
@@ -551,6 +559,10 @@ router.put('/candidates/:id', async (req, res) => {
       where: { id },
       data: updateData
     });
+
+    if (updateData.status) {
+      await handleApplicationStatusChange(id, updateData.status);
+    }
 
     res.json({
       message: 'Candidate updated successfully',
@@ -3148,6 +3160,8 @@ router.patch('/staging/candidates/:id/status', async (req, res) => {
       }
     });
 
+    await handleApplicationStatusChange(id, status);
+
     // Add comment if notes provided
     if (notes && notes.trim()) {
       await prisma.comment.create({
@@ -3183,6 +3197,8 @@ router.post('/staging/candidates/:id/final-decision', async (req, res) => {
       }
     });
 
+    await handleApplicationStatusChange(id, status);
+
     // Add comment if feedback provided
     if (feedback && feedback.trim()) {
       await prisma.comment.create({
@@ -3198,6 +3214,52 @@ router.post('/staging/candidates/:id/final-decision', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/staging/candidates/:id/final-decision]', error);
     res.status(500).json({ error: 'Failed to submit final decision' });
+  }
+});
+
+// Get feedback scheduler jobs for admin observability
+router.get('/feedback-jobs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const { status, applicationId } = req.query;
+    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+
+    const result = await getFeedbackJobs({
+      cycleId: req.query.cycleId || active?.id,
+      status,
+      applicationId,
+      page,
+      limit,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[GET /api/admin/feedback-jobs]', error);
+    res.status(500).json({ error: 'Failed to fetch feedback jobs', details: error.message });
+  }
+});
+
+// Manually process feedback jobs (e.g., after downtime)
+router.post('/feedback-jobs/process', async (req, res) => {
+  try {
+    const results = await processFeedbackJobs();
+    res.json({ message: 'Feedback job processing completed', results });
+  } catch (error) {
+    console.error('[POST /api/admin/feedback-jobs/process]', error);
+    res.status(500).json({ error: 'Failed to process feedback jobs', details: error.message });
+  }
+});
+
+// Retry a failed or cancelled feedback job safely
+router.post('/feedback-jobs/:id/retry', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const job = await retryFeedbackJob(id);
+    res.json({ message: 'Feedback job queued for retry', job });
+  } catch (error) {
+    console.error('[POST /api/admin/feedback-jobs/:id/retry]', error);
+    res.status(400).json({ error: 'Failed to retry feedback job', details: error.message });
   }
 });
 
@@ -4483,7 +4545,7 @@ router.post('/process-final-decisions', async (req, res) => {
 
         if (decision === 'yes') {
           // Accept candidate - move to final stage (round 5)
-          const updatedApp = await prisma.application.update({
+          let updatedApp = await prisma.application.update({
             where: { id: application.id },
             data: {
               status: 'ACCEPTED',
@@ -4505,6 +4567,14 @@ router.post('/process-final-decisions', async (req, res) => {
           }
 
           if (emailResult.success) {
+            const decisionSentAt = new Date();
+            updatedApp = await prisma.application.update({
+              where: { id: application.id },
+              data: { decisionSentAt }
+            });
+            await cancelPendingFeedbackRequest(application.id);
+            await scheduleFeedbackRequest(updatedApp, active, decisionSentAt);
+
             results.emailsSent++;
             results.accepted.push({
               applicationId: application.id,
@@ -4526,7 +4596,7 @@ router.post('/process-final-decisions', async (req, res) => {
           }
         } else if (decision === 'no') {
           // Reject
-          await prisma.application.update({
+          let updatedApp = await prisma.application.update({
             where: { id: application.id },
             data: {
               status: 'REJECTED',
@@ -4535,13 +4605,27 @@ router.post('/process-final-decisions', async (req, res) => {
             }
           });
 
-          const emailResult = await sendFinalRejectionEmail(
-            application.email,
-            `${application.firstName} ${application.lastName}`,
-            active.name
-          );
+          let emailResult;
+          try {
+            emailResult = await sendFinalRejectionEmail(
+              application.email,
+              `${application.firstName} ${application.lastName}`,
+              active.name
+            );
+          } catch (emailError) {
+            console.error(`Error sending final rejection email to ${application.email}:`, emailError);
+            emailResult = { success: false, error: emailError.message };
+          }
 
           if (emailResult.success) {
+            const decisionSentAt = new Date();
+            updatedApp = await prisma.application.update({
+              where: { id: application.id },
+              data: { decisionSentAt }
+            });
+            await cancelPendingFeedbackRequest(application.id);
+            await scheduleFeedbackRequest(updatedApp, active, decisionSentAt);
+
             results.emailsSent++;
             results.rejected.push({
               applicationId: application.id,

@@ -77,6 +77,7 @@ model Application {
   status                ApplicationStatus               @default(SUBMITTED)
   responseID            String                          @unique
   submittedAt           DateTime                        @default(now())
+  decisionSentAt        DateTime?
   email                 String
   firstName             String
   lastName              String
@@ -113,18 +114,20 @@ model Application {
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
+  feedbackJobs          ApplicationFeedbackJob[]
 
   @@map("applications")
 }
 
 model RecruitingCycle {
-  id                  String             @id @default(uuid())
+  id                  String                  @id @default(uuid())
   name                String
-  isActive            Boolean            @default(false)
+  isActive            Boolean                 @default(false)
   startDate           DateTime?
   endDate             DateTime?
-  createdAt           DateTime           @default(now())
+  createdAt           DateTime                @default(now())
   formUrl             String?
+  feedbackFormUrl     String?
   resumeDeadline      String?
   coverLetterDeadline String?
   videoDeadline       String?
@@ -137,8 +140,31 @@ model RecruitingCycle {
   resumeScores        ResumeScore[]
   videoScores         VideoScore[]
   cases               Case[]
+  feedbackJobs        ApplicationFeedbackJob[]
 
   @@map("recruiting_cycles")
+}
+
+model ApplicationFeedbackJob {
+  id             String       @id @default(uuid())
+  applicationId  String
+  cycleId        String?
+  type           String
+  status         String       @default("PENDING")
+  dueAt          DateTime
+  sentAt         DateTime?
+  attempts       Int          @default(0)
+  lastError      String?
+  decisionSentAt DateTime
+  feedbackFormUrl String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  application    Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  cycle          RecruitingCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+
+  @@unique([applicationId, type, decisionSentAt])
+  @@index([status, dueAt])
+  @@map("application_feedback_jobs")
 }
 
 model Comment {
