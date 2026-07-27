@@ -90,6 +90,44 @@ describe('AdminAssignedInterviews create flow', () => {
     expect(alert).not.toHaveBeenCalled();
   });
 
+  it('surfaces a partial calendar failure even when the invite was sent', async () => {
+    apiClient.post.mockResolvedValue({
+      id: 'iv-2',
+      title: 'Coffee Chat 2',
+      interviewType: 'COFFEE_CHAT',
+      startDate: '',
+      endDate: '',
+      location: '',
+      dresscode: '',
+      description: '{}',
+      calendarSync: {
+        status: 'SYNCED',
+        calendarEventId: 'ucatsiv2',
+        error: 'Calendar sync state could not be saved; reload to see the current status.'
+      }
+    });
+
+    renderWithRouter(<AdminAssignedInterviews />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Create Interview' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Interview' }));
+    const titleInput = screen.getByText('Title').nextElementSibling;
+    fireEvent.change(titleInput, { target: { value: 'Coffee Chat 2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(alert).toHaveBeenCalledWith(expect.stringContaining('could not be saved'));
+    });
+
+    // The row must also carry the returned sync state, not just the nested calendarSync object.
+    await waitFor(() => {
+      expect(screen.getByText(/could not be saved/)).toBeInTheDocument();
+    });
+  });
+
   it('exits the loading state when create fails', async () => {
     apiClient.post.mockRejectedValue(new Error('Server error'));
 

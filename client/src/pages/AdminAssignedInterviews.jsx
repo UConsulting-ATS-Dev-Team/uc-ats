@@ -490,7 +490,7 @@ export default function AdminAssignedInterviews() {
     try {
       const result = await apiClient.post(`/admin/interviews/${interviewId}/calendar-sync`, {});
       applyCalendarSync(interviewId, result);
-      if (result.status !== 'SYNCED') {
+      if (result.status !== 'SYNCED' || result.error) {
         alert(result.error || 'Calendar invite could not be sent.');
       }
     } catch (e) {
@@ -556,10 +556,22 @@ export default function AdminAssignedInterviews() {
       };
       console.log('Creating interview with payload:', payload);
       const created = await apiClient.post('/admin/interviews', payload);
-      const next = [created, ...interviews];
-      setInterviews(next);
-      if (created.calendarSync && created.calendarSync.status !== 'SYNCED' && created.calendarSync.error) {
-        alert(`Interview created, but the calendar invite was not sent: ${created.calendarSync.error}`);
+      const calendarSync = created.calendarSync;
+      setInterviews([
+        {
+          ...created,
+          calendarEventId: calendarSync?.calendarEventId ?? created.calendarEventId ?? null,
+          calendarSyncStatus: calendarSync?.status ?? created.calendarSyncStatus ?? 'NOT_SYNCED',
+          calendarSyncError: calendarSync?.error ?? null
+        },
+        ...interviews
+      ]);
+      // A SYNCED result can still carry an error (the invite went out but its state could not be
+      // saved), so surface any error rather than only the non-synced ones.
+      if (calendarSync?.error) {
+        alert(calendarSync.status === 'SYNCED'
+          ? `Interview created and invites sent, but: ${calendarSync.error}`
+          : `Interview created, but the calendar invite was not sent: ${calendarSync.error}`);
       }
       setSelectedInterviewId(created.id);
       setEditedInterview(null);
