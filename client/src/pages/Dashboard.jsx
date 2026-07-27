@@ -12,7 +12,7 @@ import {
   Alert,
   Chip
 } from '@mui/material';
-import { useTheme, ThemeProvider, alpha } from '@mui/material/styles';
+import { useTheme, alpha } from '@mui/material/styles';
 import { BarChart as BarChartIcon, DonutLarge as DonutLargeIcon } from '@mui/icons-material';
 import {
   BarChart,
@@ -31,7 +31,6 @@ import {
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
-import globalTheme from '../styles/globalTheme';
 
 function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisAngle = 0, limit }) {
   const theme = useTheme();
@@ -361,24 +360,21 @@ export default function Dashboard() {
 
   if (!user) {
     return (
-      <ThemeProvider theme={globalTheme}>
-        <Box>
-          <Paper sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="h4" gutterBottom>
-              Authentication Required
-            </Typography>
-            <Typography variant="body1" color="text.secondary">
-              Please log in to view the dashboard.
-            </Typography>
-          </Paper>
-        </Box>
-      </ThemeProvider>
+      <Box>
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <Typography variant="h4" gutterBottom>
+            Authentication Required
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            Please log in to view the dashboard.
+          </Typography>
+        </Paper>
+      </Box>
     );
   }
 
   return (
-    <ThemeProvider theme={globalTheme}>
-      <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
         <Box sx={{ maxWidth: 1200, mx: 'auto', p: 0 }}>
           {/* Header */}
           <Box sx={{ mb: 4 }}>
@@ -525,6 +521,5 @@ export default function Dashboard() {
           )}
         </Box>
       </AccessControl>
-    </ThemeProvider>
   );
 }

@@ -26,8 +26,6 @@ import {
   Snackbar,
   TextField,
   CircularProgress,
-  ThemeProvider,
-  CssBaseline,
   Card,
   Grid,
   CardContent,
@@ -75,7 +73,6 @@ import {
   ArrowDownward as ArrowDownwardIcon,
   Sort as SortIcon
 } from '@mui/icons-material';
-import globalTheme from '../styles/globalTheme';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
@@ -1893,9 +1890,7 @@ export default function Staging() {
 
   return (
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
-      <ThemeProvider theme={globalTheme}>
-        <CssBaseline />
-        <Box className="staging-page" sx={{ p: 3 }}>
+      <Box className="staging-page" sx={{ p: 3 }}>
           <Box mb={3} display="flex" alignItems="center" justifyContent="space-between">
             <Box>
               <Typography variant="h4" gutterBottom sx={{ fontWeight: 700, color: '#042742' }}>
@@ -2606,7 +2601,6 @@ export default function Staging() {
             </Alert>
           </Snackbar>
         </Box>
-      </ThemeProvider>
     </AccessControl>
   );
 }

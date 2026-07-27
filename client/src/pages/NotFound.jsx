@@ -3,20 +3,15 @@ import {
   Box,
   Button,
   Typography,
-  ThemeProvider,
-  CssBaseline,
   Container,
 } from '@mui/material';
-import authTheme from '../styles/authTheme';
 import UConsultingLogo from '../components/UConsultingLogo';
 
 export default function NotFound() {
   const navigate = useNavigate();
 
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -49,6 +44,5 @@ export default function NotFound() {
           </Box>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 }

@@ -549,7 +549,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                     />
@@ -559,7 +559,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                       title={`${config.previewTitle}`}
