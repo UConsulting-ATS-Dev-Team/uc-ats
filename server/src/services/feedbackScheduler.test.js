@@ -1,18 +1,219 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../prismaClient.js', () => {
-  const p = {
-    applicationFeedbackJob: {
-      create: vi.fn(),
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-      findFirst: vi.fn(),
-      count: vi.fn(),
-      update: vi.fn(),
-      updateMany: vi.fn(),
+  function uid(prefix = 'id') {
+    return `${prefix}-${++state.idCounter}`;
+  }
+
+  function datesEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return new Date(a).getTime() === new Date(b).getTime();
+  }
+
+  function matches(record, where) {
+    if (!where) return true;
+
+    for (const [key, value] of Object.entries(where)) {
+      if (key === 'OR') {
+        if (!value.some((cond) => matches(record, cond))) return false;
+        continue;
+      }
+      if (key === 'AND') {
+        if (!value.every((cond) => matches(record, cond))) return false;
+        continue;
+      }
+      if (key === 'NOT') {
+        if (matches(record, value)) return false;
+        continue;
+      }
+      if (key === 'applicationId_type_decisionSentAt') {
+        const w = value;
+        if (
+          record.applicationId !== w.applicationId ||
+          record.type !== w.type ||
+          !datesEqual(record.decisionSentAt, w.decisionSentAt)
+        ) {
+          return false;
+        }
+        continue;
+      }
+      if (key === 'id') {
+        if (typeof value === 'string' && record.id !== value) return false;
+        if (value?.in && !value.in.includes(record.id)) return false;
+        continue;
+      }
+      if (key === 'jobId') {
+        if (typeof value === 'string' && record.jobId !== value) return false;
+        if (value?.in && !value.in.includes(record.jobId)) return false;
+        continue;
+      }
+      if (key === 'status') {
+        if (value?.in && !value.in.includes(record.status)) return false;
+        if (!value?.in && record.status !== value) return false;
+        continue;
+      }
+      if (key === 'dueAt' && value?.lte !== undefined) {
+        const rec = record.dueAt ? new Date(record.dueAt).getTime() : null;
+        if (rec === null || rec > new Date(value.lte).getTime()) return false;
+        continue;
+      }
+      if (key === 'claimedAt') {
+        if (value === null && record.claimedAt !== null) return false;
+        if (value?.lte !== undefined) {
+          const rec = record.claimedAt ? new Date(record.claimedAt).getTime() : -Infinity;
+          if (rec > new Date(value.lte).getTime()) return false;
+        }
+        continue;
+      }
+      if (key === 'decisionSentAt' && value?.lte !== undefined) {
+        const rec = record.decisionSentAt ? new Date(record.decisionSentAt).getTime() : null;
+        if (rec === null || rec > new Date(value.lte).getTime()) return false;
+        continue;
+      }
+      if (record[key] !== value) return false;
+    }
+
+    return true;
+  }
+
+  function applyData(record, data) {
+    for (const [key, value] of Object.entries(data)) {
+      if (value && typeof value === 'object' && 'increment' in value) {
+        record[key] = (record[key] || 0) + value.increment;
+      } else if (['dueAt', 'sentAt', 'decisionSentAt', 'claimedAt', 'attemptedAt', 'createdAt', 'updatedAt'].includes(key)) {
+        record[key] = value ? new Date(value) : null;
+      } else {
+        record[key] = value;
+      }
+    }
+    if ('updatedAt' in record) record.updatedAt = new Date();
+  }
+
+  function applyInclude(record, include) {
+    if (!include) return record;
+    const copy = { ...record };
+    if (include.application) copy.application = state.applications.find((a) => a.id === record.applicationId) || null;
+    if (include.cycle) copy.cycle = state.cycles.find((c) => c.id === record.cycleId) || null;
+    if (include.deliveryAttempts) {
+      copy.deliveryAttempts = state.attempts
+        .filter((a) => a.jobId === record.id)
+        .sort((a, b) => new Date(b.attemptedAt).getTime() - new Date(a.attemptedAt).getTime());
+    }
+    if (include.job) copy.job = state.jobs.find((j) => j.id === record.jobId) || null;
+    return copy;
+  }
+
+  function queryStore(store, { where, orderBy, skip, take, include, select } = {}) {
+    let result = store.filter((r) => matches(r, where));
+    if (orderBy) {
+      const [key, dir] = Object.entries(orderBy)[0];
+      result = result.slice().sort((a, b) => {
+        const av = a[key] ? new Date(a[key]).getTime() : (dir === 'asc' ? -Infinity : Infinity);
+        const bv = b[key] ? new Date(b[key]).getTime() : (dir === 'asc' ? -Infinity : Infinity);
+        return dir === 'asc' ? av - bv : bv - av;
+      });
+    }
+    if (skip) result = result.slice(skip);
+    if (take !== undefined) result = result.slice(0, take);
+    return result.map((r) => applyInclude(r, include));
+  }
+
+  function createStoreMethods(store, { defaults = {}, uniqueKeys = [] } = {}) {
+    return {
+      create: vi.fn(async ({ data }) => {
+        for (const keys of uniqueKeys) {
+          if (keys.every((k) => data[k] !== undefined) && store.some((r) => keys.every((k) => {
+            const a = r[k];
+            const b = data[k];
+            if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+            return a === b;
+          }))) {
+            const error = new Error('Unique constraint failed');
+            error.code = 'P2002';
+            error.meta = { target: keys };
+            throw error;
+          }
+        }
+
+        const record = {
+          id: data.id || uid(store === state.jobs ? 'job' : store === state.attempts ? 'attempt' : 'record'),
+          ...defaults,
+          ...data,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        if (record.decisionSentAt) record.decisionSentAt = new Date(record.decisionSentAt);
+        if (record.dueAt) record.dueAt = new Date(record.dueAt);
+        if (record.sentAt) record.sentAt = new Date(record.sentAt);
+        if (record.claimedAt) record.claimedAt = new Date(record.claimedAt);
+        if (record.attemptedAt) record.attemptedAt = new Date(record.attemptedAt);
+        store.push(record);
+        return { ...record };
+      }),
+      findUnique: vi.fn(async ({ where, include }) => {
+        let record;
+        if (where.id) {
+          record = store.find((r) => r.id === where.id);
+        } else if (where.applicationId_type_decisionSentAt) {
+          record = store.find((r) => matches(r, where));
+        }
+        return record ? applyInclude(record, include) : null;
+      }),
+      findMany: vi.fn(async (args = {}) => queryStore(store, args)),
+      findFirst: vi.fn(async (args = {}) => queryStore(store, args)[0] || null),
+      count: vi.fn(async ({ where } = {}) => store.filter((r) => matches(r, where)).length),
+      update: vi.fn(async ({ where, data, include }) => {
+        const record = store.find((r) => r.id === where.id);
+        if (!record) throw new Error('Record not found');
+        applyData(record, data);
+        return applyInclude(record, include);
+      }),
+      updateMany: vi.fn(async ({ where, data }) => {
+        const matchesArr = store.filter((r) => matches(r, where));
+        matchesArr.forEach((r) => applyData(r, data));
+        return { count: matchesArr.length };
+      }),
+      deleteMany: vi.fn(async ({ where } = {}) => {
+        const before = store.length;
+        const remaining = store.filter((r) => !matches(r, where));
+        store.length = 0;
+        store.push(...remaining);
+        return { count: before - store.length };
+      }),
+    };
+  }
+
+  const state = {
+    idCounter: 0,
+    jobs: [],
+    attempts: [],
+    applications: [],
+    cycles: [],
+    reset: () => {
+      state.idCounter = 0;
+      state.jobs.length = 0;
+      state.attempts.length = 0;
+      state.applications.length = 0;
+      state.cycles.length = 0;
     },
   };
-  p.$transaction = vi.fn((callback) => callback(p));
+
+  const p = {
+    __state: state,
+    applicationFeedbackJob: createStoreMethods(state.jobs, {
+      uniqueKeys: [['applicationId', 'type', 'decisionSentAt']],
+    }),
+    applicationFeedbackDeliveryAttempt: createStoreMethods(state.attempts),
+    application: createStoreMethods(state.applications),
+    recruitingCycle: createStoreMethods(state.cycles),
+  };
+
+  p.$transaction = vi.fn((arg) => {
+    if (Array.isArray(arg)) return Promise.all(arg.map((promise) => Promise.resolve(promise)));
+    return Promise.resolve(arg(p));
+  });
+
   return { default: p };
 });
 
@@ -30,146 +231,159 @@ import {
   getFeedbackJobs,
   retryFeedbackJob,
   JOB_STATUS,
+  ATTEMPT_STATUS,
   FEEDBACK_JOB_TYPE,
 } from './feedbackScheduler.js';
 
 const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
 
+function resetState() {
+  prisma.__state.reset();
+  vi.clearAllMocks();
+}
+
 function applicationFixture(overrides = {}) {
   return {
-    id: 'app-1',
     status: 'ACCEPTED',
     firstName: 'Jane',
     lastName: 'Doe',
     email: 'jane@example.com',
+    decisionSentAt: new Date('2026-07-27T10:00:00.000Z'),
     ...overrides,
   };
 }
 
 function cycleFixture(overrides = {}) {
   return {
-    id: 'cycle-1',
     name: 'Fall 2026',
     feedbackFormUrl: 'https://forms.example.com/feedback',
     ...overrides,
   };
 }
 
-function jobFixture(overrides = {}) {
-  return {
-    id: 'job-1',
-    type: FEEDBACK_JOB_TYPE,
-    status: JOB_STATUS.PENDING,
-    dueAt: new Date('2026-07-25T10:00:00.000Z'),
-    attempts: 0,
-    application: applicationFixture(),
-    cycle: cycleFixture(),
-    ...overrides,
-  };
+async function seedApplication(overrides = {}) {
+  return prisma.application.create({ data: applicationFixture(overrides) });
+}
+
+async function seedCycle(overrides = {}) {
+  return prisma.recruitingCycle.create({ data: cycleFixture(overrides) });
+}
+
+async function seedJob(overrides = {}) {
+  const app = overrides.application || (await seedApplication());
+  const cycle = overrides.cycle || (await seedCycle());
+  const decisionSentAt = overrides.decisionSentAt || new Date('2026-07-27T10:00:00.000Z');
+  return prisma.applicationFeedbackJob.create({
+    data: {
+      applicationId: app.id,
+      cycleId: cycle.id,
+      type: FEEDBACK_JOB_TYPE,
+      status: JOB_STATUS.PENDING,
+      dueAt: new Date(decisionSentAt.getTime() + FEEDBACK_DELAY_MS),
+      decisionSentAt,
+      feedbackFormUrl: cycle.feedbackFormUrl,
+      ...overrides,
+    },
+  });
 }
 
 describe('scheduleFeedbackRequest', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetState();
   });
 
   it('creates a PENDING feedback job due 48 hours after decisionSentAt for ACCEPTED', async () => {
-    const application = applicationFixture({ status: 'ACCEPTED' });
-    const cycle = cycleFixture();
+    const app = await seedApplication();
+    const cycle = await seedCycle();
     const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
-    prisma.applicationFeedbackJob.create.mockResolvedValue({ id: 'job-1' });
 
-    await scheduleFeedbackRequest(application, cycle, decisionSentAt);
+    const job = await scheduleFeedbackRequest(app, cycle, decisionSentAt);
 
-    expect(prisma.applicationFeedbackJob.create).toHaveBeenCalledTimes(1);
-    const data = prisma.applicationFeedbackJob.create.mock.calls[0][0].data;
-    expect(data.applicationId).toBe('app-1');
-    expect(data.cycleId).toBe('cycle-1');
-    expect(data.type).toBe(FEEDBACK_JOB_TYPE);
-    expect(data.status).toBe(JOB_STATUS.PENDING);
-    expect(data.feedbackFormUrl).toBe(cycle.feedbackFormUrl);
-    expect(data.dueAt.getTime()).toBe(decisionSentAt.getTime() + FEEDBACK_DELAY_MS);
-    expect(data.decisionSentAt.getTime()).toBe(decisionSentAt.getTime());
+    expect(job.status).toBe(JOB_STATUS.PENDING);
+    expect(job.applicationId).toBe(app.id);
+    expect(job.feedbackFormUrl).toBe(cycle.feedbackFormUrl);
+    expect(job.dueAt.getTime()).toBe(decisionSentAt.getTime() + FEEDBACK_DELAY_MS);
+    expect(prisma.__state.jobs).toHaveLength(1);
   });
 
   it('creates a PENDING feedback job for REJECTED', async () => {
-    const application = applicationFixture({ status: 'REJECTED' });
-    const cycle = cycleFixture();
-    const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
-    prisma.applicationFeedbackJob.create.mockResolvedValue({ id: 'job-2' });
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
 
-    await scheduleFeedbackRequest(application, cycle, decisionSentAt);
+    const job = await scheduleFeedbackRequest(app, cycle, new Date());
 
-    expect(prisma.applicationFeedbackJob.create).toHaveBeenCalledTimes(1);
-    expect(prisma.applicationFeedbackJob.create.mock.calls[0][0].data.status).toBe(JOB_STATUS.PENDING);
+    expect(job.status).toBe(JOB_STATUS.PENDING);
   });
 
-  it('cancels pending jobs and returns null when status is not final', async () => {
-    const application = applicationFixture({ status: 'UNDER_REVIEW' });
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
+  it('creates a FAILED job when the feedback form URL is missing or not allowed', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle({ feedbackFormUrl: 'not-a-url' });
 
-    const result = await scheduleFeedbackRequest(application, cycleFixture(), new Date());
+    const job = await scheduleFeedbackRequest(app, cycle, new Date());
+
+    expect(job.status).toBe(JOB_STATUS.FAILED);
+    expect(job.lastError).toMatch(/missing or not allowed/);
+  });
+
+  it('cancels pending jobs and returns null for non-final status', async () => {
+    const app = await seedApplication({ status: 'UNDER_REVIEW' });
+    const existing = await seedJob({ applicationId: app.id, status: JOB_STATUS.PENDING });
+
+    const result = await scheduleFeedbackRequest(app, await seedCycle(), new Date());
 
     expect(result).toBeNull();
-    expect(prisma.applicationFeedbackJob.updateMany).toHaveBeenCalledWith({
-      where: {
-        applicationId: 'app-1',
-        type: FEEDBACK_JOB_TYPE,
-        status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.FAILED] },
-      },
-      data: { status: JOB_STATUS.CANCELLED, lastError: null },
-    });
+    const cancelled = prisma.__state.jobs.find((j) => j.id === existing.id);
+    expect(cancelled.status).toBe(JOB_STATUS.CANCELLED);
   });
 
   it('returns the existing job when the same decisionSend is scheduled twice', async () => {
-    const application = applicationFixture();
-    const cycle = cycleFixture();
+    const app = await seedApplication();
+    const cycle = await seedCycle();
     const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
-    const existing = { id: 'job-3' };
 
-    prisma.applicationFeedbackJob.create
-      .mockRejectedValueOnce({ code: 'P2002' })
-      .mockRejectedValueOnce({ code: 'P2002' });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(existing);
+    const first = await scheduleFeedbackRequest(app, cycle, decisionSentAt);
+    const second = await scheduleFeedbackRequest(app, cycle, decisionSentAt);
 
-    const first = await scheduleFeedbackRequest(application, cycle, decisionSentAt);
-    const second = await scheduleFeedbackRequest(application, cycle, decisionSentAt);
-
-    expect(prisma.applicationFeedbackJob.create).toHaveBeenCalledTimes(2);
-    expect(second).toBe(existing);
-    expect(first).toBe(existing);
+    expect(prisma.__state.jobs).toHaveLength(1);
+    expect(second.id).toBe(first.id);
   });
 });
 
 describe('handleApplicationStatusChange', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetState();
   });
 
-  it('cancels pending jobs when status changes away from final', async () => {
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    await handleApplicationStatusChange('app-1', 'WAITLISTED');
-    expect(prisma.applicationFeedbackJob.updateMany).toHaveBeenCalledWith({
-      where: {
-        applicationId: 'app-1',
-        type: FEEDBACK_JOB_TYPE,
-        status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.FAILED] },
-      },
-      data: { status: JOB_STATUS.CANCELLED, lastError: null },
+  it('cancels pending jobs and their attempts when status changes away from final', async () => {
+    const app = await seedApplication({ status: 'WAITLISTED' });
+    const job = await seedJob({ applicationId: app.id, status: JOB_STATUS.PENDING });
+    await prisma.applicationFeedbackDeliveryAttempt.create({
+      data: { jobId: job.id, status: ATTEMPT_STATUS.PENDING, feedbackFormUrl: job.feedbackFormUrl },
     });
+
+    await handleApplicationStatusChange(app.id, 'WAITLISTED');
+
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.CANCELLED);
+    expect(updated.claimToken).toBeNull();
+    const attempt = prisma.__state.attempts.find((a) => a.jobId === job.id);
+    expect(attempt.status).toBe(ATTEMPT_STATUS.CANCELLED);
   });
 
   it('does nothing for final statuses', async () => {
-    await handleApplicationStatusChange('app-1', 'ACCEPTED');
-    expect(prisma.applicationFeedbackJob.updateMany).not.toHaveBeenCalled();
+    const app = await seedApplication();
+    await seedJob({ applicationId: app.id });
+    await handleApplicationStatusChange(app.id, 'ACCEPTED');
+    expect(prisma.__state.jobs[0].status).toBe(JOB_STATUS.PENDING);
   });
 });
 
 describe('processFeedbackJobs', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetState();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
+    sendApplicantFeedbackRequest.mockResolvedValue({ success: true, messageId: 'msg-1' });
   });
 
   afterEach(() => {
@@ -177,136 +391,215 @@ describe('processFeedbackJobs', () => {
   });
 
   it('processes overdue PENDING jobs and sends the feedback email', async () => {
-    const job = jobFixture();
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([job]);
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(job);
-    sendApplicantFeedbackRequest.mockResolvedValue({ success: true, messageId: 'msg-1' });
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
 
     const results = await processFeedbackJobs();
 
-    expect(prisma.applicationFeedbackJob.findMany).toHaveBeenCalledWith({
-      where: { status: JOB_STATUS.PENDING, dueAt: { lte: new Date('2026-07-28T10:00:00.000Z') } },
-      orderBy: { dueAt: 'asc' },
-      include: { application: true, cycle: true },
-    });
-    expect(prisma.applicationFeedbackJob.updateMany).toHaveBeenCalledWith({
-      where: { id: 'job-1', status: JOB_STATUS.PENDING },
-      data: { status: JOB_STATUS.PROCESSING, attempts: { increment: 1 } },
-    });
     expect(sendApplicantFeedbackRequest).toHaveBeenCalledWith(
       'jane@example.com',
       'Jane Doe',
       'Fall 2026',
       'https://forms.example.com/feedback'
     );
-    expect(prisma.applicationFeedbackJob.update).toHaveBeenCalledWith({
-      where: { id: 'job-1' },
-      data: { status: JOB_STATUS.SENT, sentAt: new Date('2026-07-28T10:00:00.000Z'), lastError: null },
-    });
-    expect(results).toEqual([{ id: 'job-1', action: 'sent', messageId: 'msg-1' }]);
+    expect(results[0].action).toBe('sent');
+    expect(results[0].messageId).toBe('msg-1');
+
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
+    expect(updated.messageId).toBe('msg-1');
+
+    const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.SENT);
+    expect(attempts[0].messageId).toBe('msg-1');
+    expect(attempts[0].feedbackFormUrl).toBe('https://forms.example.com/feedback');
   });
 
-  it('skips a job already claimed by another worker instance', async () => {
-    const job = jobFixture();
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([job]);
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 0 });
-
-    const results = await processFeedbackJobs();
-
-    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
-    expect(prisma.applicationFeedbackJob.update).not.toHaveBeenCalled();
-    expect(results).toEqual([{ id: 'job-1', action: 'skipped', reason: 'already claimed or no longer pending' }]);
-  });
-
-  it('records a FAILED job when the feedback form URL is missing', async () => {
-    const job = jobFixture({ cycle: cycleFixture({ feedbackFormUrl: null }) });
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([job]);
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(job);
-
-    const results = await processFeedbackJobs();
-
-    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
-    expect(prisma.applicationFeedbackJob.update).toHaveBeenCalledWith({
-      where: { id: 'job-1' },
-      data: { status: JOB_STATUS.FAILED, lastError: 'Feedback form URL is not configured for this cycle' },
+  it('uses the immutable feedbackFormUrl snapshot even if the cycle config changes', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      dueAt: new Date('2026-07-26T10:00:00.000Z'),
+      feedbackFormUrl: 'https://snapshot.example.com/feedback',
     });
-    expect(results[0].action).toBe('failed');
+
+    // Change the cycle config after scheduling.
+    await prisma.recruitingCycle.update({
+      where: { id: cycle.id },
+      data: { feedbackFormUrl: 'https://new.example.com/feedback' },
+    });
+
+    await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledWith(
+      'jane@example.com',
+      'Jane Doe',
+      'Fall 2026',
+      'https://snapshot.example.com/feedback'
+    );
+
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
   });
 
   it('records a FAILED job when the applicant email is invalid', async () => {
-    const job = jobFixture({ application: applicationFixture({ email: 'not-an-email' }) });
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([job]);
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(job);
+    const app = await seedApplication({ email: 'not-an-email' });
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
 
     const results = await processFeedbackJobs();
 
     expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
     expect(results[0].action).toBe('failed');
     expect(results[0].error).toMatch(/Invalid or missing applicant email/);
+
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.FAILED);
+    const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.FAILED);
   });
 
-  it('records a FAILED job and does not crash when the provider fails', async () => {
-    const job = jobFixture();
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([job]);
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(job);
+  it('records a FAILED job when the provider fails', async () => {
     sendApplicantFeedbackRequest.mockResolvedValue({ success: false, error: 'SES timeout' });
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
 
     const results = await processFeedbackJobs();
 
     expect(sendApplicantFeedbackRequest).toHaveBeenCalled();
-    expect(prisma.applicationFeedbackJob.update).toHaveBeenCalledWith({
-      where: { id: 'job-1' },
-      data: { status: JOB_STATUS.FAILED, lastError: 'SES timeout' },
-    });
     expect(results[0].action).toBe('failed');
+    expect(results[0].error).toBe('SES timeout');
+
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.FAILED);
+    expect(updated.lastError).toBe('SES timeout');
   });
 
-  it('processes only jobs whose dueAt has passed', async () => {
-    vi.setSystemTime(new Date('2026-07-24T10:00:00.000Z'));
-    const job = jobFixture({ dueAt: new Date('2026-07-25T10:00:00.000Z') });
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue([]);
+  it('cancels the send when the application status is reversed before the send boundary', async () => {
+    const app = await seedApplication({ status: 'WAITLISTED' });
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
 
-    await processFeedbackJobs();
+    const results = await processFeedbackJobs();
 
-    const where = prisma.applicationFeedbackJob.findMany.mock.calls[0][0].where;
-    expect(where.dueAt.lte.getTime()).toBe(new Date('2026-07-24T10:00:00.000Z').getTime());
     expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results[0].action).toBe('cancelled');
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.CANCELLED);
+    expect(updated.lastError).toMatch(/eligibility changed/);
+  });
+
+  it('reconciles a PROCESSING job with a SENT delivery attempt without resending', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      dueAt: new Date('2026-07-26T10:00:00.000Z'),
+      status: JOB_STATUS.PROCESSING,
+      claimToken: 'token-1',
+      claimedAt: new Date('2026-07-25T10:00:00.000Z'),
+    });
+    await prisma.applicationFeedbackDeliveryAttempt.create({
+      data: {
+        jobId: job.id,
+        claimToken: 'token-1',
+        status: ATTEMPT_STATUS.SENT,
+        messageId: 'msg-2',
+        attemptedAt: new Date('2026-07-25T10:01:00.000Z'),
+        feedbackFormUrl: job.feedbackFormUrl,
+      },
+    });
+
+    const results = await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
+    expect(updated.messageId).toBe('msg-2');
+  });
+
+  it('resets a stale PROCESSING job without a SENT attempt back to PENDING', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      dueAt: new Date('2026-07-26T10:00:00.000Z'),
+      status: JOB_STATUS.PROCESSING,
+      claimToken: 'token-1',
+      claimedAt: new Date('2026-07-25T10:00:00.000Z'),
+    });
+
+    const results = await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalled();
+    expect(results[0].action).toBe('sent');
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
+  });
+
+  it('does not resend when provider succeeds but the job SENT state write fails', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    const originalUpdateMany = prisma.applicationFeedbackJob.updateMany;
+    prisma.applicationFeedbackJob.updateMany = vi.fn(async (args) => {
+      if (args?.data?.status === JOB_STATUS.SENT) {
+        return { count: 0 };
+      }
+      return originalUpdateMany(args);
+    });
+
+    const first = await processFeedbackJobs();
+    expect(first[0].action).toBe('sent');
+    expect(first[0].note).toMatch(/job state changed after delivery/);
+
+    // Restore and run reconciliation; the SENT attempt should keep the email from being retried.
+    prisma.applicationFeedbackJob.updateMany = originalUpdateMany;
+    const second = await processFeedbackJobs();
+    expect(second).toEqual([]);
+
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
+    expect(updated.messageId).toBe('msg-1');
   });
 });
 
 describe('getFeedbackJobs', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetState();
   });
 
-  it('returns paginated jobs filtered by cycle and status', async () => {
-    const jobs = [{ id: 'job-1' }];
-    prisma.applicationFeedbackJob.findMany.mockResolvedValue(jobs);
-    prisma.applicationFeedbackJob.count.mockResolvedValue(1);
-
-    const result = await getFeedbackJobs({ cycleId: 'cycle-1', status: 'PENDING', page: 1, limit: 10 });
-
-    expect(prisma.applicationFeedbackJob.findMany).toHaveBeenCalledWith({
-      where: { type: FEEDBACK_JOB_TYPE, cycleId: 'cycle-1', status: 'PENDING' },
-      orderBy: { dueAt: 'asc' },
-      skip: 0,
-      take: 10,
-      include: {
-        application: { select: { id: true, firstName: true, lastName: true, email: true, status: true } },
-        cycle: { select: { id: true, name: true, feedbackFormUrl: true } },
-      },
+  it('returns paginated jobs filtered by cycle and status with attempts', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id });
+    await prisma.applicationFeedbackDeliveryAttempt.create({
+      data: { jobId: job.id, status: ATTEMPT_STATUS.PENDING, feedbackFormUrl: job.feedbackFormUrl },
     });
-    expect(result).toEqual({ jobs, total: 1, page: 1, limit: 10, totalPages: 1 });
+
+    const result = await getFeedbackJobs({ cycleId: cycle.id, status: JOB_STATUS.PENDING, page: 1, limit: 10 });
+
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].id).toBe(job.id);
+    expect(result.jobs[0].deliveryAttempts).toHaveLength(1);
+    expect(result.total).toBe(1);
+    expect(result.totalPages).toBe(1);
   });
 });
 
 describe('retryFeedbackJob', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetState();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
   });
@@ -315,28 +608,34 @@ describe('retryFeedbackJob', () => {
     vi.useRealTimers();
   });
 
-  it('resets a FAILED job to PENDING with dueAt now', async () => {
-    const job = { id: 'job-1', type: FEEDBACK_JOB_TYPE, status: JOB_STATUS.FAILED };
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 1 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue(job);
-
-    const result = await retryFeedbackJob('job-1');
-
-    expect(prisma.applicationFeedbackJob.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: 'job-1',
-        type: FEEDBACK_JOB_TYPE,
-        status: { in: [JOB_STATUS.FAILED, JOB_STATUS.CANCELLED, JOB_STATUS.PENDING] },
-      },
-      data: { status: JOB_STATUS.PENDING, dueAt: new Date('2026-07-28T10:00:00.000Z'), lastError: null },
+  it('resets a FAILED job to PENDING with dueAt now and refreshes the form URL snapshot', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      status: JOB_STATUS.FAILED,
+      lastError: 'old error',
+      feedbackFormUrl: 'https://old.example.com/feedback',
     });
-    expect(result).toBe(job);
+
+    await prisma.recruitingCycle.update({
+      where: { id: cycle.id },
+      data: { feedbackFormUrl: 'https://new.example.com/feedback' },
+    });
+
+    const result = await retryFeedbackJob(job.id);
+
+    expect(result.status).toBe(JOB_STATUS.PENDING);
+    expect(result.dueAt.getTime()).toBe(new Date('2026-07-28T10:00:00.000Z').getTime());
+    expect(result.lastError).toBeNull();
+    expect(result.feedbackFormUrl).toBe('https://new.example.com/feedback');
   });
 
   it('throws when retrying a SENT job', async () => {
-    prisma.applicationFeedbackJob.updateMany.mockResolvedValue({ count: 0 });
-    prisma.applicationFeedbackJob.findUnique.mockResolvedValue({ id: 'job-1', status: JOB_STATUS.SENT });
-
-    await expect(retryFeedbackJob('job-1')).rejects.toThrow(/Cannot retry job in status SENT/);
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.SENT });
+    await expect(retryFeedbackJob(job.id)).rejects.toThrow(/Cannot retry job in status SENT/);
   });
 });

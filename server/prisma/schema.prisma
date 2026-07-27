@@ -146,25 +146,45 @@ model RecruitingCycle {
 }
 
 model ApplicationFeedbackJob {
-  id             String       @id @default(uuid())
+  id             String                          @id @default(uuid())
   applicationId  String
   cycleId        String?
   type           String
-  status         String       @default("PENDING")
+  status         String                          @default("PENDING")
   dueAt          DateTime
   sentAt         DateTime?
-  attempts       Int          @default(0)
+  attempts       Int                             @default(0)
   lastError      String?
   decisionSentAt DateTime
   feedbackFormUrl String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  application    Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  cycle          RecruitingCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  claimToken     String?
+  claimedAt      DateTime?
+  messageId      String?
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @updatedAt
+  application    Application                     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  cycle          RecruitingCycle?                @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  deliveryAttempts ApplicationFeedbackDeliveryAttempt[]
 
   @@unique([applicationId, type, decisionSentAt])
   @@index([status, dueAt])
+  @@index([status, claimedAt])
   @@map("application_feedback_jobs")
+}
+
+model ApplicationFeedbackDeliveryAttempt {
+  id             String               @id @default(uuid())
+  jobId          String
+  claimToken     String?              @unique
+  status         String               @default("PENDING")
+  messageId      String?
+  error          String?
+  feedbackFormUrl String?
+  attemptedAt    DateTime             @default(now())
+  job            ApplicationFeedbackJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, attemptedAt])
+  @@map("application_feedback_delivery_attempts")
 }
 
 model Comment {
