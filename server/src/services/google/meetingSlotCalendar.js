@@ -9,6 +9,15 @@ import {
 const DEFAULT_SLOT_DURATION_MS = 30 * 60 * 1000;
 const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
 
+// Google Calendar event IDs must be base32hex: lowercase a-v and 0-9, 5-1024 chars.
+export function deriveCalendarEventId(slotId) {
+  if (!slotId) return null;
+  const cleaned = String(slotId).toLowerCase().replace(/[^a-v0-9]/g, '');
+  if (cleaned.length < 5) return null;
+  if (cleaned.length > 1024) return cleaned.slice(0, 1024);
+  return cleaned;
+}
+
 function buildSlotEventDetails(slot) {
   const start = slot.startTime ? new Date(slot.startTime) : null;
   const end = slot.endTime
@@ -55,11 +64,12 @@ async function persistSyncStatus(slotId, data) {
 
 async function recordFailure(slot, error, extra = {}) {
   const retryCount = (slot.calendarRetryCount || 0) + 1;
+  const retryAt = nextRetryAt(retryCount - 1);
   const payload = {
     calendarSyncStatus: 'FAILED',
     calendarSyncError: String(error).slice(0, 1000),
     calendarRetryCount: retryCount,
-    calendarRetryAt: nextRetryAt(retryCount - 1),
+    calendarRetryAt: retryAt,
     ...extra,
   };
   try {
@@ -67,6 +77,18 @@ async function recordFailure(slot, error, extra = {}) {
   } catch (dbError) {
     console.error(`[meetingSlotCalendar] failed to persist failure for slot ${slot.id}:`, dbError);
   }
+  return retryAt;
+}
+
+export function calendarSyncResponse(syncResult) {
+  const needsWarning = !syncResult.success || (syncResult.status !== 'SYNCED' && syncResult.status !== 'CANCELLED');
+  return {
+    status: syncResult.status,
+    eventId: syncResult.eventId || null,
+    error: syncResult.success ? null : syncResult.error,
+    warning: needsWarning ? (syncResult.error || `Calendar sync is ${syncResult.status}`) : null,
+    retryAt: syncResult.retryAt || null,
+  };
 }
 
 export async function syncMeetingSlotCalendar(slotId, { force = false } = {}) {
@@ -94,7 +116,12 @@ export async function syncMeetingSlotCalendar(slotId, { force = false } = {}) {
     slot.calendarRetryAt &&
     new Date() < new Date(slot.calendarRetryAt)
   ) {
-    return { success: false, status: 'FAILED', error: 'Retry backoff active' };
+    return {
+      success: false,
+      status: 'FAILED',
+      error: 'Retry backoff active',
+      retryAt: slot.calendarRetryAt,
+    };
   }
 
   // Until GOOGLE_CALENDAR_ID is configured, do not call the provider.
@@ -111,23 +138,23 @@ export async function syncMeetingSlotCalendar(slotId, { force = false } = {}) {
 
   const eventDetails = buildSlotEventDetails(slot);
   const attendeeEmails = getAttendeeEmails(slot);
-  let eventId = null;
 
+  // Derive a deterministic Google-compatible event ID from the slot UUID so that
+  // retries are idempotent even when the local state write fails.
+  const providerEventId = slot.calendarEventId || deriveCalendarEventId(slot.id);
+  if (!providerEventId) {
+    return { success: false, status: 'FAILED', error: 'Could not derive a valid calendar event ID' };
+  }
+
+  let eventId = null;
   try {
-    if (slot.calendarEventId) {
-      eventId = await updateCalendarEvent(slot.calendarEventId, eventDetails, attendeeEmails);
-      if (!eventId) {
-        return { success: true, status: 'SYNCED', eventId: slot.calendarEventId };
-      }
-    } else {
-      eventId = await createCalendarEvent(eventDetails, attendeeEmails);
-      if (!eventId) {
-        return { success: true, status: 'NOT_CONFIGURED', eventId: null };
-      }
+    eventId = await updateCalendarEvent(providerEventId, eventDetails, attendeeEmails);
+    if (!eventId) {
+      return { success: true, status: 'SYNCED', eventId: providerEventId };
     }
   } catch (providerError) {
-    await recordFailure(slot, providerError);
-    return { success: false, status: 'FAILED', error: providerError.message || String(providerError) };
+    const retryAt = await recordFailure(slot, providerError);
+    return { success: false, status: 'FAILED', error: providerError.message || String(providerError), retryAt };
   }
 
   try {
@@ -140,22 +167,13 @@ export async function syncMeetingSlotCalendar(slotId, { force = false } = {}) {
     });
     return { success: true, status: 'SYNCED', eventId };
   } catch (dbError) {
-    // If we just created a brand new event, try to roll it back so we don't
-    // leave an orphan invite or create duplicates on the next retry.
-    if (!slot.calendarEventId && eventId) {
-      try {
-        await cancelCalendarEvent(eventId);
-      } catch (cancelError) {
-        console.error(
-          `[meetingSlotCalendar] failed to cancel orphan event ${eventId} after DB write failure for slot ${slot.id}:`,
-          cancelError
-        );
-      }
-    }
-    await recordFailure(slot, `DB write failure: ${dbError.message || String(dbError)}`, {
-      calendarEventId: slot.calendarEventId || eventId,
+    // With a deterministic event ID, the provider event can be re-associated on
+    // the next retry without creating a duplicate. Record the ID so the retry path
+    // can target it.
+    const retryAt = await recordFailure(slot, `DB write failure: ${dbError.message || String(dbError)}`, {
+      calendarEventId: eventId,
     });
-    return { success: false, status: 'FAILED', error: dbError.message || String(dbError) };
+    return { success: false, status: 'FAILED', error: dbError.message || String(dbError), retryAt, eventId };
   }
 }
 
@@ -178,25 +196,42 @@ export async function cancelMeetingSlotCalendar(slotId) {
     return { success: false, status: 'FAILED', error: 'Slot not found' };
   }
 
-  if (slot.calendarEventId) {
+  // A deterministic ID lets us retry cancellation later without losing the handle.
+  const providerEventId = slot.calendarEventId || deriveCalendarEventId(slot.id);
+
+  if (providerEventId) {
     try {
-      await cancelCalendarEvent(slot.calendarEventId);
+      await cancelCalendarEvent(providerEventId);
     } catch (providerError) {
-      await recordFailure(slot, providerError);
-      return { success: false, status: 'FAILED', error: providerError.message || String(providerError) };
+      const retryAt = await recordFailure(slot, providerError, {
+        calendarSyncStatus: 'CANCEL_PENDING',
+        calendarEventId: providerEventId,
+      });
+      return {
+        success: false,
+        status: 'CANCEL_PENDING',
+        error: providerError.message || String(providerError),
+        eventId: providerEventId,
+        retryAt,
+      };
     }
   }
 
   try {
     await persistSyncStatus(slot.id, {
+      calendarEventId: null,
       calendarSyncStatus: 'CANCELLED',
+      calendarSyncError: null,
       calendarRetryCount: 0,
       calendarRetryAt: null,
     });
-    return { success: true, status: 'CANCELLED' };
+    return { success: true, status: 'CANCELLED', eventId: null };
   } catch (dbError) {
-    console.error(`[meetingSlotCalendar] failed to persist cancellation for slot ${slot.id}:`, dbError);
-    return { success: false, status: 'FAILED', error: dbError.message || String(dbError) };
+    const retryAt = await recordFailure(slot, dbError, {
+      calendarSyncStatus: 'CANCEL_PENDING',
+      calendarEventId: providerEventId,
+    });
+    return { success: false, status: 'CANCEL_PENDING', error: dbError.message || String(dbError), eventId: providerEventId, retryAt };
   }
 }
 

@@ -7,6 +7,7 @@ import {
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
+import { syncMeetingSlotCalendar, calendarSyncResponse } from '../services/google/meetingSlotCalendar.js';
 
 const router = express.Router();
 
@@ -44,6 +45,9 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
         startTime: signup.slot.startTime,
         endTime: signup.slot.endTime,
         canModify: hoursUntil(signup.slot.startTime) >= MODIFY_CUTOFF_HOURS,
+        calendarSyncStatus: signup.slot.calendarSyncStatus,
+        calendarSyncError: signup.slot.calendarSyncError,
+        calendarRetryAt: signup.slot.calendarRetryAt,
       }));
 
     res.json(upcoming);
@@ -157,7 +161,14 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
       console.error('Failed to send notification email to member:', emailError);
     }
 
-    res.json({ success: true, signup, message: 'Successfully signed up! You will receive a confirmation email shortly.' });
+    const syncResult = await syncMeetingSlotCalendar(slot.id, { force: true });
+
+    res.json({
+      success: true,
+      signup,
+      message: 'Successfully signed up! You will receive a confirmation email shortly.',
+      calendarSync: calendarSyncResponse(syncResult),
+    });
   } catch (error) {
     if (error?.code === 'P2002') {
       return res.status(400).json({ error: 'You are already signed up for this slot' });
@@ -232,7 +243,13 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
       console.error('Failed to send cancellation notification to member:', emailError);
     }
 
-    res.json({ success: true, message: 'Your meeting has been cancelled.' });
+    const syncResult = await syncMeetingSlotCalendar(signup.slotId, { force: true });
+
+    res.json({
+      success: true,
+      message: 'Your meeting has been cancelled.',
+      calendarSync: calendarSyncResponse(syncResult),
+    });
   } catch (error) {
     console.error('[DELETE /api/my-meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to cancel signup' });

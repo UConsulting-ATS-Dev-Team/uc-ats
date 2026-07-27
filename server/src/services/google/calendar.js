@@ -14,10 +14,10 @@ async function getCalendarClient() {
   return calendarClient;
 }
 
-function buildEventResource({ eventName, eventLocation, eventStartDate, eventEndDate, cycleName }, attendeeEmails) {
+function buildEventResource({ eventName, eventLocation, eventStartDate, eventEndDate, cycleName }, attendeeEmails, eventId = null) {
   const description = `UConsulting Event: ${eventName}${cycleName ? `\nCycle: ${cycleName}` : ''}\n\nThis is a UConsulting recruitment event. You're receiving this invite because you're a relevant UConsulting member or admin.`;
 
-  return {
+  const resource = {
     summary: eventName,
     location: eventLocation || undefined,
     description,
@@ -25,6 +25,12 @@ function buildEventResource({ eventName, eventLocation, eventStartDate, eventEnd
     end: { dateTime: new Date(eventEndDate).toISOString(), timeZone: TIMEZONE },
     attendees: attendeeEmails.map((email) => ({ email })),
   };
+
+  if (eventId) {
+    resource.id = eventId;
+  }
+
+  return resource;
 }
 
 // Redirects real invites to a single test address when CALENDAR_INVITE_TEST_EMAIL is set,
@@ -46,19 +52,34 @@ export function isCalendarConfigured() {
 // Creates a Google Calendar event and invites attendeeEmails. Returns the created event's ID
 // (store this on the Events row so future updates patch it instead of duplicating it), or null
 // if GOOGLE_CALENDAR_ID isn't configured yet.
-export async function createCalendarEvent(eventDetails, attendeeEmails) {
+// If eventId is provided, it is used as the Google Calendar event ID, making the insert
+// deterministic and idempotent across retries (a 409 conflict means the event already exists).
+export async function createCalendarEvent(eventDetails, attendeeEmails, eventId = null) {
   if (!isCalendarConfigured()) {
     console.warn('[Calendar] GOOGLE_CALENDAR_ID not set — skipping calendar invite creation.');
     return null;
   }
 
   const calendar = await getCalendarClient();
-  const res = await calendar.events.insert({
-    calendarId: config.googleCalendarId,
-    sendUpdates: 'all',
-    requestBody: buildEventResource(eventDetails, resolveAttendees(attendeeEmails)),
-  });
-  return res.data.id;
+  try {
+    const res = await calendar.events.insert({
+      calendarId: config.googleCalendarId,
+      sendUpdates: 'all',
+      requestBody: buildEventResource(eventDetails, resolveAttendees(attendeeEmails), eventId),
+    });
+    return res.data.id;
+  } catch (error) {
+    if (isConflictError(error) && eventId) {
+      console.warn(`[Calendar] Event ${eventId} already exists — using existing event.`);
+      return eventId;
+    }
+    throw error;
+  }
+}
+
+function isConflictError(error) {
+  const status = error.code || error.response?.status;
+  return status === 409;
 }
 
 // Patches an existing Google Calendar event in place so already-invited attendees see an update
@@ -82,7 +103,7 @@ export async function updateCalendarEvent(calendarEventId, eventDetails, attende
   } catch (error) {
     if (isGoneError(error)) {
       console.warn(`[Calendar] Event ${calendarEventId} no longer exists on the calendar — recreating.`);
-      return createCalendarEvent(eventDetails, attendeeEmails);
+      return createCalendarEvent(eventDetails, attendeeEmails, calendarEventId);
     }
     throw error;
   }

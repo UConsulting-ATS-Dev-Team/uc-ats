@@ -4,6 +4,8 @@ import {
   cancelMeetingSlotCalendar,
   buildSlotEventDetails,
   getAttendeeEmails,
+  deriveCalendarEventId,
+  calendarSyncResponse,
 } from './meetingSlotCalendar.js';
 import {
   createCalendarEvent,
@@ -29,8 +31,11 @@ vi.mock('../../prismaClient.js', () => ({
   },
 }));
 
+const SLOT_ID = '550e8400-e29b-41d4-a716-446655440000';
+const DERIVED_EVENT_ID = SLOT_ID.toLowerCase().replace(/-/g, '');
+
 const baseSlot = {
-  id: 'slot-1',
+  id: SLOT_ID,
   memberId: 'member-1',
   location: 'Zoom',
   startTime: new Date('2026-08-01T17:00:00.000Z'),
@@ -75,28 +80,61 @@ describe('meetingSlotCalendar', () => {
     });
   });
 
+  describe('deriveCalendarEventId', () => {
+    it('derives a base32hex-compatible id from a slot uuid', () => {
+      const id = deriveCalendarEventId(SLOT_ID);
+      expect(id).toBe(DERIVED_EVENT_ID);
+      expect(id).toMatch(/^[a-v0-9]+$/);
+      expect(id.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('removes invalid characters from a non-uuid id', () => {
+      const id = deriveCalendarEventId('gtkuc_abc123-WXYZ');
+      expect(id).toBe('gtkucabc123');
+    });
+  });
+
+  describe('calendarSyncResponse', () => {
+    it('returns a warning for a failed sync', () => {
+      const result = calendarSyncResponse({ success: false, status: 'FAILED', error: 'Google is down', retryAt: null });
+      expect(result.warning).toBe('Google is down');
+      expect(result.error).toBe('Google is down');
+    });
+
+    it('returns no warning for a successful sync', () => {
+      const result = calendarSyncResponse({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+      expect(result.warning).toBeNull();
+      expect(result.error).toBeNull();
+    });
+  });
+
   describe('syncMeetingSlotCalendar', () => {
-    it('creates a calendar event when no eventId is stored', async () => {
+    it('creates a calendar event with a deterministic id when no eventId is stored', async () => {
       const signup = { email: 'Candidate@example.com', fullName: 'Candidate One' };
       slotState = makeSlot({ signups: [signup] });
-      createCalendarEvent.mockResolvedValue('evt-123');
+      updateCalendarEvent.mockResolvedValue(DERIVED_EVENT_ID);
 
-      const result = await syncMeetingSlotCalendar('slot-1');
+      const result = await syncMeetingSlotCalendar(SLOT_ID);
 
-      expect(result).toEqual({ success: true, status: 'SYNCED', eventId: 'evt-123' });
-      expect(createCalendarEvent).toHaveBeenCalledOnce();
-      const [details, attendees] = createCalendarEvent.mock.calls[0];
+      expect(result).toEqual({ success: true, status: 'SYNCED', eventId: DERIVED_EVENT_ID });
+      expect(updateCalendarEvent).toHaveBeenCalledOnce();
+      expect(updateCalendarEvent).toHaveBeenCalledWith(DERIVED_EVENT_ID, expect.any(Object), [
+        'alice@example.com',
+        'candidate@example.com',
+      ]);
+      expect(createCalendarEvent).not.toHaveBeenCalled();
+
+      const [, details] = updateCalendarEvent.mock.calls[0];
       expect(details.eventName).toContain('Alice Anderson');
       expect(details.eventLocation).toBe('Zoom');
       expect(new Date(details.eventStartDate).toISOString()).toBe(slotState.startTime.toISOString());
       expect(new Date(details.eventEndDate).toISOString()).toBe(slotState.endTime.toISOString());
-      expect(attendees).toEqual(['alice@example.com', 'candidate@example.com']);
 
       expect(prisma.meetingSlot.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'slot-1' },
+          where: { id: SLOT_ID },
           data: expectSyncState('SYNCED', {
-            calendarEventId: 'evt-123',
+            calendarEventId: DERIVED_EVENT_ID,
             calendarSyncError: null,
             calendarRetryCount: 0,
             calendarRetryAt: null,
@@ -112,46 +150,70 @@ describe('meetingSlotCalendar', () => {
       });
       updateCalendarEvent.mockResolvedValue('evt-1');
 
-      const result = await syncMeetingSlotCalendar('slot-1');
+      const result = await syncMeetingSlotCalendar(SLOT_ID);
 
       expect(result).toEqual({ success: true, status: 'SYNCED', eventId: 'evt-1' });
       expect(updateCalendarEvent).toHaveBeenCalledWith('evt-1', expect.any(Object), [
         'alice@example.com',
         'bob@example.com',
       ]);
+    });
+
+    it('is idempotent across repeated sync calls by reusing the deterministic eventId', async () => {
+      slotState = makeSlot();
+      updateCalendarEvent.mockResolvedValue(DERIVED_EVENT_ID);
+
+      await syncMeetingSlotCalendar(SLOT_ID);
+      await syncMeetingSlotCalendar(SLOT_ID);
+
+      expect(updateCalendarEvent).toHaveBeenCalledTimes(2);
+      expect(updateCalendarEvent).toHaveBeenNthCalledWith(1, DERIVED_EVENT_ID, expect.any(Object), [
+        'alice@example.com',
+      ]);
+      expect(updateCalendarEvent).toHaveBeenNthCalledWith(2, DERIVED_EVENT_ID, expect.any(Object), [
+        'alice@example.com',
+      ]);
       expect(createCalendarEvent).not.toHaveBeenCalled();
     });
 
-    it('is idempotent across repeated sync calls by reusing the stored eventId', async () => {
+    it('creates only one provider event when state writes fail after provider success and retry', async () => {
       slotState = makeSlot();
-      createCalendarEvent.mockResolvedValue('evt-created');
-      updateCalendarEvent.mockResolvedValue('evt-created');
+      updateCalendarEvent.mockResolvedValue(DERIVED_EVENT_ID);
+      let updateCall = 0;
+      prisma.meetingSlot.update.mockImplementation(({ data }) => {
+        updateCall += 1;
+        throw new Error('DB is locked');
+      });
 
-      await syncMeetingSlotCalendar('slot-1');
-      await syncMeetingSlotCalendar('slot-1');
-
-      expect(createCalendarEvent).toHaveBeenCalledTimes(1);
+      const first = await syncMeetingSlotCalendar(SLOT_ID);
+      expect(first.success).toBe(false);
+      expect(first.status).toBe('FAILED');
+      expect(first.eventId).toBe(DERIVED_EVENT_ID);
       expect(updateCalendarEvent).toHaveBeenCalledTimes(1);
-      expect(updateCalendarEvent).toHaveBeenCalledWith('evt-created', expect.any(Object), [
-        'alice@example.com',
-      ]);
+      expect(cancelCalendarEvent).not.toHaveBeenCalled();
+
+      // Retry: provider still sees the same id, so it patches instead of creating.
+      const second = await syncMeetingSlotCalendar(SLOT_ID, { force: true });
+      expect(second.success).toBe(false);
+      expect(second.status).toBe('FAILED');
+      expect(second.eventId).toBe(DERIVED_EVENT_ID);
+      expect(updateCalendarEvent).toHaveBeenCalledTimes(2);
+      expect(createCalendarEvent).not.toHaveBeenCalled();
     });
 
     it('retries after a provider failure and resets state on success', async () => {
       slotState = makeSlot();
-      createCalendarEvent
-        .mockRejectedValueOnce(new Error('Google is down'))
-        .mockResolvedValueOnce('evt-retry');
+      updateCalendarEvent.mockRejectedValueOnce(new Error('Google is down')).mockResolvedValueOnce(DERIVED_EVENT_ID);
 
-      const first = await syncMeetingSlotCalendar('slot-1');
+      const first = await syncMeetingSlotCalendar(SLOT_ID);
       expect(first.success).toBe(false);
       expect(first.status).toBe('FAILED');
       expect(slotState.calendarRetryCount).toBe(1);
       expect(slotState.calendarSyncStatus).toBe('FAILED');
       expect(slotState.calendarRetryAt).toBeInstanceOf(Date);
 
-      const second = await syncMeetingSlotCalendar('slot-1', { force: true });
-      expect(second).toEqual({ success: true, status: 'SYNCED', eventId: 'evt-retry' });
+      const second = await syncMeetingSlotCalendar(SLOT_ID, { force: true });
+      expect(second).toEqual({ success: true, status: 'SYNCED', eventId: DERIVED_EVENT_ID });
       expect(slotState.calendarRetryCount).toBe(0);
       expect(slotState.calendarRetryAt).toBeNull();
     });
@@ -160,7 +222,7 @@ describe('meetingSlotCalendar', () => {
       slotState = makeSlot({ calendarEventId: 'evt-gone', signups: [{ email: 'cara@example.com' }] });
       updateCalendarEvent.mockResolvedValue('evt-new');
 
-      const result = await syncMeetingSlotCalendar('slot-1');
+      const result = await syncMeetingSlotCalendar(SLOT_ID);
 
       expect(updateCalendarEvent).toHaveBeenCalledWith('evt-gone', expect.any(Object), [
         'alice@example.com',
@@ -180,56 +242,31 @@ describe('meetingSlotCalendar', () => {
         calendarRetryAt: new Date(Date.now() + 60_000),
       });
 
-      const withoutForce = await syncMeetingSlotCalendar('slot-1');
+      const withoutForce = await syncMeetingSlotCalendar(SLOT_ID);
       expect(withoutForce.success).toBe(false);
       expect(withoutForce.error).toMatch(/backoff/i);
-      expect(createCalendarEvent).not.toHaveBeenCalled();
       expect(updateCalendarEvent).not.toHaveBeenCalled();
+      expect(createCalendarEvent).not.toHaveBeenCalled();
 
-      createCalendarEvent.mockResolvedValue('evt-forced');
-      const withForce = await syncMeetingSlotCalendar('slot-1', { force: true });
+      updateCalendarEvent.mockResolvedValue(DERIVED_EVENT_ID);
+      const withForce = await syncMeetingSlotCalendar(SLOT_ID, { force: true });
       expect(withForce.success).toBe(true);
-      expect(createCalendarEvent).toHaveBeenCalledOnce();
+      expect(updateCalendarEvent).toHaveBeenCalledOnce();
     });
 
     it('marks NOT_CONFIGURED and does not call the provider when calendar is not set up', async () => {
       isCalendarConfigured.mockReturnValue(false);
 
-      const result = await syncMeetingSlotCalendar('slot-1');
+      const result = await syncMeetingSlotCalendar(SLOT_ID);
 
       expect(result).toEqual({ success: true, status: 'NOT_CONFIGURED', eventId: null });
-      expect(createCalendarEvent).not.toHaveBeenCalled();
       expect(updateCalendarEvent).not.toHaveBeenCalled();
+      expect(createCalendarEvent).not.toHaveBeenCalled();
       expect(prisma.meetingSlot.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ calendarSyncStatus: 'NOT_CONFIGURED' }),
         })
       );
-    });
-
-    it('rolls back a newly created event when the DB write fails', async () => {
-      slotState = makeSlot();
-      createCalendarEvent.mockResolvedValue('evt-orphan');
-
-      let updateCall = 0;
-      prisma.meetingSlot.update.mockImplementation(({ data }) => {
-        updateCall += 1;
-        if (updateCall === 1) {
-          throw new Error('DB is locked');
-        }
-        slotState = { ...slotState, ...data };
-        return Promise.resolve({ ...slotState });
-      });
-
-      const result = await syncMeetingSlotCalendar('slot-1');
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe('FAILED');
-      expect(createCalendarEvent).toHaveBeenCalledOnce();
-      expect(cancelCalendarEvent).toHaveBeenCalledWith('evt-orphan');
-      expect(prisma.meetingSlot.update).toHaveBeenCalledTimes(2);
-      expect(slotState.calendarSyncStatus).toBe('FAILED');
-      expect(slotState.calendarSyncError).toMatch(/DB is locked/);
     });
 
     it('builds a 30-minute end time when the slot has no end time', () => {
@@ -254,35 +291,42 @@ describe('meetingSlotCalendar', () => {
       slotState = makeSlot({ calendarEventId: 'evt-cancel' });
       cancelCalendarEvent.mockResolvedValue();
 
-      const result = await cancelMeetingSlotCalendar('slot-1');
+      const result = await cancelMeetingSlotCalendar(SLOT_ID);
 
-      expect(result).toEqual({ success: true, status: 'CANCELLED' });
+      expect(result).toEqual({ success: true, status: 'CANCELLED', eventId: null });
       expect(cancelCalendarEvent).toHaveBeenCalledWith('evt-cancel');
       expect(prisma.meetingSlot.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ calendarSyncStatus: 'CANCELLED' }),
+          data: expect.objectContaining({
+            calendarSyncStatus: 'CANCELLED',
+            calendarEventId: null,
+          }),
         })
       );
     });
 
     it('succeeds when there is no calendar event to cancel', async () => {
       slotState = makeSlot({ calendarEventId: null });
+      // Derive deterministic id from slot for the provider call.
+      cancelCalendarEvent.mockResolvedValue();
 
-      const result = await cancelMeetingSlotCalendar('slot-1');
+      const result = await cancelMeetingSlotCalendar(SLOT_ID);
 
-      expect(result).toEqual({ success: true, status: 'CANCELLED' });
-      expect(cancelCalendarEvent).not.toHaveBeenCalled();
+      expect(result).toEqual({ success: true, status: 'CANCELLED', eventId: null });
+      expect(cancelCalendarEvent).toHaveBeenCalledWith(DERIVED_EVENT_ID);
     });
 
-    it('records failure when the provider cancellation fails', async () => {
+    it('records CANCEL_PENDING and retains the provider event id when cancellation fails', async () => {
       slotState = makeSlot({ calendarEventId: 'evt-cancel' });
       cancelCalendarEvent.mockRejectedValue(new Error('Google is down'));
 
-      const result = await cancelMeetingSlotCalendar('slot-1');
+      const result = await cancelMeetingSlotCalendar(SLOT_ID);
 
       expect(result.success).toBe(false);
-      expect(result.status).toBe('FAILED');
-      expect(slotState.calendarSyncStatus).toBe('FAILED');
+      expect(result.status).toBe('CANCEL_PENDING');
+      expect(result.eventId).toBe('evt-cancel');
+      expect(slotState.calendarSyncStatus).toBe('CANCEL_PENDING');
+      expect(slotState.calendarEventId).toBe('evt-cancel');
       expect(slotState.calendarRetryCount).toBe(1);
     });
   });

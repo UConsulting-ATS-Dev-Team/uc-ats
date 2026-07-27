@@ -64,12 +64,14 @@ export default function CandidateGTKUC() {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [warning, setWarning] = useState('');
   const [rebooking, setRebooking] = useState(false);
 
   const load = async () => {
     try {
       setLoading(true);
       setError('');
+      setWarning('');
       const [signups, cycle, allSlots] = await Promise.all([
         apiClient.get('/my-meeting-signups'),
         apiClient.get('/active-cycle').catch(() => null),
@@ -102,9 +104,13 @@ export default function CandidateGTKUC() {
     try {
       setActionLoading(true);
       setError('');
+      setWarning('');
       setSuccess('');
       const response = await apiClient.post('/my-meeting-signups', { slotId });
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
+      if (response?.calendarSync?.warning) {
+        setWarning(response.calendarSync.warning);
+      }
       setRebooking(false);
       await load();
     } catch (e) {
@@ -121,9 +127,13 @@ export default function CandidateGTKUC() {
     try {
       setActionLoading(true);
       setError('');
+      setWarning('');
       setSuccess('');
-      await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
+      const response = await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
       setSuccess('Your meeting has been cancelled.');
+      if (response?.calendarSync?.warning) {
+        setWarning(response.calendarSync.warning);
+      }
       await load();
     } catch (e) {
       setError(e.message || 'Failed to cancel your meeting');
@@ -141,8 +151,12 @@ export default function CandidateGTKUC() {
     try {
       setActionLoading(true);
       setError('');
+      setWarning('');
       setSuccess('');
-      await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
+      const response = await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
+      if (response?.calendarSync?.warning) {
+        setWarning(response.calendarSync.warning);
+      }
       setRebooking(true);
       await load();
     } catch (e) {
@@ -184,6 +198,13 @@ export default function CandidateGTKUC() {
             sx={{ mt: 2 }}
           >
             Changes are locked within {MODIFY_CUTOFF_HOURS} hours of your meeting.
+          </Alert>
+        )}
+
+        {mySignup.calendarSyncStatus && mySignup.calendarSyncStatus !== 'SYNCED' && mySignup.calendarSyncStatus !== 'NOT_CONFIGURED' && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            Calendar sync issue: {mySignup.calendarSyncError || mySignup.calendarSyncStatus}
+            {mySignup.calendarRetryAt && ` (retry at ${formatDateTime(mySignup.calendarRetryAt)})`}
           </Alert>
         )}
       </CardContent>
@@ -292,6 +313,11 @@ export default function CandidateGTKUC() {
         {success && (
           <Alert severity="success" sx={{ mb: 3 }} onClose={() => setSuccess('')}>
             {success}
+          </Alert>
+        )}
+        {warning && (
+          <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setWarning('')}>
+            {warning}
           </Alert>
         )}
 
