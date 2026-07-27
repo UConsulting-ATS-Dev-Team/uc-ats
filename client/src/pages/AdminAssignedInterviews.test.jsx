@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import AdminAssignedInterviews from './AdminAssignedInterviews';
+import AdminAssignedInterviews, { dateTimeLocalToISO, formatForDateTimeLocal } from './AdminAssignedInterviews';
 import apiClient from '../utils/api';
 
 vi.mock('../components/AccessControl', () => ({
@@ -176,6 +176,75 @@ describe('AdminAssignedInterviews create flow', () => {
       expect(screen.getByText('Google Calendar quota exceeded.')).toBeInTheDocument();
     });
     expect(alert).toHaveBeenCalledWith(expect.stringContaining('quota exceeded'));
+  });
+
+  it('lets a coordinator move the schedule and re-syncs the same calendar event', async () => {
+    const interview = {
+      id: 'iv-4',
+      title: 'Round One',
+      interviewType: 'ROUND_ONE',
+      // 09:00–11:30 America/Los_Angeles (PST, UTC-8)
+      startDate: '2026-02-14T17:00:00.000Z',
+      endDate: '2026-02-14T19:30:00.000Z',
+      location: 'Anderson 121',
+      dresscode: 'Business',
+      description: '{}',
+      calendarSyncStatus: 'SYNCED'
+    };
+    const moved = {
+      ...interview,
+      startDate: '2026-02-14T21:00:00.000Z',
+      endDate: '2026-02-14T23:30:00.000Z'
+    };
+    apiClient.get = vi.fn((endpoint) => {
+      if (endpoint === '/admin/interviews') return Promise.resolve([interview]);
+      if (endpoint === '/admin/cycles/active') return Promise.resolve({ id: 'cycle-1', name: 'Test Cycle' });
+      if (endpoint === '/admin/profile') return Promise.resolve({ id: 'admin-1', fullName: 'Test Admin', role: 'ADMIN' });
+      return Promise.resolve([]);
+    });
+    apiClient.patch.mockResolvedValue({
+      ...moved,
+      calendarSync: { status: 'SYNCED', calendarEventId: 'ucatsiv4', error: null }
+    });
+
+    renderWithRouter(<AdminAssignedInterviews />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit Interview')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTitle('Edit Interview'));
+
+    // The pickers show interview-local (Los Angeles) wall-clock time, not UTC.
+    expect(screen.getByLabelText('Start').value).toBe('2026-02-14T09:00');
+    expect(screen.getByLabelText('End').value).toBe('2026-02-14T11:30');
+
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-02-14T13:00' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-02-14T15:30' } });
+    fireEvent.click(screen.getByTitle('Save Changes'));
+
+    await waitFor(() => {
+      expect(apiClient.patch).toHaveBeenCalledWith('/admin/interviews/iv-4', expect.objectContaining({
+        startDate: '2026-02-14T21:00:00.000Z',
+        endDate: '2026-02-14T23:30:00.000Z'
+      }));
+    });
+
+    // Server values are what get rendered afterwards, so a refresh shows the same thing.
+    await waitFor(() => {
+      expect(screen.getByText(/01:00 PM/)).toBeInTheDocument();
+    });
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('converts between interview-local wall clock and UTC instants across DST', () => {
+    // PST (UTC-8)
+    expect(formatForDateTimeLocal('2026-02-14T17:00:00.000Z')).toBe('2026-02-14T09:00');
+    expect(dateTimeLocalToISO('2026-02-14T09:00')).toBe('2026-02-14T17:00:00.000Z');
+    // PDT (UTC-7)
+    expect(formatForDateTimeLocal('2026-07-14T16:00:00.000Z')).toBe('2026-07-14T09:00');
+    expect(dateTimeLocalToISO('2026-07-14T09:00')).toBe('2026-07-14T16:00:00.000Z');
+    expect(dateTimeLocalToISO('')).toBeNull();
+    expect(formatForDateTimeLocal(null)).toBe('');
   });
 
   it('exits the loading state when create fails', async () => {

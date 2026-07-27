@@ -32,6 +32,30 @@ const CALENDAR_STATUS_LABELS = {
   NOT_SYNCED: 'No calendar invite yet'
 };
 
+// Interviews are scheduled in UConsulting's local time regardless of where the admin's browser is,
+// so the edit inputs read and write America/Los_Angeles wall-clock time.
+const INTERVIEW_TIME_ZONE = 'America/Los_Angeles';
+
+const zoneOffsetMs = (instant) =>
+  new Date(instant.toLocaleString('en-US', { timeZone: 'UTC' })).getTime()
+  - new Date(instant.toLocaleString('en-US', { timeZone: INTERVIEW_TIME_ZONE })).getTime();
+
+// ISO instant -> "YYYY-MM-DDTHH:mm" in interview time
+export const formatForDateTimeLocal = (value) => {
+  if (!value) return '';
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return '';
+  return new Date(instant.getTime() - zoneOffsetMs(instant)).toISOString().slice(0, 16);
+};
+
+// "YYYY-MM-DDTHH:mm" in interview time -> ISO instant
+export const dateTimeLocalToISO = (value) => {
+  if (!value) return null;
+  const asUtc = new Date(`${value}:00Z`);
+  if (Number.isNaN(asUtc.getTime())) return null;
+  return new Date(asUtc.getTime() + zoneOffsetMs(asUtc)).toISOString();
+};
+
 // Application Group Card Component for Admin
 const AdminApplicationGroupCard = ({ group, interviewId }) => {
   const [applications, setApplications] = useState([]);
@@ -567,6 +591,10 @@ export default function AdminAssignedInterviews() {
     try {
       const payload = {
         ...newInterview,
+        // The pickers are interview-time wall clocks; send instants so the invite is not shifted by
+        // the admin's (or the server's) timezone.
+        startDate: dateTimeLocalToISO(newInterview.startDate),
+        endDate: dateTimeLocalToISO(newInterview.endDate),
         cycleId: activeCycle.id
       };
       console.log('Creating interview with payload:', payload);
@@ -1147,10 +1175,31 @@ export default function AdminAssignedInterviews() {
                       <div className="interview-details">
                         <div className="detail-item">
                           <ClockIcon className="detail-icon" />
-                          <span>
-                            {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - 
-                            {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
+                          {isBeingEdited ? (
+                            <>
+                              <input
+                                type="datetime-local"
+                                aria-label="Start"
+                                value={formatForDateTimeLocal(editedInterview.startDate)}
+                                onChange={(e) => handleFieldChange('startDate', dateTimeLocalToISO(e.target.value))}
+                                className="edit-input datetime-input"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <input
+                                type="datetime-local"
+                                aria-label="End"
+                                value={formatForDateTimeLocal(editedInterview.endDate)}
+                                onChange={(e) => handleFieldChange('endDate', dateTimeLocalToISO(e.target.value))}
+                                className="edit-input datetime-input"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </>
+                          ) : (
+                            <span>
+                              {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })} - 
+                              {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })}
+                            </span>
+                          )}
                         </div>
                         
                         <div className="detail-item">
