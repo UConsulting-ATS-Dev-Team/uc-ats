@@ -529,7 +529,7 @@ router.get('/:id/comments', requireAdminOrMember, async (req, res) => {
     const comments = await prisma.comment.findMany({
       where: { applicationId: id },
       orderBy: { createdAt: 'desc' },
-      include: { user: { select: { id: true, email: true, fullName: true } } }
+      include: { user: { select: { id: true, email: true, fullName: true, profileImage: true } } }
     });
     res.json(comments);
   } catch (error) {
@@ -750,7 +750,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
     // First, get the user to find their studentId
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { studentId: true, email: true, fullName: true }
+      select: { studentId: true, email: true, fullName: true, profileImage: true }
     });
 
     console.log('User found:', user);
@@ -817,7 +817,7 @@ router.get('/:id', async (req, res) => {
       include: {
         comments: {
           orderBy: { createdAt: 'desc' },
-          include: { user: { select: { id: true, email: true, fullName: true } } }
+          include: { user: { select: { id: true, email: true, fullName: true, profileImage: true } } }
         },
         candidate: {
           select: {
@@ -1013,8 +1013,7 @@ router.post('/:id/grades', requireAuth, async (req, res) => {
         select: {
           id: true,
           fullName: true,
-          email: true
-        }
+          email: true, profileImage: true }
       })
     ]);
     
@@ -1366,7 +1365,7 @@ router.get('/:id/events', requireAuth, async (req, res) => {
           slot: {
             include: {
               member: {
-                select: { fullName: true }
+                select: { fullName: true, profileImage: true }
               }
             }
           }

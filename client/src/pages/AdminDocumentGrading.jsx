@@ -4,6 +4,7 @@ import apiClient from '../utils/api';
 import DocumentGradingModal from '../components/DocumentGradingModal';
 import FlagDocumentModal from '../components/FlagDocumentModal';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 import {
   Box,
   Typography,
@@ -1090,9 +1091,12 @@ export default function AdminDocumentGrading() {
                                 {flaggedDoc.message}
                               </Typography>
                             )}
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              Flagged by {flaggedDoc.flagger.fullName}
-                            </Typography>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={flaggedDoc.flagger} size={20} />
+                              <Typography variant="caption" color="text.secondary">
+                                Flagged by {flaggedDoc.flagger.fullName}
+                              </Typography>
+                            </Stack>
                           </Box>
                         </TableCell>
                         <TableCell data-label="Status">
@@ -1184,12 +1188,18 @@ export default function AdminDocumentGrading() {
                                 {resolvedDoc.message}
                               </Typography>
                             )}
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              Flagged by {resolvedDoc.flagger.fullName}
-                            </Typography>
-                            <Typography variant="caption" color="success.main" display="block">
-                              Resolved by {resolvedDoc.resolver?.fullName} on {new Date(resolvedDoc.resolvedAt).toLocaleDateString()}
-                            </Typography>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={resolvedDoc.flagger} size={20} />
+                              <Typography variant="caption" color="text.secondary">
+                                Flagged by {resolvedDoc.flagger.fullName}
+                              </Typography>
+                            </Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={resolvedDoc.resolver} size={20} />
+                              <Typography variant="caption" color="success.main">
+                                Resolved by {resolvedDoc.resolver?.fullName} on {new Date(resolvedDoc.resolvedAt).toLocaleDateString()}
+                              </Typography>
+                            </Stack>
                           </Box>
                         </TableCell>
                         <TableCell data-label="Status">

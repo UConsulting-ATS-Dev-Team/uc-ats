@@ -173,8 +173,7 @@ router.patch('/:id/role', requireAuth, async (req, res) => {
         email: true,
         fullName: true,
         role: true,
-        createdAt: true
-      }
+        createdAt: true, profileImage: true }
     });
 
     console.log('[PATCH /api/users/:id/role] Role updated successfully:', updatedUser);
@@ -370,8 +369,7 @@ router.post('/', requireAuth, async (req, res) => {
         fullName: true,
         graduationClass: true,
         role: true,
-        createdAt: true
-      }
+        createdAt: true, profileImage: true }
     });
 
     res.status(201).json({
