@@ -34,7 +34,11 @@ export function AppThemeProvider({ children }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
+    if (mode !== 'system') return undefined;
+
     const media = window.matchMedia('(prefers-color-scheme: dark)');
+    setSystemDark(media.matches);
+
     const listener = (event) => setSystemDark(event.matches);
     if (media.addEventListener) {
       media.addEventListener('change', listener);
@@ -43,7 +47,7 @@ export function AppThemeProvider({ children }) {
     // Fallback for older environments (including some jsdom versions)
     media.addListener(listener);
     return () => media.removeListener(listener);
-  }, []);
+  }, [mode]);
 
   const resolvedMode = mode === 'system' ? (systemDark ? 'dark' : 'light') : mode;
 

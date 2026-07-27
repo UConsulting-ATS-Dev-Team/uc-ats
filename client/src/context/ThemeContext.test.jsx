@@ -157,4 +157,43 @@ describe('AppThemeProvider', () => {
     listeners.forEach((listener) => listener({ matches: true }));
     await waitFor(() => expect(screen.getByTestId('resolved').textContent).toBe('light'));
   });
+
+  it('subscribes to system media only when mode is system and cleans up on change/unmount', async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    window.matchMedia = vi.fn().mockImplementation(() => ({
+      matches: false,
+      addEventListener,
+      removeEventListener,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    }));
+
+    window.localStorage.setItem(STORAGE_KEY, 'dark');
+    const { unmount } = render(
+      <AppThemeProvider>
+        <ModeSwitcher />
+      </AppThemeProvider>
+    );
+
+    expect(addEventListener).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('System'));
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe('system'));
+    expect(addEventListener).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Light'));
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe('light'));
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+
+    addEventListener.mockClear();
+    removeEventListener.mockClear();
+    fireEvent.click(screen.getByText('System'));
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe('system'));
+    expect(addEventListener).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+  });
 });
