@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Person as PersonIcon } from '@mui/icons-material';
 import { getInitials } from './MemberAvatar';
 
@@ -33,6 +33,10 @@ export default function PublicHostAvatar({
     : 'Member';
   const initials = getInitials(displayName);
   const safeUrl = isSafeProfileImageUrl(profileImage) ? profileImage.trim() : null;
+
+  useEffect(() => {
+    setHasError(false);
+  }, [safeUrl]);
 
   const baseStyle = {
     width: size,

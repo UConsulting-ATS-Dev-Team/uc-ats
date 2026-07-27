@@ -3,14 +3,19 @@ import express from 'express';
 import publicRoutes from './public.js';
 import prisma from '../prismaClient.js';
 
-vi.mock('../prismaClient.js', () => ({
-  default: {
+function createMockPrisma() {
+  const defaultExport = {
     recruitingCycle: { findFirst: vi.fn() },
     meetingSlot: { findMany: vi.fn(), findUnique: vi.fn() },
     meetingSignup: { findMany: vi.fn(), create: vi.fn() },
-    user: { findUnique: vi.fn() }
-  }
-}));
+    user: { findUnique: vi.fn() },
+    $queryRaw: vi.fn()
+  };
+  defaultExport.$transaction = vi.fn(async (callback) => callback(defaultExport));
+  return { default: defaultExport };
+}
+
+vi.mock('../prismaClient.js', () => createMockPrisma());
 
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => {
@@ -197,7 +202,7 @@ describe('public meeting slot routes', () => {
   describe('POST /api/meeting-slots/:id/signup', () => {
     beforeEach(() => {
       vi.setSystemTime(new Date('2026-01-10T00:00:00Z'));
-      prisma.recruitingCycle.findFirst.mockResolvedValue(activeCycle);
+      prisma.$queryRaw.mockResolvedValue([activeCycle]);
       prisma.user.findUnique.mockResolvedValue(null);
     });
 
@@ -226,7 +231,7 @@ describe('public meeting slot routes', () => {
     });
 
     it('rejects signup when there is no active recruiting cycle', async () => {
-      prisma.recruitingCycle.findFirst.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValue([]);
 
       const res = await post('/api/meeting-slots/slot-1/signup');
       expect(res.status).toBe(400);

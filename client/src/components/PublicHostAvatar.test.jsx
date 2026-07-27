@@ -111,4 +111,22 @@ describe('PublicHostAvatar', () => {
     expect(img.style.width).toBe('48px');
     expect(img.style.height).toBe('48px');
   });
+
+  it('retries image rendering when the profileImage source changes after an error', () => {
+    const { container, rerender } = render(
+      <PublicHostAvatar name="Alex Host" profileImage="/api/uploads/profile-images/bad.png" />
+    );
+
+    const badImg = getImg(container);
+    fireEvent.error(badImg);
+    expect(getImg(container)).not.toBeInTheDocument();
+    expect(screen.getByText('AH')).toBeInTheDocument();
+
+    rerender(
+      <PublicHostAvatar name="Alex Host" profileImage="/api/uploads/profile-images/alex.png" />
+    );
+
+    expect(getImg(container)).toBeInTheDocument();
+    expect(screen.queryByText('AH')).not.toBeInTheDocument();
+  });
 });

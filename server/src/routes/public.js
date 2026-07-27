@@ -1,4 +1,5 @@
 import express from 'express';
+import { Prisma } from '@prisma/client';
 import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
@@ -8,6 +9,14 @@ import {
   isSlotStartInActiveCycle,
   isSlotStartFuture,
 } from '../utils/meetingSlotEligibility.js';
+
+class PublicError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = 'PublicError';
+  }
+}
 
 const router = express.Router();
 
@@ -73,84 +82,101 @@ router.get('/meeting-slots', async (req, res) => {
 // Sign up for a meeting slot. Requires an account: identity comes from the
 // authenticated user, not the request body, so candidates can't book on behalf
 // of someone else. The /meet page stays public to browse; booking is gated.
+//
+// The eligibility check, capacity check, one-signup-per-cycle check, and
+// insert are wrapped in a Prisma interactive transaction and serialized on the
+// active recruiting cycle row (FOR UPDATE) so concurrent last-seat bookings or
+// same-candidate/different-slot bookings cannot both succeed.
 router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  // Identity is taken from the signed-in account. studentId falls back to the
+  // request body only if the account doesn't have one on file.
+  const fullName = req.user.fullName;
+  const email = req.user.email;
+  const studentId = req.user.studentId || (req.body?.studentId || '').trim() || null;
+
+  if (!fullName || !email || !studentId) {
+    return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
+  }
+
   try {
-    const { id } = req.params;
+    const { signup, slot } = await prisma.$transaction(async (tx) => {
+      // Lock the active cycle row so all signups for this cycle serialize.
+      const cycles = await tx.$queryRaw`
+        SELECT id, "startDate", "endDate"
+        FROM "recruiting_cycles"
+        WHERE "isActive" = true
+        FOR UPDATE
+      `;
 
-    // Identity is taken from the signed-in account. studentId falls back to the
-    // request body only if the account doesn't have one on file.
-    const fullName = req.user.fullName;
-    const email = req.user.email;
-    const studentId = req.user.studentId || (req.body?.studentId || '').trim() || null;
-
-    if (!fullName || !email || !studentId) {
-      return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
-    }
-
-    // Get the active recruiting cycle; booking is only allowed against an
-    // active, date-bounded cycle.
-    const activeCycle = await prisma.recruitingCycle.findFirst({
-      where: { isActive: true }
-    });
-
-    if (!activeCycle || (!activeCycle.startDate && !activeCycle.endDate)) {
-      return res.status(400).json({ error: 'No active recruiting cycle' });
-    }
-
-    const slot = await prisma.meetingSlot.findUnique({
-      where: { id },
-      include: {
-        signups: true,
-        member: {
-          select: { fullName: true, email: true }
-        }
+      if (!cycles || cycles.length === 0) {
+        throw new PublicError(400, 'No active recruiting cycle');
       }
-    });
 
-    if (!slot) {
-      return res.status(404).json({ error: 'Slot not found' });
-    }
+      const activeCycle = cycles[0];
 
-    if (!isSlotStartInActiveCycle(slot.startTime, activeCycle)) {
-      return res.status(400).json({ error: 'This meeting slot is not part of the active recruiting cycle' });
-    }
-
-    if (!isSlotStartFuture(slot.startTime)) {
-      return res.status(400).json({ error: 'This meeting slot has already passed' });
-    }
-
-    if (slot.signups.length >= slot.capacity) {
-      return res.status(400).json({ error: 'This time slot is full' });
-    }
-
-    // Check if user has already signed up for a meeting slot in the current cycle
-    const existingSignups = await prisma.meetingSignup.findMany({
-      where: { email },
-      include: { slot: true }
-    });
-
-    const existingSignupInCycle = existingSignups.find(signup =>
-      isSlotStartInActiveCycle(signup.slot.startTime, activeCycle)
-    );
-
-    if (existingSignupInCycle) {
-      return res.status(400).json({
-        error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.`
+      const slot = await tx.meetingSlot.findUnique({
+        where: { id },
+        include: {
+          signups: true,
+          member: {
+            select: { fullName: true, email: true }
+          }
+        }
       });
-    }
+
+      if (!slot) {
+        throw new PublicError(404, 'Slot not found');
+      }
+
+      if (!isSlotStartInActiveCycle(slot.startTime, activeCycle)) {
+        throw new PublicError(400, 'This meeting slot is not part of the active recruiting cycle');
+      }
+
+      if (!isSlotStartFuture(slot.startTime)) {
+        throw new PublicError(400, 'This meeting slot has already passed');
+      }
+
+      if (slot.signups.length >= slot.capacity) {
+        throw new PublicError(400, 'This time slot is full');
+      }
+
+      // Check if user has already signed up for a meeting slot in the current cycle
+      const existingSignups = await tx.meetingSignup.findMany({
+        where: { email },
+        include: { slot: { select: { startTime: true } } }
+      });
+
+      const existingSignupInCycle = existingSignups.find(signup =>
+        isSlotStartInActiveCycle(signup.slot.startTime, activeCycle)
+      );
+
+      if (existingSignupInCycle) {
+        throw new PublicError(
+          400,
+          `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.`
+        );
+      }
+
+      const signup = await tx.meetingSignup.create({
+        data: {
+          slotId: id,
+          fullName,
+          email,
+          studentId
+        }
+      });
+
+      return { signup, slot };
+    }, {
+      maxWait: 5000,
+      timeout: 10000
+    });
 
     // Check if user exists in the system (has an account)
     const existingUser = await prisma.user.findUnique({
       where: { email }
-    });
-
-    const signup = await prisma.meetingSignup.create({
-      data: {
-        slotId: id,
-        fullName,
-        email,
-        studentId
-      }
     });
 
     // Send confirmation email to candidate (and log the communication)
@@ -195,18 +221,23 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       );
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       signup,
       needsAccount: !existingUser,
-      message: existingUser 
+      message: existingUser
         ? 'Successfully signed up! You will receive a confirmation email shortly.'
         : 'Successfully signed up! You will receive a confirmation email shortly. We recommend creating an account to track your application status.'
     });
   } catch (error) {
-    if (error?.code === 'P2002') {
-      return res.status(400).json({ error: 'You are already signed up for this slot' });
+    if (error instanceof PublicError) {
+      return res.status(error.status).json({ error: error.message });
     }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(409).json({ error: 'You are already signed up for this slot' });
+    }
+
     console.error('[POST /api/meeting-slots/:id/signup]', error);
     res.status(500).json({ error: 'Failed to create signup' });
   }
