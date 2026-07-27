@@ -4,6 +4,7 @@ import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { syncMeetingSlotCalendar, cancelMeetingSlotCalendar } from '../services/google/meetingSlotCalendar.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getGroupMemberUsers,
@@ -885,7 +886,13 @@ router.post('/meeting-slots', requireAuth, async (req, res) => {
     
     console.log('Created slot startTime:', slot.startTime);
     console.log('Created slot endTime:', slot.endTime);
-    
+
+    // Sync the GTKUC slot to Google Calendar in the background. Calendar failures
+    // are logged and persisted on the slot but do not fail the creation request.
+    syncMeetingSlotCalendar(slot.id, { force: true }).catch((error) => {
+      console.error('[POST /api/member/meeting-slots] calendar sync failed:', error);
+    });
+
     res.json(slot);
   } catch (error) {
     console.error('[POST /api/member/meeting-slots]', error);
@@ -949,7 +956,12 @@ router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
       data: updateData,
       include: { signups: true }
     });
-    
+
+    // Sync any time/location changes to the existing Google Calendar event.
+    syncMeetingSlotCalendar(updatedSlot.id, { force: true }).catch((error) => {
+      console.error('[PUT /api/member/meeting-slots/:id] calendar sync failed:', error);
+    });
+
     res.json(updatedSlot);
   } catch (error) {
     console.error('[PUT /api/member/meeting-slots/:id]', error);
@@ -1010,6 +1022,14 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
       await Promise.allSettled(emailPromises);
     }
     
+    // Cancel the associated Google Calendar event before deleting the slot so
+    // we still have the calendarEventId reference. Provider failures are logged
+    // but do not block deletion.
+    const calendarResult = await cancelMeetingSlotCalendar(existingSlot.id);
+    if (!calendarResult.success) {
+      console.error('[DELETE /api/member/meeting-slots/:id] calendar cancellation failed:', calendarResult.error);
+    }
+
     // Delete the meeting slot (this will cascade delete all signups due to foreign key constraint)
     await prisma.$transaction(async (tx) => {
       await tx.meetingSignup.deleteMany({
@@ -1084,6 +1104,11 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
     // Delete the signup
     await prisma.meetingSignup.delete({
       where: { id }
+    });
+
+    // Refresh the slot's calendar event attendee list without this signup.
+    syncMeetingSlotCalendar(signup.slotId, { force: true }).catch((error) => {
+      console.error('[DELETE /api/member/meeting-signups/:id] calendar sync failed:', error);
     });
 
     res.json({

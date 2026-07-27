@@ -39,6 +39,11 @@ const config = {
   baseUrl: process.env.BASE_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:3001'),
   clientUrl: process.env.CLIENT_URL || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173'),
 
+  // Google Calendar integration for meeting slot lifecycle invites.
+  // GOOGLE_CALENDAR_ID gates all calendar provider calls until preflight approval.
+  googleCalendarId: process.env.GOOGLE_CALENDAR_ID || null,
+  calendarInviteTestEmail: process.env.CALENDAR_INVITE_TEST_EMAIL || null,
+
   corsOrigin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
     : (isProduction ? ['https://uconsultingats.com'] : ['http://localhost:5173']),

@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { syncMeetingSlotCalendar } from '../services/google/meetingSlotCalendar.js';
 
 const router = express.Router();
 
@@ -175,6 +176,12 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       );
     }
 
+    // Add the candidate to the slot's Google Calendar event. Calendar failures
+    // are logged and persisted on the slot but do not fail the signup.
+    syncMeetingSlotCalendar(slot.id, { force: true }).catch((error) => {
+      console.error('[POST /api/meeting-slots/:id/signup] calendar sync failed:', error);
+    });
+
     res.json({ 
       success: true, 
       signup,
@@ -257,6 +264,11 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
     }
 
     await prisma.meetingSignup.delete({ where: { id } });
+
+    // Remove the candidate from the slot's calendar event.
+    syncMeetingSlotCalendar(signup.slotId, { force: true }).catch((error) => {
+      console.error('[DELETE /api/meeting-signups/:id] calendar sync failed:', error);
+    });
 
     res.json({ message: 'Your signup has been cancelled.' });
   } catch (error) {
