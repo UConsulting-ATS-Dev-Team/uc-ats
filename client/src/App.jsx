@@ -43,6 +43,7 @@ import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
 import './styles/variables.css';
@@ -165,6 +166,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <UserManagement />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            {user?.role === 'USER' ? <Navigate to="/" /> : <Profile />}
           </ProtectedRoute>
         }
       />
