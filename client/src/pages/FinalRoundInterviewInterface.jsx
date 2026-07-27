@@ -22,7 +22,6 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import CaseViewer from '../components/case/CaseViewer';
 import { usePreviewActive } from '../utils/previewMode';
-import { useCelebration } from '../context/CelebrationContext';
 import '../styles/FinalRoundInterviewInterface.css';
 
 export default function FinalRoundInterviewInterface() {
@@ -31,7 +30,6 @@ export default function FinalRoundInterviewInterface() {
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
   
-  const { triggerCelebration } = useCelebration();
   const candidatePreviewActive = usePreviewActive();
   
   const [interview, setInterview] = useState(null);
@@ -406,7 +404,6 @@ export default function FinalRoundInterviewInterface() {
       }
       
       alert('Evaluation saved successfully');
-      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluation:', error);
       alert('Failed to save evaluation');
@@ -443,7 +440,6 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      triggerCelebration();
       alert('All evaluations saved successfully!');
     } catch (error) {
       console.error('Failed to save evaluations:', error);

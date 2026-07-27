@@ -82,6 +82,7 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
+import { useCelebration } from '../context/CelebrationContext';
 import ApplicationDetail from './ApplicationDetail';
 
 // Simple cache for staging data
@@ -467,6 +468,7 @@ ${hasVideo ? (hasVideoScore ? '✓ Video Scored' : '⏳ Video Pending') : '✗ N
 export default function Staging() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { triggerCelebration } = useCelebration();
   const isAdmin = user?.role === 'ADMIN';
   
   const [candidates, setCandidates] = useState([]);
@@ -1495,6 +1497,10 @@ export default function Staging() {
         });
       } else {
         setSnackbar({ open: true, message: 'Processed decisions.', severity: 'success' });
+      }
+
+      if (currentTab === 3) {
+        triggerCelebration('deliberations-completed');
       }
 
       await fetchCandidates();
