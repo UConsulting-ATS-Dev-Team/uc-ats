@@ -6,6 +6,10 @@ import { sendMeetingCancellationEmail } from '../services/emailNotifications.js'
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
+  isSlotStartInActiveCycle,
+  isSlotStartFuture,
+} from '../utils/meetingSlotEligibility.js';
+import {
   getGroupMemberUsers,
   getGroupMemberIds,
   groupMemberUserInclude
@@ -862,30 +866,51 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
   }
 });
 
-// Member: create a meeting slot
+// Member: create a meeting slot. Slots must belong to the active recruiting
+// cycle and start in the future, so the public /meet page shows bookable,
+// cycle-appropriate times only.
 router.post('/meeting-slots', requireAuth, async (req, res) => {
   try {
     const { location, startTime, endTime, capacity } = req.body || {};
     if (!location || !startTime) {
       return res.status(400).json({ error: 'Location and start time are required' });
     }
-    
+
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true }
+    });
+
+    if (!activeCycle || (!activeCycle.startDate && !activeCycle.endDate)) {
+      return res.status(400).json({ error: 'No active recruiting cycle with date boundaries' });
+    }
+
+    const slotStart = localInputToUTC(startTime);
+
+    if (!isSlotStartInActiveCycle(slotStart, activeCycle)) {
+      return res.status(400).json({ error: 'Slot must be within the active recruiting cycle' });
+    }
+
+    if (!isSlotStartFuture(slotStart)) {
+      return res.status(400).json({ error: 'Slot start time must be in the future' });
+    }
+
     console.log('Received startTime:', startTime);
     console.log('Received endTime:', endTime);
+    console.log('Resolved slot startTime:', slotStart);
 
     const slot = await prisma.meetingSlot.create({
       data: {
         memberId: req.user.id,
         location,
-        startTime: localInputToUTC(startTime),
+        startTime: slotStart,
         endTime: endTime ? localInputToUTC(endTime) : null,
         capacity: Number.isInteger(capacity) ? capacity : 2
       }
     });
-    
+
     console.log('Created slot startTime:', slot.startTime);
     console.log('Created slot endTime:', slot.endTime);
-    
+
     res.json(slot);
   } catch (error) {
     console.error('[POST /api/member/meeting-slots]', error);

@@ -3,17 +3,45 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import {
+  getActiveCycleBoundaries,
+  isSlotStartInActiveCycle,
+  isSlotStartFuture,
+} from '../utils/meetingSlotEligibility.js';
 
 const router = express.Router();
 
-// Public: list available meeting slots with remaining capacity and signups
+// Public: list available meeting slots for the active recruiting cycle.
+// Eligibility is computed server-side using the active cycle's date boundaries
+// (in the meeting timezone) and future availability/capacity. No member email
+// or other private profile fields are exposed.
 router.get('/meeting-slots', async (req, res) => {
   try {
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true }
+    });
+
+    const boundaries = getActiveCycleBoundaries(activeCycle);
+    if (!boundaries) {
+      console.log('[GET /api/meeting-slots] No active recruiting cycle with date boundaries');
+      return res.json([]);
+    }
+
+    const { start, endExclusive } = boundaries;
+    const now = new Date();
+    const minStart = start && start > now ? start : now;
+
     const slots = await prisma.meetingSlot.findMany({
+      where: {
+        startTime: {
+          gte: minStart,
+          lt: endExclusive
+        }
+      },
       orderBy: { startTime: 'asc' },
       include: {
         member: {
-          select: { id: true, fullName: true, email: true }
+          select: { id: true, fullName: true, profileImage: true }
         },
         signups: {
           select: { id: true }
@@ -21,17 +49,19 @@ router.get('/meeting-slots', async (req, res) => {
       }
     });
 
-    const formatted = slots.map(slot => ({
-      id: slot.id,
-      memberName: slot.member?.fullName || 'Member',
-      memberEmail: slot.member?.email || null,
-      location: slot.location,
-      startTime: slot.startTime,
-      endTime: slot.endTime,
-      capacity: slot.capacity,
-      taken: slot.signups.length,
-      remaining: Math.max(0, slot.capacity - slot.signups.length)
-    }));
+    const formatted = slots
+      .map(slot => ({
+        id: slot.id,
+        memberName: slot.member?.fullName || 'Member',
+        memberProfileImage: slot.member?.profileImage || null,
+        location: slot.location,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        capacity: slot.capacity,
+        taken: slot.signups.length,
+        remaining: Math.max(0, slot.capacity - slot.signups.length)
+      }))
+      .filter(slot => slot.remaining > 0);
 
     res.json(formatted);
   } catch (error) {
@@ -57,58 +87,19 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
     }
 
-    // Get the active recruiting cycle to check for cycle-specific signups
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
+    // Get the active recruiting cycle; booking is only allowed against an
+    // active, date-bounded cycle.
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true }
     });
 
-    // Check if user has already signed up for a meeting slot in the current cycle
-    if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
-      const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-      const cycleEndDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-
-      // Find existing signups for this email
-      const existingSignups = await prisma.meetingSignup.findMany({
-        where: { email },
-        include: { slot: true }
-      });
-
-      // Check if any existing signup falls within the current cycle's date range
-      const existingSignupInCycle = existingSignups.find(signup => {
-        const slotDate = new Date(signup.slot.startTime);
-        const isAfterStart = !cycleStartDate || slotDate >= cycleStartDate;
-        const isBeforeEnd = !cycleEndDate || slotDate <= cycleEndDate;
-        return isAfterStart && isBeforeEnd;
-      });
-
-      if (existingSignupInCycle) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.` 
-        });
-      }
-    } else {
-      // If no active cycle or no date range, fall back to checking all signups
-      // (for backwards compatibility)
-      const existingSignup = await prisma.meetingSignup.findFirst({
-        where: { email },
-        include: { slot: true }
-      });
-
-      if (existingSignup) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignup.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot.` 
-        });
-      }
+    if (!activeCycle || (!activeCycle.startDate && !activeCycle.endDate)) {
+      return res.status(400).json({ error: 'No active recruiting cycle' });
     }
-
-    // Check if user exists in the system (has an account)
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
-    });
 
     const slot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { 
+      include: {
         signups: true,
         member: {
           select: { fullName: true, email: true }
@@ -120,9 +111,38 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Slot not found' });
     }
 
+    if (!isSlotStartInActiveCycle(slot.startTime, activeCycle)) {
+      return res.status(400).json({ error: 'This meeting slot is not part of the active recruiting cycle' });
+    }
+
+    if (!isSlotStartFuture(slot.startTime)) {
+      return res.status(400).json({ error: 'This meeting slot has already passed' });
+    }
+
     if (slot.signups.length >= slot.capacity) {
       return res.status(400).json({ error: 'This time slot is full' });
     }
+
+    // Check if user has already signed up for a meeting slot in the current cycle
+    const existingSignups = await prisma.meetingSignup.findMany({
+      where: { email },
+      include: { slot: true }
+    });
+
+    const existingSignupInCycle = existingSignups.find(signup =>
+      isSlotStartInActiveCycle(signup.slot.startTime, activeCycle)
+    );
+
+    if (existingSignupInCycle) {
+      return res.status(400).json({
+        error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.`
+      });
+    }
+
+    // Check if user exists in the system (has an account)
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
     const signup = await prisma.meetingSignup.create({
       data: {

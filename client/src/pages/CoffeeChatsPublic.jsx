@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../utils/api';
 import UConsultingLogo from '../components/UConsultingLogo';
+import PublicHostAvatar from '../components/PublicHostAvatar';
 import {
   Box,
   Typography,
@@ -30,7 +31,6 @@ import {
 
 export default function CoffeeChatsPublic() {
   const [slots, setSlots] = useState([]);
-  const [allSlots, setAllSlots] = useState([]); // Store all slots for filtering
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -51,42 +51,22 @@ export default function CoffeeChatsPublic() {
     }
   };
 
-  const filterSlotsByCycle = (slotsToFilter, cycle) => {
-    // If no active cycle, return empty array to only show spots from current cycle
-    if (!cycle) return [];
-    
-    // If cycle has date range, filter slots by date
-    if (cycle.startDate || cycle.endDate) {
-      return slotsToFilter.filter(slot => {
-        const slotDate = new Date(slot.startTime);
-        const startDate = cycle.startDate ? new Date(cycle.startDate) : null;
-        const endDate = cycle.endDate ? new Date(cycle.endDate) : null;
-        
-        // If cycle has start date, slot must be on or after start date
-        if (startDate && slotDate < startDate) return false;
-        
-        // If cycle has end date, slot must be on or before end date
-        if (endDate && slotDate > endDate) return false;
-        
-        return true;
-      });
-    }
-    
-    // If no date range, return empty array to hide old cycle slots
-    return [];
-  };
-
   const load = async () => {
     try {
       setLoading(true);
       setError('');
-      const data = await api.get('/meeting-slots');
-      setAllSlots(data);
-      
-      // Load active cycle and filter slots
+
+      // Load the active recruiting cycle first; the public endpoint is the
+      // source of truth for which slots are eligible, but the page needs the
+      // cycle to explain empty/no-cycle states.
       const cycle = await loadActiveCycle();
-      const filtered = filterSlotsByCycle(data, cycle);
-      setSlots(filtered);
+      if (!cycle) {
+        setSlots([]);
+        return;
+      }
+
+      const data = await api.get('/meeting-slots');
+      setSlots(data);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
     } finally {
@@ -164,23 +144,12 @@ export default function CoffeeChatsPublic() {
     return slots.find(s => s.id === selectedSlot);
   };
 
-  // Filter out past meeting slots and full capacity slots
-  const getAvailableSlots = () => {
-    const now = new Date();
-    return slots.filter(slot => {
-      // Compare times in UTC (no conversion needed)
-      const startTime = new Date(slot.startTime);
-      // Only show slots that haven't ended yet AND have available capacity
-      return startTime >= now && slot.remaining > 0;
-    });
-  };
-
-  const availableSlots = getAvailableSlots();
-  
-  // Calculate total available spots and total spots
-  // Note: slots is already filtered by active cycle, so totalSpots only counts spots from current cycle
+  // The public endpoint is now the source of truth for active-cycle,
+  // future, and capacity filtering. These values simply format what the
+  // server returns for the public page.
+  const availableSlots = slots;
   const totalAvailableSpots = availableSlots.reduce((sum, slot) => sum + slot.remaining, 0);
-  const totalSpots = slots.reduce((sum, slot) => sum + slot.capacity, 0);
+  const totalSpots = availableSlots.reduce((sum, slot) => sum + slot.capacity, 0);
 
   return (
     <Box>
@@ -364,17 +333,24 @@ export default function CoffeeChatsPublic() {
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
                 <CircularProgress />
               </Box>
-            ) : availableSlots.length === 0 ? (
+            ) : !activeCycle ? (
               <Box sx={{ textAlign: 'center', p: 4 }}>
                 <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
-                  {slots.length === 0 ? 'No Meeting Slots Available' : 'No Available Meeting Slots'}
+                  No Active Recruiting Cycle
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {slots.length === 0 
-                    ? 'Check back later for new meeting opportunities.'
-                    : 'All meeting slots are either full or have passed. Check back later for new meeting opportunities.'
-                  }
+                  Meeting slots will appear when the next recruiting cycle opens.
+                </Typography>
+              </Box>
+            ) : slots.length === 0 ? (
+              <Box sx={{ textAlign: 'center', p: 4 }}>
+                <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
+                <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
+                  No Meeting Slots Available
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Check back later for new meeting opportunities.
                 </Typography>
               </Box>
             ) : (
@@ -423,7 +399,11 @@ export default function CoffeeChatsPublic() {
                             {formatDateTime(slot.startTime)}
                           </Typography>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <PersonIcon sx={{ fontSize: { xs: 18, md: 16 }, color: 'text.secondary' }} />
+                            <PublicHostAvatar
+                              name={slot.memberName}
+                              profileImage={slot.memberProfileImage}
+                              size={28}
+                            />
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.875rem' } }}>
                               {slot.memberName}
                             </Typography>
