@@ -21,6 +21,17 @@ import {
 
 const router = express.Router();
 
+// Calendar sync is best-effort: an interview that exists must never be reported as a failed request,
+// because the client would retry the create and mint a second interview (and a second invite).
+async function bestEffortCalendarSync(interviewId, reason) {
+  try {
+    return await syncInterviewCalendarEvent(interviewId, { reason });
+  } catch (error) {
+    console.error(`[InterviewCalendar] Unexpected sync failure for interview ${interviewId}:`, error?.message);
+    return { status: 'FAILED', error: 'Calendar invite could not be sent. Use "Send invites" to retry.' };
+  }
+}
+
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -1819,7 +1830,7 @@ router.post('/interviews', async (req, res) => {
       }
     });
 
-    const calendarSync = await syncInterviewCalendarEvent(interview.id, { reason: 'interview created' });
+    const calendarSync = await bestEffortCalendarSync(interview.id, 'interview created');
 
     res.json({ ...interview, calendarSync });
   } catch (error) {
@@ -2113,7 +2124,7 @@ router.patch('/interviews/:id/config', async (req, res) => {
     });
 
     // The member groups in this config are the interviewer roster, so keep the invite in step
-    const calendarSync = await syncInterviewCalendarEvent(id, { reason: 'roster updated' });
+    const calendarSync = await bestEffortCalendarSync(id, 'roster updated');
 
     res.json({ ...updatedInterview, calendarSync });
   } catch (error) {
@@ -2132,7 +2143,7 @@ router.post('/interviews/:id/calendar-sync', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
 
-    const calendarSync = await syncInterviewCalendarEvent(id, { reason: 'manual retry' });
+    const calendarSync = await bestEffortCalendarSync(id, 'manual retry');
     res.json(calendarSync);
   } catch (error) {
     console.error('[POST /api/admin/interviews/:id/calendar-sync]', error);

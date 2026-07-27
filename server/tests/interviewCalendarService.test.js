@@ -16,8 +16,8 @@ vi.mock('../src/services/google/calendar.js', () => ({
 }));
 
 const prisma = (await import('../src/prismaClient.js')).default;
-const { deleteEventById, isCalendarConfigured } = await import('../src/services/google/calendar.js');
-const { cancelInterviewCalendarEvent } = await import('../src/services/interviewCalendar.js');
+const { deleteEventById, insertEventWithId, isCalendarConfigured } = await import('../src/services/google/calendar.js');
+const { cancelInterviewCalendarEvent, syncInterviewCalendarEvent } = await import('../src/services/interviewCalendar.js');
 
 const INTERVIEW = { id: 'interview-1', calendarEventId: 'ucatsinterview1' };
 
@@ -92,5 +92,41 @@ describe('cancelInterviewCalendarEvent', () => {
     expect(result.status).toBe('CANCELLED');
     expect(deleteEventById).toHaveBeenCalledWith(INTERVIEW.calendarEventId);
     expect(prisma.interview.update.mock.calls[0][0].data.calendarEventId).toBeNull();
+  });
+});
+
+describe('syncInterviewCalendarEvent', () => {
+  const SYNCABLE = {
+    id: 'interview-2',
+    title: 'Round One',
+    interviewType: 'ROUND_ONE',
+    startDate: '2026-02-14T17:00:00.000Z',
+    endDate: '2026-02-14T19:30:00.000Z',
+    location: 'Anderson 121',
+    description: null,
+    calendarEventId: null,
+    calendarAttendees: [],
+    cycle: { name: 'Fall 2026' },
+    assignments: [{ userId: 'user-1' }]
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isCalendarConfigured.mockReturnValue(true);
+    prisma.interview.findUnique.mockResolvedValue({ ...SYNCABLE });
+    prisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'lead@ucla.edu', fullName: 'Lead' }]);
+    insertEventWithId.mockResolvedValue({ id: 'ucatsinterview2' });
+  });
+
+  test('still reports the created event when the sync-state write fails', async () => {
+    prisma.interview.update.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await syncInterviewCalendarEvent(SYNCABLE.id, { reason: 'interview created' });
+
+    // Throwing here would fail POST /interviews, and the client's retry would mint a second
+    // interview ID — and therefore a second event.
+    expect(result.status).toBe('SYNCED');
+    expect(result.calendarEventId).toBe('ucatsinterview2');
+    expect(result.error).toMatch(/could not be saved/);
   });
 });

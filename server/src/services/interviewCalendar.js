@@ -169,27 +169,34 @@ async function persistSyncResult(interview, { status, calendarEventId, attendees
   if (calendarEventId !== undefined) data.calendarEventId = calendarEventId;
   if (attendees !== undefined) data.calendarAttendees = attendees;
 
-  await updateInterviewSyncFields(interview.id, data);
+  const persisted = await updateInterviewSyncFields(interview.id, data);
 
   return {
     status,
-    error,
+    // Losing the sync-state write does not undo the invite, so say so instead of failing the caller:
+    // the next sync reuses the deterministic event ID and patches the same event.
+    error: persisted
+      ? error
+      : [error, 'Calendar sync state could not be saved; reload to see the current status.'].filter(Boolean).join(' '),
     calendarEventId: calendarEventId ?? interview.calendarEventId ?? null,
     invited: changes?.added || [],
     removed: changes?.removed || []
   };
 }
 
-// The calendar columns are additive, so a server running ahead of its migration should degrade to
-// "not synced" rather than break interview creation.
+// Never throws: calendar sync is best-effort, so a failed sync-state write must not roll back or
+// fail the request that triggered it. The calendar columns are also additive, so a server running
+// ahead of its migration degrades to "not synced".
 async function updateInterviewSyncFields(interviewId, data) {
   try {
     await prisma.interview.update({ where: { id: interviewId }, data });
+    return true;
   } catch (updateError) {
     if (updateError?.code === 'P2021' || updateError?.code === 'P2022') {
       console.warn('[InterviewCalendar] Calendar sync columns are missing — run prisma migrate deploy.');
-      return;
+    } else {
+      console.error(`[InterviewCalendar] Failed to persist sync state for interview ${interviewId}:`, updateError?.message);
     }
-    throw updateError;
+    return false;
   }
 }
