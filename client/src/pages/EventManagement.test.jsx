@@ -103,7 +103,7 @@ describe('EventManagement cycle-portable copy', () => {
     expect(screen.getByLabelText('Target Cycle')).toBeInTheDocument();
   });
 
-  it('requests a preview when cycles are selected', async () => {
+  it('requests a preview and renders editable event fields', async () => {
     const preview = {
       sourceCycle: { id: 'cycle-source', name: 'Fall 2025' },
       targetCycle: { id: 'cycle-target', name: 'Fall 2026' },
@@ -155,5 +155,90 @@ describe('EventManagement cycle-portable copy', () => {
     expect(screen.getByDisplayValue('Info Session')).toBeInTheDocument();
     expect(screen.getByLabelText(/Start date for Info Session/)).toBeInTheDocument();
     expect(screen.getByLabelText(/Location for Info Session/)).toBeInTheDocument();
+  });
+
+  it('commits a copy with edited dates and locations, interpreting input as Los Angeles time', async () => {
+    apiClient.post.mockImplementation((url, body) => {
+      if (url === '/admin/events/copy-preview') {
+        return Promise.resolve({
+          sourceCycle: { id: 'cycle-source', name: 'Fall 2025' },
+          targetCycle: { id: 'cycle-target', name: 'Fall 2026' },
+          events: [
+            {
+              sourceEventId: 'event-1',
+              eventName: 'Info Session',
+              eventStartDate: '2025-09-01T18:00:00.000Z',
+              eventEndDate: '2025-09-01T20:00:00.000Z',
+              eventLocation: 'Room A',
+              showToCandidates: true,
+              rsvpForm: 'https://forms.gle/old-rsvp',
+              attendanceForm: '',
+              memberRsvpUrl: '',
+              alreadyExists: false,
+            },
+          ],
+        });
+      }
+      if (url === '/admin/events/copy-commit') {
+        return Promise.resolve({
+          copiedCount: 1,
+          skippedCount: 0,
+          targetCycle: { id: 'cycle-target', name: 'Fall 2026' },
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <MemoryRouter>
+        <EventManagement />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Copy from Cycle')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText('Copy from Cycle'));
+
+    await user.selectOptions(screen.getByLabelText('Source Cycle'), 'cycle-source');
+    await user.selectOptions(screen.getByLabelText('Target Cycle'), 'cycle-target');
+
+    fireEvent.click(screen.getByText('Preview Events'));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Info Session')).toBeInTheDocument();
+    });
+
+    const startInputDiv = screen.getByLabelText(/Start date for Info Session/);
+    const startInput = startInputDiv.querySelector('input');
+    const endInputDiv = screen.getByLabelText(/End date for Info Session/);
+    const endInput = endInputDiv.querySelector('input');
+    const locationInputDiv = screen.getByLabelText(/Location for Info Session/);
+    const locationInput = locationInputDiv.querySelector('input');
+
+    fireEvent.change(startInput, { target: { value: '2026-09-15T18:00' } });
+    fireEvent.change(endInput, { target: { value: '2026-09-15T20:00' } });
+    fireEvent.change(locationInput, { target: { value: 'Room B' } });
+
+    fireEvent.click(screen.getByText('Copy Events'));
+
+    await waitFor(() => {
+      expect(apiClient.post).toHaveBeenCalledWith(
+        '/admin/events/copy-commit',
+        expect.objectContaining({
+          sourceCycleId: 'cycle-source',
+          targetCycleId: 'cycle-target',
+          force: false,
+        })
+      );
+    });
+
+    const commitCall = apiClient.post.mock.calls.find(([url]) => url === '/admin/events/copy-commit');
+    const committedEvent = commitCall[1].events[0];
+    // 2026-09-15T18:00 in Los Angeles (PDT, UTC-7) is 2026-09-16T01:00 UTC
+    expect(committedEvent.eventStartDate).toBe('2026-09-16T01:00:00.000Z');
+    expect(committedEvent.eventLocation).toBe('Room B');
+    expect(committedEvent.sourceEventId).toBe('event-1');
   });
 });

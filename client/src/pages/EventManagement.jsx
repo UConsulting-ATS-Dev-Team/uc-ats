@@ -29,7 +29,7 @@ import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
-import { formatInLA } from '../../../server/src/utils/timezoneUtils';
+import { formatInLA, localInputToUTC } from '../../../server/src/utils/timezoneUtils';
 
 export default function EventManagement() {
   const [events, setEvents] = useState([]);
@@ -81,13 +81,24 @@ export default function EventManagement() {
   const { user } = useAuth();
 
   function formatForDateTimeLocal(date, timeZone) {
-    const d = new Date(
-      new Date(date).toLocaleString("en-US", { timeZone })
-    )
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
 
-    const pad = (n) => String(n).padStart(2, "0")
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
 
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    const parts = Object.fromEntries(
+      formatter.formatToParts(d).map((p) => [p.type, p.value])
+    );
+
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
 
 
@@ -191,6 +202,9 @@ export default function EventManagement() {
     const errors = [];
     for (let i = 0; i < copyEvents.length; i++) {
       const evt = copyEvents[i];
+      if (!evt.sourceEventId) {
+        errors.push(`Row ${i + 1}: Source event reference is missing`);
+      }
       if (!evt.eventName || !evt.eventName.trim()) {
         errors.push(`Row ${i + 1}: Event name is required`);
       }
@@ -200,7 +214,9 @@ export default function EventManagement() {
       if (!evt.eventEndDate) {
         errors.push(`Row ${i + 1}: End date is required`);
       }
-      if (evt.eventStartDate && evt.eventEndDate && new Date(evt.eventStartDate) >= new Date(evt.eventEndDate)) {
+      const startUTC = evt.eventStartDate ? localInputToUTC(evt.eventStartDate) : null;
+      const endUTC = evt.eventEndDate ? localInputToUTC(evt.eventEndDate) : null;
+      if (startUTC && endUTC && startUTC >= endUTC) {
         errors.push(`Row ${i + 1}: End date must be after start date`);
       }
       const urlFields = ['rsvpForm', 'attendanceForm', 'memberRsvpUrl'];
@@ -237,8 +253,8 @@ export default function EventManagement() {
 
       const eventsToCommit = copyEvents.map((evt) => ({
         ...evt,
-        eventStartDate: new Date(evt.eventStartDate).toISOString(),
-        eventEndDate: new Date(evt.eventEndDate).toISOString(),
+        eventStartDate: localInputToUTC(evt.eventStartDate).toISOString(),
+        eventEndDate: localInputToUTC(evt.eventEndDate).toISOString(),
       }));
 
       const result = await apiClient.post('/admin/events/copy-commit', {

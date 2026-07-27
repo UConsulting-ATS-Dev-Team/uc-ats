@@ -1740,6 +1740,7 @@ router.post('/events/copy-commit', async (req, res) => {
       sourceCycleId,
       targetCycleId,
       events,
+      actorId: req.user?.id,
       force: Boolean(force)
     });
     res.status(201).json(result);

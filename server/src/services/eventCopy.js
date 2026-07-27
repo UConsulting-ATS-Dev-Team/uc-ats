@@ -4,6 +4,8 @@
 // event metadata only and never copies registrations, candidate data,
 // calendar provider events, attachments, or source event records.
 
+import { localInputToUTC } from '../utils/timezoneUtils.js';
+
 // Approved portable event fields. Fields marked `required` are validated on
 // commit. `editable` fields are shown in the preview table for explicit edits.
 export const PORTABLE_EVENT_FIELDS = [
@@ -86,7 +88,7 @@ export async function previewCycleEventCopy({ prisma, sourceCycleId, targetCycle
   };
 }
 
-export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleId, events, force = false }) {
+export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleId, events, actorId, force = false }) {
   if (!sourceCycleId || !targetCycleId) {
     throw new Error('Source and target cycle IDs are required');
   }
@@ -107,19 +109,34 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
     throw new Error('At least one event must be selected to copy');
   }
 
-  const targetEvents = await prisma.events.findMany({
-    where: { cycleId: targetCycleId },
-    select: { id: true, eventName: true },
+  // Load source events once for tamper/cross-cycle validation. Each committed
+  // row must reference an event that actually exists in the selected source
+  // cycle. The server never trusts arbitrary client-shaped payloads.
+  const sourceEvents = await prisma.events.findMany({
+    where: { cycleId: sourceCycleId },
+    orderBy: { eventStartDate: 'asc' },
   });
-  const targetNames = new Map(targetEvents.map((e) => [e.eventName.toLowerCase(), e]));
+  const sourceById = new Map(sourceEvents.map((e) => [e.id, e]));
 
   const validationErrors = [];
-  const eventsToCreate = [];
-  const skipped = [];
 
   for (let i = 0; i < events.length; i++) {
     const evt = events[i];
     const index = i + 1;
+
+    if (!evt.sourceEventId) {
+      validationErrors.push({ index, field: 'sourceEventId', message: 'Source event reference is required' });
+      continue;
+    }
+
+    if (!sourceById.has(evt.sourceEventId)) {
+      validationErrors.push({
+        index,
+        field: 'sourceEventId',
+        message: 'Source event does not exist in the selected source cycle',
+      });
+      continue;
+    }
 
     if (!evt.eventName || !evt.eventName.trim()) {
       validationErrors.push({ index, field: 'eventName', message: 'Event name is required' });
@@ -154,33 +171,6 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
       validationErrors.push({ index, field: 'memberRsvpUrl', message: 'Member RSVP form must be a valid URL' });
       continue;
     }
-
-    const existing = targetNames.get(evt.eventName.toLowerCase());
-    if (existing && !force) {
-      validationErrors.push({
-        index,
-        field: 'eventName',
-        message: `An event named "${evt.eventName}" already exists in the target cycle. Pass force=true to re-run.`,
-      });
-      continue;
-    }
-
-    if (existing && force) {
-      skipped.push({ sourceEventId: evt.sourceEventId, eventName: evt.eventName, targetEventId: existing.id });
-      continue;
-    }
-
-    eventsToCreate.push({
-      cycleId: targetCycleId,
-      eventName: evt.eventName.trim(),
-      eventStartDate: new Date(start),
-      eventEndDate: new Date(end),
-      eventLocation: evt.eventLocation ? evt.eventLocation.trim() : null,
-      showToCandidates: Boolean(evt.showToCandidates),
-      rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
-      attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
-      memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
-    });
   }
 
   if (validationErrors.length > 0) {
@@ -191,28 +181,92 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
   }
 
   let created = [];
-  if (eventsToCreate.length > 0) {
+  let skipped = [];
+
+  if (events.length > 0) {
     await prisma.$transaction(async (tx) => {
-      created = await Promise.all(
-        eventsToCreate.map((data) =>
-          tx.events.create({
-            data,
-            select: {
-              id: true,
-              eventName: true,
-              eventStartDate: true,
-              eventEndDate: true,
-              eventLocation: true,
-              cycleId: true,
-              showToCandidates: true,
-              rsvpForm: true,
-              attendanceForm: true,
-              memberRsvpUrl: true,
-              createdAt: true,
-            },
-          })
-        )
-      );
+      // Serialize copy commits for this target cycle to prevent concurrent
+      // duplicate inserts. Long-term idempotency (reruns with the same source
+      // event) still needs a durable copy key/unique constraint on the events
+      // table or a dedicated copy audit table.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('event_copy_' || ${targetCycleId})::bigint)`;
+
+      const targetEvents = await tx.events.findMany({
+        where: { cycleId: targetCycleId },
+        select: { id: true, eventName: true },
+      });
+      const targetNames = new Map(targetEvents.map((e) => [e.eventName.toLowerCase(), e]));
+
+      const eventsToCreate = [];
+
+      for (let i = 0; i < events.length; i++) {
+        const evt = events[i];
+        const source = sourceById.get(evt.sourceEventId);
+        const start = toIsoString(evt.eventStartDate);
+        const end = toIsoString(evt.eventEndDate);
+
+        const existing = targetNames.get(evt.eventName.toLowerCase());
+        if (existing && !force) {
+          throw new Error(
+            `An event named "${evt.eventName}" already exists in the target cycle. Pass force=true to re-run.`
+          );
+        }
+
+        if (existing && force) {
+          skipped.push({ sourceEventId: evt.sourceEventId, eventName: evt.eventName, targetEventId: existing.id });
+          continue;
+        }
+
+        eventsToCreate.push({
+          cycleId: targetCycleId,
+          eventName: evt.eventName.trim(),
+          eventStartDate: new Date(start),
+          eventEndDate: new Date(end),
+          eventLocation: evt.eventLocation ? evt.eventLocation.trim() : null,
+          showToCandidates: Boolean(evt.showToCandidates),
+          rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
+          attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
+          memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
+          // Provenance fields (sourceEventId, sourceCycleId, actorId, copiedAt)
+          // cannot be persisted without adding them to the Events model or
+          // creating a copy-audit table. The service returns the mapping in the
+          // response for now and validates the source reference server-side.
+          _sourceEventId: evt.sourceEventId,
+          _sourceCycleId: sourceCycleId,
+          _actorId: actorId,
+        });
+      }
+
+      const inserted = eventsToCreate.length > 0
+        ? await Promise.all(
+            eventsToCreate.map((data) => {
+              const { _sourceEventId, _sourceCycleId, _actorId, ...createData } = data;
+              return tx.events.create({
+                data: createData,
+                select: {
+                  id: true,
+                  eventName: true,
+                  eventStartDate: true,
+                  eventEndDate: true,
+                  eventLocation: true,
+                  cycleId: true,
+                  showToCandidates: true,
+                  rsvpForm: true,
+                  attendanceForm: true,
+                  memberRsvpUrl: true,
+                  createdAt: true,
+                },
+              });
+            })
+          )
+        : [];
+
+      created = inserted.map((c, i) => ({
+        ...c,
+        sourceEventId: eventsToCreate[i]._sourceEventId,
+        sourceCycleId: eventsToCreate[i]._sourceCycleId,
+        actorId: eventsToCreate[i]._actorId,
+      }));
     });
   }
 

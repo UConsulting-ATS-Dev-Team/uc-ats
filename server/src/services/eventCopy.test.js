@@ -18,6 +18,19 @@ describe('eventCopy service', () => {
     cycleId: sourceCycle.id,
   };
 
+  const secondSourceEvent = {
+    id: 'event-2',
+    eventName: 'Resume Workshop',
+    eventStartDate: new Date('2025-09-15T17:00:00.000Z'),
+    eventEndDate: new Date('2025-09-15T19:00:00.000Z'),
+    eventLocation: 'Zoom',
+    rsvpForm: '',
+    attendanceForm: '',
+    memberRsvpUrl: '',
+    showToCandidates: true,
+    cycleId: sourceCycle.id,
+  };
+
   function createMockPrisma({ targetEvents = [] } = {}) {
     const events = {
       findMany: vi.fn(),
@@ -30,8 +43,12 @@ describe('eventCopy service', () => {
     const mockPrisma = {
       recruitingCycle,
       events,
+      $queryRaw: vi.fn(),
       $transaction: vi.fn((cb) => {
-        const tx = { events: { create: events.create } };
+        const tx = {
+          $queryRaw: mockPrisma.$queryRaw,
+          events: { findMany: events.findMany, create: events.create },
+        };
         return cb(tx);
       }),
     };
@@ -43,7 +60,7 @@ describe('eventCopy service', () => {
     });
 
     events.findMany.mockImplementation(({ where }) => {
-      if (where.cycleId === sourceCycle.id) return [sourceEvent];
+      if (where.cycleId === sourceCycle.id) return [sourceEvent, secondSourceEvent];
       if (where.cycleId === targetCycle.id) return targetEvents;
       return [];
     });
@@ -76,7 +93,7 @@ describe('eventCopy service', () => {
 
     expect(result.sourceCycle).toEqual({ id: sourceCycle.id, name: sourceCycle.name });
     expect(result.targetCycle).toEqual({ id: targetCycle.id, name: targetCycle.name });
-    expect(result.events).toHaveLength(1);
+    expect(result.events).toHaveLength(2);
     expect(result.events[0].sourceEventId).toBe(sourceEvent.id);
     expect(result.events[0].eventName).toBe(sourceEvent.eventName);
     expect(result.events[0].alreadyExists).toBe(false);
@@ -135,7 +152,7 @@ describe('eventCopy service', () => {
     });
 
     expect(result.copiedCount).toBe(1);
-    expect(result.created[0]).toEqual({ id: 'new-event-1' });
+    expect(result.created[0]).toMatchObject({ id: 'new-event-1', sourceEventId: sourceEvent.id });
     expect(mockPrisma.events.create).toHaveBeenCalledWith({
       data: {
         cycleId: targetCycle.id,
@@ -207,6 +224,54 @@ describe('eventCopy service', () => {
     ).rejects.toThrow('Validation failed');
   });
 
+  it('rejects a missing source event reference', async () => {
+    const mockPrisma = createMockPrisma();
+
+    const events = [
+      {
+        sourceEventId: '',
+        eventName: 'Info Session Copy',
+        eventStartDate: '2026-09-01T18:00:00.000Z',
+        eventEndDate: '2026-09-01T20:00:00.000Z',
+        eventLocation: 'Room B',
+        showToCandidates: false,
+      },
+    ];
+
+    await expect(
+      commitCycleEventCopy({
+        prisma: mockPrisma,
+        sourceCycleId: sourceCycle.id,
+        targetCycleId: targetCycle.id,
+        events,
+      })
+    ).rejects.toThrow('Validation failed');
+  });
+
+  it('rejects a tampered or cross-cycle source event id', async () => {
+    const mockPrisma = createMockPrisma();
+
+    const events = [
+      {
+        sourceEventId: 'tampered-event-id',
+        eventName: 'Info Session Copy',
+        eventStartDate: '2026-09-01T18:00:00.000Z',
+        eventEndDate: '2026-09-01T20:00:00.000Z',
+        eventLocation: 'Room B',
+        showToCandidates: false,
+      },
+    ];
+
+    await expect(
+      commitCycleEventCopy({
+        prisma: mockPrisma,
+        sourceCycleId: sourceCycle.id,
+        targetCycleId: targetCycle.id,
+        events,
+      })
+    ).rejects.toThrow('Validation failed');
+  });
+
   it('rejects duplicate event names in the target cycle unless force is set', async () => {
     const targetEvents = [{ id: 'event-existing', eventName: 'Info Session' }];
     const mockPrisma = createMockPrisma({ targetEvents });
@@ -229,7 +294,7 @@ describe('eventCopy service', () => {
         targetCycleId: targetCycle.id,
         events,
       })
-    ).rejects.toThrow('Validation failed');
+    ).rejects.toThrow('already exists');
   });
 
   it('skips duplicates and creates remaining events when force is set', async () => {
@@ -247,7 +312,7 @@ describe('eventCopy service', () => {
         showToCandidates: false,
       },
       {
-        sourceEventId: 'event-2',
+        sourceEventId: secondSourceEvent.id,
         eventName: 'New Event',
         eventStartDate: '2026-09-02T18:00:00.000Z',
         eventEndDate: '2026-09-02T20:00:00.000Z',
@@ -266,6 +331,33 @@ describe('eventCopy service', () => {
 
     expect(result.skippedCount).toBe(1);
     expect(result.copiedCount).toBe(1);
-    expect(result.created[0]).toEqual({ id: 'new-event-2' });
+    expect(result.created[0]).toMatchObject({ id: 'new-event-2', sourceEventId: secondSourceEvent.id });
+  });
+
+  it('acquires an advisory lock inside the commit transaction', async () => {
+    const mockPrisma = createMockPrisma();
+    mockPrisma.events.create.mockResolvedValue({ id: 'new-event-1' });
+
+    const events = [
+      {
+        sourceEventId: sourceEvent.id,
+        eventName: 'Info Session Copy',
+        eventStartDate: '2026-09-01T18:00:00.000Z',
+        eventEndDate: '2026-09-01T20:00:00.000Z',
+        eventLocation: 'Room B',
+        showToCandidates: false,
+      },
+    ];
+
+    await commitCycleEventCopy({
+      prisma: mockPrisma,
+      sourceCycleId: sourceCycle.id,
+      targetCycleId: targetCycle.id,
+      events,
+    });
+
+    expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+    const rawArgs = mockPrisma.$queryRaw.mock.calls[0].slice(1);
+    expect(rawArgs).toContain(targetCycle.id);
   });
 });
