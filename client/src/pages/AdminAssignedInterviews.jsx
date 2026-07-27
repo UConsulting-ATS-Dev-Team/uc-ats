@@ -1196,7 +1196,8 @@ export default function AdminAssignedInterviews() {
                             </>
                           ) : (
                             <span>
-                              {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })} - 
+                              {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })}
+                              {' - '}
                               {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })}
                             </span>
                           )}
