@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 import {
   Box,
   Typography,
@@ -593,9 +594,7 @@ function TimeSlotsTab({
                   <TableRow key={slot.id} hover sx={{ cursor: 'pointer' }} onClick={() => onView(slot)}>
                     <TableCell>
                       <Stack direction="row" spacing={1} alignItems="center">
-                        <Avatar src={slot.member?.profileImage || undefined} sx={{ width: 28, height: 28, fontSize: 13 }}>
-                          {slot.member?.fullName?.[0] || '?'}
-                        </Avatar>
+                        <MemberAvatar member={slot.member} size={28} />
                         <Typography variant="body2">{slot.member?.fullName || 'Unknown'}</Typography>
                       </Stack>
                     </TableCell>
@@ -713,7 +712,7 @@ function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, on
             <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
               <Typography variant="overline" color="text.secondary" display="block" gutterBottom>Host (UC member)</Typography>
               <Stack direction="row" spacing={1.5} alignItems="flex-start">
-                <Avatar src={slot.member?.profileImage || undefined}>{slot.member?.fullName?.[0] || '?'}</Avatar>
+                <MemberAvatar member={slot.member} size={40} />
                 <Box sx={{ minWidth: 0 }}>
                   <Typography fontWeight={600} sx={{ wordBreak: 'break-word' }}>
                     {slot.member?.fullName || 'Unknown'}{isYou ? ' (You)' : ''}

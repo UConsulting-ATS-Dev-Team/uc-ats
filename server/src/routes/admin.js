@@ -260,8 +260,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               },
               orderBy: { createdAt: 'desc' }
@@ -272,8 +271,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 interview: {
                   select: {
@@ -291,8 +289,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             },
@@ -302,15 +299,13 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 resolver: {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -322,8 +317,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -333,8 +327,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -344,8 +337,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -357,8 +349,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -372,8 +363,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -387,8 +377,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -1944,8 +1933,7 @@ router.get('/interviews/:id/config', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         });
@@ -2122,8 +2110,7 @@ router.get('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2157,8 +2144,7 @@ router.post('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2196,8 +2182,7 @@ router.patch('/interviews/:id/action-items/:actionItemId', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2455,27 +2440,24 @@ router.get('/applications', async (req, res) => {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberTwoUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberThreeUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           groupMembers: {
             select: {
               userId: true,
-              user: { select: { id: true, fullName: true, email: true } }
+              user: { select: { id: true, fullName: true, email: true, profileImage: true } }
             }
           }
         }
@@ -2937,12 +2919,12 @@ router.get('/staging/candidates', async (req, res) => {
       where: { id: { in: reviewTeamIds } },
       select: {
         id: true,
-        memberOneUser: { select: { fullName: true } },
-        memberTwoUser: { select: { fullName: true } },
-        memberThreeUser: { select: { fullName: true } },
+        memberOneUser: { select: { fullName: true, profileImage: true } },
+        memberTwoUser: { select: { fullName: true, profileImage: true } },
+        memberThreeUser: { select: { fullName: true, profileImage: true } },
         groupMembers: {
           select: {
-            user: { select: { fullName: true } }
+            user: { select: { fullName: true, profileImage: true } }
           }
         }
       }
@@ -3249,13 +3231,13 @@ router.get('/review-teams', async (req, res) => {
       select: {
         id: true,
         name: true,
-        memberOneUser: { select: { id: true, fullName: true, email: true } },
-        memberTwoUser: { select: { id: true, fullName: true, email: true } },
-        memberThreeUser: { select: { id: true, fullName: true, email: true } },
+        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
         groupMembers: {
           select: {
             userId: true,
-            user: { select: { id: true, fullName: true, email: true } }
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       },
@@ -3723,8 +3705,7 @@ router.get('/applications/:id/final-round-interview-evaluations', async (req, re
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         application: {
           select: {
@@ -3955,8 +3936,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         rubricScores: {
           orderBy: { category: 'asc' }
@@ -3982,8 +3962,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5027,8 +5006,7 @@ router.post('/flag-document', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5089,15 +5067,13 @@ router.get('/flagged-documents', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5148,15 +5124,13 @@ router.patch('/flagged-documents/:id/resolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5208,8 +5182,7 @@ router.patch('/flagged-documents/:id/unresolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5266,7 +5239,8 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
       groupMembers: groupMembers.map(member => ({
         id: member.id,
         fullName: member.fullName,
-        email: member.email
+        email: member.email,
+        profileImage: member.profileImage
       })),
       candidate: {
         id: flaggedDocument.application.candidate?.id,
@@ -5347,8 +5321,7 @@ router.patch('/resume-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5402,8 +5375,7 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5452,8 +5424,7 @@ router.patch('/video-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5677,7 +5648,7 @@ router.delete('/meeting-slots/:id', async (req, res) => {
 
     const existingSlot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { signups: true, member: { select: { fullName: true, email: true } } }
+      include: { signups: true, member: { select: { fullName: true, email: true, profileImage: true } } }
     });
 
     if (!existingSlot) {
@@ -5789,7 +5760,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     const signup = await prisma.meetingSignup.findUnique({
       where: { id },
-      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
+      include: { slot: { include: { member: { select: { fullName: true, email: true, profileImage: true } } } } }
     });
 
     if (!signup) {

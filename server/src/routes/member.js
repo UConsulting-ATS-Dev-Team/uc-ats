@@ -547,8 +547,10 @@ router.get('/my-team', requireAuth, async (req, res) => {
       members: members.map(member => ({
         id: member.id,
         name: member.fullName,
+        fullName: member.fullName,
         email: member.email,
-        avatar: null
+        profileImage: member.profileImage,
+        avatar: member.profileImage
       })),
       applications,
       cycleId: userTeam.cycleId,
@@ -708,8 +710,7 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         });
@@ -967,7 +968,7 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
       include: { 
         signups: true,
         member: {
-          select: { fullName: true }
+          select: { fullName: true, profileImage: true }
         }
       }
     });
@@ -1043,7 +1044,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
         slot: {
           include: {
             member: {
-              select: { fullName: true }
+              select: { fullName: true, profileImage: true }
             }
           }
         }
@@ -1498,8 +1499,7 @@ router.post('/message-admin', requireAuth, async (req, res) => {
         select: {
           fullName: true,
           email: true,
-          role: true
-        }
+          role: true, profileImage: true }
       });
     } catch (dbError) {
       console.error('[POST /api/member/message-admin] Database error:', dbError);
@@ -1660,8 +1660,7 @@ router.post('/flag-document', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });

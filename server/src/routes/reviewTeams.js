@@ -41,13 +41,13 @@ router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
             }
           }
         },
-        memberOneUser: { select: { id: true, fullName: true, email: true } },
-        memberTwoUser: { select: { id: true, fullName: true, email: true } },
-        memberThreeUser: { select: { id: true, fullName: true, email: true } },
+        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
         groupMembers: {
           select: {
             userId: true,
-            user: { select: { id: true, fullName: true, email: true } }
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       }
@@ -156,7 +156,7 @@ router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmi
 
     const reviewer = await prisma.user.findUnique({
       where: { id: reviewerId },
-      select: { id: true, fullName: true, email: true }
+      select: { id: true, fullName: true, email: true, profileImage: true }
     });
 
     if (!reviewer) {
@@ -257,27 +257,24 @@ router.get('/', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberTwoUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberThreeUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         groupMembers: {
           select: {
             userId: true,
-            user: { select: { id: true, fullName: true, email: true } }
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         },
         assignedCandidates: {
@@ -330,8 +327,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -350,8 +346,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -370,8 +365,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -491,8 +485,10 @@ router.get('/', requireAuth, async (req, res) => {
         members: members.map(member => ({
           id: member.id,
           name: member.fullName,
+          fullName: member.fullName,
           email: member.email,
-          avatar: null
+          profileImage: member.profileImage,
+          avatar: member.profileImage
         })),
         applications,
         cycleId: group.cycleId,
@@ -582,8 +578,10 @@ router.post('/', requireAuth, async (req, res) => {
       members: members.map(member => ({
         id: member.id,
         name: member.fullName,
+        fullName: member.fullName,
         email: member.email,
-        avatar: null
+        profileImage: member.profileImage,
+        avatar: member.profileImage
       })),
       applications: [],
       cycleId: group.cycleId,
@@ -809,8 +807,10 @@ router.put('/:groupId/members', requireAuth, async (req, res) => {
     const transformedMembers = members.map(member => ({
       id: member.id,
       name: member.fullName,
+      fullName: member.fullName,
       email: member.email,
-      avatar: null
+      profileImage: member.profileImage,
+      avatar: member.profileImage
     }));
 
     res.json(transformedMembers);
@@ -874,8 +874,10 @@ router.delete('/:groupId/members/:memberId', requireAuth, async (req, res) => {
     const transformedMembers = members.map(member => ({
       id: member.id,
       name: member.fullName,
+      fullName: member.fullName,
       email: member.email,
-      avatar: null
+      profileImage: member.profileImage,
+      avatar: member.profileImage
     }));
 
     res.json(transformedMembers);
@@ -1200,27 +1202,24 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberTwoUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberThreeUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         groupMembers: {
           select: {
             userId: true,
-            user: { select: { id: true, fullName: true, email: true } }
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       }
@@ -1625,8 +1624,7 @@ router.get('/resume-scores/:candidateId', requireAuth, requireAdminOrMember, asy
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {
@@ -1784,8 +1782,7 @@ router.get('/cover-letter-scores/:candidateId', requireAuth, requireAdminOrMembe
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {
@@ -1942,8 +1939,7 @@ router.get('/video-scores/:candidateId', requireAuth, requireAdminOrMember, asyn
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {

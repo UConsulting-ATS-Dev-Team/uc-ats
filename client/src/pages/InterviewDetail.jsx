@@ -30,6 +30,7 @@ import {
   Switch,
   FormControlLabel,
 } from '@mui/material';
+import MemberAvatar from '../components/MemberAvatar';
 import {
   ArrowLeftIcon,
   UserGroupIcon,
@@ -415,9 +416,16 @@ export default function InterviewDetail() {
                     <ListItem key={index} divider>
                       <ListItemText
                         primary={`Group ${index + 1}`}
-                        secondary={pair.map(interviewer => 
-                          `${interviewer.fullName}`
-                        ).join(', ')}
+                        secondary={
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" component="span">
+                            {pair.map(interviewer => (
+                              <Stack key={interviewer.id} direction="row" spacing={0.5} alignItems="center" component="span">
+                                <MemberAvatar member={interviewer} size={20} />
+                                <Typography variant="body2" component="span">{interviewer.fullName}</Typography>
+                              </Stack>
+                            ))}
+                          </Stack>
+                        }
                       />
                     </ListItem>
                   ))}
@@ -444,9 +452,15 @@ export default function InterviewDetail() {
                         <Typography variant="subtitle1" gutterBottom>
                           Interviewer Group {sessionIndex + 1}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          Interviewers: {session.interviewerPair.map(i => i.fullName).join(', ')}
-                        </Typography>
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
+                          <Typography variant="body2" color="text.secondary">Interviewers:</Typography>
+                          {session.interviewerPair.map(i => (
+                            <Stack key={i.id} direction="row" spacing={0.5} alignItems="center">
+                              <MemberAvatar member={i} size={20} />
+                              <Typography variant="body2">{i.fullName}</Typography>
+                            </Stack>
+                          ))}
+                        </Stack>
                         <Typography variant="body2">
                           Candidates: {session.candidatePairs.flat().map(c => 
                             `${c.firstName} ${c.lastName}`

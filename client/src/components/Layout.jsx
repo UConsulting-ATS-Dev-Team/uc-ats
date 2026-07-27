@@ -22,6 +22,7 @@ import {
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
+import MemberAvatar from './MemberAvatar';
 import '../styles/Layout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -106,12 +107,15 @@ const Layout = ({ children }) => {
 
             {/* Right side - User info and logout */}
             <div className="nav-right">
-              <div className="user-info">
-                <p className="user-name">{user?.fullName}</p>
-                <p className="user-role">
-                  {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
-                </p>
-              </div>
+              <Link to="/profile" className="profile-link" aria-label="Edit profile">
+                <MemberAvatar member={user} size={32} />
+                <div className="user-info">
+                  <p className="user-name">{user?.fullName}</p>
+                  <p className="user-role">
+                    {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
+                  </p>
+                </div>
+              </Link>
               <button
                 onClick={handleLogout}
                 className="logout-btn"
