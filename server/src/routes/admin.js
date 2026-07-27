@@ -25,6 +25,8 @@ import {
 
 const router = express.Router();
 
+const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
+
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -417,17 +419,17 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
-// Get all users (with optional role and event RSVP filter)
+// Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role, memberEventRsvpEventId } = req.query;
-    
+    const { role, memberEventRsvpEventId, graduationClass } = req.query;
+
     // Map INTERVIEWER to MEMBER role since that's what we have in the enum
-    let whereClause = {};
+    const whereClause = {};
     if (role === 'INTERVIEWER') {
-      whereClause = { role: 'MEMBER' };
+      whereClause.role = 'MEMBER';
     } else if (role) {
-      whereClause = { role };
+      whereClause.role = role;
     }
 
     // Member event RSVP filter
@@ -436,7 +438,28 @@ router.get('/users', async (req, res) => {
         some: { eventId: memberEventRsvpEventId }
       };
     }
-    
+
+    // Graduation class filter
+    if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
+      if (typeof graduationClass !== 'string') {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      const normalizedClass = graduationClass.trim();
+      if (normalizedClass.length > 100) {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      if (normalizedClass === MISSING_GRADUATION_CLASS) {
+        whereClause.OR = [
+          { graduationClass: null },
+          { graduationClass: '' }
+        ];
+      } else {
+        whereClause.graduationClass = normalizedClass;
+      }
+    }
+
     const users = await prisma.user.findMany({
       where: whereClause,
       select: {
@@ -449,7 +472,7 @@ router.get('/users', async (req, res) => {
       },
       orderBy: { fullName: 'asc' }
     });
-    
+
     res.json(users);
   } catch (error) {
     console.error('[GET /api/admin/users]', error);

@@ -39,6 +39,8 @@ import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
 
 const UserManagement = () => {
+  const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
+
   const { user, updateUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,9 +51,17 @@ const UserManagement = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_searchTerm') : '') || ''
+  );
+  const [roleFilter, setRoleFilter] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_roleFilter') : '') || 'ALL'
+  );
   const [memberEventRsvpFilter, setMemberEventRsvpFilter] = useState('');
+  const [graduationClassFilter, setGraduationClassFilter] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_graduationClassFilter') : '') || ''
+  );
+  const [classOptions, setClassOptions] = useState([]);
   const [events, setEvents] = useState([]);
 
   // Form states
@@ -100,6 +110,7 @@ const UserManagement = () => {
       const params = new URLSearchParams();
       if (roleFilter !== 'ALL') params.append('role', roleFilter);
       if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
+      if (graduationClassFilter) params.append('graduationClass', graduationClassFilter);
       const queryString = params.toString();
       const response = await apiClient.get(`/admin/users${queryString ? '?' + queryString : ''}`);
       setUsers(response);
@@ -234,13 +245,48 @@ const UserManagement = () => {
     if (user?.role === 'ADMIN') {
       fetchUsers();
     }
-  }, [roleFilter, memberEventRsvpFilter]);
+  }, [roleFilter, memberEventRsvpFilter, graduationClassFilter]);
+
+  // Persist filters across refreshes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_searchTerm', searchTerm);
+    }
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_roleFilter', roleFilter);
+    }
+  }, [roleFilter]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_graduationClassFilter', graduationClassFilter);
+    }
+  }, [graduationClassFilter]);
 
   const filteredUsers = users.filter(userItem => {
     const matchesSearch = userItem.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          userItem.email.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesSearch;
   });
+
+  // Accumulate graduation class options from every server response so selecting
+  // a class does not hide the other class options.
+  useEffect(() => {
+    setClassOptions((prev) => {
+      const classes = new Set(prev);
+      users.forEach((userItem) => {
+        const c = (userItem.graduationClass || '').trim();
+        if (c) classes.add(c);
+      });
+      const sorted = Array.from(classes).sort((a, b) => a.localeCompare(b));
+      const prevKey = prev.join('|');
+      const nextKey = sorted.join('|');
+      return prevKey === nextKey ? prev : sorted;
+    });
+  }, [users]);
 
   const getRoleColor = (role) => {
     switch (role) {
@@ -352,7 +398,7 @@ const UserManagement = () => {
                             {/* Search and Filters */}
           <Paper sx={{ p: 1, mb: 2, width: '100%', boxSizing: 'border-box' }}>
             <Grid container spacing={1} sx={{ width: '100%' }}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} sm={6} md={3}>
                 <TextField
                   fullWidth
                   label="Search Users"
@@ -365,7 +411,7 @@ const UserManagement = () => {
                   size="small"
                 />
               </Grid>
-              <Grid item xs={12} md={3}>
+              <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Filter by Role</InputLabel>
                   <Select
@@ -380,7 +426,7 @@ const UserManagement = () => {
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} md={3}>
+              <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Member Event RSVP</InputLabel>
                   <Select
@@ -396,6 +442,53 @@ const UserManagement = () => {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Filter by Class</InputLabel>
+                  <Select
+                    value={graduationClassFilter}
+                    label="Filter by Class"
+                    onChange={(e) => setGraduationClassFilter(e.target.value)}
+                  >
+                    <MenuItem value="">All Classes</MenuItem>
+                    <MenuItem value={MISSING_GRADUATION_CLASS}>Unknown / No class</MenuItem>
+                    {classOptions.map((c) => (
+                      <MenuItem key={`class-${c}`} value={c}>
+                        {c}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  flexWrap="wrap"
+                  alignItems="center"
+                  sx={{ pt: 1 }}
+                >
+                  {roleFilter !== 'ALL' && (
+                    <Chip
+                      label={`Role: ${roleFilter}`}
+                      size="small"
+                      onDelete={() => setRoleFilter('ALL')}
+                    />
+                  )}
+                  {graduationClassFilter && (
+                    <Chip
+                      label={`Class: ${graduationClassFilter === MISSING_GRADUATION_CLASS ? 'Unknown / No class' : graduationClassFilter}`}
+                      size="small"
+                      onDelete={() => setGraduationClassFilter('')}
+                    />
+                  )}
+                  {!loading && (
+                    <Typography variant="body2" color="text.secondary">
+                      {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+                    </Typography>
+                  )}
+                </Stack>
               </Grid>
             </Grid>
           </Paper>
@@ -519,7 +612,7 @@ const UserManagement = () => {
               No users found
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {searchTerm || roleFilter !== 'ALL' 
+              {searchTerm || roleFilter !== 'ALL' || graduationClassFilter
                 ? 'Try adjusting your search or filter criteria.'
                 : 'Get started by creating a new user.'
               }
