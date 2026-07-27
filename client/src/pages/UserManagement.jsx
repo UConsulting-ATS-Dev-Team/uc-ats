@@ -62,6 +62,11 @@ const UserManagement = () => {
     (typeof window !== 'undefined' ? localStorage.getItem('um_graduationClassFilter') : '') || ''
   );
   const [classOptions, setClassOptions] = useState([]);
+  const [classOptionData, setClassOptionData] = useState({
+    total: 0,
+    classes: [],
+    unknown: { value: MISSING_GRADUATION_CLASS, label: 'Unknown / No class', count: 0 }
+  });
   const [events, setEvents] = useState([]);
 
   // Form states
@@ -134,7 +139,8 @@ const UserManagement = () => {
         graduationClass: '',
         role: 'USER'
       });
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
     } catch (err) {
       setError('Failed to create user');
       console.error('Error creating user:', err);
@@ -148,7 +154,8 @@ const UserManagement = () => {
       setShowEditModal(false);
       setSelectedUser(null);
       setSuccess('User information updated successfully!');
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
       if (response?.id === user?.id) {
         updateUser(response);
       }
@@ -164,7 +171,8 @@ const UserManagement = () => {
     try {
       await apiClient.patch(`/users/${userId}/role`, { role: newRole });
       setSuccess('User role updated successfully!');
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -204,7 +212,8 @@ const UserManagement = () => {
 
     try {
       await apiClient.delete(`/users/${userId}`);
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
     } catch (err) {
       setError('Failed to delete user');
       console.error('Error deleting user:', err);
@@ -272,21 +281,46 @@ const UserManagement = () => {
     return matchesSearch;
   });
 
-  // Accumulate graduation class options from every server response so selecting
-  // a class does not hide the other class options.
-  useEffect(() => {
-    setClassOptions((prev) => {
-      const classes = new Set(prev);
-      users.forEach((userItem) => {
-        const c = (userItem.graduationClass || '').trim();
-        if (c) classes.add(c);
-      });
-      const sorted = Array.from(classes).sort((a, b) => a.localeCompare(b));
-      const prevKey = prev.join('|');
-      const nextKey = sorted.join('|');
-      return prevKey === nextKey ? prev : sorted;
+  // Load class options from an independent endpoint that ignores the class
+  // filter so the dropdown still shows every class after a refresh.
+  const fetchClassOptions = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (roleFilter !== 'ALL') params.append('role', roleFilter);
+      if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
+      const queryString = params.toString();
+      const data = await apiClient.get(`/admin/users/classes${queryString ? '?' + queryString : ''}`);
+      setClassOptionData(data);
+    } catch (err) {
+      console.error('Error fetching class options:', err);
+    }
+  };
+
+  const buildClassOptions = (data) => {
+    const options = [
+      { value: '', label: `All Classes (${data.total})` }
+    ];
+    data.classes.forEach((c) => {
+      options.push({ value: c.value, label: `${c.label} (${c.count})` });
     });
-  }, [users]);
+    if (data.unknown.count > 0 || graduationClassFilter === data.unknown.value) {
+      options.push({ value: data.unknown.value, label: `${data.unknown.label} (${data.unknown.count})` });
+    }
+    if (graduationClassFilter && graduationClassFilter !== data.unknown.value && !data.classes.some((c) => c.value === graduationClassFilter)) {
+      options.push({ value: graduationClassFilter, label: `${graduationClassFilter} (0)` });
+    }
+    setClassOptions(options);
+  };
+
+  useEffect(() => {
+    if (user?.role === 'ADMIN') {
+      fetchClassOptions();
+    }
+  }, [user, roleFilter, memberEventRsvpFilter]);
+
+  useEffect(() => {
+    buildClassOptions(classOptionData);
+  }, [classOptionData, graduationClassFilter]);
 
   const getRoleColor = (role) => {
     switch (role) {
@@ -451,11 +485,9 @@ const UserManagement = () => {
                     label="Filter by Class"
                     onChange={(e) => setGraduationClassFilter(e.target.value)}
                   >
-                    <MenuItem value="">All Classes</MenuItem>
-                    <MenuItem value={MISSING_GRADUATION_CLASS}>Unknown / No class</MenuItem>
-                    {classOptions.map((c) => (
-                      <MenuItem key={`class-${c}`} value={c}>
-                        {c}
+                    {classOptions.map((option) => (
+                      <MenuItem key={`class-${option.value}`} value={option.value}>
+                        {option.label}
                       </MenuItem>
                     ))}
                   </Select>

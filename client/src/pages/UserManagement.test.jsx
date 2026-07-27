@@ -42,6 +42,9 @@ describe('UserManagement profile image upload', () => {
       updateUser: vi.fn(),
     });
     vi.spyOn(apiClient, 'get').mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/admin/users/classes')) {
+        return Promise.resolve({ total: 0, classes: [], unknown: { value: '__UNKNOWN_GRADUATION_CLASS__', label: 'Unknown / No class', count: 0 } });
+      }
       if (typeof url === 'string' && url.startsWith('/admin/users')) {
         return Promise.resolve([adminUser]);
       }
@@ -165,6 +168,29 @@ describe('UserManagement graduation class filter', () => {
       updateUser: vi.fn()
     });
     vi.spyOn(apiClient, 'get').mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/admin/users/classes')) {
+        const params = new URLSearchParams(url.split('?')[1] || '');
+        const role = params.get('role');
+        let result = allUsers;
+        if (role) result = result.filter((u) => u.role === role);
+        const counts = new Map();
+        let unknown = 0;
+        let total = 0;
+        result.forEach((u) => {
+          total++;
+          const c = (u.graduationClass || '').trim();
+          if (!c) unknown++;
+          else counts.set(c, (counts.get(c) || 0) + 1);
+        });
+        const classes = Array.from(counts.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([value, count]) => ({ value, label: value, count }));
+        return Promise.resolve({
+          total,
+          classes,
+          unknown: { value: MISSING_GRADUATION_CLASS, label: 'Unknown / No class', count: unknown }
+        });
+      }
       if (typeof url === 'string' && url.startsWith('/admin/users')) {
         const params = new URLSearchParams(url.split('?')[1] || '');
         const role = params.get('role');
@@ -201,10 +227,10 @@ describe('UserManagement graduation class filter', () => {
     const trigger = getClassSelectTrigger();
     fireEvent.mouseDown(trigger);
 
-    expect(screen.getByRole('option', { name: 'All Classes' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Unknown / No class' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Fall 2024' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Spring 2025' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'All Classes (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Unknown / No class (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fall 2024 (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Spring 2025 (1)' })).toBeInTheDocument();
   });
 
   it('filters by an unknown or blank graduation class and shows an active chip with count', async () => {
@@ -218,7 +244,7 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
 
-    selectClassOption('Unknown / No class');
+    selectClassOption('Unknown / No class (1)');
 
     await waitFor(() => {
       expect(apiClient.get).toHaveBeenCalledWith(
@@ -246,7 +272,7 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
 
-    selectClassOption('Spring 2025');
+    selectClassOption('Spring 2025 (1)');
 
     await waitFor(() => {
       expect(apiClient.get).toHaveBeenCalledWith(
@@ -272,7 +298,7 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
 
-    selectClassOption('Spring 2025');
+    selectClassOption('Spring 2025 (1)');
 
     const roleLabel = screen.getByText('Filter by Role', { selector: 'label' });
     const roleControl = roleLabel.closest('.MuiFormControl-root');
@@ -299,7 +325,7 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
 
-    selectClassOption('Spring 2025');
+    selectClassOption('Spring 2025 (1)');
 
     await waitFor(() => {
       expect(screen.getByText('1 user')).toBeInTheDocument();
@@ -325,7 +351,7 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
 
-    selectClassOption('Fall 2024');
+    selectClassOption('Fall 2024 (1)');
 
     await waitFor(() => {
       expect(screen.queryByText('Alice Anderson', { selector: 'h6' })).not.toBeInTheDocument();
@@ -338,5 +364,27 @@ describe('UserManagement graduation class filter', () => {
       expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
     });
     expect(screen.getByText('3 users')).toBeInTheDocument();
+  });
+
+  it('does not hide other class options when a persisted class filter is reloaded', async () => {
+    localStorage.setItem('um_graduationClassFilter', 'Fall 2024');
+
+    render(
+      <MemoryRouter>
+        <UserManagement />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Carol Chen', { selector: 'h6' })).toBeInTheDocument();
+    });
+
+    const trigger = getClassSelectTrigger();
+    fireEvent.mouseDown(trigger);
+
+    expect(screen.getByRole('option', { name: 'All Classes (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fall 2024 (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Spring 2025 (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Unknown / No class (1)' })).toBeInTheDocument();
   });
 });

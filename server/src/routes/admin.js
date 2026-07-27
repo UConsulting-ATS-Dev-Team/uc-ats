@@ -419,25 +419,34 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
+// Helper to build the shared role/event RSVP where-clause for user endpoints.
+// Does NOT apply graduation-class filtering; that is handled by each route.
+function buildBaseUserWhereClause({ role, memberEventRsvpEventId }) {
+  const whereClause = {};
+
+  // Map INTERVIEWER to MEMBER role since that's what we have in the enum
+  if (role === 'INTERVIEWER') {
+    whereClause.role = 'MEMBER';
+  } else if (role) {
+    whereClause.role = role;
+  }
+
+  // Member event RSVP filter
+  if (memberEventRsvpEventId) {
+    whereClause.memberEventRsvp = {
+      some: { eventId: memberEventRsvpEventId }
+    };
+  }
+
+  return whereClause;
+}
+
 // Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
     const { role, memberEventRsvpEventId, graduationClass } = req.query;
 
-    // Map INTERVIEWER to MEMBER role since that's what we have in the enum
-    const whereClause = {};
-    if (role === 'INTERVIEWER') {
-      whereClause.role = 'MEMBER';
-    } else if (role) {
-      whereClause.role = role;
-    }
-
-    // Member event RSVP filter
-    if (memberEventRsvpEventId) {
-      whereClause.memberEventRsvp = {
-        some: { eventId: memberEventRsvpEventId }
-      };
-    }
+    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
 
     // Graduation class filter
     if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
@@ -477,6 +486,53 @@ router.get('/users', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/admin/users]', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get graduation class options and counts for the admin user filter.
+// Independent of the graduation-class filter itself so the dropdown stays usable
+// even when a class filter is already persisted.
+router.get('/users/classes', async (req, res) => {
+  try {
+    const { role, memberEventRsvpEventId } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
+
+    const users = await prisma.user.findMany({
+      where: whereClause,
+      select: { graduationClass: true }
+    });
+
+    const classCounts = new Map();
+    let unknownCount = 0;
+    let totalCount = 0;
+
+    users.forEach((userItem) => {
+      totalCount++;
+      const c = (userItem.graduationClass || '').trim();
+      if (!c) {
+        unknownCount++;
+      } else {
+        classCounts.set(c, (classCounts.get(c) || 0) + 1);
+      }
+    });
+
+    const classes = Array.from(classCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: value, count }));
+
+    res.json({
+      total: totalCount,
+      classes,
+      unknown: {
+        value: MISSING_GRADUATION_CLASS,
+        label: 'Unknown / No class',
+        count: unknownCount
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/users/classes]', error);
+    res.status(500).json({ error: 'Failed to fetch class options' });
   }
 });
 

@@ -185,4 +185,70 @@ describe('GET /api/admin/users', () => {
     const body = await res.json();
     expect(body).toEqual([]);
   });
+
+  async function getClasses(token = tokenFor(adminUser), query = {}) {
+    const qs = new URLSearchParams(query).toString();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(`http://localhost:${port}/api/admin/users/classes${qs ? '?' + qs : ''}`, { headers });
+  }
+
+  describe('GET /api/admin/users/classes', () => {
+    it('returns class options and counts for an admin', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        { graduationClass: 'Fall 2024' },
+        { graduationClass: 'Fall 2024' },
+        { graduationClass: 'Spring 2025' },
+        { graduationClass: '' },
+        { graduationClass: null },
+        { graduationClass: '  ' }
+      ]);
+
+      const res = await getClasses();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.total).toBe(6);
+      expect(body.classes).toEqual([
+        { value: 'Fall 2024', label: 'Fall 2024', count: 2 },
+        { value: 'Spring 2025', label: 'Spring 2025', count: 1 }
+      ]);
+      expect(body.unknown).toEqual({
+        value: '__UNKNOWN_GRADUATION_CLASS__',
+        label: 'Unknown / No class',
+        count: 3
+      });
+    });
+
+    it('rejects unauthenticated requests', async () => {
+      const res = await getClasses(null);
+      expect(res.status).toBe(401);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-admin requests', async () => {
+      const res = await getClasses(tokenFor(memberUser));
+      expect(res.status).toBe(403);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('composes role filter but ignores the graduation class filter', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        { role: 'MEMBER', graduationClass: 'Fall 2024' },
+        { role: 'MEMBER', graduationClass: null }
+      ]);
+
+      const res = await getClasses(tokenFor(adminUser), { role: 'MEMBER', graduationClass: 'Fall 2024' });
+      expect(res.status).toBe(200);
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ role: 'MEMBER' }),
+          select: { graduationClass: true }
+        })
+      );
+      const body = await res.json();
+      expect(body.total).toBe(2);
+      expect(body.classes).toHaveLength(1);
+      expect(body.unknown.count).toBe(1);
+    });
+  });
 });
