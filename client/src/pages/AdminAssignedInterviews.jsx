@@ -507,12 +507,27 @@ export default function AdminAssignedInterviews() {
     setIsEditMode(true);
   };
 
-  const handleSaveInterview = () => {
-    setInterviews(prev => prev.map(interview => 
-      interview.id === editedInterview.id ? editedInterview : interview
-    ));
-    setIsEditMode(false);
-    setEditedInterview(null);
+  const handleSaveInterview = async () => {
+    const { id, title, startDate, endDate, location, dresscode } = editedInterview;
+    try {
+      const updated = await apiClient.patch(`/admin/interviews/${id}`, {
+        title,
+        startDate,
+        endDate,
+        location: location ?? '',
+        dresscode: dresscode ?? ''
+      });
+      setInterviews(prev => prev.map(interview => interview.id === id ? { ...interview, ...updated } : interview));
+      applyCalendarSync(id, updated.calendarSync);
+      if (updated.calendarSync?.error) {
+        alert(`Interview saved, but the calendar invite was not updated: ${updated.calendarSync.error}`);
+      }
+      setIsEditMode(false);
+      setEditedInterview(null);
+    } catch (e) {
+      console.error('Failed to save interview', e);
+      alert(e.message || 'Failed to save interview');
+    }
   };
 
   const handleCancelEdit = () => {

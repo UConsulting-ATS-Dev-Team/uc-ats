@@ -128,6 +128,56 @@ describe('AdminAssignedInterviews create flow', () => {
     });
   });
 
+  it('persists edited interview details and applies the returned calendar sync', async () => {
+    const interview = {
+      id: 'iv-3',
+      title: 'Round One',
+      interviewType: 'ROUND_ONE',
+      startDate: '2026-02-14T17:00:00.000Z',
+      endDate: '2026-02-14T19:30:00.000Z',
+      location: 'Anderson 121',
+      dresscode: 'Business',
+      description: '{}',
+      calendarSyncStatus: 'SYNCED'
+    };
+    apiClient.get = vi.fn((endpoint) => {
+      if (endpoint === '/admin/interviews') return Promise.resolve([interview]);
+      if (endpoint === '/admin/cycles/active') return Promise.resolve({ id: 'cycle-1', name: 'Test Cycle' });
+      if (endpoint === '/admin/profile') return Promise.resolve({ id: 'admin-1', fullName: 'Test Admin', role: 'ADMIN' });
+      return Promise.resolve([]);
+    });
+    apiClient.patch.mockResolvedValue({
+      ...interview,
+      location: 'Kerckhoff 200',
+      calendarSync: { status: 'FAILED', calendarEventId: 'ucatsiv3', error: 'Google Calendar quota exceeded.' }
+    });
+
+    renderWithRouter(<AdminAssignedInterviews />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit Interview')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTitle('Edit Interview'));
+
+    const locationInput = screen.getByPlaceholderText('Location');
+    fireEvent.change(locationInput, { target: { value: 'Kerckhoff 200' } });
+    fireEvent.click(screen.getByTitle('Save Changes'));
+
+    await waitFor(() => {
+      expect(apiClient.patch).toHaveBeenCalledWith('/admin/interviews/iv-3', expect.objectContaining({
+        location: 'Kerckhoff 200',
+        startDate: interview.startDate,
+        endDate: interview.endDate
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Kerckhoff 200')).toBeInTheDocument();
+      expect(screen.getByText('Google Calendar quota exceeded.')).toBeInTheDocument();
+    });
+    expect(alert).toHaveBeenCalledWith(expect.stringContaining('quota exceeded'));
+  });
+
   it('exits the loading state when create fails', async () => {
     apiClient.post.mockRejectedValue(new Error('Server error'));
 

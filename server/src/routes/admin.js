@@ -1923,6 +1923,76 @@ router.get('/interviews/:id', async (req, res) => {
   }
 });
 
+// Update interview details (schedule/location). Keeps the calendar invite on the same provider
+// event so interviewers see an update rather than a second invitation.
+const EDITABLE_INTERVIEW_FIELDS = ['title', 'startDate', 'endDate', 'location', 'dresscode'];
+const LOCKED_INTERVIEW_STATUSES = ['COMPLETED', 'CANCELLED'];
+
+router.patch('/interviews/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.interview.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Interview not found' });
+    }
+    if (LOCKED_INTERVIEW_STATUSES.includes(existing.status)) {
+      return res.status(409).json({ error: `A ${existing.status.toLowerCase()} interview can no longer be edited` });
+    }
+
+    const rejected = Object.keys(req.body || {}).filter((field) => !EDITABLE_INTERVIEW_FIELDS.includes(field));
+    if (rejected.length) {
+      return res.status(400).json({ error: `Fields cannot be updated here: ${rejected.join(', ')}` });
+    }
+
+    const data = {};
+    for (const field of EDITABLE_INTERVIEW_FIELDS) {
+      if (req.body?.[field] === undefined) continue;
+      const value = req.body[field];
+
+      if (field === 'startDate' || field === 'endDate') {
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({ error: `${field} is not a valid date` });
+        }
+        data[field] = parsed;
+        continue;
+      }
+
+      if (field === 'title' && !String(value || '').trim()) {
+        return res.status(400).json({ error: 'Interview title is required' });
+      }
+      data[field] = value === '' ? null : value;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'No editable fields provided' });
+    }
+
+    const start = data.startDate ?? existing.startDate;
+    const end = data.endDate ?? existing.endDate;
+    if (start && end && end <= start) {
+      return res.status(400).json({ error: 'Interview end must be after its start' });
+    }
+
+    const interview = await prisma.interview.update({
+      where: { id },
+      data,
+      include: { cycle: true }
+    });
+
+    const calendarSync = await bestEffortCalendarSync(id, 'schedule updated');
+
+    res.json({ ...interview, calendarSync });
+  } catch (error) {
+    console.error('[PATCH /api/admin/interviews/:id]', error);
+    if (error?.code === 'P2021' || error?.code === 'P2022') {
+      return res.status(400).json({ error: 'Interview schema not found. Run migrations to create interview tables.' });
+    }
+    res.status(500).json({ error: 'Failed to update interview' });
+  }
+});
+
 // Get interview configuration
 router.get('/interviews/:id/config', async (req, res) => {
   try {

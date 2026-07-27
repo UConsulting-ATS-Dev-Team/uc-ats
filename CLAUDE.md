@@ -197,7 +197,7 @@ When the application form changes:
 
 1. Admin creates `Interview` via Staging page or EventManagement
 2. Assigns interviewers via `InterviewAssignment` (role: LEAD_INTERVIEWER, INTERVIEWER, OBSERVER)
-3. Saving the roster syncs a Google Calendar invite for the assigned interviewers (see `interviewCalendar.js`); sync state lives on `Interview.calendarEventId` / `calendarSyncStatus`
+3. Saving the roster syncs a Google Calendar invite for the assigned interviewers (see `interviewCalendar.js`); sync state lives on `Interview.calendarEventId` / `calendarSyncStatus`. Editing the schedule/location goes through `PATCH /api/admin/interviews/:id` (title, startDate, endDate, location, dresscode; blocked once the interview is COMPLETED/CANCELLED), which re-syncs the same provider event rather than creating a second invite
 4. Interviewers access via AssignedInterviews page
 5. During interview, create `InterviewEvaluation` (or `FirstRoundInterviewEvaluation` for Round 1) with rubric scores
 6. Deliberations: review all evaluations, make final decisions
