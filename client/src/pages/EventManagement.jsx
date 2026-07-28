@@ -24,6 +24,7 @@ import {
   Tooltip,
   Switch,
   FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
@@ -177,6 +178,7 @@ export default function EventManagement() {
       // Convert preview dates to datetime-local values for inline editing
       const events = data.events.map((evt) => ({
         ...evt,
+        selected: true,
         eventStartDate: evt.eventStartDate ? formatForDateTimeLocal(evt.eventStartDate, 'America/Los_Angeles') : '',
         eventEndDate: evt.eventEndDate ? formatForDateTimeLocal(evt.eventEndDate, 'America/Los_Angeles') : '',
       }));
@@ -198,10 +200,27 @@ export default function EventManagement() {
     });
   };
 
+  const toggleAllCopyEvents = (checked) => {
+    setCopyEvents((prev) => prev.map((evt) => ({ ...evt, selected: checked })));
+  };
+
+  const toggleCopyEvent = (index, checked) => {
+    setCopyEvents((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], selected: checked };
+      return updated;
+    });
+  };
+
   const validateCopyEvents = () => {
     const errors = [];
+    const selected = copyEvents.filter((evt) => evt.selected);
+    if (selected.length === 0) {
+      errors.push('Select at least one event to copy');
+    }
     for (let i = 0; i < copyEvents.length; i++) {
       const evt = copyEvents[i];
+      if (!evt.selected) continue;
       if (!evt.sourceEventId) {
         errors.push(`Row ${i + 1}: Source event reference is missing`);
       }
@@ -251,11 +270,13 @@ export default function EventManagement() {
         return;
       }
 
-      const eventsToCommit = copyEvents.map((evt) => ({
-        ...evt,
-        eventStartDate: localInputToUTC(evt.eventStartDate).toISOString(),
-        eventEndDate: localInputToUTC(evt.eventEndDate).toISOString(),
-      }));
+      const eventsToCommit = copyEvents
+        .filter((evt) => evt.selected)
+        .map((evt) => ({
+          ...evt,
+          eventStartDate: localInputToUTC(evt.eventStartDate).toISOString(),
+          eventEndDate: localInputToUTC(evt.eventEndDate).toISOString(),
+        }));
 
       const result = await apiClient.post('/admin/events/copy-commit', {
         sourceCycleId: copySourceCycleId,
@@ -1084,7 +1105,7 @@ export default function EventManagement() {
             {copyPreview && (
               <>
                 <Typography variant="subtitle2">
-                  Preview: {copyPreview.events.length} event(s) from {copyPreview.sourceCycle.name} to {copyPreview.targetCycle.name}
+                  Preview: {copyPreview.events.length} event(s) from {copyPreview.sourceCycle.name} to {copyPreview.targetCycle.name} ({copyEvents.filter((e) => e.selected).length} selected)
                 </Typography>
 
                 <Box sx={{ width: '100%', overflowX: 'auto' }}>
@@ -1092,6 +1113,17 @@ export default function EventManagement() {
                     <Table size="small">
                       <TableHead>
                         <TableRow>
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              size="small"
+                              checked={copyEvents.length > 0 && copyEvents.every((e) => e.selected)}
+                              indeterminate={
+                                copyEvents.some((e) => e.selected) && !copyEvents.every((e) => e.selected)
+                              }
+                              onChange={(e) => toggleAllCopyEvents(e.target.checked)}
+                              inputProps={{ 'aria-label': 'Select all events to copy' }}
+                            />
+                          </TableCell>
                           <TableCell>Name</TableCell>
                           <TableCell>Start</TableCell>
                           <TableCell>End</TableCell>
@@ -1106,6 +1138,14 @@ export default function EventManagement() {
                       <TableBody>
                         {copyEvents.map((evt, index) => (
                           <TableRow key={evt.sourceEventId || index}>
+                            <TableCell padding="checkbox">
+                              <Checkbox
+                                size="small"
+                                checked={Boolean(evt.selected)}
+                                onChange={(e) => toggleCopyEvent(index, e.target.checked)}
+                                inputProps={{ 'aria-label': `Copy ${evt.eventName}` }}
+                              />
+                            </TableCell>
                             <TableCell>
                               <TextField
                                 size="small"
@@ -1221,7 +1261,7 @@ export default function EventManagement() {
           <Button
             variant="contained"
             onClick={commitCopy}
-            disabled={copyCommitLoading || copyEvents.length === 0}
+            disabled={copyCommitLoading || !copyEvents.some((evt) => evt.selected)}
           >
             {copyCommitLoading ? <CircularProgress size={20} /> : 'Copy Events'}
           </Button>

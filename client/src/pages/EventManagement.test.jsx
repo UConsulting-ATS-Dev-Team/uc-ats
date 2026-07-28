@@ -241,4 +241,92 @@ describe('EventManagement cycle-portable copy', () => {
     expect(committedEvent.eventLocation).toBe('Room B');
     expect(committedEvent.sourceEventId).toBe('event-1');
   });
+
+  it('only commits events selected in the preview table', async () => {
+    apiClient.post.mockImplementation((url, body) => {
+      if (url === '/admin/events/copy-preview') {
+        return Promise.resolve({
+          sourceCycle: { id: 'cycle-source', name: 'Fall 2025' },
+          targetCycle: { id: 'cycle-target', name: 'Fall 2026' },
+          events: [
+            {
+              sourceEventId: 'event-1',
+              eventName: 'Info Session',
+              eventStartDate: '2025-09-01T18:00:00.000Z',
+              eventEndDate: '2025-09-01T20:00:00.000Z',
+              eventLocation: 'Room A',
+              showToCandidates: true,
+              rsvpForm: 'https://forms.gle/old-rsvp',
+              attendanceForm: '',
+              memberRsvpUrl: '',
+              alreadyExists: false,
+            },
+            {
+              sourceEventId: 'event-2',
+              eventName: 'Resume Workshop',
+              eventStartDate: '2025-09-15T17:00:00.000Z',
+              eventEndDate: '2025-09-15T19:00:00.000Z',
+              eventLocation: 'Zoom',
+              showToCandidates: true,
+              rsvpForm: '',
+              attendanceForm: '',
+              memberRsvpUrl: '',
+              alreadyExists: false,
+            },
+          ],
+        });
+      }
+      if (url === '/admin/events/copy-commit') {
+        return Promise.resolve({
+          copiedCount: 1,
+          skippedCount: 0,
+          targetCycle: { id: 'cycle-target', name: 'Fall 2026' },
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <MemoryRouter>
+        <EventManagement />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Copy from Cycle')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText('Copy from Cycle'));
+
+    await user.selectOptions(screen.getByLabelText('Source Cycle'), 'cycle-source');
+    await user.selectOptions(screen.getByLabelText('Target Cycle'), 'cycle-target');
+
+    fireEvent.click(screen.getByText('Preview Events'));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Info Session')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Resume Workshop')).toBeInTheDocument();
+    });
+
+    // Deselect the first event
+    const checkbox = screen.getByRole('checkbox', { name: 'Copy Info Session' });
+    fireEvent.click(checkbox);
+
+    fireEvent.click(screen.getByText('Copy Events'));
+
+    await waitFor(() => {
+      expect(apiClient.post).toHaveBeenCalledWith(
+        '/admin/events/copy-commit',
+        expect.objectContaining({
+          sourceCycleId: 'cycle-source',
+          targetCycleId: 'cycle-target',
+        })
+      );
+    });
+
+    const commitCall = apiClient.post.mock.calls.find(([url]) => url === '/admin/events/copy-commit');
+    const committedEvents = commitCall[1].events;
+    expect(committedEvents).toHaveLength(1);
+    expect(committedEvents[0].sourceEventId).toBe('event-2');
+  });
 });
