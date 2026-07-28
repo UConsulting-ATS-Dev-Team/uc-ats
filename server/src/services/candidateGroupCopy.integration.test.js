@@ -150,15 +150,18 @@ describe.skipIf(!dbUrl)('candidateGroupCopy integration', () => {
     expect(commit.duplicateCount).toBe(0);
     expect(commit.skippedCount).toBe(1);
     expect(commit.copiedByUserId).toBe(actor.id);
+    expect(commit.copyEvent).toBeTruthy();
+    expect(commit.copyEvent.sourceGroupId).toBe(sourceGroup.id);
+    expect(commit.copyEvent.actorId).toBe(actor.id);
 
     const updated = await prisma.interview.findUnique({ where: { id: interview.id } });
     const config = JSON.parse(updated.description);
     expect(config.applicationGroups).toHaveLength(1);
     expect(config.applicationGroups[0].applicationIds).toEqual([appOne.id, appTwo.id]);
-    expect(config.applicationGroups[0].copiedFromGroupId).toBe(sourceGroup.id);
-    expect(config.applicationGroups[0].copiedByUserId).toBe(actor.id);
+    expect(config.applicationGroups[0].copiedFromGroupId).toBeUndefined();
+    expect(config.applicationGroups[0].copiedByUserId).toBeUndefined();
 
-    // Re-run is idempotent
+    // Re-run is idempotent and does not duplicate the audit event
     const rerun = await commitCandidateGroupCopy({
       prisma,
       sourceGroupId: sourceGroup.id,
@@ -170,6 +173,13 @@ describe.skipIf(!dbUrl)('candidateGroupCopy integration', () => {
     expect(rerun.additionCount).toBe(0);
     expect(rerun.duplicateCount).toBe(2);
 
+    const events = await prisma.candidateGroupCopyEvent.findMany({
+      where: { interviewId: interview.id },
+      orderBy: { copiedAt: 'asc' },
+    });
+    expect(events).toHaveLength(1);
+
+    await prisma.candidateGroupCopyEvent.deleteMany({ where: { interviewId: interview.id } });
     await prisma.interview.deleteMany({ where: { cycleId: cycle.id } });
     await prisma.groups.deleteMany({ where: { cycleId: cycle.id } });
     await prisma.application.deleteMany({ where: { cycleId: cycle.id } });

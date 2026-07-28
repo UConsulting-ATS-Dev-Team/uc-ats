@@ -156,9 +156,6 @@ describe('AdminAssignedInterviews create flow', () => {
         id: 'new-group',
         name: 'Team Alpha',
         applicationIds: ['app-1', 'app-2'],
-        copiedFromGroupId: 'group-1',
-        copiedByUserId: 'admin-1',
-        copiedAt: new Date().toISOString(),
       }],
       groupAssignments: { g1: ['a1'] },
     };

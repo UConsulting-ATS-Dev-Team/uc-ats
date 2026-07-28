@@ -15,6 +15,10 @@ vi.mock('../prismaClient.js', () => ({
     groups: {
       findUnique: vi.fn(),
     },
+    candidateGroupCopyEvent: {
+      findUnique: vi.fn(),
+      create: vi.fn(),
+    },
     $executeRaw: vi.fn(),
     $transaction: vi.fn(),
   }
@@ -104,6 +108,10 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group-preview', () => {
 
     prisma.interview.findUnique.mockResolvedValue(interviewFixture());
     prisma.groups.findUnique.mockResolvedValue(sourceGroup);
+    prisma.candidateGroupCopyEvent.findUnique.mockResolvedValue(null);
+    prisma.candidateGroupCopyEvent.create.mockImplementation(({ data }) =>
+      Promise.resolve({ ...data, id: 'copy-event-1' })
+    );
 
     // Make the transaction run against the same prisma mock so the route tests
     // the full service path without a real database.
@@ -111,6 +119,7 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group-preview', () => {
       const tx = {
         interview: prisma.interview,
         groups: prisma.groups,
+        candidateGroupCopyEvent: prisma.candidateGroupCopyEvent,
         $executeRaw: prisma.$executeRaw,
       };
       return cb(tx);
@@ -212,11 +221,16 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
 
     prisma.interview.findUnique.mockResolvedValue(interviewFixture());
     prisma.groups.findUnique.mockResolvedValue(sourceGroup);
+    prisma.candidateGroupCopyEvent.findUnique.mockResolvedValue(null);
+    prisma.candidateGroupCopyEvent.create.mockImplementation(({ data }) =>
+      Promise.resolve({ ...data, id: 'copy-event-1' })
+    );
 
     prisma.$transaction.mockImplementation(async (cb) => {
       const tx = {
         interview: prisma.interview,
         groups: prisma.groups,
+        candidateGroupCopyEvent: prisma.candidateGroupCopyEvent,
         $executeRaw: prisma.$executeRaw,
       };
       return cb(tx);
@@ -251,16 +265,36 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
     expect(json.duplicateCount).toBe(0);
     expect(json.skippedCount).toBe(1);
     expect(json.copiedByUserId).toBe(adminUser.id);
+    expect(json.copyEvent).toBeTruthy();
+    expect(json.copyEvent.sourceGroupId).toBe(sourceGroup.id);
+    expect(json.copyEvent.actorId).toBe(adminUser.id);
+    expect(json.copyEvent.additionCount).toBe(2);
+    expect(json.copyEvent.skippedCount).toBe(1);
 
     const updateArgs = prisma.interview.update.mock.calls[0][0];
     const config = JSON.parse(updateArgs.data.description);
     expect(config.applicationGroups).toHaveLength(1);
     expect(config.applicationGroups[0].applicationIds).toEqual(['app-1', 'app-2']);
-    expect(config.applicationGroups[0].copiedFromGroupId).toBe(sourceGroup.id);
-    expect(config.applicationGroups[0].copiedByUserId).toBe(adminUser.id);
+    expect(config.applicationGroups[0].copiedFromGroupId).toBeUndefined();
+    expect(config.applicationGroups[0].copiedByUserId).toBeUndefined();
   });
 
-  it('is idempotent when the same create-new request is retried', async () => {
+  it('is idempotent when the same create-new request is retried and preserves audit history', async () => {
+    // Use an in-memory store for copy events so the retry finds the prior event.
+    const events = [];
+    prisma.candidateGroupCopyEvent.findUnique.mockImplementation(({ where }) => {
+      const key = where?.interviewId_operationKey;
+      const found = key
+        ? events.find((e) => e.interviewId === key.interviewId && e.operationKey === key.operationKey)
+        : null;
+      return Promise.resolve(found || null);
+    });
+    prisma.candidateGroupCopyEvent.create.mockImplementation(({ data }) => {
+      const event = { ...data, id: `copy-event-${events.length + 1}` };
+      events.push(event);
+      return Promise.resolve(event);
+    });
+
     // First commit to an empty interview creates a deterministic group.
     const firstRes = await post(
       '/api/admin/interviews/iv-1/copy-candidate-group',
@@ -272,6 +306,8 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
     const firstJson = await firstRes.json();
     expect(firstJson.additionCount).toBe(2);
     expect(firstJson.config.applicationGroups).toHaveLength(1);
+    expect(firstJson.copyEvent).toBeTruthy();
+    expect(events).toHaveLength(1);
 
     // Simulate persisted state by feeding the committed config back into findUnique.
     const updatedDescription = JSON.stringify(firstJson.config);
@@ -291,6 +327,8 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
     expect(json.skippedCount).toBe(1);
     expect(json.config.applicationGroups).toHaveLength(1);
     expect(json.config.applicationGroups[0].id).toBe(firstJson.config.applicationGroups[0].id);
+    expect(json.copyEvent.id).toBe(firstJson.copyEvent.id);
+    expect(events).toHaveLength(1);
   });
 
   it('rejects a stale or missing destinationGroupId', async () => {

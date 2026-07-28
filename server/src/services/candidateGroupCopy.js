@@ -90,7 +90,7 @@ async function loadInterviewAndGroup(prisma, destinationInterviewId, sourceGroup
   return { interview, group };
 }
 
-function classifyCandidates(group, targetGroup, actorId, now) {
+function classifyCandidates(group, targetGroup) {
   const additions = [];
   const duplicates = [];
   const skipped = [];
@@ -134,7 +134,16 @@ function deriveDefaultGroupId(interviewId, sourceGroupId) {
     .digest('hex');
 }
 
-function buildTargetGroup(sourceGroup, existingGroup, groupId, additions, actorId, now) {
+function deriveOperationKey(interviewId, sourceGroupId, destinationGroupId, actorId, sourceCandidates) {
+  const candidateIds = (sourceCandidates || []).map((c) => c.id).sort().join(',');
+  return createHash('sha256')
+    .update(
+      `candidate-group-copy-op:${interviewId}:${sourceGroupId}:${destinationGroupId}:${actorId}:${candidateIds}`
+    )
+    .digest('hex');
+}
+
+function buildTargetGroup(sourceGroup, existingGroup, groupId, additions) {
   const baseApplicationIds = existingGroup ? (existingGroup.applicationIds || []) : [];
   // preserve order of existing IDs, then append new additions
   const mergedApplicationIds = [
@@ -147,9 +156,6 @@ function buildTargetGroup(sourceGroup, existingGroup, groupId, additions, actorI
     name: existingGroup?.name || sourceGroup.name || `Copy of ${sourceGroup.id.slice(-8)}`,
     applicationIds: mergedApplicationIds,
     notes: existingGroup?.notes || '',
-    copiedFromGroupId: sourceGroup.id,
-    copiedByUserId: actorId,
-    copiedAt: now.toISOString(),
   };
 }
 
@@ -252,9 +258,9 @@ export async function commitCandidateGroupCopy({
 
     const existingGroup = existingGroupIndex >= 0 ? applicationGroups[existingGroupIndex] : null;
 
-    const { additions, duplicates, skipped } = classifyCandidates(group, existingGroup, actorId, now);
+    const { additions, duplicates, skipped } = classifyCandidates(group, existingGroup);
 
-    const updatedGroup = buildTargetGroup(group, existingGroup, effectiveDestinationGroupId, additions, actorId, now);
+    const updatedGroup = buildTargetGroup(group, existingGroup, effectiveDestinationGroupId, additions);
 
     if (existingGroupIndex >= 0) {
       applicationGroups[existingGroupIndex] = updatedGroup;
@@ -271,6 +277,49 @@ export async function commitCandidateGroupCopy({
       },
       include: { cycle: true },
     });
+
+    // Persist an append-only copy event. The operation key is derived from the
+    // interview, source group, destination group, actor, and source candidate
+    // membership, so a no-op retry does not duplicate the event and a different
+    // source creates a new event without touching prior history.
+    const operationKey = deriveOperationKey(
+      interview.id,
+      group.id,
+      updatedGroup.id,
+      actorId,
+      group.assignedCandidates
+    );
+
+    let copyEvent = null;
+    if (tx.candidateGroupCopyEvent) {
+      const existingEvent = await tx.candidateGroupCopyEvent.findUnique({
+        where: {
+          interviewId_operationKey: {
+            interviewId: interview.id,
+            operationKey,
+          },
+        },
+      });
+
+      if (!existingEvent) {
+        copyEvent = await tx.candidateGroupCopyEvent.create({
+          data: {
+            interviewId: interview.id,
+            sourceGroupId: group.id,
+            destinationGroupId: updatedGroup.id,
+            actorId,
+            operationKey,
+            additions,
+            skipped,
+            additionCount: additions.length,
+            skippedCount: skipped.length,
+            copiedAt: now,
+          },
+        });
+      } else {
+        copyEvent = existingEvent;
+      }
+    }
 
     return {
       interview: {
@@ -295,6 +344,7 @@ export async function commitCandidateGroupCopy({
       skippedCount: skipped.length,
       copiedByUserId: actorId,
       copiedAt: now.toISOString(),
+      copyEvent,
       config,
     };
   });

@@ -77,6 +77,34 @@ function createMockPrisma({ group = sourceGroup, iv = interview } = {}) {
   // Deep-clone fixtures so mutations in one test do not leak to others.
   iv = JSON.parse(JSON.stringify(iv));
   group = JSON.parse(JSON.stringify(group));
+  const copyEvents = [];
+
+  function makeCandidateGroupCopyEvent(client) {
+    return {
+      findUnique: vi.fn(({ where }) => {
+        const key = where?.interviewId_operationKey;
+        const found = key
+          ? copyEvents.find(
+              (e) => e.interviewId === key.interviewId && e.operationKey === key.operationKey
+            )
+          : null;
+        return Promise.resolve(found || null);
+      }),
+      findMany: vi.fn(({ where } = {}) => {
+        const found = where?.interviewId
+          ? copyEvents.filter((e) => e.interviewId === where.interviewId)
+          : copyEvents;
+        return Promise.resolve([...found]);
+      }),
+      create: vi.fn(({ data }) => {
+        const event = { ...data, id: `copy-event-${copyEvents.length + 1}` };
+        copyEvents.push(event);
+        return Promise.resolve(event);
+      }),
+    };
+  }
+
+  const candidateGroupCopyEvent = makeCandidateGroupCopyEvent();
   const mockPrisma = {
     interview: {
       findUnique: vi.fn().mockResolvedValue(iv),
@@ -92,8 +120,12 @@ function createMockPrisma({ group = sourceGroup, iv = interview } = {}) {
     groups: {
       findUnique: vi.fn().mockResolvedValue(group),
     },
+    candidateGroupCopyEvent,
     $executeRaw: vi.fn(),
     transactions: [],
+    copyEvents,
+    group,
+    iv,
     $transaction: vi.fn((cb) => {
       const tx = {
         interview: {
@@ -111,6 +143,7 @@ function createMockPrisma({ group = sourceGroup, iv = interview } = {}) {
         groups: {
           findUnique: vi.fn().mockResolvedValue(group),
         },
+        candidateGroupCopyEvent: makeCandidateGroupCopyEvent(),
         $executeRaw: vi.fn(),
       };
       mockPrisma.transactions.push(tx);
@@ -192,7 +225,7 @@ describe('candidateGroupCopy service', () => {
     ).rejects.toThrow('Interview not found');
   });
 
-  it('commits an idempotent add-only copy', async () => {
+  it('commits an add-only copy and records an append-only audit event', async () => {
     const mockPrisma = createMockPrisma();
 
     const result = await commitCandidateGroupCopy({
@@ -207,6 +240,11 @@ describe('candidateGroupCopy service', () => {
     expect(result.duplicateCount).toBe(1);
     expect(result.skippedCount).toBe(1);
     expect(result.destinationGroup.newCount).toBe(2);
+    expect(result.copyEvent).toBeTruthy();
+    expect(result.copyEvent.sourceGroupId).toBe(sourceGroup.id);
+    expect(result.copyEvent.actorId).toBe(adminUser.id);
+    expect(result.copyEvent.additionCount).toBe(1);
+    expect(result.copyEvent.skippedCount).toBe(1);
     expect(result.copiedByUserId).toBe(adminUser.id);
     expect(result.copiedAt).toBeTruthy();
 
@@ -215,11 +253,11 @@ describe('candidateGroupCopy service', () => {
     const config = JSON.parse(updateArgs.data.description);
     expect(config.applicationGroups).toHaveLength(1);
     expect(config.applicationGroups[0].applicationIds).toEqual(['app-1', 'app-2']);
-    expect(config.applicationGroups[0].copiedFromGroupId).toBe(sourceGroup.id);
-    expect(config.applicationGroups[0].copiedByUserId).toBe(adminUser.id);
+    expect(config.applicationGroups[0].copiedFromGroupId).toBeUndefined();
+    expect(config.applicationGroups[0].copiedByUserId).toBeUndefined();
   });
 
-  it('is idempotent on re-run to the same destination group', async () => {
+  it('is idempotent on re-run to the same destination group and does not duplicate audit events', async () => {
     const mockPrisma = createMockPrisma();
 
     await commitCandidateGroupCopy({
@@ -241,6 +279,8 @@ describe('candidateGroupCopy service', () => {
     expect(second.additionCount).toBe(0);
     expect(second.duplicateCount).toBe(2);
     expect(second.skippedCount).toBe(1);
+    expect(second.copyEvent.id).toBe(mockPrisma.copyEvents[0].id);
+    expect(mockPrisma.copyEvents).toHaveLength(1);
   });
 
   it('rejects unsupported replace mode', async () => {
@@ -285,7 +325,7 @@ describe('candidateGroupCopy service', () => {
     expect(preview.skipped[0].reason).toBe('missing_required_data');
   });
 
-  it('create-new commit is idempotent on identical retries', async () => {
+  it('create-new commit is idempotent on identical retries and records only one audit event', async () => {
     const emptyInterview = {
       ...interview,
       description: JSON.stringify({ memberGroups: [], applicationGroups: [], groupAssignments: {} }),
@@ -301,6 +341,7 @@ describe('candidateGroupCopy service', () => {
 
     expect(first.additionCount).toBe(2);
     expect(first.config.applicationGroups).toHaveLength(1);
+    expect(first.copyEvent).toBeTruthy();
 
     const second = await commitCandidateGroupCopy({
       prisma: mockPrisma,
@@ -313,6 +354,8 @@ describe('candidateGroupCopy service', () => {
     expect(second.duplicateCount).toBe(2);
     expect(second.skippedCount).toBe(1);
     expect(second.destinationGroup.id).toBe(first.destinationGroup.id);
+    expect(second.copyEvent.id).toBe(first.copyEvent.id);
+    expect(mockPrisma.copyEvents).toHaveLength(1);
 
     const tx = mockPrisma.transactions[0];
     const updateArgs = tx.interview.update.mock.calls[0][0];
@@ -374,7 +417,7 @@ describe('candidateGroupCopy service', () => {
     ).rejects.toThrow('Destination group not found in interview');
   });
 
-  it('returns the authoritative committed config with audit provenance', async () => {
+  it('returns the authoritative committed config and an append-only audit event', async () => {
     const mockPrisma = createMockPrisma({
       iv: {
         ...interview,
@@ -396,11 +439,60 @@ describe('candidateGroupCopy service', () => {
     expect(result.config).toBeTruthy();
     expect(result.config.memberGroups).toEqual([{ id: 'keep', name: 'Keep Me' }]);
     expect(result.config.groupAssignments).toEqual({ g1: ['a1'] });
-    expect(result.config.applicationGroups[0].copiedFromGroupId).toBe(sourceGroup.id);
-    expect(result.config.applicationGroups[0].copiedByUserId).toBe(adminUser.id);
-    expect(result.config.applicationGroups[0].copiedAt).toBeTruthy();
-    expect(result.destinationGroup.copiedFromGroupId).toBe(sourceGroup.id);
-    expect(result.destinationGroup.copiedByUserId).toBe(adminUser.id);
-    expect(result.destinationGroup.copiedAt).toBeTruthy();
+    expect(result.config.applicationGroups[0].copiedFromGroupId).toBeUndefined();
+    expect(result.config.applicationGroups[0].copiedByUserId).toBeUndefined();
+    expect(result.destinationGroup.copiedFromGroupId).toBeUndefined();
+    expect(result.copyEvent).toBeTruthy();
+    expect(result.copyEvent.sourceGroupId).toBe(sourceGroup.id);
+    expect(result.copyEvent.actorId).toBe(adminUser.id);
+    expect(result.copyEvent.additions).toHaveLength(2);
+    expect(result.copyEvent.skipped).toHaveLength(1);
+  });
+
+  it('appends a second audit event when a different source is copied to the same destination', async () => {
+    const emptyInterview = {
+      ...interview,
+      description: JSON.stringify({ memberGroups: [], applicationGroups: [], groupAssignments: {} }),
+    };
+    const mockPrisma = createMockPrisma({ iv: emptyInterview });
+
+    const firstSource = sourceGroup;
+    const secondSource = {
+      ...sourceGroup,
+      id: 'group-2',
+      name: 'Team Beta',
+      assignedCandidates: [
+        {
+          ...sourceGroup.assignedCandidates[0],
+          id: 'candidate-4',
+          applications: [{ id: 'app-4', firstName: 'Dana', lastName: 'Doe', email: 'dana@example.com', studentId: '44444', submittedAt: new Date() }],
+        },
+      ],
+    };
+
+    const first = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: firstSource.id,
+      destinationInterviewId: interview.id,
+      actorId: 'admin-a',
+    });
+
+    // Copy a second source into the same deterministic destination group.
+    Object.assign(mockPrisma.group, JSON.parse(JSON.stringify(secondSource)));
+
+    const second = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: secondSource.id,
+      destinationInterviewId: interview.id,
+      destinationGroupId: first.destinationGroup.id,
+      actorId: 'admin-b',
+    });
+
+    expect(second.additionCount).toBe(1);
+    expect(second.copyEvent.sourceGroupId).toBe('group-2');
+    expect(second.copyEvent.actorId).toBe('admin-b');
+    expect(mockPrisma.copyEvents).toHaveLength(2);
+    expect(mockPrisma.copyEvents[0].actorId).toBe('admin-a');
+    expect(mockPrisma.copyEvents[1].actorId).toBe('admin-b');
   });
 });
