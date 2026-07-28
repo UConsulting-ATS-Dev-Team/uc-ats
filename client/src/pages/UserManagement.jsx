@@ -86,6 +86,14 @@ const UserManagement = () => {
 
   const [imageFile, setImageFile] = useState(null);
 
+  // Graduated-member deactivation state
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deactivatePreview, setDeactivatePreview] = useState(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
+  const [deactivateError, setDeactivateError] = useState(null);
+  const [deactivateSuccess, setDeactivateSuccess] = useState(null);
+  const [deactivateConfirmation, setDeactivateConfirmation] = useState('');
+
   // Fetch events for filter dropdown
   useEffect(() => {
     const fetchEvents = async () => {
@@ -322,6 +330,81 @@ const UserManagement = () => {
     buildClassOptions(classOptionData);
   }, [classOptionData, graduationClassFilter]);
 
+  const parseGraduationYear = (cls) => {
+    if (typeof cls !== 'string') return null;
+    const match = cls.match(/\b(19|20)\d{2}\b/);
+    return match ? parseInt(match[0], 10) : null;
+  };
+
+  const canDeactivateClass = (cls) => {
+    if (!cls || cls === MISSING_GRADUATION_CLASS) return false;
+    const year = parseGraduationYear(cls);
+    if (!year) return false;
+    return new Date() >= new Date(year, 11, 31, 23, 59, 59, 999);
+  };
+
+  const openDeactivateModal = () => {
+    setDeactivateModalOpen(true);
+    setDeactivatePreview(null);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    setDeactivateConfirmation('');
+    fetchDeactivatePreview();
+  };
+
+  const closeDeactivateModal = () => {
+    setDeactivateModalOpen(false);
+    setDeactivatePreview(null);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    setDeactivateConfirmation('');
+  };
+
+  const fetchDeactivatePreview = async () => {
+    if (!graduationClassFilter || graduationClassFilter === MISSING_GRADUATION_CLASS) return;
+    setDeactivateLoading(true);
+    setDeactivateError(null);
+    try {
+      const data = await apiClient.post('/admin/users/deactivate-preview', { graduationClass: graduationClassFilter });
+      setDeactivatePreview(data);
+    } catch (err) {
+      setDeactivateError(err.message || 'Failed to load deactivation preview');
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
+
+  const executeDeactivate = async (dryRun = false) => {
+    if (!graduationClassFilter) return;
+    if (deactivateConfirmation !== graduationClassFilter) {
+      setDeactivateError(`Type "${graduationClassFilter}" to confirm`);
+      return;
+    }
+    setDeactivateLoading(true);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    try {
+      const data = await apiClient.post('/admin/users/deactivate', {
+        graduationClass: graduationClassFilter,
+        confirmationText: deactivateConfirmation,
+        confirmedCount: deactivatePreview?.eligibleCount ?? 0,
+        dryRun
+      });
+      if (dryRun) {
+        setDeactivatePreview(data);
+        setDeactivateSuccess(`Dry run complete: ${data.eligibleCount} eligible, ${data.blockedCount} blocked, ${data.ineligibleCount} ineligible`);
+      } else {
+        setDeactivateSuccess(`Deactivated ${data.deactivatedCount} member(s)`);
+        await fetchUsers();
+        await fetchClassOptions();
+      }
+    } catch (err) {
+      setDeactivateError(err.message || 'Deactivation failed');
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
+
   const getRoleColor = (role) => {
     switch (role) {
       case 'ADMIN':
@@ -519,6 +602,16 @@ const UserManagement = () => {
                     <Typography variant="body2" color="text.secondary">
                       {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
                     </Typography>
+                  )}
+                  {canDeactivateClass(graduationClassFilter) && (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="warning"
+                      onClick={openDeactivateModal}
+                    >
+                      Deactivate Graduated Members
+                    </Button>
                   )}
                 </Stack>
               </Grid>
@@ -776,6 +869,101 @@ const UserManagement = () => {
             </DialogActions>
           </form>
                  </Dialog>
+
+        {/* Deactivate Graduated Members Modal */}
+        <Dialog open={deactivateModalOpen} onClose={closeDeactivateModal} maxWidth="md" fullWidth>
+          <DialogTitle>Deactivate Graduated Members</DialogTitle>
+          <DialogContent>
+            {deactivateLoading && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress />
+              </Box>
+            )}
+            {deactivateError && (
+              <Alert severity="error" sx={{ mb: 2 }}>{deactivateError}</Alert>
+            )}
+            {deactivateSuccess && (
+              <Alert severity="success" sx={{ mb: 2 }}>{deactivateSuccess}</Alert>
+            )}
+            {!deactivateLoading && deactivatePreview && (
+              <Stack spacing={2} sx={{ mt: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Graduation class: <strong>{deactivatePreview.graduationClass}</strong>
+                  <br />
+                  Deactivation date: {deactivatePreview.deactivationDate?.split('T')[0]}
+                </Typography>
+                <Stack direction="row" spacing={2} flexWrap="wrap">
+                  <Chip label={`Found: ${deactivatePreview.totalFound}`} size="small" />
+                  <Chip label={`Eligible: ${deactivatePreview.eligibleCount}`} size="small" color="warning" />
+                  <Chip label={`Blocked: ${deactivatePreview.blockedCount}`} size="small" color="error" />
+                  <Chip label={`Ineligible: ${deactivatePreview.ineligibleCount}`} size="small" />
+                </Stack>
+
+                {deactivatePreview.eligible?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Eligible members</Typography>
+                    {deactivatePreview.eligible.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} ({u.email}) — {u.relations?.total ?? 0} relations
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                {deactivatePreview.blocked?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Blocked (active/current-cycle)</Typography>
+                    {deactivatePreview.blocked.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} — {u.reason}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                {deactivatePreview.ineligible?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Ineligible</Typography>
+                    {deactivatePreview.ineligible.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} — {u.reason}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={`Type "${graduationClassFilter}" to confirm`}
+                  value={deactivateConfirmation}
+                  onChange={(e) => setDeactivateConfirmation(e.target.value)}
+                  disabled={deactivateLoading}
+                />
+              </Stack>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeDeactivateModal} disabled={deactivateLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => executeDeactivate(true)}
+              disabled={deactivateLoading || deactivateConfirmation !== graduationClassFilter}
+              variant="outlined"
+            >
+              Dry Run
+            </Button>
+            <Button
+              onClick={() => executeDeactivate(false)}
+              disabled={deactivateLoading || deactivateConfirmation !== graduationClassFilter}
+              variant="contained"
+              color="warning"
+            >
+              Deactivate
+            </Button>
+          </DialogActions>
+        </Dialog>
        </Box>
     </AccessControl>
    );

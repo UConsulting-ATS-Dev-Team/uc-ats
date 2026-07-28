@@ -33,6 +33,7 @@ export const requireAuth = async (req, res, next) => {
         email: true,
         fullName: true,
         role: true,
+        isActive: true,
         graduationClass: true,
         studentId: true,
         profileImage: true,
@@ -43,6 +44,11 @@ export const requireAuth = async (req, res, next) => {
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.isActive === false) {
+      userCache.delete(userId);
+      return res.status(401).json({ error: 'Account deactivated' });
     }
     
     // Cache the user data

@@ -8,6 +8,10 @@ import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, send
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
+  getDeactivationCandidates,
+  parseGraduationYear
+} from '../services/userDeactivation.js';
+import {
   getGroupMemberUsers,
   getGroupMemberIds,
   groupMemberUserInclude
@@ -5897,6 +5901,115 @@ router.delete('/meeting-signups/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to delete signup' });
+  }
+});
+
+// Preview graduated-member deactivation for a selected graduation class.
+// Returns eligible members, blocked members (active/current-cycle), and ineligible
+// members (not yet reached deactivation date), with relation counts.
+router.post('/users/deactivate-preview', async (req, res) => {
+  try {
+    const { graduationClass } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const result = await getDeactivationCandidates({
+      graduationClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate-preview]', error);
+    res.status(500).json({ error: 'Failed to generate deactivation preview' });
+  }
+});
+
+// Deactivate graduated members for a selected class.
+// Requires typed confirmation equal to the graduation class and a matching count.
+router.post('/users/deactivate', async (req, res) => {
+  try {
+    const { graduationClass, confirmationText, confirmedCount, dryRun } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const normalizedClass = graduationClass.trim();
+    if (normalizedClass.length > 100) {
+      return res.status(400).json({ error: 'Invalid graduation class' });
+    }
+
+    if (confirmationText !== normalizedClass) {
+      return res.status(400).json({ error: 'Confirmation text does not match graduation class' });
+    }
+
+    if (parseGraduationYear(normalizedClass) === null) {
+      return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const preview = await getDeactivationCandidates({
+      graduationClass: normalizedClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (preview.error) {
+      return res.status(400).json({ error: preview.error });
+    }
+
+    if (typeof confirmedCount !== 'number' || confirmedCount !== preview.eligibleCount) {
+      return res.status(400).json({ error: 'Confirmed count does not match eligible count' });
+    }
+
+    if (dryRun) {
+      return res.json({ ...preview, dryRun: true });
+    }
+
+    if (preview.eligible.length === 0) {
+      return res.json({ ...preview, deactivatedCount: 0, dryRun: false });
+    }
+
+    const eligibleIds = preview.eligible.map(u => u.id);
+
+    const [updateResult] = await prisma.$transaction([
+      prisma.user.updateMany({
+        where: { id: { in: eligibleIds } },
+        data: {
+          isActive: false,
+          deactivatedAt: new Date(),
+          deactivatedBy: req.user.id
+        }
+      })
+    ]);
+
+    res.json({
+      ...preview,
+      dryRun: false,
+      deactivatedCount: updateResult.count
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate]', error);
+    res.status(500).json({ error: 'Failed to deactivate users' });
   }
 });
 

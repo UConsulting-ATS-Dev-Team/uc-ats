@@ -211,6 +211,49 @@ describe('UserManagement graduation class filter', () => {
       }
       return Promise.resolve([]);
     });
+    vi.spyOn(apiClient, 'post').mockImplementation((endpoint, data) => {
+      if (endpoint === '/admin/users/deactivate-preview') {
+        const cls = data?.graduationClass;
+        const members = allUsers.filter((u) => u.graduationClass === cls && u.role === 'MEMBER');
+        const eligible = members.map((u) => ({
+          id: u.id,
+          fullName: u.fullName,
+          email: u.email,
+          graduationClass: u.graduationClass,
+          role: u.role,
+          relations: { total: 0 }
+        }));
+        return Promise.resolve({
+          graduationClass: cls,
+          deactivationDate: '2025-12-31T23:59:59.999Z',
+          eligibleCount: eligible.length,
+          ineligibleCount: 0,
+          blockedCount: 0,
+          totalFound: members.length,
+          eligible,
+          ineligible: [],
+          blocked: []
+        });
+      }
+      if (endpoint === '/admin/users/deactivate') {
+        const preview = {
+          graduationClass: data?.graduationClass,
+          deactivationDate: '2025-12-31T23:59:59.999Z',
+          eligibleCount: data?.confirmedCount ?? 0,
+          ineligibleCount: 0,
+          blockedCount: 0,
+          totalFound: data?.confirmedCount ?? 0,
+          eligible: [],
+          ineligible: [],
+          blocked: []
+        };
+        if (data?.dryRun) {
+          return Promise.resolve({ ...preview, dryRun: true });
+        }
+        return Promise.resolve({ ...preview, dryRun: false, deactivatedCount: data?.confirmedCount ?? 0 });
+      }
+      return Promise.resolve({});
+    });
   });
 
   it('renders the class filter with All, Unknown, and sorted class options', async () => {
@@ -386,5 +429,38 @@ describe('UserManagement graduation class filter', () => {
     expect(screen.getByRole('option', { name: 'Fall 2024 (1)' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Spring 2025 (1)' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Unknown / No class (1)' })).toBeInTheDocument();
+  });
+
+  it('shows a deactivation preview and deactivates graduated members after typed confirmation', async () => {
+    render(
+      <MemoryRouter>
+        <UserManagement />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Anderson', { selector: 'h6' })).toBeInTheDocument();
+    });
+
+    selectClassOption('Spring 2025 (1)');
+
+    await waitFor(() => {
+      expect(screen.getByText('Deactivate Graduated Members')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Deactivate Graduated Members'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Eligible: 1')).toBeInTheDocument();
+    });
+
+    const confirmInput = screen.getByLabelText('Type "Spring 2025" to confirm');
+    fireEvent.change(confirmInput, { target: { value: 'Spring 2025' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Deactivated 1 member(s)')).toBeInTheDocument();
+    });
   });
 });
