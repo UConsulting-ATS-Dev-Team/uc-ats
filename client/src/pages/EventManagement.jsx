@@ -1109,7 +1109,7 @@ export default function EventManagement() {
                 </Typography>
 
                 <Box sx={{ width: '100%', overflowX: 'auto' }}>
-                  <TableContainer component={Paper} sx={{ minWidth: 900 }}>
+                  <TableContainer component={Paper} sx={{ minWidth: 1100 }}>
                     <Table size="small">
                       <TableHead>
                         <TableRow>
@@ -1124,7 +1124,7 @@ export default function EventManagement() {
                               inputProps={{ 'aria-label': 'Select all events to copy' }}
                             />
                           </TableCell>
-                          <TableCell>Name</TableCell>
+                          <TableCell sx={{ minWidth: 220 }}>Name</TableCell>
                           <TableCell>Start</TableCell>
                           <TableCell>End</TableCell>
                           <TableCell>Location</TableCell>
@@ -1146,12 +1146,13 @@ export default function EventManagement() {
                                 inputProps={{ 'aria-label': `Copy ${evt.eventName}` }}
                               />
                             </TableCell>
-                            <TableCell>
+                            <TableCell sx={{ minWidth: 220 }}>
                               <TextField
                                 size="small"
                                 value={evt.eventName}
                                 onChange={(e) => updateCopyEvent(index, 'eventName', e.target.value)}
                                 aria-label={`Event name for ${evt.eventName}`}
+                                placeholder="Event name"
                                 fullWidth
                               />
                             </TableCell>
