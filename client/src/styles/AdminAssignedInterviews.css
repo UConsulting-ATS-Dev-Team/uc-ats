@@ -49,8 +49,7 @@
 
 .create-interview-btn {
   background-color: var(--primary-blue);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   padding: 0.75rem 1.5rem;
   border-radius: var(--border-radius);
   font-size: 0.875rem;
@@ -183,8 +182,7 @@
 
 .interview-type-badge {
   background: var(--primary-blue);
-  color: white;
-  padding: 0.25rem 0.75rem;
+  color: var(--text-white);  padding: 0.25rem 0.75rem;
   border-radius: var(--border-radius);
   font-size: 0.75rem;
   font-weight: 600;
@@ -228,8 +226,7 @@
 
 .interview-card-actions .icon-btn.expand {
   background: var(--primary-blue);
-  color: white;
-  border-color: var(--primary-blue);
+  color: var(--text-white);  border-color: var(--primary-blue);
 }
 
 .interview-card-actions .icon-btn.expand:hover {
@@ -258,12 +255,11 @@
 }
 
 .interview-date-badge {
-  background: linear-gradient(135deg, #10b981, #059669);
+  background: linear-gradient(135deg, var(--status-success-border), var(--status-success-border));
   border-radius: var(--border-radius-lg);
   padding: 0.75rem;
   text-align: center;
-  color: white;
-  min-width: 80px;
+  color: var(--text-white);  min-width: 80px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -358,8 +354,7 @@
 
 .groups-count {
   background: var(--primary-blue);
-  color: white;
-  padding: 0.125rem 0.375rem;
+  color: var(--text-white);  padding: 0.125rem 0.375rem;
   border-radius: var(--border-radius-sm);
   font-size: 0.75rem;
   font-weight: 600;
@@ -524,8 +519,7 @@
 
 .start-interview-btn-new {
   background-color: var(--primary-blue);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   padding: 1rem 1.5rem;
   border-radius: var(--border-radius);
   font-size: 1rem;
@@ -591,8 +585,7 @@
 
 .edit-btn-new:hover {
   background-color: var(--status-info-border);
-  color: white;
-}
+  color: var(--text-white);}
 
 .delete-btn-new {
   background-color: var(--status-error-bg);
@@ -602,8 +595,7 @@
 
 .delete-btn-new:hover {
   background-color: var(--status-error-border);
-  color: white;
-}
+  color: var(--text-white);}
 
 .save-btn-new {
   background-color: var(--status-success-bg);
@@ -613,8 +605,7 @@
 
 .save-btn-new:hover {
   background-color: var(--status-success-border);
-  color: white;
-}
+  color: var(--text-white);}
 
 .cancel-btn-new {
   background-color: var(--bg-gray-light);
@@ -714,8 +705,7 @@
 .group-type-select:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 /* Group Type Badge */
 .group-type-badge-container {
@@ -734,19 +724,15 @@
 }
 
 .group-type-badge.mixed {
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-  color: white;
-}
+  background: linear-gradient(135deg, var(--primary-blue), var(--accent-purple));  color: var(--text-white);}
 
 .group-type-badge.members {
-  background: linear-gradient(135deg, #10b981, #059669);
-  color: white;
+  background: linear-gradient(135deg, var(--status-success-border), var(--status-success-border));
+  color: var(--text-white);
 }
 
 .group-type-badge.applications {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  color: white;
-}
+  background: linear-gradient(135deg, var(--status-warning-border), var(--status-warning-border));  color: var(--text-white);}
 
 .badge-icon {
   width: 1rem;
@@ -851,8 +837,7 @@
 .group-notes-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .description-header h3 {
   font-size: 1.5rem;
@@ -920,8 +905,7 @@
 
 .interview-action-btn.btn-primary {
   background: var(--primary-blue);
-  color: white;
-}
+  color: var(--text-white);}
 
 .interview-action-btn.btn-primary:hover {
   background: var(--primary-blue-hover);
@@ -1024,8 +1008,7 @@
 
 .action-item-checkbox input[type="checkbox"]:checked + .checkmark::after {
   content: '✓';
-  color: white;
-  font-size: 0.875rem;
+  color: var(--text-white);  font-size: 0.875rem;
   font-weight: bold;
 }
 
@@ -1043,8 +1026,7 @@
 .action-item-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .action-item-remove-btn {
   background: var(--status-error-bg);
@@ -1059,8 +1041,7 @@
 
 .action-item-remove-btn:hover {
   background: var(--status-error-border);
-  color: white;
-}
+  color: var(--text-white);}
 
 .action-item-remove-btn .btn-icon {
   width: 0.875rem;
@@ -1092,8 +1073,7 @@
 .add-item-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 /* Resources Grid */
 .resources-grid {
@@ -1173,8 +1153,7 @@
 .resource-url-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .resource-btn.remove {
   background: var(--status-error-bg);
@@ -1184,8 +1163,7 @@
 
 .resource-btn.remove:hover {
   background: var(--status-error-border);
-  color: white;
-}
+  color: var(--text-white);}
 
 .add-resource-section {
   margin-top: 1rem;
@@ -1211,8 +1189,7 @@
 .add-resource-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 @media (min-width: 768px) {
   .add-resource-input-group {
@@ -1306,8 +1283,7 @@
 .groups-search-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .group-header-actions {
   display: flex;
@@ -1398,8 +1374,7 @@
 .members-search-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .no-results {
   text-align: center;
@@ -1507,8 +1482,7 @@
 .assignments-search-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .assignments-list {
   display: flex;
@@ -1585,8 +1559,7 @@
 .applications-search-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .application-checkbox {
   display: flex;
@@ -1685,8 +1658,7 @@
   content: '';
   width: 0.5rem;
   height: 0.5rem;
-  background-color: white;
-  border-radius: 50%;
+  background-color: var(--bg-white);  border-radius: 50%;
 }
 
 .external-link-btn-new {
@@ -1887,8 +1859,7 @@
 .edit-input:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .title-input-new {
   font-size: 2rem;
@@ -1912,8 +1883,7 @@
 .edit-textarea:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .description-textarea-new {
   min-height: 100px;
@@ -1973,7 +1943,7 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.35);
+  background: var(--overlay-light);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2025,8 +1995,7 @@
 .form-row select:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 2px var(--primary-subtle-bg);}
 
 .modal-footer {
   border-top: 1px solid var(--border-light);
@@ -2183,8 +2152,7 @@
   top: 1px;
   width: 6px;
   height: 10px;
-  border: solid white;
-  border-width: 0 2px 2px 0;
+  border: solid var(--text-white);  border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 
@@ -2329,7 +2297,7 @@
 
 .evaluation-item:hover {
   border-color: var(--border-medium);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .evaluation-header {
@@ -2368,27 +2336,27 @@
 }
 
 .decision-yes {
-  background-color: #dcfce7;
-  color: #166534;
-  border: 1px solid #bbf7d0;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
+  border: 1px solid var(--status-success-border);
 }
 
 .decision-maybe-yes {
-  background-color: #f0fdf4;
-  color: #15803d;
-  border: 1px solid #dcfce7;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
+  border: 1px solid var(--status-success-border);
 }
 
 .decision-maybe-no {
-  background-color: #fff7ed;
-  color: #c2410c;
-  border: 1px solid #fed7aa;
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
+  border: 1px solid var(--status-warning-border);
 }
 
 .decision-no {
-  background-color: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
+  border: 1px solid var(--status-error-border);
 }
 
 .decision-none {
@@ -2598,8 +2566,7 @@
 .form-textarea:focus {
   outline: none;
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
+  box-shadow: 0 0 0 3px var(--primary-subtle-bg);}
 
 /* Application Groups Section */
 .application-groups-list {
@@ -2611,13 +2578,12 @@
 .application-group-card {
   border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: white;
-  overflow: hidden;
+  background: var(--bg-white);  overflow: hidden;
   transition: box-shadow 0.2s ease;
 }
 
 .application-group-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-lg);
 }
 
 .group-card-header {
@@ -2669,8 +2635,7 @@
 
 .group-applications {
   padding: 1.5rem;
-  background: white;
-}
+  background: var(--bg-white);}
 
 .loading-applications {
   display: flex;
@@ -2712,12 +2677,11 @@
   border: 1px solid var(--border-light);
   border-radius: 8px;
   padding: 1.5rem;
-  background: white;
-  transition: box-shadow 0.2s ease;
+  background: var(--bg-white);  transition: box-shadow 0.2s ease;
 }
 
 .candidate-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .candidate-header {
@@ -2746,8 +2710,7 @@
   align-items: center;
   justify-content: center;
   background: var(--primary-color);
-  color: white;
-  font-weight: 600;
+  color: var(--text-white);  font-weight: 600;
   font-size: 1.2rem;
 }
 
@@ -2783,8 +2746,7 @@
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   background: var(--primary-color);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -2843,8 +2805,7 @@
   border: 1px solid var(--border-medium);
   border-radius: var(--border-radius);
   font-size: 0.875rem;
-  background-color: white;
-  color: var(--text-primary);
+  background-color: var(--bg-white);  color: var(--text-primary);
   transition: border-color 0.2s ease;
 }
 
@@ -2875,8 +2836,7 @@
 
 .remove-question-btn:hover {
   background-color: var(--status-error-text);
-  color: white;
-}
+  color: var(--text-white);}
 
 .add-question-btn {
   display: flex;
@@ -2885,8 +2845,7 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   background-color: var(--primary-blue);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   border-radius: var(--border-radius);
   cursor: pointer;
   font-size: 0.875rem;
@@ -2902,27 +2861,23 @@
 .config-instruction {
   margin: 0 0 1rem 0;
   padding: 0.75rem;
-  background-color: #f0f9ff;
-  border: 1px solid #0ea5e9;
-  border-radius: var(--border-radius);
-  color: #0c4a6e;
-  font-size: 0.875rem;
+  background-color: var(--status-info-bg);  border: 1px solid var(--status-info-border);  border-radius: var(--border-radius);
+  color: var(--status-info-text);  font-size: 0.875rem;
   line-height: 1.4;
 }
 
 .existing-questions-note {
   margin-top: 0.75rem;
   padding: 0.75rem;
-  background-color: #dbeafe;
-  border: 1px solid #93c5fd;
+  background-color: var(--status-info-bg);
+  border: 1px solid var(--status-info-border);
   border-radius: 0.375rem;
-  color: #1e40af;
+  color: var(--status-info-text);
   font-size: 0.8rem;
 }
 
 .no-questions-message {
   text-align: center;
   padding: 2rem;
-  color: #6b7280;
-  font-style: italic;
+  color: var(--text-tertiary);  font-style: italic;
 }

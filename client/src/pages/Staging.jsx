@@ -26,8 +26,6 @@ import {
   Snackbar,
   TextField,
   CircularProgress,
-  ThemeProvider,
-  CssBaseline,
   Card,
   Grid,
   CardContent,
@@ -75,7 +73,6 @@ import {
   ArrowDownward as ArrowDownwardIcon,
   Sort as SortIcon
 } from '@mui/icons-material';
-import globalTheme from '../styles/globalTheme';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
@@ -1893,12 +1890,10 @@ export default function Staging() {
 
   return (
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
-      <ThemeProvider theme={globalTheme}>
-        <CssBaseline />
-        <Box className="staging-page" sx={{ p: 3 }}>
+      <Box className="staging-page" sx={{ p: 3 }}>
           <Box mb={3} display="flex" alignItems="center" justifyContent="space-between">
             <Box>
-              <Typography variant="h4" gutterBottom sx={{ fontWeight: 700, color: '#042742' }}>
+              <Typography variant="h4" gutterBottom sx={{ fontWeight: 700, color: 'text.primary' }}>
                 Candidate Staging
               </Typography>
               <Typography variant="body1" color="text.secondary">
@@ -2417,7 +2412,7 @@ export default function Staging() {
             fullWidth
             sx={{
               '& .MuiDialog-paper': {
-                bgcolor: '#f5f5f5',
+                bgcolor: 'background.paper',
                 height: '90vh',
                 maxHeight: '90vh'
               }
@@ -2427,8 +2422,9 @@ export default function Staging() {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              bgcolor: 'white',
-              borderBottom: '1px solid #e0e0e0',
+              bgcolor: 'background.paper',
+              borderBottom: 1,
+              borderColor: 'divider',
               py: 1
             }}>
               <Box display="flex" alignItems="center" gap={2}>
@@ -2606,7 +2602,6 @@ export default function Staging() {
             </Alert>
           </Snackbar>
         </Box>
-      </ThemeProvider>
     </AccessControl>
   );
 }

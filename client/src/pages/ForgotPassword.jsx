@@ -6,12 +6,9 @@ import {
   TextField,
   Typography,
   Paper,
-  ThemeProvider,
-  CssBaseline,
   Alert,
   Container,
 } from '@mui/material';
-import authTheme from '../styles/authTheme';
 import UConsultingLogo from '../components/UConsultingLogo';
 
 export default function ForgotPassword() {
@@ -38,9 +35,7 @@ export default function ForgotPassword() {
   };
 
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -101,6 +96,5 @@ export default function ForgotPassword() {
           </Paper>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 }

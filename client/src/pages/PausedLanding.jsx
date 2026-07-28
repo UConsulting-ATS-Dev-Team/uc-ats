@@ -3,18 +3,14 @@ import {
   Box,
   Typography,
   Paper,
-  ThemeProvider,
-  CssBaseline,
   Container,
 } from '@mui/material';
 import UConsultingLogo from '../components/UConsultingLogo';
-import authTheme from '../styles/authTheme';
+import ThemeToggle from '../components/ThemeToggle';
 
 const PausedLanding = () => {
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -22,8 +18,16 @@ const PausedLanding = () => {
           alignItems: 'center',
           justifyContent: 'center',
           padding: 2,
+        position: 'relative',
         }}
       >
+        <ThemeToggle
+          sx={{
+            position: 'absolute',
+            top: { xs: 8, sm: 16 },
+            right: { xs: 8, sm: 16 },
+          }}
+        />
         <Container maxWidth="sm">
           <Box sx={{ mb: 4, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <UConsultingLogo size="large" style={{ marginBottom: '2rem' }} />
@@ -88,7 +92,6 @@ const PausedLanding = () => {
           </Paper>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 };
 
