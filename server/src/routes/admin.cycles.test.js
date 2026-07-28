@@ -111,21 +111,19 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
     });
   }
 
-  it('rejects enabling feedback without the required approver', async () => {
-    process.env.FEEDBACK_APPROVER = 'Ryan';
+  it('rejects enabling feedback until the configured approver is set', async () => {
+    process.env.FEEDBACK_APPROVER = '';
     const res = await postCycle({
       name: 'Fall 2026',
       feedbackEnabled: true,
       feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
       feedbackRetentionDays: '30',
       feedbackAccessModel: 'CONFIDENTIAL',
-      feedbackApproved: true,
-      feedbackApprovedBy: 'test-admin',
     });
 
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/Feedback must be approved by Ryan/);
+    expect(body.details).toMatch(/Feedback cannot be enabled until Ryan approves/);
   });
 
   it('rejects enabling feedback with an anonymous access model', async () => {
@@ -135,8 +133,6 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
       feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
       feedbackRetentionDays: '30',
       feedbackAccessModel: 'ANONYMOUS',
-      feedbackApproved: true,
-      feedbackApprovedBy: 'test-admin',
     });
 
     expect(res.status).toBe(500);
@@ -144,15 +140,13 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
     expect(body.details).toMatch(/Feedback access model must be CONFIDENTIAL/);
   });
 
-  it('parses a string retention payload and creates an enabled cycle', async () => {
+  it('parses a string retention payload and creates an enabled cycle approved by the configured approver', async () => {
     const res = await postCycle({
       name: 'Fall 2026',
       feedbackEnabled: true,
       feedbackPrivacyPolicy: 'Confidential, retained 365 days, admin readers.',
       feedbackRetentionDays: '365',
       feedbackAccessModel: 'CONFIDENTIAL',
-      feedbackApproved: true,
-      feedbackApprovedBy: 'test-admin',
     });
 
     expect(res.status).toBe(201);
@@ -160,6 +154,7 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
     expect(body.feedbackEnabled).toBe(true);
     expect(body.feedbackRetentionDays).toBe(365);
     expect(body.feedbackAccessModel).toBe('CONFIDENTIAL');
+    expect(body.feedbackApprovedBy).toBe('test-admin');
   });
 });
 
@@ -212,7 +207,28 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
     });
     prisma.recruitingCycle.update.mockImplementation(async ({ where: { id }, data }) => {
       if (id !== cycleId) throw new Error('Record not found');
-      return { id: cycleId, ...data };
+      const existingRecord = {
+        id: cycleId,
+        name: 'Fall 2026',
+        isActive: false,
+        formUrl: null,
+        startDate: null,
+        endDate: null,
+        resumeDeadline: null,
+        coverLetterDeadline: null,
+        videoDeadline: null,
+        feedbackEnabled: true,
+        feedbackCadenceHours: 48,
+        feedbackPrompt: null,
+        feedbackQuestions: [],
+        feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
+        feedbackRetentionDays: 30,
+        feedbackAccessModel: 'CONFIDENTIAL',
+        feedbackApproved: true,
+        feedbackApprovedBy: 'test-admin',
+        feedbackApprovedAt: new Date(),
+      };
+      return { ...existingRecord, ...data };
     });
   });
 
@@ -252,11 +268,13 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
     expect(body.details).toMatch(/Feedback access model must be CONFIDENTIAL/);
   });
 
-  it('rejects a partial PATCH that un-approves an enabled cycle', async () => {
-    const res = await patchCycle({ feedbackApproved: false });
-    expect(res.status).toBe(500);
+  it('ignores a partial PATCH that tries to un-approve an enabled cycle and preserves the approved reader/retention policy', async () => {
+    const res = await patchCycle({ feedbackApproved: false, feedbackApprovedBy: '' });
+    expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.details).toMatch(/Feedback must be explicitly approved/);
+    expect(body.feedbackEnabled).toBe(true);
+    expect(body.feedbackApprovedBy).toBe('test-admin');
+    expect(body.feedbackAccessModel).toBe('CONFIDENTIAL');
   });
 
   it('accepts a partial PATCH with a valid string retention payload on an enabled cycle', async () => {

@@ -205,12 +205,33 @@ function parsePositiveInteger(value, fallback = null) {
   return n;
 }
 
+function normalizeFeedbackApproval(data) {
+  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
+  if (data.feedbackEnabled && requiredApprover) {
+    if (data.feedbackApproved === true && data.feedbackApprovedBy === requiredApprover && data.feedbackApprovedAt) {
+      // Preserve the existing approval record; do not reset the timestamp.
+    } else {
+      data.feedbackApproved = true;
+      data.feedbackApprovedBy = requiredApprover;
+      data.feedbackApprovedAt = data.feedbackApprovedAt || new Date();
+    }
+  } else {
+    data.feedbackApproved = false;
+    data.feedbackApprovedBy = null;
+    data.feedbackApprovedAt = null;
+  }
+}
+
 function validateFeedbackConfig(data) {
   if (!data.feedbackEnabled) return;
 
-  const privacyPolicy = typeof data.feedbackPrivacyPolicy === 'string' ? data.feedbackPrivacyPolicy.trim() : '';
-  if (!privacyPolicy) {
-    throw new Error('A feedback privacy/retention policy is required when feedback is enabled');
+  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
+  if (!requiredApprover) {
+    throw new Error('Feedback cannot be enabled until Ryan approves the access, reader, and retention policy on issue #31');
+  }
+
+  if (data.feedbackAccessModel !== 'CONFIDENTIAL') {
+    throw new Error('Feedback access model must be CONFIDENTIAL (admin readers) until an anonymous model is approved');
   }
 
   const retentionDays = parsePositiveInteger(data.feedbackRetentionDays);
@@ -218,25 +239,12 @@ function validateFeedbackConfig(data) {
     throw new Error('A positive integer feedback retention period (days) is required when feedback is enabled');
   }
 
-  if (data.feedbackAccessModel !== 'CONFIDENTIAL') {
-    throw new Error('Feedback access model must be CONFIDENTIAL (admin readers) until an anonymous model is approved');
+  const privacyPolicy = typeof data.feedbackPrivacyPolicy === 'string' ? data.feedbackPrivacyPolicy.trim() : '';
+  if (!privacyPolicy) {
+    throw new Error('A feedback privacy/retention policy is required when feedback is enabled');
   }
 
-  if (data.feedbackApproved !== true) {
-    throw new Error('Feedback must be explicitly approved before it can be enabled');
-  }
-
-  const approvedBy = typeof data.feedbackApprovedBy === 'string' ? data.feedbackApprovedBy.trim() : '';
-  if (!approvedBy) {
-    throw new Error('An approver name is required when feedback is enabled');
-  }
-
-  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
-  if (!requiredApprover) {
-    throw new Error('Feedback cannot be enabled until Ryan approves the access, reader, and retention policy on issue #31');
-  }
-
-  if (approvedBy !== requiredApprover) {
+  if (data.feedbackApproved !== true || data.feedbackApprovedBy !== requiredApprover) {
     throw new Error(`Feedback must be approved by ${requiredApprover}`);
   }
 }
@@ -1444,7 +1452,7 @@ router.get('/cycles/active', async (req, res) => {
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
-    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel, feedbackApproved, feedbackApprovedBy } = req.body;
+    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel } = req.body;
     const data = {
       name,
       formUrl: formUrl || null,
@@ -1461,10 +1469,11 @@ router.post('/cycles', async (req, res) => {
       feedbackPrivacyPolicy: feedbackPrivacyPolicy || null,
       feedbackRetentionDays: parsePositiveInteger(feedbackRetentionDays),
       feedbackAccessModel: feedbackAccessModel || 'CONFIDENTIAL',
-      feedbackApproved: Boolean(feedbackApproved),
-      feedbackApprovedBy: feedbackApprovedBy || null,
-      feedbackApprovedAt: feedbackApproved ? new Date() : null,
+      feedbackApproved: false,
+      feedbackApprovedBy: null,
+      feedbackApprovedAt: null,
     };
+    normalizeFeedbackApproval(data);
     validateFeedbackConfig(data);
     const created = await prisma.recruitingCycle.create({ data });
     // If created as active, deactivate others
@@ -1508,7 +1517,7 @@ router.post('/cycles/:id/activate', async (req, res) => {
 // Update a cycle
 router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel, feedbackApproved, feedbackApprovedBy } = req.body;
+  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel } = req.body;
   try {
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
 
@@ -1545,19 +1554,6 @@ router.patch('/cycles/:id', async (req, res) => {
     if (feedbackAccessModel !== undefined) {
       updateData.feedbackAccessModel = feedbackAccessModel || 'CONFIDENTIAL';
     }
-    if (feedbackApproved !== undefined) {
-      updateData.feedbackApproved = Boolean(feedbackApproved);
-      updateData.feedbackApprovedBy = feedbackApprovedBy || null;
-    }
-    if (updateData.feedbackApproved && !existing.feedbackApprovedAt) {
-      updateData.feedbackApprovedAt = new Date();
-    }
-
-    // Validate the effective state after merging the existing cycle with the
-    // partial payload. This prevents an enabled cycle from being silently
-    // left in an invalid state by a PATCH that omits `feedbackEnabled`.
-    const effectiveData = { ...existing, ...updateData };
-    validateFeedbackConfig(effectiveData);
 
     // Add deadline fields if they exist in the schema
     if (resumeDeadline !== undefined) {
@@ -1569,9 +1565,22 @@ router.patch('/cycles/:id', async (req, res) => {
     if (videoDeadline !== undefined) {
       updateData.videoDeadline = videoDeadline || null;
     }
-    
+
+    // Validate the effective state after merging the existing cycle with the
+    // partial payload. Approval is derived from the FEEDBACK_APPROVER environment
+    // setting so an ATS admin cannot self-approve an unresolved policy.
+    const effectiveData = { ...existing, ...updateData };
+    normalizeFeedbackApproval(effectiveData);
+    validateFeedbackConfig(effectiveData);
+
+    // Persist the normalized approval record along with the rest of the update.
+    updateData.feedbackEnabled = effectiveData.feedbackEnabled;
+    updateData.feedbackApproved = effectiveData.feedbackApproved;
+    updateData.feedbackApprovedBy = effectiveData.feedbackApprovedBy;
+    updateData.feedbackApprovedAt = effectiveData.feedbackApprovedAt;
+
     console.log('[PATCH /api/admin/cycles/:id] Update data:', updateData);
-    
+
     const updated = await prisma.recruitingCycle.update({
       where: { id },
       data: updateData
