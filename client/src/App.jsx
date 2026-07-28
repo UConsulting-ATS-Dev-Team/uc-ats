@@ -43,6 +43,8 @@ import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import FeedbackForm from './pages/FeedbackForm';
+import AdminFeedbackResponses from './pages/AdminFeedbackResponses';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
@@ -348,6 +350,8 @@ const AppRoutes = () => {
       
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      {/* Public anonymous feedback form */}
+      <Route path="/feedback/:token" element={<FeedbackForm />} />
       {/* Public meeting signup page */}
       <Route path="/meet" element={<CoffeeChatsPublic />} />
       {/* Member meeting slots management */}
@@ -365,6 +369,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <AdminMeetingSlots />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Anonymous feedback responses */}
+      <Route
+        path="/admin/feedback-responses"
+        element={
+          <ProtectedRoute>
+            <AdminFeedbackResponses />
           </ProtectedRoute>
         }
       />

@@ -3263,6 +3263,43 @@ router.post('/feedback-jobs/:id/retry', async (req, res) => {
   }
 });
 
+// Admin view for anonymous feedback responses.
+router.get('/feedback-responses', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const { cycleId } = req.query;
+
+    const where = {};
+    if (cycleId) where.cycleId = cycleId;
+
+    const skip = (page - 1) * limit;
+    const [responses, total] = await Promise.all([
+      prisma.feedbackResponse.findMany({
+        where,
+        orderBy: { submittedAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          cycle: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.feedbackResponse.count({ where }),
+    ]);
+
+    res.json({
+      responses,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/feedback-responses]', error);
+    res.status(500).json({ error: 'Failed to fetch feedback responses', details: error.message });
+  }
+});
+
 // Get interview rounds configuration
 router.get('/interview-rounds', async (req, res) => {
   try {

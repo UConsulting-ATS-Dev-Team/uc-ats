@@ -802,7 +802,7 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
   candidateName = escapeHtml(candidateName);
   currentCycleName = escapeHtml(currentCycleName);
   feedbackFormUrl = escapeHtml(feedbackFormUrl);
-  const text = `Dear ${candidateName},\n\nThank you for your interest in UConsulting and for participating in our ${currentCycleName} recruitment process.\n\nWe would greatly appreciate your feedback via this short survey:\n${feedbackFormUrl}\n\nYour responses help us improve our process for future candidates.\n\nBest regards,\nUConsulting Recruitment Team`;
+  const text = `Dear ${candidateName},\n\nThank you for your interest in UConsulting and for participating in our ${currentCycleName} recruitment process.\n\nWe would greatly appreciate your anonymous feedback via this short form:\n${feedbackFormUrl}\n\nYour responses help us improve our process for future candidates.\n\nBest regards,\nUConsulting Recruitment Team`;
   return {
     subject: `Feedback Request - ${subjectCycle}`,
     html: `
@@ -823,11 +823,11 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
           </p>
 
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We would greatly appreciate your feedback via this short survey:
+            We would greatly appreciate your anonymous feedback via this short form:
           </p>
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
-            <a href="${feedbackFormUrl}" style="display: inline-block; background-color: #0c74c1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Give Feedback</a>
+            <a href="${feedbackFormUrl}" style="display: inline-block; background-color: #0c74c1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Give Anonymous Feedback</a>
           </div>
 
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">

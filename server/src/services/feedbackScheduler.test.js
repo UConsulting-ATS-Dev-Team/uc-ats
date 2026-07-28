@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 vi.mock('../prismaClient.js', () => {
   function uid(prefix = 'id') {
@@ -81,7 +82,7 @@ vi.mock('../prismaClient.js', () => {
     for (const [key, value] of Object.entries(data)) {
       if (value && typeof value === 'object' && 'increment' in value) {
         record[key] = (record[key] || 0) + value.increment;
-      } else if (['dueAt', 'sentAt', 'decisionSentAt', 'claimedAt', 'attemptedAt', 'createdAt', 'updatedAt'].includes(key)) {
+      } else if (['dueAt', 'sentAt', 'decisionSentAt', 'claimedAt', 'attemptedAt', 'respondedAt', 'submittedAt', 'createdAt', 'updatedAt'].includes(key)) {
         record[key] = value ? new Date(value) : null;
       } else {
         record[key] = value;
@@ -100,6 +101,7 @@ vi.mock('../prismaClient.js', () => {
         .filter((a) => a.jobId === record.id)
         .sort((a, b) => new Date(b.attemptedAt).getTime() - new Date(a.attemptedAt).getTime());
     }
+    if (include.response) copy.response = state.feedbackResponses.find((r) => r.feedbackJobId === record.id) || null;
     if (include.job) copy.job = state.jobs.find((j) => j.id === record.jobId) || null;
     return copy;
   }
@@ -155,6 +157,10 @@ vi.mock('../prismaClient.js', () => {
         let record;
         if (where.id) {
           record = store.find((r) => r.id === where.id);
+        } else if (where.feedbackToken) {
+          record = store.find((r) => r.feedbackToken === where.feedbackToken);
+        } else if (where.feedbackJobId) {
+          record = store.find((r) => r.feedbackJobId === where.feedbackJobId);
         } else if (where.applicationId_type_decisionSentAt) {
           record = store.find((r) => matches(r, where));
         }
@@ -190,23 +196,26 @@ vi.mock('../prismaClient.js', () => {
     attempts: [],
     applications: [],
     cycles: [],
+    feedbackResponses: [],
     reset: () => {
       state.idCounter = 0;
       state.jobs.length = 0;
       state.attempts.length = 0;
       state.applications.length = 0;
       state.cycles.length = 0;
+      state.feedbackResponses.length = 0;
     },
   };
 
   const p = {
     __state: state,
     applicationFeedbackJob: createStoreMethods(state.jobs, {
-      uniqueKeys: [['applicationId', 'type', 'decisionSentAt']],
+      uniqueKeys: [['applicationId', 'type', 'decisionSentAt'], ['feedbackToken']],
     }),
     applicationFeedbackDeliveryAttempt: createStoreMethods(state.attempts),
     application: createStoreMethods(state.applications),
     recruitingCycle: createStoreMethods(state.cycles),
+    feedbackResponse: createStoreMethods(state.feedbackResponses),
   };
 
   p.$transaction = vi.fn((arg) => {
@@ -240,6 +249,7 @@ const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
 function resetState() {
   prisma.__state.reset();
   vi.clearAllMocks();
+  process.env.BASE_URL = 'http://localhost:3001';
 }
 
 function applicationFixture(overrides = {}) {
@@ -256,7 +266,6 @@ function applicationFixture(overrides = {}) {
 function cycleFixture(overrides = {}) {
   return {
     name: 'Fall 2026',
-    feedbackFormUrl: 'https://forms.example.com/feedback',
     ...overrides,
   };
 }
@@ -273,6 +282,9 @@ async function seedJob(overrides = {}) {
   const app = overrides.application || (await seedApplication());
   const cycle = overrides.cycle || (await seedCycle());
   const decisionSentAt = overrides.decisionSentAt || new Date('2026-07-27T10:00:00.000Z');
+  const feedbackToken = overrides.feedbackToken || randomUUID();
+  const baseUrl = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const feedbackFormUrl = overrides.feedbackFormUrl || `${baseUrl}/feedback/${feedbackToken}`;
   return prisma.applicationFeedbackJob.create({
     data: {
       applicationId: app.id,
@@ -281,7 +293,8 @@ async function seedJob(overrides = {}) {
       status: JOB_STATUS.PENDING,
       dueAt: new Date(decisionSentAt.getTime() + FEEDBACK_DELAY_MS),
       decisionSentAt,
-      feedbackFormUrl: cycle.feedbackFormUrl,
+      feedbackToken,
+      feedbackFormUrl,
       ...overrides,
     },
   });
@@ -301,7 +314,8 @@ describe('scheduleFeedbackRequest', () => {
 
     expect(job.status).toBe(JOB_STATUS.PENDING);
     expect(job.applicationId).toBe(app.id);
-    expect(job.feedbackFormUrl).toBe(cycle.feedbackFormUrl);
+    expect(job.feedbackToken).toBeTruthy();
+    expect(job.feedbackFormUrl).toMatch(/^http:\/\/localhost:3001\/feedback\/.+/);
     expect(job.dueAt.getTime()).toBe(decisionSentAt.getTime() + FEEDBACK_DELAY_MS);
     expect(prisma.__state.jobs).toHaveLength(1);
   });
@@ -315,9 +329,10 @@ describe('scheduleFeedbackRequest', () => {
     expect(job.status).toBe(JOB_STATUS.PENDING);
   });
 
-  it('creates a FAILED job when the feedback form URL is missing or not allowed', async () => {
+  it('creates a FAILED job when the generated feedback URL is invalid', async () => {
     const app = await seedApplication();
-    const cycle = await seedCycle({ feedbackFormUrl: 'not-a-url' });
+    const cycle = await seedCycle();
+    process.env.BASE_URL = 'ftp://invalid';
 
     const job = await scheduleFeedbackRequest(app, cycle, new Date());
 
@@ -401,7 +416,7 @@ describe('processFeedbackJobs', () => {
       'jane@example.com',
       'Jane Doe',
       'Fall 2026',
-      'https://forms.example.com/feedback'
+      job.feedbackFormUrl
     );
     expect(results[0].action).toBe('sent');
     expect(results[0].messageId).toBe('msg-1');
@@ -414,7 +429,7 @@ describe('processFeedbackJobs', () => {
     expect(attempts).toHaveLength(1);
     expect(attempts[0].status).toBe(ATTEMPT_STATUS.SENT);
     expect(attempts[0].messageId).toBe('msg-1');
-    expect(attempts[0].feedbackFormUrl).toBe('https://forms.example.com/feedback');
+    expect(attempts[0].feedbackFormUrl).toBe(job.feedbackFormUrl);
   });
 
   it('uses the immutable feedbackFormUrl snapshot even if the cycle config changes', async () => {
@@ -608,7 +623,7 @@ describe('retryFeedbackJob', () => {
     vi.useRealTimers();
   });
 
-  it('resets a FAILED job to PENDING with dueAt now and refreshes the form URL snapshot', async () => {
+  it('resets a FAILED job to PENDING with dueAt now while preserving the immutable form URL snapshot', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({
@@ -629,7 +644,7 @@ describe('retryFeedbackJob', () => {
     expect(result.status).toBe(JOB_STATUS.PENDING);
     expect(result.dueAt.getTime()).toBe(new Date('2026-07-28T10:00:00.000Z').getTime());
     expect(result.lastError).toBeNull();
-    expect(result.feedbackFormUrl).toBe('https://new.example.com/feedback');
+    expect(result.feedbackFormUrl).toBe('https://old.example.com/feedback');
   });
 
   it('throws when retrying a SENT job', async () => {

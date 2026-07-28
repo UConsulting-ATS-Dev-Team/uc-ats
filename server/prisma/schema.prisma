@@ -141,6 +141,7 @@ model RecruitingCycle {
   videoScores         VideoScore[]
   cases               Case[]
   feedbackJobs        ApplicationFeedbackJob[]
+  feedbackResponses   FeedbackResponse[]
 
   @@map("recruiting_cycles")
 }
@@ -157,6 +158,8 @@ model ApplicationFeedbackJob {
   lastError      String?
   decisionSentAt DateTime
   feedbackFormUrl String?
+  feedbackToken  String?                         @unique
+  respondedAt    DateTime?
   claimToken     String?
   claimedAt      DateTime?
   messageId      String?
@@ -165,6 +168,7 @@ model ApplicationFeedbackJob {
   application    Application                     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   cycle          RecruitingCycle?                @relation(fields: [cycleId], references: [id], onDelete: SetNull)
   deliveryAttempts ApplicationFeedbackDeliveryAttempt[]
+  response       FeedbackResponse?
 
   @@unique([applicationId, type, decisionSentAt])
   @@index([status, dueAt])
@@ -185,6 +189,19 @@ model ApplicationFeedbackDeliveryAttempt {
 
   @@index([jobId, attemptedAt])
   @@map("application_feedback_delivery_attempts")
+}
+
+model FeedbackResponse {
+  id           String                  @id @default(uuid())
+  cycleId      String
+  feedbackJobId String?                 @unique
+  content      String
+  submittedAt  DateTime                @default(now())
+  cycle        RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  job          ApplicationFeedbackJob?  @relation(fields: [feedbackJobId], references: [id], onDelete: SetNull)
+
+  @@index([cycleId, submittedAt])
+  @@map("feedback_responses")
 }
 
 model Comment {

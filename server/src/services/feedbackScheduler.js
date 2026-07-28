@@ -47,6 +47,15 @@ function generateClaimToken() {
   return randomUUID();
 }
 
+function generateFeedbackToken() {
+  return randomUUID();
+}
+
+function buildFeedbackUrl(token) {
+  const base = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+  return `${base}/feedback/${token}`;
+}
+
 function datesEqual(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -71,7 +80,8 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
     throw new Error('decisionSentAt is required to schedule a feedback request');
   }
 
-  const feedbackFormUrl = cycle?.feedbackFormUrl || null;
+  const feedbackToken = generateFeedbackToken();
+  const feedbackFormUrl = buildFeedbackUrl(feedbackToken);
   const dueAt = computeDueAt(decisionSentAt);
 
   if (!isAllowedFeedbackFormUrl(feedbackFormUrl)) {
@@ -83,8 +93,9 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
         status: JOB_STATUS.FAILED,
         dueAt,
         decisionSentAt: new Date(decisionSentAt),
+        feedbackToken,
         feedbackFormUrl,
-        lastError: `Feedback form URL is missing or not allowed: ${feedbackFormUrl || '(none)'}`,
+        lastError: `Feedback form URL is missing or not allowed: ${feedbackFormUrl}`,
       },
     });
   }
@@ -98,6 +109,7 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
         status: JOB_STATUS.PENDING,
         dueAt,
         decisionSentAt: new Date(decisionSentAt),
+        feedbackToken,
         feedbackFormUrl,
       },
     });
@@ -427,6 +439,9 @@ export async function getFeedbackJobs({ cycleId, status, applicationId, page = 1
         cycle: {
           select: { id: true, name: true, feedbackFormUrl: true },
         },
+        response: {
+          select: { id: true, submittedAt: true },
+        },
         deliveryAttempts: {
           orderBy: { attemptedAt: 'desc' },
         },
@@ -452,8 +467,6 @@ export async function retryFeedbackJob(id) {
 
   if (!existing) throw new Error('Feedback job not found');
 
-  const feedbackFormUrl = existing.cycle?.feedbackFormUrl || existing.feedbackFormUrl;
-
   const updated = await prisma.applicationFeedbackJob.updateMany({
     where: {
       id,
@@ -466,7 +479,7 @@ export async function retryFeedbackJob(id) {
       lastError: null,
       claimToken: null,
       claimedAt: null,
-      feedbackFormUrl,
+      respondedAt: null,
     },
   });
 
