@@ -26,10 +26,6 @@ export const ATTEMPT_STATUS = {
 
 const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
 
-// In-flight send cancellation boundary. `handleApplicationStatusChange` can
-// abort a job that is already between the durable SENDING intent and the
-// provider call, preventing mail to candidates whose status has reversed.
-const activeFeedbackSends = new Map();
 
 function isRejectedStatus(status) {
   return status === 'REJECTED';
@@ -195,22 +191,14 @@ export async function cancelPendingFeedbackRequest(applicationId) {
   return jobs.length;
 }
 
-function abortActiveFeedbackSendsForApplication(applicationId, reason) {
-  for (const [jobId, { controller, applicationId: appId }] of activeFeedbackSends) {
-    if (appId === applicationId) {
-      controller.abort(reason || 'Application status changed away from REJECTED');
-      activeFeedbackSends.delete(jobId);
-    }
-  }
-}
-
 export async function handleApplicationStatusChange(applicationId, newStatus) {
   // Only rejected candidates should receive a feedback request, so any
   // transition away from REJECTED cancels pending/processing/failed jobs,
-  // aborts any in-flight send, and clears any prior final-decision timestamp
-  // so a new final decision can be processed idempotently.
+  // updates the durable SENDING intent, and clears any prior final-decision
+  // timestamp so a new final decision can be processed idempotently. Any
+  // in-flight send is aborted by the DB state change in `cancelPendingFeedbackRequest`
+  // and the final `onBeforeSend` re-check inside `sendEmail`.
   if (!isRejectedStatus(newStatus)) {
-    abortActiveFeedbackSendsForApplication(applicationId, 'Application status changed away from REJECTED');
     const cancelled = await cancelPendingFeedbackRequest(applicationId);
     await prisma.application.update({
       where: { id: applicationId },
@@ -417,43 +405,43 @@ async function markJobUnknown(job, token, messageId, now, reason) {
   ]);
 }
 
-async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey, signal) {
+async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey) {
   // The durable SENDING delivery attempt is the authoritative send boundary.
-  // Re-read the attempt, job claim, and application eligibility immediately
-  // before the provider call so a concurrent status reversal or claim loss is
-  // observed here and the provider is never invoked. The AbortController/signal
-  // closes the remaining race between the read and the network call: a status
-  // reversal aborts the in-flight send before `transporter.sendMail` executes.
-  if (signal?.aborted) {
-    return { cancelled: true, reason: signal.reason || 'Send aborted before provider call' };
+  // `onBeforeSend` is invoked by `sendEmail` immediately before the network
+  // call, so a concurrent status reversal, claim loss, or SENDING cancellation
+  // is observed at the last possible moment. This is cross-process safe: another
+  // instance/worker updates the same Prisma records, and the DB read inside the
+  // hook sees the current state instead of a process-local `AbortController`.
+  const onBeforeSend = async () => {
+    const [currentJob, currentAttempt, currentApp] = await Promise.all([
+      prisma.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
+      prisma.applicationFeedbackDeliveryAttempt.findFirst({
+        where: { jobId: job.id, claimToken: token },
+        orderBy: { attemptedAt: 'desc' },
+      }),
+      prisma.application.findUnique({ where: { id: job.applicationId } }),
+    ]);
+
+    if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
+      return { cancelled: true, reason: 'Job claim lost or token mismatch at send boundary' };
+    }
+
+    if (!currentAttempt || currentAttempt.status !== ATTEMPT_STATUS.SENDING) {
+      return { cancelled: true, reason: 'Delivery attempt was cancelled before provider call' };
+    }
+
+    if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
+      return { cancelled: true, reason: 'Application eligibility changed or final decision was reversed at send boundary' };
+    }
+
+    return {};
+  };
+
+  const result = await sendApplicantFeedbackRequest(to, candidateName, cycleName, feedbackFormUrl, messageKey, { onBeforeSend });
+  if (result.cancelled) {
+    return { cancelled: true, reason: result.error };
   }
-
-  const [currentJob, currentAttempt, currentApp] = await Promise.all([
-    prisma.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
-    prisma.applicationFeedbackDeliveryAttempt.findFirst({
-      where: { jobId: job.id, claimToken: token },
-      orderBy: { attemptedAt: 'desc' },
-    }),
-    prisma.application.findUnique({ where: { id: job.applicationId } }),
-  ]);
-
-  if (signal?.aborted) {
-    return { cancelled: true, reason: 'Send aborted between eligibility read and provider call' };
-  }
-
-  if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
-    return { cancelled: true, reason: 'Job claim lost or token mismatch at send boundary' };
-  }
-
-  if (!currentAttempt || currentAttempt.status !== ATTEMPT_STATUS.SENDING) {
-    return { cancelled: true, reason: 'Delivery attempt was cancelled before provider call' };
-  }
-
-  if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
-    return { cancelled: true, reason: 'Application eligibility changed or final decision was reversed at send boundary' };
-  }
-
-  return sendApplicantFeedbackRequest(to, candidateName, cycleName, feedbackFormUrl, messageKey, { signal });
+  return result;
 }
 
 async function processSingleFeedbackJob(job, now = new Date()) {
@@ -551,20 +539,16 @@ async function processSingleFeedbackJob(job, now = new Date()) {
   }
 
   // The provider is only invoked after the durable SENDING attempt and current
-  // eligibility are re-verified by guardedSend. An AbortController is registered
-  // so `handleApplicationStatusChange` can cancel the send between the final
-  // eligibility read and the network call, making the outbox intent
-  // authoritative even during the provider call.
-  const abortController = new AbortController();
-  activeFeedbackSends.set(job.id, { controller: abortController, applicationId: job.applicationId });
+  // eligibility are re-verified by guardedSend via the `onBeforeSend` hook that
+  // `sendEmail` calls immediately before the network call. This is cross-process
+  // safe because it re-reads the same Prisma records that another worker or
+  // status route would update.
   let sendResult;
   try {
-    sendResult = await guardedSend(currentJob, token, to, candidateName, cycleName, feedbackFormUrl, messageKey, abortController.signal);
+    sendResult = await guardedSend(currentJob, token, to, candidateName, cycleName, feedbackFormUrl, messageKey);
   } catch (sendErr) {
     await markJobFailed(currentJob, token, sendErr.message);
     return { id: job.id, action: 'failed', error: sendErr.message };
-  } finally {
-    activeFeedbackSends.delete(job.id);
   }
 
   if (sendResult.cancelled) {
@@ -895,7 +879,6 @@ export async function cancelFeedbackJob(id) {
 export async function expireFeedbackResponses(now = new Date()) {
   const cycles = await prisma.recruitingCycle.findMany({
     where: {
-      feedbackEnabled: true,
       feedbackRetentionDays: { gt: 0 },
     },
     select: { id: true, feedbackRetentionDays: true },

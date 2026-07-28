@@ -67,6 +67,7 @@ const Layout = ({ children }) => {
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Feedback Jobs', href: '/admin/feedback-jobs', icon: ChatBubbleOvalLeftEllipsisIcon },
       { name: 'Feedback Responses', href: '/admin/feedback-responses', icon: ChatBubbleOvalLeftEllipsisIcon },
+      { name: 'Decision Sends', href: '/admin/decision-sends', icon: ChatBubbleOvalLeftEllipsisIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
       FEATURE_REQUEST_NAV,

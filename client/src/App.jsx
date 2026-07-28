@@ -47,6 +47,7 @@ import CandidateDetail from './pages/CandidateDetail';
 import FeedbackForm from './pages/FeedbackForm';
 import AdminFeedbackResponses from './pages/AdminFeedbackResponses';
 import AdminFeedbackJobs from './pages/AdminFeedbackJobs';
+import AdminDecisionSends from './pages/AdminDecisionSends';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
@@ -394,6 +395,18 @@ const AppRoutes = () => {
           <ProtectedRoute>
             <AccessControl allowedRoles={['ADMIN']}>
               <AdminFeedbackResponses />
+            </AccessControl>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Final-decision send reconciliation */}
+      <Route
+        path="/admin/decision-sends"
+        element={
+          <ProtectedRoute>
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminDecisionSends />
             </AccessControl>
           </ProtectedRoute>
         }

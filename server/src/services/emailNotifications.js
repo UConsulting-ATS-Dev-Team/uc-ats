@@ -125,6 +125,18 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 // Send email function
 const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined, options = {}) => {
   try {
+    // Call the durable, provider-safe intent/cancellation hook right before the
+    // network call. This is the last moment at which a reversal can be observed
+    // from any worker instance because the hook reads from the shared database.
+    if (options?.onBeforeSend) {
+      const beforeResult = await options.onBeforeSend();
+      if (beforeResult && beforeResult.cancelled) {
+        const reason = beforeResult.reason || 'Send cancelled by before-send hook';
+        console.log('Email send cancelled by before-send hook:', reason);
+        return { success: false, error: reason, cancelled: true };
+      }
+    }
+
     if (options?.signal?.aborted) {
       const reason = options.signal.reason || 'Send aborted by cancellation signal';
       console.log('Email send aborted before transporter call:', reason);

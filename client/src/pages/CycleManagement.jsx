@@ -19,11 +19,8 @@ import {
   Checkbox,
   IconButton,
   Tooltip,
-  Switch,
+  Alert,
   FormControlLabel,
-  FormLabel,
-  Radio,
-  RadioGroup,
   Divider,
 } from '@mui/material';
 import { Edit as EditIcon, Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
@@ -80,27 +77,6 @@ export default function CycleManagement() {
       return;
     }
 
-    if (form.feedbackEnabled && (!form.feedbackPrivacyPolicy || !form.feedbackPrivacyPolicy.trim())) {
-      setError('A feedback privacy/retention policy is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && (!form.feedbackRetentionDays || Number(form.feedbackRetentionDays) <= 0)) {
-      setError('A positive feedback retention period (days) is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && !form.feedbackAccessModel) {
-      setError('A feedback access model is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && !form.feedbackApproved) {
-      setError('Feedback must be explicitly approved before it can be enabled');
-      return;
-    }
-    if (form.feedbackEnabled && (!form.feedbackApprovedBy || !form.feedbackApprovedBy.trim())) {
-      setError('An approver name is required when feedback is enabled');
-      return;
-    }
-
     try {
       setError('');
       setSubmitting(true);
@@ -133,27 +109,6 @@ export default function CycleManagement() {
 
     if (form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate)) {
       setError('End date must be after start date');
-      return;
-    }
-
-    if (form.feedbackEnabled && (!form.feedbackPrivacyPolicy || !form.feedbackPrivacyPolicy.trim())) {
-      setError('A feedback privacy/retention policy is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && (!form.feedbackRetentionDays || Number(form.feedbackRetentionDays) <= 0)) {
-      setError('A positive feedback retention period (days) is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && !form.feedbackAccessModel) {
-      setError('A feedback access model is required when feedback is enabled');
-      return;
-    }
-    if (form.feedbackEnabled && !form.feedbackApproved) {
-      setError('Feedback must be explicitly approved before it can be enabled');
-      return;
-    }
-    if (form.feedbackEnabled && (!form.feedbackApprovedBy || !form.feedbackApprovedBy.trim())) {
-      setError('An approver name is required when feedback is enabled');
       return;
     }
 
@@ -360,14 +315,9 @@ export default function CycleManagement() {
 
             <Divider sx={{ my: 1 }} />
             <Typography variant="h6">Feedback Configuration</Typography>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Switch
-                checked={form.feedbackEnabled}
-                onChange={(e) => setForm({ ...form, feedbackEnabled: e.target.checked })}
-                disabled={submitting}
-              />
-              <Typography>Enable feedback requests</Typography>
-            </Stack>
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Candidate-facing feedback is disabled until Ryan approves the access model, authorized readers, and retention period on issue #31. The settings below can be drafted but will not be active.
+            </Alert>
             <TextField
               label="Feedback cadence (hours)"
               type="number"
@@ -375,7 +325,7 @@ export default function CycleManagement() {
               onChange={(e) => setForm({ ...form, feedbackCadenceHours: parseInt(e.target.value, 10) || 0 })}
               fullWidth
               inputProps={{ min: 1 }}
-              disabled={!form.feedbackEnabled}
+              disabled={submitting}
             />
             <TextField
               label="Feedback prompt"
@@ -383,63 +333,34 @@ export default function CycleManagement() {
               onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
               fullWidth
               placeholder="We would greatly appreciate your confidential feedback."
-              disabled={!form.feedbackEnabled}
+              disabled={submitting}
             />
-            {form.feedbackEnabled && (
-              <TextField
-                label="Feedback privacy / retention policy"
-                value={form.feedbackPrivacyPolicy}
-                onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
-                fullWidth
-                multiline
-                minRows={3}
-                placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
-                disabled={!form.feedbackEnabled}
-                required={form.feedbackEnabled}
-              />
-            )}
-            {form.feedbackEnabled && (
-              <TextField
-                label="Retention period (days)"
-                type="number"
-                value={form.feedbackRetentionDays}
-                onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
-                fullWidth
-                inputProps={{ min: 1 }}
-                disabled={!form.feedbackEnabled}
-                required={form.feedbackEnabled}
-              />
-            )}
-            {form.feedbackEnabled && (
-              <>
-                <FormLabel component="legend" disabled={!form.feedbackEnabled}>Feedback access model</FormLabel>
-                <RadioGroup
-                  row
-                  value={form.feedbackAccessModel}
-                  onChange={(e) => setForm({ ...form, feedbackAccessModel: e.target.value })}
-                >
-                  <FormControlLabel value="CONFIDENTIAL" control={<Radio disabled={!form.feedbackEnabled} />} label="Confidential (named admin readers)" />
-                  <FormControlLabel value="ANONYMOUS" control={<Radio disabled={!form.feedbackEnabled} />} label="Anonymous (content only, no reader identity)" />
-                </RadioGroup>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <Switch
-                    checked={form.feedbackApproved}
-                    onChange={(e) => setForm({ ...form, feedbackApproved: e.target.checked })}
-                    disabled={!form.feedbackEnabled || submitting}
-                  />
-                  <Typography>Feedback policy approved</Typography>
-                </Stack>
-                <TextField
-                  label="Approved by"
-                  value={form.feedbackApprovedBy}
-                  onChange={(e) => setForm({ ...form, feedbackApprovedBy: e.target.value })}
-                  fullWidth
-                  placeholder="Name of person who approved the access and retention policy"
-                  disabled={!form.feedbackEnabled || !form.feedbackApproved}
-                  required={form.feedbackEnabled && form.feedbackApproved}
-                />
-              </>
-            )}
+            <TextField
+              label="Feedback privacy / retention policy"
+              value={form.feedbackPrivacyPolicy}
+              onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
+              fullWidth
+              multiline
+              minRows={3}
+              placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
+              disabled={submitting}
+            />
+            <TextField
+              label="Retention period (days)"
+              type="number"
+              value={form.feedbackRetentionDays}
+              onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
+              fullWidth
+              inputProps={{ min: 1 }}
+              disabled={submitting}
+            />
+            <TextField
+              label="Feedback access model"
+              value="CONFIDENTIAL"
+              fullWidth
+              disabled
+              helperText="Only CONFIDENTIAL (admin readers) is supported until anonymous handling is approved."
+            />
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>
               {(form.feedbackQuestions || []).map((q, index) => (
@@ -449,19 +370,19 @@ export default function CycleManagement() {
                     value={q.label}
                     onChange={(e) => updateFeedbackQuestion(index, { label: e.target.value })}
                     fullWidth
-                    disabled={!form.feedbackEnabled}
+                    disabled={submitting}
                   />
                   <FormControlLabel
                     control={
                       <Checkbox
                         checked={q.required}
                         onChange={(e) => updateFeedbackQuestion(index, { required: e.target.checked })}
-                        disabled={!form.feedbackEnabled}
+                        disabled={submitting}
                       />
                     }
                     label="Required"
                   />
-                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={!form.feedbackEnabled} color="error">
+                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={submitting} color="error">
                     <DeleteIcon />
                   </IconButton>
                 </Stack>
@@ -470,7 +391,7 @@ export default function CycleManagement() {
                 size="small"
                 startIcon={<AddIcon />}
                 onClick={addFeedbackQuestion}
-                disabled={!form.feedbackEnabled || submitting}
+                disabled={submitting}
               >
                 Add question
               </Button>
@@ -535,14 +456,9 @@ export default function CycleManagement() {
 
             <Divider sx={{ my: 1 }} />
             <Typography variant="h6">Feedback Configuration</Typography>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Switch
-                checked={form.feedbackEnabled}
-                onChange={(e) => setForm({ ...form, feedbackEnabled: e.target.checked })}
-                disabled={submitting}
-              />
-              <Typography>Enable feedback requests</Typography>
-            </Stack>
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Candidate-facing feedback is disabled until Ryan approves the access model, authorized readers, and retention period on issue #31. The settings below can be drafted but will not be active.
+            </Alert>
             <TextField
               label="Feedback cadence (hours)"
               type="number"
@@ -550,7 +466,7 @@ export default function CycleManagement() {
               onChange={(e) => setForm({ ...form, feedbackCadenceHours: parseInt(e.target.value, 10) || 0 })}
               fullWidth
               inputProps={{ min: 1 }}
-              disabled={!form.feedbackEnabled}
+              disabled={submitting}
             />
             <TextField
               label="Feedback prompt"
@@ -558,63 +474,34 @@ export default function CycleManagement() {
               onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
               fullWidth
               placeholder="We would greatly appreciate your confidential feedback."
-              disabled={!form.feedbackEnabled}
+              disabled={submitting}
             />
-            {form.feedbackEnabled && (
-              <TextField
-                label="Feedback privacy / retention policy"
-                value={form.feedbackPrivacyPolicy}
-                onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
-                fullWidth
-                multiline
-                minRows={3}
-                placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
-                disabled={!form.feedbackEnabled}
-                required={form.feedbackEnabled}
-              />
-            )}
-            {form.feedbackEnabled && (
-              <TextField
-                label="Retention period (days)"
-                type="number"
-                value={form.feedbackRetentionDays}
-                onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
-                fullWidth
-                inputProps={{ min: 1 }}
-                disabled={!form.feedbackEnabled}
-                required={form.feedbackEnabled}
-              />
-            )}
-            {form.feedbackEnabled && (
-              <>
-                <FormLabel component="legend" disabled={!form.feedbackEnabled}>Feedback access model</FormLabel>
-                <RadioGroup
-                  row
-                  value={form.feedbackAccessModel}
-                  onChange={(e) => setForm({ ...form, feedbackAccessModel: e.target.value })}
-                >
-                  <FormControlLabel value="CONFIDENTIAL" control={<Radio disabled={!form.feedbackEnabled} />} label="Confidential (named admin readers)" />
-                  <FormControlLabel value="ANONYMOUS" control={<Radio disabled={!form.feedbackEnabled} />} label="Anonymous (content only, no reader identity)" />
-                </RadioGroup>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <Switch
-                    checked={form.feedbackApproved}
-                    onChange={(e) => setForm({ ...form, feedbackApproved: e.target.checked })}
-                    disabled={!form.feedbackEnabled || submitting}
-                  />
-                  <Typography>Feedback policy approved</Typography>
-                </Stack>
-                <TextField
-                  label="Approved by"
-                  value={form.feedbackApprovedBy}
-                  onChange={(e) => setForm({ ...form, feedbackApprovedBy: e.target.value })}
-                  fullWidth
-                  placeholder="Name of person who approved the access and retention policy"
-                  disabled={!form.feedbackEnabled || !form.feedbackApproved}
-                  required={form.feedbackEnabled && form.feedbackApproved}
-                />
-              </>
-            )}
+            <TextField
+              label="Feedback privacy / retention policy"
+              value={form.feedbackPrivacyPolicy}
+              onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
+              fullWidth
+              multiline
+              minRows={3}
+              placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
+              disabled={submitting}
+            />
+            <TextField
+              label="Retention period (days)"
+              type="number"
+              value={form.feedbackRetentionDays}
+              onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
+              fullWidth
+              inputProps={{ min: 1 }}
+              disabled={submitting}
+            />
+            <TextField
+              label="Feedback access model"
+              value="CONFIDENTIAL"
+              fullWidth
+              disabled
+              helperText="Only CONFIDENTIAL (admin readers) is supported until anonymous handling is approved."
+            />
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>
               {(form.feedbackQuestions || []).map((q, index) => (
@@ -624,19 +511,19 @@ export default function CycleManagement() {
                     value={q.label}
                     onChange={(e) => updateFeedbackQuestion(index, { label: e.target.value })}
                     fullWidth
-                    disabled={!form.feedbackEnabled}
+                    disabled={submitting}
                   />
                   <FormControlLabel
                     control={
                       <Checkbox
                         checked={q.required}
                         onChange={(e) => updateFeedbackQuestion(index, { required: e.target.checked })}
-                        disabled={!form.feedbackEnabled}
+                        disabled={submitting}
                       />
                     }
                     label="Required"
                   />
-                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={!form.feedbackEnabled} color="error">
+                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={submitting} color="error">
                     <DeleteIcon />
                   </IconButton>
                 </Stack>
@@ -645,7 +532,7 @@ export default function CycleManagement() {
                 size="small"
                 startIcon={<AddIcon />}
                 onClick={addFeedbackQuestion}
-                disabled={!form.feedbackEnabled || submitting}
+                disabled={submitting}
               >
                 Add question
               </Button>

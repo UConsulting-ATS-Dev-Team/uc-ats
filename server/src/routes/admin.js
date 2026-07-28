@@ -207,23 +207,37 @@ function parsePositiveInteger(value, fallback = null) {
 
 function validateFeedbackConfig(data) {
   if (!data.feedbackEnabled) return;
+
   const privacyPolicy = typeof data.feedbackPrivacyPolicy === 'string' ? data.feedbackPrivacyPolicy.trim() : '';
   if (!privacyPolicy) {
     throw new Error('A feedback privacy/retention policy is required when feedback is enabled');
   }
+
   const retentionDays = parsePositiveInteger(data.feedbackRetentionDays);
   if (retentionDays === null) {
     throw new Error('A positive integer feedback retention period (days) is required when feedback is enabled');
   }
-  if (!data.feedbackAccessModel || !['CONFIDENTIAL', 'ANONYMOUS'].includes(data.feedbackAccessModel)) {
-    throw new Error('A valid feedback access model (CONFIDENTIAL or ANONYMOUS) is required when feedback is enabled');
+
+  if (data.feedbackAccessModel !== 'CONFIDENTIAL') {
+    throw new Error('Feedback access model must be CONFIDENTIAL (admin readers) until an anonymous model is approved');
   }
+
   if (data.feedbackApproved !== true) {
     throw new Error('Feedback must be explicitly approved before it can be enabled');
   }
+
   const approvedBy = typeof data.feedbackApprovedBy === 'string' ? data.feedbackApprovedBy.trim() : '';
   if (!approvedBy) {
     throw new Error('An approver name is required when feedback is enabled');
+  }
+
+  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
+  if (!requiredApprover) {
+    throw new Error('Feedback cannot be enabled until Ryan approves the access, reader, and retention policy on issue #31');
+  }
+
+  if (approvedBy !== requiredApprover) {
+    throw new Error(`Feedback must be approved by ${requiredApprover}`);
   }
 }
 
@@ -1463,7 +1477,7 @@ router.post('/cycles', async (req, res) => {
     res.status(201).json(created);
   } catch (error) {
     console.error('[POST /api/admin/cycles]', error);
-    res.status(500).json({ error: 'Failed to create cycle' });
+    res.status(500).json({ error: 'Failed to create cycle', details: error.message });
   }
 });
 
@@ -1538,7 +1552,12 @@ router.patch('/cycles/:id', async (req, res) => {
     if (updateData.feedbackApproved && !existing.feedbackApprovedAt) {
       updateData.feedbackApprovedAt = new Date();
     }
-    validateFeedbackConfig(updateData);
+
+    // Validate the effective state after merging the existing cycle with the
+    // partial payload. This prevents an enabled cycle from being silently
+    // left in an invalid state by a PATCH that omits `feedbackEnabled`.
+    const effectiveData = { ...existing, ...updateData };
+    validateFeedbackConfig(effectiveData);
 
     // Add deadline fields if they exist in the schema
     if (resumeDeadline !== undefined) {

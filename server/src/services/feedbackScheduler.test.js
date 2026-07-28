@@ -483,7 +483,15 @@ describe('processFeedbackJobs', () => {
     resetState();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
-    sendApplicantFeedbackRequest.mockResolvedValue({ success: true, messageId: 'msg-1' });
+    sendApplicantFeedbackRequest.mockImplementation(async (to, name, cycle, url, messageKey, options = {}) => {
+      if (options?.onBeforeSend) {
+        const result = await options.onBeforeSend();
+        if (result && result.cancelled) {
+          return { success: false, error: result.reason, cancelled: true };
+        }
+      }
+      return { success: true, messageId: 'msg-1' };
+    });
   });
 
   afterEach(() => {
@@ -744,7 +752,7 @@ describe('processFeedbackJobs', () => {
     const results = await processFeedbackJobs();
     prisma.application.findUnique = originalFindUnique;
 
-    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
     expect(results[0].action).toBe('cancelled');
     expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
@@ -1032,6 +1040,22 @@ describe('expireFeedbackResponses', () => {
     expect(deleted).toBe(0);
     expect(prisma.__state.feedbackResponses).toHaveLength(1);
   });
+
+  it('deletes expired responses for a disabled cycle that still has a positive retention period', async () => {
+    const cycle = await seedCycle({ feedbackEnabled: false, feedbackRetentionDays: 30 });
+    const response = await prisma.feedbackResponse.create({
+      data: { cycleId: cycle.id, content: 'old disabled', answers: {} },
+    });
+    await prisma.feedbackResponse.update({
+      where: { id: response.id },
+      data: { createdAt: new Date('2026-06-01T12:00:00.000Z') },
+    });
+
+    const deleted = await expireFeedbackResponses();
+
+    expect(deleted).toBe(1);
+    expect(prisma.__state.feedbackResponses).toHaveLength(0);
+  });
 });
 
 describe('decision send reconciliation', () => {
@@ -1103,7 +1127,15 @@ describe('active send abort boundary', () => {
     resetState();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
-    sendApplicantFeedbackRequest.mockResolvedValue({ success: true, messageId: 'msg-1' });
+    sendApplicantFeedbackRequest.mockImplementation(async (to, name, cycle, url, messageKey, options = {}) => {
+      if (options?.onBeforeSend) {
+        const result = await options.onBeforeSend();
+        if (result && result.cancelled) {
+          return { success: false, error: result.reason, cancelled: true };
+        }
+      }
+      return { success: true, messageId: 'msg-1' };
+    });
   });
 
   afterEach(() => {
@@ -1133,8 +1165,35 @@ describe('active send abort boundary', () => {
     const results = await processFeedbackJobs();
     prisma.application.findUnique = originalFindUnique;
 
-    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
     expect(results[0].action).toBe('cancelled');
     expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
+  });
+
+  it('cancels the send when a concurrent worker reverses the application status after the provider function is entered', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    // Simulate a cross-instance status reversal that happens after the provider
+    // function is entered but before `transporter.sendMail` would run.
+    sendApplicantFeedbackRequest.mockImplementation(async (to, name, cycleName, url, messageKey, options = {}) => {
+      const application = prisma.__state.applications.find((a) => a.email === to);
+      if (application) application.status = 'WAITLISTED';
+      if (options?.onBeforeSend) {
+        const result = await options.onBeforeSend();
+        if (result && result.cancelled) {
+          return { success: false, error: result.reason, cancelled: true };
+        }
+      }
+      return { success: true, messageId: 'msg-1' };
+    });
+
+    const results = await processFeedbackJobs();
+
+    expect(results[0].action).toBe('cancelled');
+    expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
+    const updated = prisma.__state.jobs.find((j) => j.applicationId === app.id);
+    expect(updated.status).toBe(JOB_STATUS.CANCELLED);
   });
 });
