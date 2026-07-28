@@ -495,4 +495,50 @@ describe('candidateGroupCopy service', () => {
     expect(mockPrisma.copyEvents[0].actorId).toBe('admin-a');
     expect(mockPrisma.copyEvents[1].actorId).toBe('admin-b');
   });
+
+  it('appends a new audit event when a previously skipped candidate gains an application', async () => {
+    const emptyInterview = {
+      ...interview,
+      description: JSON.stringify({ memberGroups: [], applicationGroups: [], groupAssignments: {} }),
+    };
+    const mockPrisma = createMockPrisma({ iv: emptyInterview });
+
+    const first = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      actorId: 'admin-a',
+    });
+
+    expect(first.additionCount).toBe(2);
+    expect(first.skippedCount).toBe(1);
+    expect(first.copyEvent.additions).toHaveLength(2);
+
+    // The skipped candidate now has a valid application in the same source group.
+    mockPrisma.group.assignedCandidates[2].applications = [
+      {
+        id: 'app-3',
+        firstName: 'Carol',
+        lastName: 'Chen',
+        email: 'carol@example.com',
+        studentId: '11111',
+        submittedAt: new Date('2026-01-03'),
+      },
+    ];
+
+    const second = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      destinationGroupId: first.destinationGroup.id,
+      actorId: 'admin-a',
+    });
+
+    expect(second.additionCount).toBe(1);
+    expect(second.copyEvent.additions).toHaveLength(1);
+    expect(second.copyEvent.additions[0].applicationId).toBe('app-3');
+    expect(mockPrisma.copyEvents).toHaveLength(2);
+    expect(mockPrisma.copyEvents[0].additions).toHaveLength(2);
+    expect(mockPrisma.copyEvents[1].additions).toHaveLength(1);
+  });
 });

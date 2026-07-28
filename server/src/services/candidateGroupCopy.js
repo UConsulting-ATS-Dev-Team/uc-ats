@@ -134,11 +134,21 @@ function deriveDefaultGroupId(interviewId, sourceGroupId) {
     .digest('hex');
 }
 
-function deriveOperationKey(interviewId, sourceGroupId, destinationGroupId, actorId, sourceCandidates) {
-  const candidateIds = (sourceCandidates || []).map((c) => c.id).sort().join(',');
+function deriveSourceDigest(sourceGroup) {
+  const entries = (sourceGroup?.assignedCandidates || []).map((candidate) => {
+    const application = candidate.applications?.[0];
+    const applicationId = isValidApplication(application) ? application.id : '';
+    return `${candidate.id}:${applicationId}`;
+  });
+  entries.sort();
+  return entries.join(',');
+}
+
+function deriveOperationKey(interviewId, sourceGroupId, destinationGroupId, actorId, sourceGroup) {
+  const sourceDigest = deriveSourceDigest(sourceGroup);
   return createHash('sha256')
     .update(
-      `candidate-group-copy-op:${interviewId}:${sourceGroupId}:${destinationGroupId}:${actorId}:${candidateIds}`
+      `candidate-group-copy-op:${interviewId}:${sourceGroupId}:${destinationGroupId}:${actorId}:${sourceDigest}`
     )
     .digest('hex');
 }
@@ -287,7 +297,7 @@ export async function commitCandidateGroupCopy({
       group.id,
       updatedGroup.id,
       actorId,
-      group.assignedCandidates
+      group
     );
 
     let copyEvent = null;
