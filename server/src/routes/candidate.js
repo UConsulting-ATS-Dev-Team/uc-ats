@@ -8,6 +8,7 @@ import {
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
 import { syncMeetingSlotCalendar, calendarSyncResponse } from '../services/google/meetingSlotCalendar.js';
+import { createMeetingSignup, MeetingBookingConflictError } from '../services/meetingBooking.js';
 
 const router = express.Router();
 
@@ -59,7 +60,8 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
 
 // POST /api/my-meeting-signups
 // Book a slot as the logged-in candidate. Identity is derived from req.user, never
-// from the request body. Used for both initial booking and rebooking.
+// from the request body. Booking is executed inside a serializable transaction so
+// capacity and one-booking-per-cycle limits are not raceable.
 router.post('/my-meeting-signups', requireAuth, async (req, res) => {
   try {
     const { slotId } = req.body || {};
@@ -72,62 +74,23 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Your account is missing a student ID. Please contact us to update your profile.' });
     }
 
-    // Enforce one signup per active recruiting cycle (mirrors public signup route).
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
-
-    if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
-      const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-      const cycleEndDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-
-      const existingSignups = await prisma.meetingSignup.findMany({
-        where: { email },
-        include: { slot: true },
-      });
-
-      const existingSignupInCycle = existingSignups.find((signup) => {
-        const slotDate = new Date(signup.slot.startTime);
-        const isAfterStart = !cycleStartDate || slotDate >= cycleStartDate;
-        const isBeforeEnd = !cycleEndDate || slotDate <= cycleEndDate;
-        return isAfterStart && isBeforeEnd;
-      });
-
-      if (existingSignupInCycle) {
-        return res.status(400).json({
-          error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.`,
-        });
+    let result;
+    try {
+      result = await createMeetingSignup({ slotId, fullName, email, studentId });
+    } catch (error) {
+      if (error instanceof MeetingBookingConflictError) {
+        return res.status(error.statusCode).json({ error: error.message });
       }
-    } else {
-      const existingSignup = await prisma.meetingSignup.findFirst({
-        where: { email },
-        include: { slot: true },
-      });
-
-      if (existingSignup) {
-        return res.status(400).json({
-          error: `You have already signed up for a meeting on ${new Date(existingSignup.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot.`,
-        });
+      if (error?.code === 'P2002') {
+        return res.status(400).json({ error: 'You are already signed up for this slot' });
       }
+      if (error?.code === 'P2034') {
+        return res.status(409).json({ error: 'This slot was just booked by someone else. Please try again.' });
+      }
+      throw error;
     }
 
-    const slot = await prisma.meetingSlot.findUnique({
-      where: { id: slotId },
-      include: {
-        signups: true,
-        member: { select: { fullName: true, email: true } },
-      },
-    });
-
-    if (!slot) {
-      return res.status(404).json({ error: 'Slot not found' });
-    }
-
-    if (slot.signups.length >= slot.capacity) {
-      return res.status(400).json({ error: 'This time slot is full' });
-    }
-
-    const signup = await prisma.meetingSignup.create({
-      data: { slotId, fullName, email, studentId },
-    });
+    const { signup, slot } = result;
 
     // Confirmation email to candidate.
     try {
@@ -170,9 +133,6 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
       calendarSync: calendarSyncResponse(syncResult),
     });
   } catch (error) {
-    if (error?.code === 'P2002') {
-      return res.status(400).json({ error: 'You are already signed up for this slot' });
-    }
     console.error('[POST /api/my-meeting-signups]', error);
     res.status(500).json({ error: 'Failed to create signup' });
   }

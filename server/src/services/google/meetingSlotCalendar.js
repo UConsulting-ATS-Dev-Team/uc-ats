@@ -226,13 +226,14 @@ export async function cancelMeetingSlotCalendar(slotId) {
     return { success: false, status: 'FAILED', error: 'Slot not found' };
   }
 
-  // A deterministic ID lets us retry cancellation later without losing the handle.
-  const providerEventId = slot.calendarEventId || deriveCalendarEventId(slot.id);
-  const hasStoredEventId = Boolean(slot.calendarEventId);
+  // Only act on a provider event that has actually been persisted locally.
+  // Deriving a deterministic ID here would cause us to call the provider for a
+  // slot that was created while Calendar was not configured and never had a live event.
+  const providerEventId = slot.calendarEventId || null;
 
   // If we have a stored provider event ID but Calendar is not configured, we cannot
   // verify the cancellation and must not delete the local handle.
-  if (hasStoredEventId && !isCalendarConfigured()) {
+  if (providerEventId && !isCalendarConfigured()) {
     const retryAt = await recordFailure(slot, new Error('Google Calendar is not configured'), {
       calendarSyncStatus: 'CANCEL_PENDING',
       calendarEventId: providerEventId,

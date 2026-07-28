@@ -336,15 +336,25 @@ describe('meetingSlotCalendar', () => {
       );
     });
 
-    it('succeeds when there is no calendar event to cancel', async () => {
+    it('succeeds locally when no provider event id was ever stored', async () => {
       slotState = makeSlot({ calendarEventId: null });
-      // Derive deterministic id from slot for the provider call.
       cancelCalendarEvent.mockResolvedValue();
 
       const result = await cancelMeetingSlotCalendar(SLOT_ID);
 
       expect(result).toEqual({ success: true, status: 'CANCELLED', eventId: null });
-      expect(cancelCalendarEvent).toHaveBeenCalledWith(DERIVED_EVENT_ID);
+      expect(cancelCalendarEvent).not.toHaveBeenCalled();
+    });
+
+    it('cancels locally and does not mark CANCEL_PENDING when Calendar is not configured and no event id is stored', async () => {
+      slotState = makeSlot({ calendarEventId: null });
+      isCalendarConfigured.mockReturnValue(false);
+
+      const result = await cancelMeetingSlotCalendar(SLOT_ID);
+
+      expect(result).toEqual({ success: true, status: 'CANCELLED', eventId: null });
+      expect(cancelCalendarEvent).not.toHaveBeenCalled();
+      expect(slotState.calendarSyncStatus).toBe('CANCELLED');
     });
 
     it('records CANCEL_PENDING and retains the provider event id when cancellation fails', async () => {

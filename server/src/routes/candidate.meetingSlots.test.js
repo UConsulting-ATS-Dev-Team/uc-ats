@@ -1,42 +1,21 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import publicRoutes from './public.js';
+import candidateRoutes from './candidate.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    recruitingCycle: { findFirst: vi.fn() },
-    user: {
-      findUnique: vi.fn(),
-      findFirst: vi.fn(),
-    },
-    meetingSlot: {
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-    },
-    meetingSignup: {
-      findFirst: vi.fn(),
-      findMany: vi.fn(),
-      create: vi.fn(),
-      findUnique: vi.fn(),
-      delete: vi.fn(),
-    },
+    user: { findUnique: vi.fn() },
+    meetingSignup: { findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
+    meetingSlot: { findUnique: vi.fn() },
   },
 }));
 
 vi.mock('../services/emailNotifications.js', () => ({
   sendMeetingSignupConfirmation: vi.fn().mockResolvedValue(),
   sendMeetingSignupNotification: vi.fn().mockResolvedValue(),
+  sendMeetingCancellationEmail: vi.fn().mockResolvedValue(),
   sendMeetingCancellationToMember: vi.fn().mockResolvedValue(),
-}));
-
-vi.mock('../services/meetingComms.js', () => ({
-  sendAndLogMeetingCommunication: vi.fn((fn) => fn()),
-  MEETING_COMM_SUBJECTS: {
-    CONFIRMATION: 'CONFIRMATION',
-    CANCELLATION: 'CANCELLATION',
-    HOST_NOTIFICATION: (candidateName) => `${candidateName} signed up for your Get to Know UC slot`,
-  },
 }));
 
 vi.mock('../services/google/meetingSlotCalendar.js', () => ({
@@ -80,7 +59,7 @@ function tokenFor(user) {
   return jwt.sign({ userId: user.id }, process.env.JWT_SECRET);
 }
 
-describe('public meeting slot routes', () => {
+describe('candidate meeting slot routes', () => {
   let app;
   let server;
   let port;
@@ -88,7 +67,7 @@ describe('public meeting slot routes', () => {
   beforeAll(async () => {
     app = express();
     app.use(express.json());
-    app.use('/api', publicRoutes);
+    app.use('/api', candidateRoutes);
     server = app.listen(0);
     await new Promise((resolve) => server.on('listening', resolve));
     port = server.address().port;
@@ -104,12 +83,11 @@ describe('public meeting slot routes', () => {
       signup: { id: 'signup-1', slotId: 'slot-1' },
       slot: SLOT,
     });
-    prisma.recruitingCycle.findFirst.mockResolvedValue(null);
-    prisma.meetingSignup.findMany.mockResolvedValue([]);
     prisma.user.findUnique.mockImplementation(({ where }) => {
       if (where.id === CANDIDATE.id || where.email === CANDIDATE.email) return CANDIDATE;
       return null;
     });
+    syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
   });
 
   async function post(endpoint, body, token = tokenFor(CANDIDATE)) {
@@ -123,43 +101,26 @@ describe('public meeting slot routes', () => {
     });
   }
 
-  describe('POST /api/meeting-slots/:id/signup', () => {
-    it('returns calendar sync warning when signup succeeds but calendar sync fails', async () => {
-      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
-      prisma.meetingSignup.create.mockResolvedValue({ id: 'signup-1', slotId: 'slot-1' });
-      syncMeetingSlotCalendar.mockResolvedValue({
-        success: false,
-        status: 'FAILED',
-        error: 'Google is down',
-        eventId: null,
-      });
-
-      const res = await post('/api/meeting-slots/slot-1/signup', {});
+  describe('POST /api/my-meeting-signups', () => {
+    it('creates a signup, syncs calendar, and returns sync state', async () => {
+      const res = await post('/api/my-meeting-signups', { slotId: 'slot-1' });
 
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.success).toBe(true);
-      expect(body.calendarSync.warning).toBe('Google is down');
-      expect(body.calendarSync.status).toBe('FAILED');
-    });
-
-    it('returns no warning when calendar sync succeeds', async () => {
-      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
-      prisma.meetingSignup.create.mockResolvedValue({ id: 'signup-1', slotId: 'slot-1' });
-      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
-
-      const res = await post('/api/meeting-slots/slot-1/signup', {});
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.calendarSync.warning).toBeNull();
       expect(body.calendarSync.status).toBe('SYNCED');
+      expect(createMeetingSignup).toHaveBeenCalledWith({
+        slotId: 'slot-1',
+        fullName: CANDIDATE.fullName,
+        email: CANDIDATE.email,
+        studentId: CANDIDATE.studentId,
+      });
     });
 
-    it('returns the conflict status and message from the booking helper', async () => {
+    it('returns the booking conflict status and message from the helper', async () => {
       createMeetingSignup.mockRejectedValue(new MeetingBookingConflictError('This time slot is full'));
 
-      const res = await post('/api/meeting-slots/slot-1/signup', {});
+      const res = await post('/api/my-meeting-signups', { slotId: 'slot-1' });
 
       expect(res.status).toBe(400);
       const body = await res.json();
@@ -171,7 +132,7 @@ describe('public meeting slot routes', () => {
       err.code = 'P2034';
       createMeetingSignup.mockRejectedValue(err);
 
-      const res = await post('/api/meeting-slots/slot-1/signup', {});
+      const res = await post('/api/my-meeting-signups', { slotId: 'slot-1' });
 
       expect(res.status).toBe(409);
     });

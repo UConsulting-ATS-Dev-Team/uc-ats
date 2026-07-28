@@ -1010,86 +1010,91 @@ router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Cancel the slot's Calendar event, then delete the local slot and signups, and
+// finally notify any signed-up candidates. Provider cancellation and local
+// deletion must succeed before side-effect communication so a failed
+// cancellation can be retried without having already told recipients the meeting
+// is cancelled.
+async function cancelAndDeleteMeetingSlot(slot, res) {
+  const calendarResult = await cancelMeetingSlotCalendar(slot.id);
+  if (!calendarResult.success) {
+    return res.status(502).json({
+      error: `Calendar cancellation failed: ${calendarResult.error}`,
+      calendarSync: calendarSyncResponse(calendarResult),
+    });
+  }
+
+  // Delete the meeting slot (this will cascade delete all signups due to foreign key constraint)
+  await prisma.$transaction(async (tx) => {
+    await tx.meetingSignup.deleteMany({
+      where: { slotId: slot.id },
+    });
+
+    await tx.meetingSlot.delete({
+      where: { id: slot.id },
+    });
+  });
+
+  // Notify signups only after local deletion can no longer be retried, so we
+  // never send the same cancellation email twice for the same slot.
+  if (slot.signups.length > 0) {
+    const memberName = slot.member?.fullName || 'UC Consulting Member';
+
+    const emailPromises = slot.signups.map((signup) =>
+      sendAndLogMeetingCommunication(
+        () => sendMeetingCancellationEmail(
+          signup.email,
+          signup.fullName,
+          memberName,
+          slot.location,
+          slot.startTime,
+          slot.endTime
+        ),
+        {
+          slotId: slot.id,
+          signupId: signup.id,
+          type: 'CANCELLATION',
+          recipient: signup.email,
+          subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+        }
+      )
+    );
+
+    await Promise.allSettled(emailPromises);
+  }
+
+  const message = slot.signups.length > 0
+    ? `Meeting slot deleted successfully. Cancellation emails sent to ${slot.signups.length} signup(s).`
+    : 'Meeting slot deleted successfully.';
+
+  return res.json({ message, calendarSync: calendarSyncResponse(calendarResult) });
+}
+
 // Member: delete a meeting slot
 router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Check if the slot belongs to this member
     const existingSlot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { 
+      include: {
         signups: true,
         member: {
           select: { fullName: true, profileImage: true }
         }
       }
     });
-    
+
     if (!existingSlot) {
       return res.status(404).json({ error: 'Meeting slot not found' });
     }
-    
+
     if (existingSlot.memberId !== req.user.id) {
       return res.status(403).json({ error: 'Not authorized to delete this meeting slot' });
     }
-    
-    // Send cancellation emails to all signups before deleting
-    if (existingSlot.signups.length > 0) {
-      const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
-      
-      // Send cancellation emails to all signups (and log each communication)
-      const emailPromises = existingSlot.signups.map((signup) =>
-        sendAndLogMeetingCommunication(
-          () => sendMeetingCancellationEmail(
-            signup.email,
-            signup.fullName,
-            memberName,
-            existingSlot.location,
-            existingSlot.startTime,
-            existingSlot.endTime
-          ),
-          {
-            slotId: existingSlot.id,
-            signupId: signup.id,
-            type: 'CANCELLATION',
-            recipient: signup.email,
-            subject: MEETING_COMM_SUBJECTS.CANCELLATION,
-          }
-        )
-      );
-      
-      // Wait for all emails to be sent (or fail)
-      await Promise.allSettled(emailPromises);
-    }
-    
-    // Cancel the associated Google Calendar event before deleting the slot so
-    // we still have the calendarEventId reference. Provider failures block deletion
-    // and leave the slot in CANCEL_PENDING so an operator can retry.
-    const calendarResult = await cancelMeetingSlotCalendar(existingSlot.id);
-    if (!calendarResult.success) {
-      return res.status(502).json({
-        error: `Calendar cancellation failed: ${calendarResult.error}`,
-        calendarSync: calendarSyncResponse(calendarResult),
-      });
-    }
 
-    // Delete the meeting slot (this will cascade delete all signups due to foreign key constraint)
-    await prisma.$transaction(async (tx) => {
-      await tx.meetingSignup.deleteMany({
-        where: { slotId: id },
-      })
-
-      await tx.meetingSlot.delete({
-        where: { id },
-      })
-    })
-    
-    const message = existingSlot.signups.length > 0 
-      ? `Meeting slot deleted successfully. Cancellation emails sent to ${existingSlot.signups.length} signup(s).`
-      : 'Meeting slot deleted successfully.';
-    
-    res.json({ message });
+    return await cancelAndDeleteMeetingSlot(existingSlot, res);
   } catch (error) {
     console.error('[DELETE /api/member/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to delete meeting slot' });
@@ -1103,7 +1108,10 @@ router.post('/meeting-slots/:id/retry-calendar', requireAuth, async (req, res) =
 
     const slot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { signups: true },
+      include: {
+        signups: true,
+        member: { select: { fullName: true } },
+      },
     });
 
     if (!slot) {
@@ -1115,20 +1123,7 @@ router.post('/meeting-slots/:id/retry-calendar', requireAuth, async (req, res) =
     }
 
     if (slot.calendarSyncStatus === 'CANCEL_PENDING') {
-      const cancelResult = await cancelMeetingSlotCalendar(slot.id);
-      if (!cancelResult.success) {
-        return res.status(502).json({
-          error: `Calendar cancellation retry failed: ${cancelResult.error}`,
-          calendarSync: calendarSyncResponse(cancelResult),
-        });
-      }
-      // The slot was awaiting cancellation; complete the deletion now that the
-      // calendar event is cancelled.
-      await prisma.$transaction(async (tx) => {
-        await tx.meetingSignup.deleteMany({ where: { slotId: id } });
-        await tx.meetingSlot.delete({ where: { id } });
-      });
-      return res.json({ message: 'Calendar event cancelled and slot deleted.', calendarSync: calendarSyncResponse(cancelResult) });
+      return await cancelAndDeleteMeetingSlot(slot, res);
     }
 
     const syncResult = await syncMeetingSlotCalendar(slot.id, { force: true });
