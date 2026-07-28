@@ -1,12 +1,17 @@
 import React from 'react';
 import UConsultingIcon from '../assets/logos/uconsulting-primary.svg';
+import UConsultingIconAlt from '../assets/logos/uconsulting-alternate.svg';
+import { useThemeControl } from '../context/ThemeContext';
 
-const UConsultingLogo = ({ 
-  size = 'medium', 
-  showIcon = true, 
+const UConsultingLogo = ({
+  size = 'medium',
+  showIcon = true,
   className = '',
-  style = {} 
+  style = {}
 }) => {
+  const { resolvedMode } = useThemeControl();
+  const logoSrc = resolvedMode === 'dark' ? UConsultingIconAlt : UConsultingIcon;
+
   const sizeStyles = {
     small: {
       container: { fontSize: '1rem', gap: '0.5rem' },
@@ -28,7 +33,7 @@ const UConsultingLogo = ({
   const currentSize = sizeStyles[size] || sizeStyles.medium;
 
   return (
-    <div 
+    <div
       className={`uconsulting-logo ${className}`}
       style={{
         display: 'flex',
@@ -38,8 +43,8 @@ const UConsultingLogo = ({
       }}
     >
       {showIcon && (
-        <img 
-          src={UConsultingIcon} 
+        <img
+          src={logoSrc}
           alt="UConsulting Logo"
           style={{
             width: 'auto',
@@ -48,20 +53,20 @@ const UConsultingLogo = ({
         />
       )}
       <div style={currentSize.text}>
-        <span 
-          style={{ 
+        <span
+          style={{
             fontFamily: 'Montserrat, sans-serif',
             fontWeight: 700,
-            color: '#0C74C1' // Official UConsulting accent blue
+            color: 'var(--logo-u)'
           }}
         >
           U
         </span>
-        <span 
-          style={{ 
+        <span
+          style={{
             fontFamily: 'Montserrat, sans-serif',
             fontWeight: 700,
-            color: '#042742' // Official UConsulting primary dark
+            color: 'var(--logo-text)'
           }}
         >
           Consulting
@@ -71,4 +76,4 @@ const UConsultingLogo = ({
   );
 };
 
-export default UConsultingLogo; 
+export default UConsultingLogo;

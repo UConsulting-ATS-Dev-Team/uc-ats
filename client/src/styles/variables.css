@@ -1,86 +1,196 @@
 /* Global CSS Variables - UConsulting Brand Colors */
-:root {
+:root,
+[data-theme="light"] {
   /* Official UConsulting Brand Colors */
   --primary-dark: #042742;
   --primary-dark-hover: #063557;
   --primary-blue: #0C74C1;
   --primary-blue-hover: #0a5d9f;
   --primary-blue-dark: #084a7d;
-  
+
   /* Secondary Colors */
   --secondary-light-blue: #5ba3e8;
   --secondary-focus: #0C74C1;
-  
-  /* Background Colors - Clean White System */
+
+  /* Surfaces */
   --bg-primary: #ffffff;
   --bg-secondary: #f8fafc;
   --bg-white: #ffffff;
   --bg-gray-light: #f9fafb;
   --bg-gray-lighter: #f3f4f6;
-  
-  /* Navigation Colors - Light Theme */
+  --bg-gray-medium: #e5e7eb;
+  --bg-elevated: #f8fafc;
+
+  /* Media/Player surfaces (intentionally dark in both modes) */
+  --media-bg-start: #1e293b;
+  --media-bg-end: #0f172a;
+
+  /* Navigation Colors */
   --nav-bg: #ffffff;
   --nav-text: #042742;
   --nav-text-secondary: #64748b;
   --nav-border: #e5e7eb;
-  
+
   /* Text Colors */
   --text-primary: #042742;
   --text-secondary: #64748b;
   --text-tertiary: #6b7280;
   --text-muted: #9ca3af;
   --text-white: #ffffff;
-  
+
   /* Border Colors */
   --border-light: #e5e7eb;
   --border-medium: #d1d5db;
   --border-focus: #0C74C1;
-  
+
   /* Status Colors */
   --status-success-bg: #dcfce7;
   --status-success-text: #166534;
   --status-success-border: #10b981;
-  
+
   --status-error-bg: #fee2e2;
   --status-error-text: #991b1b;
   --status-error-border: #ef4444;
-  
+
   --status-warning-bg: #fef3c7;
   --status-warning-text: #92400e;
   --status-warning-border: #f59e0b;
-  
+
   --status-info-bg: #EEF2FF;
   --status-info-text: #4F46E5;
   --status-info-border: #6366f1;
-  
+
+  --primary-color: var(--primary-blue);
+  --error-color: var(--status-error-text);
+
+  /* Semantic link/action colors */
+  --link-default: #2563eb;
+  --link-hover: #1d4ed8;
+
+  /* Subtle primary tint for badges/highlights */
+  --primary-subtle-bg: rgba(59, 130, 246, 0.1);
+
   /* Interactive States */
   --hover-overlay: rgba(12, 116, 193, 0.1);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.1);
   --shadow-focus: 0 0 0 3px rgba(12, 116, 193, 0.1);
-  
+  --overlay: rgba(0, 0, 0, 0.5);
+  --overlay-heavy: rgba(0, 0, 0, 0.6);
+  --overlay-light: rgba(0, 0, 0, 0.35);
+
+  /* Logo */
+  --logo-text: #042742;
+  --logo-u: #0C74C1;
+
   /* Typography - UConsulting Brand Fonts */
   --font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
   --font-family-heading: 'Montserrat', sans-serif;
   --font-weight-heading: 700; /* Montserrat Bold */
   --font-weight-body: 300;    /* Montserrat Light */
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
-  
+
   /* Sizing */
   --border-radius: 0.5rem;
   --border-radius-sm: 0.375rem;
   --border-radius-lg: 0.75rem;
   --border-radius-xl: 1rem;
 
-  /* Responsive tokens
-     Breakpoints (use literal pixel values inside @media — CSS vars are
-     not allowed in media query conditions):
-       --breakpoint-sm: 480px  (small phone)
-       --breakpoint-md: 768px  (tablet — primary mobile/desktop divider)
-       --breakpoint-lg: 1024px (small desktop) */
+  /* Responsive tokens */
   --space-mobile-padding: 1rem;
   --touch-target-min: 44px;
+}
+
+[data-theme="dark"] {
+  /* Brand colors lightened for dark surfaces */
+  --primary-color: var(--primary-blue);
+  --error-color: var(--status-error-text);
+  --primary-subtle-bg: rgba(56, 189, 248, 0.12);
+
+  --primary-dark: #60a5fa;
+  --primary-dark-hover: #93c5fd;
+  --primary-blue: #38bdf8;
+  --primary-blue-hover: #7dd3fc;
+  --primary-blue-dark: #0ea5e9;
+
+  /* Secondary Colors */
+  --secondary-light-blue: #7dd3fc;
+  --secondary-focus: #38bdf8;
+
+  /* Surfaces */
+  --bg-primary: #0b1220;
+  --bg-secondary: #0f172a;
+  --bg-white: #0f172a;
+  --bg-gray-light: #1e293b;
+  --bg-gray-lighter: #334155;
+  --bg-elevated: #1e293b;
+
+  /* Media/Player surfaces (intentionally dark in both modes) */
+  --media-bg-start: #1e293b;
+  --media-bg-end: #0f172a;
+
+  /* Navigation */
+  --nav-bg: #0b1220;
+  --nav-text: #f8fafc;
+  --nav-text-secondary: #94a3b8;
+  --nav-border: #1e293b;
+
+  /* Text */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #cbd5e1;
+  --text-muted: #64748b;
+  --text-white: #f8fafc;
+
+  /* Border */
+  --border-light: #1e293b;
+  --border-medium: #334155;
+  --border-focus: #38bdf8;
+
+  /* Status (dark, higher contrast) */
+  --status-success-bg: #064e3b;
+  --status-success-text: #6ee7b7;
+  --status-success-border: #10b981;
+
+  --status-error-bg: #450a0a;
+  --status-error-text: #fca5a5;
+  --status-error-border: #ef4444;
+
+  --status-warning-bg: #451a03;
+  --status-warning-text: #fcd34d;
+  --status-warning-border: #f59e0b;
+
+  --status-info-bg: #1e3a8a;
+  --status-info-text: #93c5fd;
+  --status-info-border: #3b82f6;
+
+  --status-purple-bg: #3b0764;
+  --status-purple-text: #d8b4fe;
+  --status-purple-border: #a855f7;
+
+  --accent-rose-bg: #4a1d2e;
+  --accent-rose-border: #f9a8d4;
+  --accent-rose-text: #fce7f3;
+
+  --accent-purple: #a78bfa;
+
+  --bg-gray-medium: #334155;
+
+  --link-default: #60a5fa;
+  --link-hover: #93c5fd;
+
+  --hover-overlay: rgba(148, 163, 184, 0.08);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.4);
+  --shadow-focus: 0 0 0 3px rgba(56, 189, 248, 0.18);
+  --overlay: rgba(0, 0, 0, 0.5);
+  --overlay-heavy: rgba(0, 0, 0, 0.6);
+  --overlay-light: rgba(0, 0, 0, 0.35);
+
+  --logo-text: #f8fafc;
+  --logo-u: #38bdf8;
 }
 
 /* Touch target minimums on mobile (Apple HIG 44pt, WCAG 2.5.5).

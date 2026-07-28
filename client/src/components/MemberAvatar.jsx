@@ -29,8 +29,8 @@ const isValidImageUrl = (profileImage) => {
   return typeof profileImage === 'string' && profileImage.trim().length > 0;
 };
 
-const DEFAULT_BG = '#1976d2';
-const DEFAULT_COLOR = '#ffffff';
+const DEFAULT_BG = 'var(--primary-blue)';
+const DEFAULT_COLOR = 'var(--text-white)';
 
 const MemberAvatar = ({ member, size = 32, className = '', style = {} }) => {
   const [hasError, setHasError] = useState(false);

@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ThemeProvider,
-  CssBaseline,
   Box,
   Tabs,
   Tab,
@@ -34,7 +32,6 @@ import {
   Tooltip,
 } from '@mui/material';
 import { MoreVert as MoreVertIcon, CloudUpload as UploadIcon } from '@mui/icons-material';
-import globalTheme from '../styles/globalTheme';
 import AccessControl from '../components/AccessControl';
 import apiClient from '../utils/api';
 import { loadPdfDocument, renderPageToBlob } from '../utils/pdfRenderer';
@@ -551,9 +548,7 @@ export default function Cases() {
 
   return (
     <AccessControl allowedRoles={['ADMIN']}>
-      <ThemeProvider theme={globalTheme}>
-        <CssBaseline />
-        <Box sx={{ p: 3 }}>
+      <Box sx={{ p: 3 }}>
           <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
             Cases
           </Typography>
@@ -569,7 +564,6 @@ export default function Cases() {
           {tab === 0 && <CaseLibraryTab />}
           {tab === 1 && <AssignmentsTab />}
         </Box>
-      </ThemeProvider>
     </AccessControl>
   );
 }

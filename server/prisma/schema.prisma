@@ -357,22 +357,27 @@ model VideoScore {
 }
 
 model Events {
-  id               String            @id @default(uuid())
-  eventName        String
-  eventStartDate   DateTime
-  eventEndDate     DateTime
-  eventLocation    String?
-  rsvpForm         String?
-  attendanceForm   String?
-  cycleId          String
-  createdAt        DateTime          @default(now())
-  memberRsvpUrl    String?
-  showToCandidates Boolean           @default(false)
-  eventAttendance  EventAttendance[]
-  eventRsvp        EventRsvp[]
-  cycle            RecruitingCycle   @relation(fields: [cycleId], references: [id])
-  memberEventRsvp  MemberEventRsvp[]
+  id                  String            @id @default(uuid())
+  eventName           String
+  eventStartDate      DateTime
+  eventEndDate        DateTime
+  eventLocation       String?
+  rsvpForm            String?
+  attendanceForm      String?
+  cycleId             String
+  createdAt           DateTime          @default(now())
+  memberRsvpUrl       String?
+  showToCandidates    Boolean           @default(false)
+  copiedFromCycleId   String?
+  copiedFromEventId   String?
+  copiedByUserId      String?
+  copiedAt            DateTime?
+  eventAttendance     EventAttendance[]
+  eventRsvp           EventRsvp[]
+  cycle               RecruitingCycle   @relation(fields: [cycleId], references: [id])
+  memberEventRsvp     MemberEventRsvp[]
 
+  @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@map("events")
 }
 

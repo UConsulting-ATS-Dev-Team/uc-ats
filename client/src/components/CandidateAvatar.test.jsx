@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import CandidateAvatar, { getInitials } from './CandidateAvatar';
+import CandidateAvatar, { getInitials, getDisplayName } from './CandidateAvatar';
 
 vi.mock('./AuthenticatedImage', () => ({
   default: function MockAuthenticatedImage({ src, alt, onError, className, style }) {
@@ -99,11 +99,41 @@ describe('CandidateAvatar', () => {
     });
   });
 
+  it('resets error state when the candidate/src changes', async () => {
+    const { rerender } = render(
+      <CandidateAvatar
+        applicant={{
+          headshotUrl: 'error',
+          firstName: 'Eve',
+          lastName: 'Evans',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('EE')).toBeInTheDocument();
+    });
+
+    rerender(
+      <CandidateAvatar
+        applicant={{
+          headshotUrl: '/api/uploads/eve.png',
+          firstName: 'Eve',
+          lastName: 'Evans',
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('candidate-image')).toBeInTheDocument();
+    expect(screen.queryByText('EE')).not.toBeInTheDocument();
+  });
+
   it('handles missing first and last name without crashing', () => {
     const { container } = render(<CandidateAvatar applicant={{ headshotUrl: null }} />);
 
     expect(container.querySelector('.candidate-avatar-fallback')).toBeInTheDocument();
     expect(screen.getByRole('img')).toHaveAttribute('aria-label', 'Candidate avatar');
+    expect(container.querySelector('svg')).toBeInTheDocument();
   });
 
   it('handles non-string name values without crashing', () => {
@@ -119,6 +149,45 @@ describe('CandidateAvatar', () => {
 
     expect(screen.getByText('4T')).toBeInTheDocument();
   });
+
+  it('shows a neutral person icon when names produce only punctuation or symbols', () => {
+    const { container } = render(
+      <CandidateAvatar
+        applicant={{
+          headshotUrl: null,
+          firstName: '???',
+          lastName: '...',
+        }}
+      />
+    );
+
+    expect(screen.queryByText('?')).not.toBeInTheDocument();
+    expect(container.querySelector('.candidate-avatar-fallback')).toBeInTheDocument();
+    expect(container.querySelector('svg')).toBeInTheDocument();
+    expect(screen.getByRole('img')).toHaveAttribute(
+      'aria-label',
+      '??? ...'
+    );
+  });
+
+  it('derives name and headshot from a nested application record', () => {
+    render(
+      <CandidateAvatar
+        applicant={{
+          applications: [
+            {
+              headshotUrl: '/api/uploads/headshot.png',
+              firstName: 'Grace',
+              lastName: 'Garcia',
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('candidate-image')).toBeInTheDocument();
+    expect(screen.queryByText('GG')).not.toBeInTheDocument();
+  });
 });
 
 describe('getInitials', () => {
@@ -132,5 +201,23 @@ describe('getInitials', () => {
 
   it('safely handles non-string name values', () => {
     expect(getInitials(42, true)).toBe('4T');
+  });
+
+  it('returns an empty string for punctuation-only names', () => {
+    expect(getInitials('???', '...')).toBe('');
+  });
+
+  it('returns a single initial for one name', () => {
+    expect(getInitials('madonna', '')).toBe('M');
+  });
+});
+
+describe('getDisplayName', () => {
+  it('joins first and last name', () => {
+    expect(getDisplayName('john', 'doe')).toBe('john doe');
+  });
+
+  it('falls back to a generic label when names are missing', () => {
+    expect(getDisplayName(null, undefined)).toBe('Candidate avatar');
   });
 });

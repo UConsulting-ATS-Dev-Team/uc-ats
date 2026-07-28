@@ -390,11 +390,10 @@ const AppRoutes = () => {
 };
 
 export default function App() {
-  // Apply global Montserrat Light for body, Montserrat Bold for headings
+  // Apply global Montserrat Light for body
   useEffect(() => {
     document.body.style.fontFamily = 'Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif';
-    document.body.style.fontWeight = '300'; // Montserrat Light as default body weight
-    document.body.style.backgroundColor = '#ffffff'; // Clean white background
+    document.body.style.fontWeight = '300';
   }, []);
 
   return (

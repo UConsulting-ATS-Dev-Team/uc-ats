@@ -23,6 +23,7 @@ import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
 import MemberAvatar from './MemberAvatar';
+import ThemeToggle from './ThemeToggle';
 import '../styles/Layout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -117,6 +118,7 @@ const Layout = ({ children }) => {
                   </p>
                 </div>
               </Link>
+              <ThemeToggle />
               <button
                 onClick={handleLogout}
                 className="logout-btn"
