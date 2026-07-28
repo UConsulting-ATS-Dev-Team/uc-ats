@@ -260,37 +260,27 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
     expect(config.applicationGroups[0].copiedByUserId).toBe(adminUser.id);
   });
 
-  it('is idempotent when re-run against the same interview', async () => {
-    // Seed the interview as if a previous copy already wrote app-1 and app-2.
-    const existingConfig = {
-      applicationGroups: [
-        {
-          id: 'existing-group',
-          name: 'Existing',
-          applicationIds: ['app-1', 'app-2'],
-          copiedFromGroupId: sourceGroup.id,
-          copiedByUserId: adminUser.id,
-          copiedAt: new Date().toISOString(),
-        }
-      ],
-      memberGroups: [],
-      groupAssignments: {}
-    };
-
-    // First commit to an empty interview
-    await post(
+  it('is idempotent when the same create-new request is retried', async () => {
+    // First commit to an empty interview creates a deterministic group.
+    const firstRes = await post(
       '/api/admin/interviews/iv-1/copy-candidate-group',
       { sourceGroupId: sourceGroup.id },
       tokenFor(adminUser)
     );
 
-    // Simulate persisted state by updating the findUnique result and update mock.
-    const updatedDescription = JSON.stringify(existingConfig);
+    expect(firstRes.status).toBe(201);
+    const firstJson = await firstRes.json();
+    expect(firstJson.additionCount).toBe(2);
+    expect(firstJson.config.applicationGroups).toHaveLength(1);
+
+    // Simulate persisted state by feeding the committed config back into findUnique.
+    const updatedDescription = JSON.stringify(firstJson.config);
     prisma.interview.findUnique.mockResolvedValue(interviewFixture(updatedDescription));
 
+    // Retry the exact same body (no destinationGroupId).
     const res = await post(
       '/api/admin/interviews/iv-1/copy-candidate-group',
-      { sourceGroupId: sourceGroup.id, destinationGroupId: 'existing-group' },
+      { sourceGroupId: sourceGroup.id },
       tokenFor(adminUser)
     );
 
@@ -299,6 +289,24 @@ describe('POST /api/admin/interviews/:id/copy-candidate-group', () => {
     expect(json.additionCount).toBe(0);
     expect(json.duplicateCount).toBe(2);
     expect(json.skippedCount).toBe(1);
+    expect(json.config.applicationGroups).toHaveLength(1);
+    expect(json.config.applicationGroups[0].id).toBe(firstJson.config.applicationGroups[0].id);
+  });
+
+  it('rejects a stale or missing destinationGroupId', async () => {
+    const previewRes = await post(
+      '/api/admin/interviews/iv-1/copy-candidate-group-preview',
+      { sourceGroupId: sourceGroup.id, destinationGroupId: 'missing-group' },
+      tokenFor(adminUser)
+    );
+    expect(previewRes.status).toBe(404);
+
+    const commitRes = await post(
+      '/api/admin/interviews/iv-1/copy-candidate-group',
+      { sourceGroupId: sourceGroup.id, destinationGroupId: 'missing-group' },
+      tokenFor(adminUser)
+    );
+    expect(commitRes.status).toBe(404);
   });
 
   it('rejects replace mode', async () => {

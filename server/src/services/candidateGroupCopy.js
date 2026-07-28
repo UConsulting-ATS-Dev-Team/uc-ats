@@ -6,7 +6,7 @@
 // The copy is add-only and idempotent by default. It never mutates the source
 // candidate group, never assigns interviewers, and never sends invitations.
 
-import { randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 
 const COPY_LOCK_PREFIX = 'candidate_group_copy_';
 
@@ -128,8 +128,14 @@ function classifyCandidates(group, targetGroup, actorId, now) {
   return { additions, duplicates, skipped };
 }
 
-function buildTargetGroup(sourceGroup, destinationGroupId, additions, actorId, now) {
-  const baseApplicationIds = destinationGroupId ? (destinationGroupId.applicationIds || []) : [];
+function deriveDefaultGroupId(interviewId, sourceGroupId) {
+  return createHash('sha256')
+    .update(`candidate-group-copy:${interviewId}:${sourceGroupId}`)
+    .digest('hex');
+}
+
+function buildTargetGroup(sourceGroup, existingGroup, groupId, additions, actorId, now) {
+  const baseApplicationIds = existingGroup ? (existingGroup.applicationIds || []) : [];
   // preserve order of existing IDs, then append new additions
   const mergedApplicationIds = [
     ...baseApplicationIds,
@@ -137,10 +143,10 @@ function buildTargetGroup(sourceGroup, destinationGroupId, additions, actorId, n
   ];
 
   return {
-    id: destinationGroupId?.id || randomUUID(),
-    name: destinationGroupId?.name || sourceGroup.name || `Copy of ${sourceGroup.id.slice(-8)}`,
+    id: groupId,
+    name: existingGroup?.name || sourceGroup.name || `Copy of ${sourceGroup.id.slice(-8)}`,
     applicationIds: mergedApplicationIds,
-    notes: destinationGroupId?.notes || '',
+    notes: existingGroup?.notes || '',
     copiedFromGroupId: sourceGroup.id,
     copiedByUserId: actorId,
     copiedAt: now.toISOString(),
@@ -165,9 +171,12 @@ export async function previewCandidateGroupCopy({
 
   const config = parseInterviewDescription(interview);
   const applicationGroups = Array.isArray(config.applicationGroups) ? config.applicationGroups : [];
-  const targetGroup = destinationGroupId
-    ? applicationGroups.find((g) => g.id === destinationGroupId)
-    : null;
+  const effectiveDestinationGroupId = destinationGroupId || deriveDefaultGroupId(interview.id, group.id);
+  const targetGroup = applicationGroups.find((g) => g.id === effectiveDestinationGroupId);
+
+  if (destinationGroupId && !targetGroup) {
+    throw Object.assign(new Error('Destination group not found in interview'), { name: 'NotFoundError' });
+  }
 
   const { additions, duplicates, skipped } = classifyCandidates(group, targetGroup);
 
@@ -189,7 +198,7 @@ export async function previewCandidateGroupCopy({
           existingApplicationCount: targetGroup.applicationIds?.length || 0,
         }
       : {
-          id: null,
+          id: effectiveDestinationGroupId,
           name: group.name || `Copy of ${group.id.slice(-4)}`,
           existingApplicationCount: 0,
           isNew: true,
@@ -234,15 +243,18 @@ export async function commitCandidateGroupCopy({
     const config = parseInterviewDescription(interview);
     const applicationGroups = Array.isArray(config.applicationGroups) ? config.applicationGroups : [];
 
-    const existingGroupIndex = destinationGroupId
-      ? applicationGroups.findIndex((g) => g.id === destinationGroupId)
-      : -1;
+    const effectiveDestinationGroupId = destinationGroupId || deriveDefaultGroupId(interview.id, group.id);
+    const existingGroupIndex = applicationGroups.findIndex((g) => g.id === effectiveDestinationGroupId);
+
+    if (destinationGroupId && existingGroupIndex === -1) {
+      throw Object.assign(new Error('Destination group not found in interview'), { name: 'NotFoundError' });
+    }
 
     const existingGroup = existingGroupIndex >= 0 ? applicationGroups[existingGroupIndex] : null;
 
     const { additions, duplicates, skipped } = classifyCandidates(group, existingGroup, actorId, now);
 
-    const updatedGroup = buildTargetGroup(group, existingGroup, additions, actorId, now);
+    const updatedGroup = buildTargetGroup(group, existingGroup, effectiveDestinationGroupId, additions, actorId, now);
 
     if (existingGroupIndex >= 0) {
       applicationGroups[existingGroupIndex] = updatedGroup;
@@ -267,9 +279,7 @@ export async function commitCandidateGroupCopy({
         cycleId: updatedInterview.cycleId,
       },
       destinationGroup: {
-        id: updatedGroup.id,
-        name: updatedGroup.name,
-        applicationIds: updatedGroup.applicationIds,
+        ...updatedGroup,
         previousCount: existingGroup?.applicationIds?.length || 0,
         newCount: updatedGroup.applicationIds.length,
       },
@@ -285,6 +295,7 @@ export async function commitCandidateGroupCopy({
       skippedCount: skipped.length,
       copiedByUserId: actorId,
       copiedAt: now.toISOString(),
+      config,
     };
   });
 }

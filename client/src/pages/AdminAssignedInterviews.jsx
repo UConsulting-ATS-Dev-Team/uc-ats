@@ -708,20 +708,17 @@ export default function AdminAssignedInterviews() {
   };
 
   const handleCopyCommit = (result) => {
-    const { interview, destinationGroup } = result;
-    const current = interviewData[interview.id] || { memberGroups: [], applicationGroups: [], groupAssignments: {} };
-    const existingIndex = current.applicationGroups.findIndex(g => g.id === destinationGroup.id);
-    const nextApplicationGroups = existingIndex >= 0
-      ? current.applicationGroups.map((g, i) => i === existingIndex ? destinationGroup : g)
-      : [...current.applicationGroups, destinationGroup];
-    const nextData = {
-      ...current,
-      applicationGroups: nextApplicationGroups,
-    };
-    persistInterviewConfig(interview.id, nextData, { silent: true });
-    setInterviewData(prev => ({ ...prev, [interview.id]: nextData }));
+    const { interview, destinationGroup, config } = result;
+    // Use the authoritative committed config from the server instead of
+    // re-building a stale client snapshot and PATCHing it back.
+    if (config) {
+      setInterviewData(prev => ({ ...prev, [interview.id]: config }));
+      setInterviews(prev => prev.map(iv =>
+        iv.id === interview.id ? { ...iv, description: JSON.stringify(config) } : iv
+      ));
+    }
     setCopyModalInterview(null);
-    alert(`Copied ${result.additionCount} candidate(s) into ${destinationGroup.name}`);
+    alert(`Copied ${result.additionCount} candidate(s) into ${destinationGroup?.name || 'group'}`);
   };
 
 

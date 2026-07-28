@@ -74,6 +74,9 @@ const interview = {
 };
 
 function createMockPrisma({ group = sourceGroup, iv = interview } = {}) {
+  // Deep-clone fixtures so mutations in one test do not leak to others.
+  iv = JSON.parse(JSON.stringify(iv));
+  group = JSON.parse(JSON.stringify(group));
   const mockPrisma = {
     interview: {
       findUnique: vi.fn().mockResolvedValue(iv),
@@ -280,5 +283,124 @@ describe('candidateGroupCopy service', () => {
 
     expect(preview.skipped).toHaveLength(1);
     expect(preview.skipped[0].reason).toBe('missing_required_data');
+  });
+
+  it('create-new commit is idempotent on identical retries', async () => {
+    const emptyInterview = {
+      ...interview,
+      description: JSON.stringify({ memberGroups: [], applicationGroups: [], groupAssignments: {} }),
+    };
+    const mockPrisma = createMockPrisma({ iv: emptyInterview });
+
+    const first = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      actorId: adminUser.id,
+    });
+
+    expect(first.additionCount).toBe(2);
+    expect(first.config.applicationGroups).toHaveLength(1);
+
+    const second = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      actorId: adminUser.id,
+    });
+
+    expect(second.additionCount).toBe(0);
+    expect(second.duplicateCount).toBe(2);
+    expect(second.skippedCount).toBe(1);
+    expect(second.destinationGroup.id).toBe(first.destinationGroup.id);
+
+    const tx = mockPrisma.transactions[0];
+    const updateArgs = tx.interview.update.mock.calls[0][0];
+    const config = JSON.parse(updateArgs.data.description);
+    expect(config.applicationGroups).toHaveLength(1);
+  });
+
+  it('preview for create-new becomes an existing group after commit', async () => {
+    const mockPrisma = createMockPrisma();
+
+    const previewBefore = await previewCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+    });
+
+    expect(previewBefore.destinationGroup.isNew).toBe(true);
+    expect(previewBefore.destinationGroup.id).toBeTruthy();
+
+    await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      actorId: adminUser.id,
+    });
+
+    const previewAfter = await previewCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+    });
+
+    expect(previewAfter.destinationGroup.isNew).toBeFalsy();
+    expect(previewAfter.destinationGroup.existingApplicationCount).toBe(2);
+    expect(previewAfter.additionCount).toBe(0);
+    expect(previewAfter.duplicateCount).toBe(2);
+  });
+
+  it('throws when an explicit destinationGroupId is not found', async () => {
+    const mockPrisma = createMockPrisma();
+
+    await expect(
+      previewCandidateGroupCopy({
+        prisma: mockPrisma,
+        sourceGroupId: sourceGroup.id,
+        destinationInterviewId: interview.id,
+        destinationGroupId: 'missing-group-id',
+      })
+    ).rejects.toThrow('Destination group not found in interview');
+
+    await expect(
+      commitCandidateGroupCopy({
+        prisma: mockPrisma,
+        sourceGroupId: sourceGroup.id,
+        destinationInterviewId: interview.id,
+        destinationGroupId: 'missing-group-id',
+        actorId: adminUser.id,
+      })
+    ).rejects.toThrow('Destination group not found in interview');
+  });
+
+  it('returns the authoritative committed config with audit provenance', async () => {
+    const mockPrisma = createMockPrisma({
+      iv: {
+        ...interview,
+        description: JSON.stringify({
+          memberGroups: [{ id: 'keep', name: 'Keep Me' }],
+          applicationGroups: [],
+          groupAssignments: { g1: ['a1'] },
+        }),
+      },
+    });
+
+    const result = await commitCandidateGroupCopy({
+      prisma: mockPrisma,
+      sourceGroupId: sourceGroup.id,
+      destinationInterviewId: interview.id,
+      actorId: adminUser.id,
+    });
+
+    expect(result.config).toBeTruthy();
+    expect(result.config.memberGroups).toEqual([{ id: 'keep', name: 'Keep Me' }]);
+    expect(result.config.groupAssignments).toEqual({ g1: ['a1'] });
+    expect(result.config.applicationGroups[0].copiedFromGroupId).toBe(sourceGroup.id);
+    expect(result.config.applicationGroups[0].copiedByUserId).toBe(adminUser.id);
+    expect(result.config.applicationGroups[0].copiedAt).toBeTruthy();
+    expect(result.destinationGroup.copiedFromGroupId).toBe(sourceGroup.id);
+    expect(result.destinationGroup.copiedByUserId).toBe(adminUser.id);
+    expect(result.destinationGroup.copiedAt).toBeTruthy();
   });
 });
