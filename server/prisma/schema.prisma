@@ -126,12 +126,16 @@ model RecruitingCycle {
   startDate           DateTime?
   endDate             DateTime?
   createdAt           DateTime                @default(now())
-  formUrl             String?
-  feedbackFormUrl     String?
-  resumeDeadline      String?
-  coverLetterDeadline String?
-  videoDeadline       String?
-  applications        Application[]
+  formUrl              String?
+  feedbackFormUrl      String?
+  feedbackEnabled      Boolean                 @default(true)
+  feedbackCadenceHours Int                     @default(48)
+  feedbackPrompt       String?
+  feedbackQuestions    Json?
+  resumeDeadline       String?
+  coverLetterDeadline  String?
+  videoDeadline        String?
+  applications         Application[]
   coverLetterScores   CoverLetterScore[]
   events              Events[]
   groups              Groups[]
@@ -192,13 +196,14 @@ model ApplicationFeedbackDeliveryAttempt {
 }
 
 model FeedbackResponse {
-  id           String                  @id @default(uuid())
-  cycleId      String
+  id            String                  @id @default(uuid())
+  cycleId       String
   feedbackJobId String?                 @unique
-  content      String
-  submittedAt  DateTime                @default(now())
-  cycle        RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
-  job          ApplicationFeedbackJob?  @relation(fields: [feedbackJobId], references: [id], onDelete: SetNull)
+  content       String
+  answers       Json?
+  submittedAt   DateTime                @default(now())
+  cycle         RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  job           ApplicationFeedbackJob?  @relation(fields: [feedbackJobId], references: [id], onDelete: SetNull)
 
   @@index([cycleId, submittedAt])
   @@map("feedback_responses")

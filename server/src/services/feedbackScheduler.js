@@ -62,9 +62,9 @@ function datesEqual(a, b) {
   return new Date(a).getTime() === new Date(b).getTime();
 }
 
-export function computeDueAt(decisionSentAt) {
+export function computeDueAt(decisionSentAt, hours = 48) {
   const date = decisionSentAt instanceof Date ? decisionSentAt : new Date(decisionSentAt);
-  return new Date(date.getTime() + FEEDBACK_DELAY_MS);
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
 
 export async function scheduleFeedbackRequest(application, cycle, decisionSentAt) {
@@ -80,9 +80,15 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
     throw new Error('decisionSentAt is required to schedule a feedback request');
   }
 
+  if (cycle?.feedbackEnabled === false) {
+    await cancelPendingFeedbackRequest(application.id);
+    return null;
+  }
+
   const feedbackToken = generateFeedbackToken();
   const feedbackFormUrl = buildFeedbackUrl(feedbackToken);
-  const dueAt = computeDueAt(decisionSentAt);
+  const cadenceHours = Number.isFinite(cycle?.feedbackCadenceHours) ? cycle.feedbackCadenceHours : 48;
+  const dueAt = computeDueAt(decisionSentAt, cadenceHours);
 
   if (!isAllowedFeedbackFormUrl(feedbackFormUrl)) {
     return prisma.applicationFeedbackJob.create({
@@ -100,6 +106,9 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
     });
   }
 
+  // If cadence was reduced so the due time is already past, process immediately.
+  const adjustedDueAt = dueAt < new Date() ? new Date() : dueAt;
+
   try {
     const job = await prisma.applicationFeedbackJob.create({
       data: {
@@ -107,7 +116,7 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
         cycleId: cycle?.id || null,
         type: FEEDBACK_JOB_TYPE,
         status: JOB_STATUS.PENDING,
-        dueAt,
+        dueAt: adjustedDueAt,
         decisionSentAt: new Date(decisionSentAt),
         feedbackToken,
         feedbackFormUrl,
@@ -262,6 +271,24 @@ async function markJobFailed(job, token, error) {
   ]);
 }
 
+async function cancelClaimedJob(job, token, reason) {
+  await prisma.$transaction([
+    prisma.applicationFeedbackDeliveryAttempt.updateMany({
+      where: { jobId: job.id, claimToken: token },
+      data: { status: ATTEMPT_STATUS.CANCELLED, error: reason },
+    }),
+    prisma.applicationFeedbackJob.updateMany({
+      where: { id: job.id, claimToken: token },
+      data: {
+        status: JOB_STATUS.CANCELLED,
+        lastError: reason,
+        claimToken: null,
+        claimedAt: null,
+      },
+    }),
+  ]);
+}
+
 async function processSingleFeedbackJob(job, now = new Date()) {
   const token = generateClaimToken();
   const claimed = await claimJob(job, token, now);
@@ -276,6 +303,12 @@ async function processSingleFeedbackJob(job, now = new Date()) {
   }
 
   const { application, cycle } = job;
+
+  if (cycle?.feedbackEnabled === false) {
+    await cancelClaimedJob(job, token, 'Feedback disabled for this recruiting cycle');
+    return { id: job.id, action: 'cancelled', reason: 'Feedback disabled for this recruiting cycle' };
+  }
+
   const to = application?.email;
   const candidateName = application ? `${application.firstName} ${application.lastName}` : '';
   const feedbackFormUrl = job.feedbackFormUrl;
@@ -437,7 +470,7 @@ export async function getFeedbackJobs({ cycleId, status, applicationId, page = 1
           select: { id: true, firstName: true, lastName: true, email: true, status: true, decisionSentAt: true },
         },
         cycle: {
-          select: { id: true, name: true, feedbackFormUrl: true },
+          select: { id: true, name: true, feedbackFormUrl: true, feedbackEnabled: true, feedbackCadenceHours: true, feedbackPrompt: true, feedbackQuestions: true },
         },
         response: {
           select: { id: true, submittedAt: true },

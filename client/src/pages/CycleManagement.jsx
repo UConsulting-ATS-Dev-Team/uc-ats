@@ -19,8 +19,11 @@ import {
   Checkbox,
   IconButton,
   Tooltip,
+  Switch,
+  FormControlLabel,
+  Divider,
 } from '@mui/material';
-import { Edit as EditIcon } from '@mui/icons-material';
+import { Edit as EditIcon, Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
@@ -33,7 +36,17 @@ export default function CycleManagement() {
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
   const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
-  const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+  const [form, setForm] = useState({
+    name: '',
+    formUrl: '',
+    startDate: '',
+    endDate: '',
+    isActive: false,
+    feedbackEnabled: true,
+    feedbackCadenceHours: 48,
+    feedbackPrompt: '',
+    feedbackQuestions: [],
+  });
   const [submitting, setSubmitting] = useState(false);
 
   const fetchCycles = async () => {
@@ -64,7 +77,10 @@ export default function CycleManagement() {
       setSubmitting(true);
       const created = await apiClient.post('/admin/cycles', form);
       setCreateOpen(false);
-      setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+      setForm({
+        name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
+        feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+      });
       await fetchCycles();
       
       // If the cycle was created as active, notify other components
@@ -96,7 +112,10 @@ export default function CycleManagement() {
       await apiClient.patch(`/admin/cycles/${editingCycle.id}`, form);
       setEditOpen(false);
       setEditingCycle(null);
-      setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+      setForm({
+        name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
+        feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+      });
       await fetchCycles();
       
       // If the cycle was activated (either newly activated or was already active), notify other components
@@ -117,7 +136,11 @@ export default function CycleManagement() {
       formUrl: cycle.formUrl || '',
       startDate: cycle.startDate ? new Date(cycle.startDate).toISOString().split('T')[0] : '',
       endDate: cycle.endDate ? new Date(cycle.endDate).toISOString().split('T')[0] : '',
-      isActive: cycle.isActive
+      isActive: cycle.isActive,
+      feedbackEnabled: cycle.feedbackEnabled !== false,
+      feedbackCadenceHours: cycle.feedbackCadenceHours || 48,
+      feedbackPrompt: cycle.feedbackPrompt || '',
+      feedbackQuestions: Array.isArray(cycle.feedbackQuestions) ? cycle.feedbackQuestions : [],
     });
     setEditOpen(true);
   };
@@ -126,7 +149,10 @@ export default function CycleManagement() {
     if (submitting) return; // Prevent closing during submission
     setEditOpen(false);
     setEditingCycle(null);
-    setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+    setForm({
+      name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
+      feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+    });
     setError('');
   };
 
@@ -141,6 +167,28 @@ export default function CycleManagement() {
   const deleteCycle = async (id) => {
     await apiClient.delete(`/admin/cycles/${id}`);
     await fetchCycles();
+  };
+
+  const addFeedbackQuestion = () => {
+    setForm((prev) => ({
+      ...prev,
+      feedbackQuestions: [...(prev.feedbackQuestions || []), { id: `q-${Date.now()}`, label: '', required: false }],
+    }));
+  };
+
+  const updateFeedbackQuestion = (index, updates) => {
+    setForm((prev) => {
+      const next = [...(prev.feedbackQuestions || [])];
+      next[index] = { ...next[index], ...updates };
+      return { ...prev, feedbackQuestions: next };
+    });
+  };
+
+  const removeFeedbackQuestion = (index) => {
+    setForm((prev) => ({
+      ...prev,
+      feedbackQuestions: prev.feedbackQuestions.filter((_, i) => i !== index),
+    }));
   };
 
   useEffect(() => {
@@ -248,6 +296,69 @@ export default function CycleManagement() {
               />
               <Typography>Set as active</Typography>
             </Stack>
+
+            <Divider sx={{ my: 1 }} />
+            <Typography variant="h6">Feedback Configuration</Typography>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Switch
+                checked={form.feedbackEnabled}
+                onChange={(e) => setForm({ ...form, feedbackEnabled: e.target.checked })}
+                disabled={submitting}
+              />
+              <Typography>Enable feedback requests</Typography>
+            </Stack>
+            <TextField
+              label="Feedback cadence (hours)"
+              type="number"
+              value={form.feedbackCadenceHours}
+              onChange={(e) => setForm({ ...form, feedbackCadenceHours: parseInt(e.target.value, 10) || 0 })}
+              fullWidth
+              inputProps={{ min: 1 }}
+              disabled={!form.feedbackEnabled}
+            />
+            <TextField
+              label="Feedback prompt"
+              value={form.feedbackPrompt}
+              onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
+              fullWidth
+              placeholder="We would greatly appreciate your anonymous feedback."
+              disabled={!form.feedbackEnabled}
+            />
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>Questions</Typography>
+              {(form.feedbackQuestions || []).map((q, index) => (
+                <Stack key={q.id || index} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <TextField
+                    label={`Question ${index + 1}`}
+                    value={q.label}
+                    onChange={(e) => updateFeedbackQuestion(index, { label: e.target.value })}
+                    fullWidth
+                    disabled={!form.feedbackEnabled}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={q.required}
+                        onChange={(e) => updateFeedbackQuestion(index, { required: e.target.checked })}
+                        disabled={!form.feedbackEnabled}
+                      />
+                    }
+                    label="Required"
+                  />
+                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={!form.feedbackEnabled} color="error">
+                    <DeleteIcon />
+                  </IconButton>
+                </Stack>
+              ))}
+              <Button
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={addFeedbackQuestion}
+                disabled={!form.feedbackEnabled || submitting}
+              >
+                Add question
+              </Button>
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -305,6 +416,69 @@ export default function CycleManagement() {
               />
               <Typography>Set as active</Typography>
             </Stack>
+
+            <Divider sx={{ my: 1 }} />
+            <Typography variant="h6">Feedback Configuration</Typography>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Switch
+                checked={form.feedbackEnabled}
+                onChange={(e) => setForm({ ...form, feedbackEnabled: e.target.checked })}
+                disabled={submitting}
+              />
+              <Typography>Enable feedback requests</Typography>
+            </Stack>
+            <TextField
+              label="Feedback cadence (hours)"
+              type="number"
+              value={form.feedbackCadenceHours}
+              onChange={(e) => setForm({ ...form, feedbackCadenceHours: parseInt(e.target.value, 10) || 0 })}
+              fullWidth
+              inputProps={{ min: 1 }}
+              disabled={!form.feedbackEnabled}
+            />
+            <TextField
+              label="Feedback prompt"
+              value={form.feedbackPrompt}
+              onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
+              fullWidth
+              placeholder="We would greatly appreciate your anonymous feedback."
+              disabled={!form.feedbackEnabled}
+            />
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>Questions</Typography>
+              {(form.feedbackQuestions || []).map((q, index) => (
+                <Stack key={q.id || index} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <TextField
+                    label={`Question ${index + 1}`}
+                    value={q.label}
+                    onChange={(e) => updateFeedbackQuestion(index, { label: e.target.value })}
+                    fullWidth
+                    disabled={!form.feedbackEnabled}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={q.required}
+                        onChange={(e) => updateFeedbackQuestion(index, { required: e.target.checked })}
+                        disabled={!form.feedbackEnabled}
+                      />
+                    }
+                    label="Required"
+                  />
+                  <IconButton onClick={() => removeFeedbackQuestion(index)} disabled={!form.feedbackEnabled} color="error">
+                    <DeleteIcon />
+                  </IconButton>
+                </Stack>
+              ))}
+              <Button
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={addFeedbackQuestion}
+                disabled={!form.feedbackEnabled || submitting}
+              >
+                Add question
+              </Button>
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>

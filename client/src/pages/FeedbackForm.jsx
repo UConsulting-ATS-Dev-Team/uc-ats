@@ -11,6 +11,7 @@ import {
   Alert,
   CircularProgress,
   Container,
+  Stack,
 } from '@mui/material';
 
 export default function FeedbackForm() {
@@ -18,6 +19,9 @@ export default function FeedbackForm() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [cycleName, setCycleName] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [questions, setQuestions] = useState(null);
+  const [answers, setAnswers] = useState({});
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -29,6 +33,8 @@ export default function FeedbackForm() {
         const data = await api.get(`/feedback/${token}`);
         if (!cancelled) {
           setCycleName(data.cycleName || '');
+          setPrompt(data.prompt || '');
+          setQuestions(data.questions);
         }
       } catch (e) {
         if (!cancelled) {
@@ -42,13 +48,17 @@ export default function FeedbackForm() {
     return () => { cancelled = true; };
   }, [token]);
 
+  const handleAnswerChange = (questionId, value) => {
+    setAnswers((prev) => ({ ...prev, [questionId]: value }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!content.trim()) return;
     setSubmitting(true);
     setError('');
     try {
-      await api.post(`/feedback/${token}`, { content });
+      const payload = questions && questions.length > 0 ? { answers } : { content };
+      await api.post(`/feedback/${token}`, payload);
       setSuccess(true);
     } catch (e) {
       setError(e.message || 'Failed to submit feedback. Please try again.');
@@ -81,6 +91,8 @@ export default function FeedbackForm() {
     );
   }
 
+  const defaultPrompt = prompt || 'We would greatly appreciate your anonymous feedback.';
+
   return (
     <Container maxWidth="sm" sx={{ pt: 8, pb: 4 }}>
       <Paper sx={{ p: 4 }}>
@@ -100,23 +112,50 @@ export default function FeedbackForm() {
 
         {!error && (
           <form onSubmit={handleSubmit}>
-            <TextField
-              label="Your feedback"
-              multiline
-              rows={6}
-              fullWidth
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              inputProps={{ maxLength: 5000 }}
-              helperText={`${content.length}/5000 characters`}
-              sx={{ mb: 3 }}
-              required
-            />
+            <Typography sx={{ mb: 2 }}>{defaultPrompt}</Typography>
+
+            {questions && questions.length > 0 ? (
+              <Stack spacing={2} sx={{ mb: 3 }}>
+                {questions.map((q) => (
+                  <TextField
+                    key={q.id}
+                    label={q.label}
+                    multiline
+                    rows={3}
+                    fullWidth
+                    required={q.required}
+                    value={answers[q.id] || ''}
+                    onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+                    inputProps={{ maxLength: 5000 }}
+                    helperText={`${(answers[q.id] || '').length}/5000 characters`}
+                  />
+                ))}
+              </Stack>
+            ) : (
+              <TextField
+                label="Your feedback"
+                multiline
+                rows={6}
+                fullWidth
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                inputProps={{ maxLength: 5000 }}
+                helperText={`${content.length}/5000 characters`}
+                sx={{ mb: 3 }}
+                required
+              />
+            )}
+
             <Button
               type="submit"
               variant="contained"
               fullWidth
-              disabled={submitting || !content.trim()}
+              disabled={
+                submitting ||
+                (questions && questions.length > 0
+                  ? questions.some((q) => q.required && (!answers[q.id] || !answers[q.id].trim()))
+                  : !content.trim())
+              }
             >
               {submitting ? <CircularProgress size={24} /> : 'Submit Feedback'}
             </Button>

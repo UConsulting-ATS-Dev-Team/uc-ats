@@ -362,6 +362,27 @@ describe('scheduleFeedbackRequest', () => {
     expect(prisma.__state.jobs).toHaveLength(1);
     expect(second.id).toBe(first.id);
   });
+
+  it('uses the cycle cadence to compute dueAt', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle({ feedbackCadenceHours: 24 });
+    const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
+
+    const job = await scheduleFeedbackRequest(app, cycle, decisionSentAt);
+
+    expect(job.status).toBe(JOB_STATUS.PENDING);
+    expect(job.dueAt.getTime()).toBe(decisionSentAt.getTime() + 24 * 60 * 60 * 1000);
+  });
+
+  it('does not schedule a job when feedback is disabled for the cycle', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle({ feedbackEnabled: false });
+
+    const result = await scheduleFeedbackRequest(app, cycle, new Date());
+
+    expect(result).toBeNull();
+    expect(prisma.__state.jobs).toHaveLength(0);
+  });
 });
 
 describe('handleApplicationStatusChange', () => {

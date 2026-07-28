@@ -3,7 +3,23 @@ import prisma from '../prismaClient.js';
 
 const router = express.Router();
 
-const MAX_CONTENT_LENGTH = 5000;
+const MAX_ANSWER_LENGTH = 5000;
+
+function normalizeQuestions(questions) {
+  if (!questions || !Array.isArray(questions)) return null;
+  return questions.filter((q) => q && typeof q === 'object' && typeof q.label === 'string');
+}
+
+function buildContentSummary(answers, questions) {
+  const lines = [];
+  const entries = Object.entries(answers || {});
+  for (const [key, value] of entries) {
+    const question = questions?.find((q) => q.id === key);
+    const label = question?.label || key;
+    lines.push(`${label}: ${value}`);
+  }
+  return lines.join('\n');
+}
 
 // Public: validate a feedback token before rendering the form.
 router.get('/:token', async (req, res) => {
@@ -12,7 +28,7 @@ router.get('/:token', async (req, res) => {
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
       include: {
-        cycle: { select: { name: true } },
+        cycle: { select: { name: true, feedbackPrompt: true, feedbackQuestions: true } },
         response: { select: { id: true } },
       },
     });
@@ -25,9 +41,13 @@ router.get('/:token', async (req, res) => {
       return res.status(409).json({ error: 'Feedback has already been submitted for this link.' });
     }
 
+    const questions = normalizeQuestions(job.cycle?.feedbackQuestions);
+
     return res.json({
       valid: true,
       cycleName: job.cycle?.name || '',
+      prompt: job.cycle?.feedbackPrompt || null,
+      questions: questions && questions.length > 0 ? questions : null,
     });
   } catch (error) {
     console.error('[GET /api/feedback/:token]', error);
@@ -39,19 +59,14 @@ router.get('/:token', async (req, res) => {
 router.post('/:token', async (req, res) => {
   try {
     const { token } = req.params;
-    const { content } = req.body;
-
-    if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      return res.status(400).json({ error: 'Feedback content is required.' });
-    }
-
-    if (content.length > MAX_CONTENT_LENGTH) {
-      return res.status(400).json({ error: `Feedback content must be under ${MAX_CONTENT_LENGTH} characters.` });
-    }
+    const { content, answers } = req.body;
 
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
-      include: { response: { select: { id: true } } },
+      include: {
+        cycle: { select: { feedbackPrompt: true, feedbackQuestions: true } },
+        response: { select: { id: true } },
+      },
     });
 
     if (!job) {
@@ -66,12 +81,48 @@ router.post('/:token', async (req, res) => {
       return res.status(400).json({ error: 'Feedback link is not yet active.' });
     }
 
+    const questions = normalizeQuestions(job.cycle?.feedbackQuestions);
+
+    let finalAnswers = {};
+    let finalContent = '';
+
+    if (questions && questions.length > 0) {
+      if (!answers || typeof answers !== 'object') {
+        return res.status(400).json({ error: 'Answers are required.' });
+      }
+
+      for (const question of questions) {
+        const answer = answers[question.id];
+        if (question.required && (!answer || typeof answer !== 'string' || answer.trim().length === 0)) {
+          return res.status(400).json({ error: `Response required for: ${question.label}` });
+        }
+        if (typeof answer === 'string') {
+          if (answer.length > MAX_ANSWER_LENGTH) {
+            return res.status(400).json({ error: `Response for ${question.label} is too long.` });
+          }
+          finalAnswers[question.id] = answer.trim();
+        }
+      }
+
+      finalContent = buildContentSummary(finalAnswers, questions) || '';
+    } else {
+      // Fall back to a single open feedback field when no questions are configured.
+      if (!content || typeof content !== 'string' || content.trim().length === 0) {
+        return res.status(400).json({ error: 'Feedback content is required.' });
+      }
+      if (content.length > MAX_ANSWER_LENGTH) {
+        return res.status(400).json({ error: `Feedback content must be under ${MAX_ANSWER_LENGTH} characters.` });
+      }
+      finalContent = content.trim();
+    }
+
     await prisma.$transaction([
       prisma.feedbackResponse.create({
         data: {
           cycleId: job.cycleId,
           feedbackJobId: job.id,
-          content: content.trim(),
+          content: finalContent,
+          answers: Object.keys(finalAnswers).length > 0 ? finalAnswers : null,
         },
       }),
       prisma.applicationFeedbackJob.update({

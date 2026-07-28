@@ -16,6 +16,7 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Stack,
 } from '@mui/material';
 import api from '../utils/api';
 
@@ -122,7 +123,20 @@ export default function AdminFeedbackResponses() {
                   <TableRow key={r.id}>
                     <TableCell>{new Date(r.submittedAt).toLocaleString()}</TableCell>
                     <TableCell>{r.cycle?.name || 'Unknown'}</TableCell>
-                    <TableCell sx={{ whiteSpace: 'pre-wrap' }}>{r.content}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'pre-wrap' }}>
+                      {r.answers && Object.keys(r.answers).length > 0 ? (
+                        <Stack spacing={1}>
+                          {Object.entries(r.answers).map(([key, value]) => (
+                            <Box key={key}>
+                              <Typography variant="subtitle2">{key}</Typography>
+                              <Typography variant="body2" color="text.secondary">{value}</Typography>
+                            </Box>
+                          ))}
+                        </Stack>
+                      ) : (
+                        r.content
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

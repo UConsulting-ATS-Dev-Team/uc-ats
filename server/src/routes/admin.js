@@ -65,6 +65,22 @@ const safeParseJsonField = (field) => {
   return field;
 };
 
+function parseFeedbackQuestions(questions) {
+  if (questions === undefined || questions === null) return null;
+  if (Array.isArray(questions)) return questions;
+  if (typeof questions === 'string') {
+    const trimmed = questions.trim();
+    if (trimmed === '') return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
 // Protect all admin routes
 router.use(requireAuth, requireAdmin);
 
@@ -1180,7 +1196,7 @@ router.get('/cycles/active', async (req, res) => {
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
-    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions } = req.body;
     const created = await prisma.recruitingCycle.create({
       data: {
         name,
@@ -1191,6 +1207,10 @@ router.post('/cycles', async (req, res) => {
         resumeDeadline: resumeDeadline || null,
         coverLetterDeadline: coverLetterDeadline || null,
         videoDeadline: videoDeadline || null,
+        feedbackEnabled: feedbackEnabled !== undefined ? Boolean(feedbackEnabled) : true,
+        feedbackCadenceHours: Number.isFinite(feedbackCadenceHours) && feedbackCadenceHours > 0 ? feedbackCadenceHours : 48,
+        feedbackPrompt: feedbackPrompt || null,
+        feedbackQuestions: parseFeedbackQuestions(feedbackQuestions),
       }
     });
     // If created as active, deactivate others
@@ -1234,7 +1254,7 @@ router.post('/cycles/:id/activate', async (req, res) => {
 // Update a cycle
 router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions } = req.body;
   try {
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
     
@@ -1245,7 +1265,21 @@ router.patch('/cycles/:id', async (req, res) => {
       ...(endDate !== undefined ? { endDate: endDate ? new Date(endDate) : null } : {}),
       ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
     };
-    
+
+    // Add feedback configuration fields if provided
+    if (feedbackEnabled !== undefined) {
+      updateData.feedbackEnabled = Boolean(feedbackEnabled);
+    }
+    if (feedbackCadenceHours !== undefined) {
+      updateData.feedbackCadenceHours = Number.isFinite(feedbackCadenceHours) && feedbackCadenceHours > 0 ? feedbackCadenceHours : 48;
+    }
+    if (feedbackPrompt !== undefined) {
+      updateData.feedbackPrompt = feedbackPrompt || null;
+    }
+    if (feedbackQuestions !== undefined) {
+      updateData.feedbackQuestions = parseFeedbackQuestions(feedbackQuestions);
+    }
+
     // Add deadline fields if they exist in the schema
     if (resumeDeadline !== undefined) {
       updateData.resumeDeadline = resumeDeadline || null;
