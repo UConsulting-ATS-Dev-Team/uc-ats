@@ -1,12 +1,16 @@
 import express from 'express';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import {
+  getDeactivationCandidates,
+  parseGraduationYear
+} from '../services/userDeactivation.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -33,6 +37,8 @@ import {
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
 const router = express.Router();
+
+const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
 
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
@@ -442,26 +448,65 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
-// Get all users (with optional role and event RSVP filter)
+// Helper to build the shared role/event RSVP where-clause for user endpoints.
+// Does NOT apply graduation-class filtering; that is handled by each route.
+function buildBaseUserWhereClause({ role, memberEventRsvpEventId, includeInactive }) {
+  const whereClause = {};
+
+  // Deactivated accounts are hidden from user management unless explicitly requested
+  if (!includeInactive) {
+    whereClause.isActive = true;
+  }
+
+  // Map INTERVIEWER to MEMBER role since that's what we have in the enum
+  if (role === 'INTERVIEWER') {
+    whereClause.role = 'MEMBER';
+  } else if (role) {
+    whereClause.role = role;
+  }
+
+  // Member event RSVP filter
+  if (memberEventRsvpEventId) {
+    whereClause.memberEventRsvp = {
+      some: { eventId: memberEventRsvpEventId }
+    };
+  }
+
+  return whereClause;
+}
+
+// Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role, memberEventRsvpEventId } = req.query;
-    
-    // Map INTERVIEWER to MEMBER role since that's what we have in the enum
-    let whereClause = {};
-    if (role === 'INTERVIEWER') {
-      whereClause = { role: 'MEMBER' };
-    } else if (role) {
-      whereClause = { role };
+    const { role, memberEventRsvpEventId, graduationClass, includeInactive } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({
+      role,
+      memberEventRsvpEventId,
+      includeInactive: includeInactive === 'true'
+    });
+
+    // Graduation class filter
+    if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
+      if (typeof graduationClass !== 'string') {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      const normalizedClass = graduationClass.trim();
+      if (normalizedClass.length > 100) {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      if (normalizedClass === MISSING_GRADUATION_CLASS) {
+        whereClause.OR = [
+          { graduationClass: null },
+          { graduationClass: '' }
+        ];
+      } else {
+        whereClause.graduationClass = normalizedClass;
+      }
     }
 
-    // Member event RSVP filter
-    if (memberEventRsvpEventId) {
-      whereClause.memberEventRsvp = {
-        some: { eventId: memberEventRsvpEventId }
-      };
-    }
-    
     const users = await prisma.user.findMany({
       where: whereClause,
       select: {
@@ -470,15 +515,64 @@ router.get('/users', async (req, res) => {
         email: true,
         role: true,
         graduationClass: true,
-        profileImage: true
+        profileImage: true,
+        isActive: true,
+        deactivatedAt: true
       },
       orderBy: { fullName: 'asc' }
     });
-    
+
     res.json(users);
   } catch (error) {
     console.error('[GET /api/admin/users]', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get graduation class options and counts for the admin user filter.
+// Independent of the graduation-class filter itself so the dropdown stays usable
+// even when a class filter is already persisted.
+router.get('/users/classes', async (req, res) => {
+  try {
+    const { role, memberEventRsvpEventId } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
+
+    const users = await prisma.user.findMany({
+      where: whereClause,
+      select: { graduationClass: true }
+    });
+
+    const classCounts = new Map();
+    let unknownCount = 0;
+    let totalCount = 0;
+
+    users.forEach((userItem) => {
+      totalCount++;
+      const c = (userItem.graduationClass || '').trim();
+      if (!c) {
+        unknownCount++;
+      } else {
+        classCounts.set(c, (classCounts.get(c) || 0) + 1);
+      }
+    });
+
+    const classes = Array.from(classCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: value, count }));
+
+    res.json({
+      total: totalCount,
+      classes,
+      unknown: {
+        value: MISSING_GRADUATION_CLASS,
+        label: 'Unknown / No class',
+        count: unknownCount
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/users/classes]', error);
+    res.status(500).json({ error: 'Failed to fetch class options' });
   }
 });
 
@@ -6032,6 +6126,118 @@ router.delete('/meeting-signups/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to delete signup' });
+  }
+});
+
+// Preview graduated-member deactivation for a selected graduation class.
+// Returns eligible members, blocked members (active/current-cycle), and ineligible
+// members (not yet reached deactivation date), with relation counts.
+router.post('/users/deactivate-preview', async (req, res) => {
+  try {
+    const { graduationClass } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const result = await getDeactivationCandidates({
+      graduationClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate-preview]', error);
+    res.status(500).json({ error: 'Failed to generate deactivation preview' });
+  }
+});
+
+// Deactivate graduated members for a selected class.
+// Requires typed confirmation equal to the graduation class and a matching count.
+router.post('/users/deactivate', async (req, res) => {
+  try {
+    const { graduationClass, confirmationText, confirmedCount, dryRun } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const normalizedClass = graduationClass.trim();
+    if (normalizedClass.length > 100) {
+      return res.status(400).json({ error: 'Invalid graduation class' });
+    }
+
+    if (confirmationText !== normalizedClass) {
+      return res.status(400).json({ error: 'Confirmation text does not match graduation class' });
+    }
+
+    if (parseGraduationYear(normalizedClass) === null) {
+      return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const preview = await getDeactivationCandidates({
+      graduationClass: normalizedClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (preview.error) {
+      return res.status(400).json({ error: preview.error });
+    }
+
+    if (typeof confirmedCount !== 'number' || confirmedCount !== preview.eligibleCount) {
+      return res.status(400).json({ error: 'Confirmed count does not match eligible count' });
+    }
+
+    if (dryRun) {
+      return res.json({ ...preview, dryRun: true });
+    }
+
+    if (preview.eligible.length === 0) {
+      return res.json({ ...preview, deactivatedCount: 0, dryRun: false });
+    }
+
+    const eligibleIds = preview.eligible.map(u => u.id);
+
+    const [updateResult] = await prisma.$transaction([
+      prisma.user.updateMany({
+        where: { id: { in: eligibleIds } },
+        data: {
+          isActive: false,
+          deactivatedAt: new Date(),
+          deactivatedBy: req.user.id
+        }
+      })
+    ]);
+
+    // Cut existing sessions immediately rather than after the cache TTL
+    invalidateUserCache(eligibleIds);
+
+    res.json({
+      ...preview,
+      dryRun: false,
+      deactivatedCount: updateResult.count
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate]', error);
+    res.status(500).json({ error: 'Failed to deactivate users' });
   }
 });
 

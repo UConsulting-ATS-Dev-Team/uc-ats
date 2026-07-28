@@ -5,7 +5,7 @@ import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -62,6 +62,8 @@ router.get('/', requireAuth, async (req, res) => {
         graduationClass: true,
         profileImage: true,
         role: true,
+        isActive: true,
+        deactivatedAt: true,
         createdAt: true,
         _count: {
           select: {
@@ -104,6 +106,8 @@ router.get('/:id', requireAuth, async (req, res) => {
         graduationClass: true,
         profileImage: true,
         role: true,
+        isActive: true,
+        deactivatedAt: true,
         createdAt: true,
         _count: {
           select: {
@@ -267,57 +271,106 @@ router.post('/:id/profile-image', requireAuth, upload.single('profileImage'), as
   }
 });
 
-// Delete user (admin only)
-router.delete('/:id', requireAuth, async (req, res) => {
+// Deactivate a single user (admin only)
+// Accounts are never hard-deleted: their grading history, evaluations and
+// interview records stay intact, the account just can no longer sign in.
+router.patch('/:id/deactivate', requireAuth, async (req, res) => {
   try {
-    // Check if user is admin
     if (req.user.role !== 'ADMIN') {
       return res.status(403).json({ error: 'Access denied. Admin only.' });
     }
 
     const { id } = req.params;
 
-    // Prevent admin from deleting themselves
     if (req.user.id === id) {
-      return res.status(400).json({ error: 'Cannot delete your own account' });
+      return res.status(400).json({ error: 'Cannot deactivate your own account' });
     }
 
-    // Check if user exists
     const user = await prisma.user.findUnique({
       where: { id },
-      include: {
-        _count: {
-          select: {
-            comments: true,
-            resumeScores: true,
-            coverLetterScores: true,
-            videoScores: true,
-            evaluations: true
-          }
-        }
-      }
+      select: { id: true, isActive: true }
     });
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Check if user has any associated data
-    const hasData = Object.values(user._count).some(count => count > 0);
-    if (hasData) {
-      return res.status(400).json({ 
-        error: 'Cannot delete user with associated data. Please reassign or delete associated records first.' 
-      });
+    if (user.isActive === false) {
+      return res.status(400).json({ error: 'User is already deactivated' });
     }
 
-    await prisma.user.delete({
-      where: { id }
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        isActive: false,
+        deactivatedAt: new Date(),
+        deactivatedBy: req.user.id
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        isActive: true,
+        deactivatedAt: true
+      }
     });
 
-    res.json({ message: 'User deleted successfully' });
+    // Cut the existing session immediately rather than after the cache TTL
+    invalidateUserCache(id);
+
+    res.json({ message: 'User deactivated successfully', user: updatedUser });
   } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).json({ error: 'Failed to delete user' });
+    console.error('Error deactivating user:', error);
+    res.status(500).json({ error: 'Failed to deactivate user' });
+  }
+});
+
+// Reactivate a single user (admin only)
+router.patch('/:id/reactivate', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Access denied. Admin only.' });
+    }
+
+    const { id } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, isActive: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.isActive !== false) {
+      return res.status(400).json({ error: 'User is already active' });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        isActive: true,
+        deactivatedAt: null,
+        deactivatedBy: null
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        isActive: true,
+        deactivatedAt: true
+      }
+    });
+
+    invalidateUserCache(id);
+
+    res.json({ message: 'User reactivated successfully', user: updatedUser });
+  } catch (error) {
+    console.error('Error reactivating user:', error);
+    res.status(500).json({ error: 'Failed to reactivate user' });
   }
 });
 

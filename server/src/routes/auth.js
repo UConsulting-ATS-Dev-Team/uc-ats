@@ -124,6 +124,10 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
+    }
     
     // Generate JWT token
     const token = jwt.sign(
@@ -162,6 +166,10 @@ router.get('/verify', async (req, res) => {
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
     }
     
     const { password: _, ...userWithoutPassword } = user;
