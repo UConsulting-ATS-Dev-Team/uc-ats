@@ -37,43 +37,90 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function validateLink(link) {
-  if (!link || typeof link !== 'object') return false;
-  if (!isNonEmptyString(link.label)) return false;
-  if (!isNonEmptyString(link.url)) return false;
+function validateLink(link, linkIndex) {
+  if (!link || typeof link !== 'object') {
+    return `link at index ${linkIndex} is not an object`;
+  }
+  if (!isNonEmptyString(link.label)) {
+    return `link at index ${linkIndex} has an empty or missing 'label'`;
+  }
+  if (!isNonEmptyString(link.url)) {
+    return `link at index ${linkIndex} has an empty or missing 'url'`;
+  }
   try {
     // eslint-disable-next-line no-new
     new URL(link.url);
   } catch {
-    return false;
+    return `link at index ${linkIndex} has an invalid URL '${link.url}'`;
   }
-  return true;
+  return null;
 }
 
-export function validateEntry(entry, seenIds = new Set()) {
-  if (!entry || typeof entry !== 'object') return false;
-  if (!isNonEmptyString(entry.id)) return false;
-  if (seenIds.has(entry.id)) return false;
-  if (!isValidDateString(entry.releaseDate)) return false;
-  if (isFutureDate(entry.releaseDate)) return false;
-  if (!isNonEmptyString(entry.title)) return false;
-  if (!isNonEmptyString(entry.summary)) return false;
-  if (entry.category && !VALID_CATEGORIES.has(entry.category)) return false;
-  if (entry.status && !VALID_STATUSES.has(entry.status)) return false;
+/**
+ * Returns an actionable error string for a release-note entry, or `null` if valid.
+ */
+export function getEntryValidationError(entry, index, seenIds = new Set()) {
+  const prefix =
+    entry && typeof entry === 'object' && isNonEmptyString(entry.id)
+      ? `entry '${entry.id}' (index ${index})`
+      : `entry at index ${index}`;
+
+  if (!entry || typeof entry !== 'object') {
+    return `Entry at index ${index} is not an object`;
+  }
+  if (!isNonEmptyString(entry.id)) {
+    return `${prefix} is missing a non-empty 'id'`;
+  }
+  if (seenIds.has(entry.id)) {
+    return `Duplicate release note id '${entry.id}' at index ${index}`;
+  }
+  if (!isValidDateString(entry.releaseDate)) {
+    return `${prefix} has an invalid 'releaseDate' (expected YYYY-MM-DD)`;
+  }
+  if (isFutureDate(entry.releaseDate)) {
+    return `${prefix} has a future 'releaseDate' (${entry.releaseDate})`;
+  }
+  if (!isNonEmptyString(entry.title)) {
+    return `${prefix} is missing a non-empty 'title'`;
+  }
+  if (!isNonEmptyString(entry.summary)) {
+    return `${prefix} is missing a non-empty 'summary'`;
+  }
+  if (!isNonEmptyString(entry.category) || !VALID_CATEGORIES.has(entry.category)) {
+    return `${prefix} has an invalid or missing 'category'`;
+  }
+  if (!isNonEmptyString(entry.affectedArea)) {
+    return `${prefix} is missing a non-empty 'affectedArea'`;
+  }
   if (
-    entry.affectedArea !== undefined &&
-    (typeof entry.affectedArea !== 'string' || entry.affectedArea.trim() === '')
+    entry.status !== undefined &&
+    (typeof entry.status !== 'string' || !VALID_STATUSES.has(entry.status))
   ) {
-    return false;
+    return `${prefix} has an invalid 'status'`;
   }
   if (entry.details !== undefined && typeof entry.details !== 'string') {
-    return false;
+    return `${prefix} has an invalid 'details' (must be a string)`;
   }
   if (entry.links !== undefined) {
-    if (!Array.isArray(entry.links)) return false;
-    if (!entry.links.every(validateLink)) return false;
+    if (!Array.isArray(entry.links)) {
+      return `${prefix} has an invalid 'links' (must be an array)`;
+    }
+    for (let i = 0; i < entry.links.length; i++) {
+      const linkError = validateLink(entry.links[i], i);
+      if (linkError) {
+        return `${prefix} has an invalid ${linkError}`;
+      }
+    }
   }
-  return true;
+  return null;
+}
+
+/**
+ * Returns `true` if the entry is valid, `false` otherwise.
+ * Kept for convenient unit assertions; use `getEntryValidationError` for diagnostics.
+ */
+export function validateEntry(entry, seenIds = new Set()) {
+  return getEntryValidationError(entry, 0, seenIds) === null;
 }
 
 export function loadReleaseNotes(filePath) {
@@ -85,13 +132,15 @@ export function loadReleaseNotes(filePath) {
   }
 
   const seenIds = new Set();
-  const valid = parsed.filter((entry) => {
-    const isValid = validateEntry(entry, seenIds);
-    if (isValid) seenIds.add(entry.id);
-    return isValid;
-  });
+  for (let i = 0; i < parsed.length; i++) {
+    const error = getEntryValidationError(parsed[i], i, seenIds);
+    if (error) {
+      throw new Error(`Invalid release notes data: ${error}`);
+    }
+    seenIds.add(parsed[i].id);
+  }
 
-  return valid
+  return parsed
     .map((entry) => ({
       ...entry,
       links: Array.isArray(entry.links) ? entry.links : [],

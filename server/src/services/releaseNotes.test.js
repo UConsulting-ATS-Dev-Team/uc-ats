@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { validateEntry, loadReleaseNotes, getReleaseNotes } from './releaseNotes.js';
+import {
+  getEntryValidationError,
+  validateEntry,
+  loadReleaseNotes,
+  getReleaseNotes,
+} from './releaseNotes.js';
 
 function validEntry(overrides = {}) {
   return {
@@ -11,12 +16,60 @@ function validEntry(overrides = {}) {
     title: 'A shipped feature',
     summary: 'It does things',
     category: 'feature',
-    status: 'resolved',
     affectedArea: 'Admin',
+    status: 'resolved',
+    details: 'More context',
     links: [{ label: 'Issue #1', url: 'https://github.com/example/repo/issues/1' }],
     ...overrides,
   };
 }
+
+describe('getEntryValidationError', () => {
+  it('returns null for a valid entry', () => {
+    expect(getEntryValidationError(validEntry(), 0)).toBeNull();
+  });
+
+  it('returns actionable errors for missing or invalid fields', () => {
+    expect(getEntryValidationError(null, 0)).toContain('index 0');
+    expect(getEntryValidationError(validEntry({ id: '' }), 0)).toContain("'id'");
+    expect(getEntryValidationError(validEntry({ releaseDate: 'bad' }), 0)).toContain(
+      'releaseDate'
+    );
+    expect(getEntryValidationError(validEntry({ title: '' }), 0)).toContain('title');
+    expect(getEntryValidationError(validEntry({ summary: '   ' }), 0)).toContain('summary');
+    expect(getEntryValidationError(validEntry({ category: 'magic' }), 0)).toContain('category');
+    expect(getEntryValidationError(validEntry({ category: '' }), 0)).toContain('category');
+    expect(getEntryValidationError(validEntry({ affectedArea: '' }), 0)).toContain(
+      'affectedArea'
+    );
+    expect(getEntryValidationError(validEntry({ status: 'almost' }), 0)).toContain('status');
+    expect(getEntryValidationError(validEntry({ details: 123 }), 0)).toContain('details');
+  });
+
+  it('reports a future releaseDate', () => {
+    const future = new Date();
+    future.setDate(future.getDate() + 7);
+    const releaseDate = future.toISOString().split('T')[0];
+    expect(getEntryValidationError(validEntry({ releaseDate }), 0)).toContain('future');
+  });
+
+  it('reports duplicate ids within the same batch', () => {
+    const seen = new Set(['test-entry']);
+    expect(getEntryValidationError(validEntry(), 1, seen)).toContain('Duplicate');
+  });
+
+  it('reports malformed links', () => {
+    expect(getEntryValidationError(validEntry({ links: [{ label: '', url: '' }] }), 0)).toContain(
+      'link'
+    );
+    expect(
+      getEntryValidationError(
+        validEntry({ links: [{ label: 'Bad URL', url: 'not-a-url' }] }),
+        0
+      )
+    ).toContain('invalid URL');
+  });
+});
 
 describe('validateEntry', () => {
   it('accepts a valid entry', () => {
@@ -44,8 +97,16 @@ describe('validateEntry', () => {
     expect(validateEntry(validEntry({ summary: '' }))).toBe(false);
   });
 
-  it('rejects unknown category or status', () => {
+  it('rejects missing or unknown category', () => {
     expect(validateEntry(validEntry({ category: 'magic' }))).toBe(false);
+    expect(validateEntry(validEntry({ category: '' }))).toBe(false);
+  });
+
+  it('rejects missing affectedArea', () => {
+    expect(validateEntry(validEntry({ affectedArea: '   ' }))).toBe(false);
+  });
+
+  it('rejects unknown status', () => {
     expect(validateEntry(validEntry({ status: 'almost' }))).toBe(false);
   });
 
@@ -56,11 +117,9 @@ describe('validateEntry', () => {
 
   it('rejects malformed links', () => {
     expect(validateEntry(validEntry({ links: [{ label: '', url: '' }] }))).toBe(false);
-    expect(validateEntry(validEntry({ links: [{ label: 'Bad URL', url: 'not-a-url' }] }))).toBe(false);
-  });
-
-  it('rejects an invalid affectedArea', () => {
-    expect(validateEntry(validEntry({ affectedArea: '   ' }))).toBe(false);
+    expect(
+      validateEntry(validEntry({ links: [{ label: 'Bad URL', url: 'not-a-url' }] }))
+    ).toBe(false);
   });
 });
 
@@ -93,15 +152,27 @@ describe('loadReleaseNotes', () => {
     expect(notes[1].id).toBe('old');
   });
 
-  it('skips invalid entries and returns the rest', () => {
+  it('throws on the first invalid entry with an actionable message', () => {
     const filePath = writeFile([
       validEntry({ id: 'good', title: 'Good' }),
       validEntry({ id: 'bad', title: '', summary: '' }),
     ]);
 
-    const notes = loadReleaseNotes(filePath);
-    expect(notes).toHaveLength(1);
-    expect(notes[0].id).toBe('good');
+    expect(() => loadReleaseNotes(filePath)).toThrow(/Invalid release notes data.*bad/);
+  });
+
+  it('throws on a future releaseDate', () => {
+    const future = new Date();
+    future.setDate(future.getDate() + 365);
+    const releaseDate = future.toISOString().split('T')[0];
+    const filePath = writeFile([validEntry({ releaseDate })]);
+
+    expect(() => loadReleaseNotes(filePath)).toThrow(/future/);
+  });
+
+  it('throws on a duplicate id', () => {
+    const filePath = writeFile([validEntry(), validEntry()]);
+    expect(() => loadReleaseNotes(filePath)).toThrow(/Duplicate/);
   });
 
   it('throws when the file is not a JSON array', () => {
@@ -117,7 +188,7 @@ describe('loadReleaseNotes', () => {
 });
 
 describe('getReleaseNotes (production file)', () => {
-  it('loads the tracked release notes without fabricated entries', () => {
+  it('loads the complete tracked release notes file without filtering', () => {
     const notes = getReleaseNotes();
     expect(notes.length).toBeGreaterThan(0);
 
@@ -128,6 +199,8 @@ describe('getReleaseNotes (production file)', () => {
       expect(note.id).toBeTruthy();
       expect(note.title).toBeTruthy();
       expect(note.summary).toBeTruthy();
+      expect(note.category).toBeTruthy();
+      expect(note.affectedArea).toBeTruthy();
       const noteDate = new Date(note.releaseDate).getTime();
       expect(noteDate).not.toBeNaN();
       expect(noteDate).toBeLessThanOrEqual(today.getTime());
