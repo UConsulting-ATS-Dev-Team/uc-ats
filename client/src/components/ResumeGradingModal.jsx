@@ -329,7 +329,7 @@ const ResumeGradingModal = ({ open, onClose, application }) => {
                   </Box>
 
                   {/* Overall Score */}
-                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.light', color: 'text.primary' }}>
+                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.main', color: 'primary.contrastText' }}>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>
                       Overall Score: {calculateOverallScore()}/10
                     </Typography>

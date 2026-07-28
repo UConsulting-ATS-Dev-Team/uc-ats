@@ -75,5 +75,13 @@ describe('createAppTheme contrast checks', () => {
       expect(contrastRatio(p.warning.dark, p.warning.light)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(p.info.dark, p.info.light)).toBeGreaterThanOrEqual(4.5);
     });
+
+    it(`${mode}: grading card and rubric surfaces meet 4.5:1`, () => {
+      // DocumentGradingModal / ResumeGradingModal Overall Score cards
+      expect(contrastRatio(p.primary.contrastText, p.primary.main)).toBeGreaterThanOrEqual(4.5);
+      // Scoring criteria table uses grey.50 / grey.100 backgrounds with text.primary
+      expect(contrastRatio(p.text.primary, p.grey[100])).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(p.text.primary, p.grey[50])).toBeGreaterThanOrEqual(4.5);
+    });
   });
 });
