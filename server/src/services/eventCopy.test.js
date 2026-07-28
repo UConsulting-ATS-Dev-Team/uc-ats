@@ -43,10 +43,10 @@ describe('eventCopy service', () => {
     const mockPrisma = {
       recruitingCycle,
       events,
-      $queryRaw: vi.fn(),
+      $executeRaw: vi.fn(),
       $transaction: vi.fn((cb) => {
         const tx = {
-          $queryRaw: mockPrisma.$queryRaw,
+          $executeRaw: mockPrisma.$executeRaw,
           events: { findMany: events.findMany, create: events.create },
         };
         return cb(tx);
@@ -99,8 +99,10 @@ describe('eventCopy service', () => {
     expect(result.events[0].alreadyExists).toBe(false);
   });
 
-  it('flags events that already exist in the target cycle', async () => {
-    const targetEvents = [{ id: 'event-existing', eventName: 'Info Session', eventStartDate: new Date() }];
+  it('flags events whose source event was already copied to the target cycle', async () => {
+    const targetEvents = [
+      { id: 'event-existing', eventName: 'Info Session (copied)', eventStartDate: new Date(), copiedFromEventId: sourceEvent.id },
+    ];
     const mockPrisma = createMockPrisma({ targetEvents });
 
     const result = await previewCycleEventCopy({
@@ -126,9 +128,14 @@ describe('eventCopy service', () => {
     ).rejects.toThrow('Source recruiting cycle not found');
   });
 
-  it('commits a copy with explicit date and location edits', async () => {
+  it('commits a copy with explicit date, location edits, and provenance', async () => {
     const mockPrisma = createMockPrisma();
-    mockPrisma.events.create.mockResolvedValue({ id: 'new-event-1' });
+    mockPrisma.events.create.mockResolvedValue({
+      id: 'new-event-1',
+      copiedFromCycleId: sourceCycle.id,
+      copiedFromEventId: sourceEvent.id,
+      copiedByUserId: null,
+    });
 
     const events = [
       {
@@ -152,21 +159,27 @@ describe('eventCopy service', () => {
     });
 
     expect(result.copiedCount).toBe(1);
-    expect(result.created[0]).toMatchObject({ id: 'new-event-1', sourceEventId: sourceEvent.id });
-    expect(mockPrisma.events.create).toHaveBeenCalledWith({
-      data: {
-        cycleId: targetCycle.id,
-        eventName: 'Info Session Copy',
-        eventStartDate: new Date('2026-09-01T18:00:00.000Z'),
-        eventEndDate: new Date('2026-09-01T20:00:00.000Z'),
-        eventLocation: 'Room B',
-        showToCandidates: true,
-        rsvpForm: 'https://forms.gle/new-rsvp',
-        attendanceForm: null,
-        memberRsvpUrl: null,
-      },
-      select: expect.any(Object),
-    });
+    expect(result.created[0]).toMatchObject({ id: 'new-event-1', sourceEventId: sourceEvent.id, sourceCycleId: sourceCycle.id });
+    expect(mockPrisma.events.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cycleId: targetCycle.id,
+          eventName: 'Info Session Copy',
+          eventStartDate: new Date('2026-09-01T18:00:00.000Z'),
+          eventEndDate: new Date('2026-09-01T20:00:00.000Z'),
+          eventLocation: 'Room B',
+          showToCandidates: true,
+          rsvpForm: 'https://forms.gle/new-rsvp',
+          attendanceForm: null,
+          memberRsvpUrl: null,
+          copiedFromCycleId: sourceCycle.id,
+          copiedFromEventId: sourceEvent.id,
+          copiedByUserId: null,
+          copiedAt: expect.any(Date),
+        }),
+        select: expect.any(Object),
+      })
+    );
   });
 
   it('does not copy rsvp/attendance/member-rsvp source records', async () => {
@@ -272,7 +285,7 @@ describe('eventCopy service', () => {
     ).rejects.toThrow('Validation failed');
   });
 
-  it('rejects duplicate event names in the target cycle unless force is set', async () => {
+  it('rejects duplicate target event names unless force is set', async () => {
     const targetEvents = [{ id: 'event-existing', eventName: 'Info Session' }];
     const mockPrisma = createMockPrisma({ targetEvents });
 
@@ -297,10 +310,15 @@ describe('eventCopy service', () => {
     ).rejects.toThrow('already exists');
   });
 
-  it('skips duplicates and creates remaining events when force is set', async () => {
+  it('skips name conflicts and creates remaining events when force is set', async () => {
     const targetEvents = [{ id: 'event-existing', eventName: 'Info Session' }];
     const mockPrisma = createMockPrisma({ targetEvents });
-    mockPrisma.events.create.mockResolvedValue({ id: 'new-event-2' });
+    mockPrisma.events.create.mockResolvedValue({
+      id: 'new-event-2',
+      copiedFromCycleId: sourceCycle.id,
+      copiedFromEventId: secondSourceEvent.id,
+      copiedByUserId: null,
+    });
 
     const events = [
       {
@@ -330,13 +348,18 @@ describe('eventCopy service', () => {
     });
 
     expect(result.skippedCount).toBe(1);
+    expect(result.skipped[0]).toMatchObject({ sourceEventId: sourceEvent.id, targetEventId: 'event-existing', reason: 'name_conflict' });
     expect(result.copiedCount).toBe(1);
     expect(result.created[0]).toMatchObject({ id: 'new-event-2', sourceEventId: secondSourceEvent.id });
   });
 
   it('acquires an advisory lock inside the commit transaction', async () => {
     const mockPrisma = createMockPrisma();
-    mockPrisma.events.create.mockResolvedValue({ id: 'new-event-1' });
+    mockPrisma.events.create.mockResolvedValue({
+      id: 'new-event-1',
+      copiedFromCycleId: sourceCycle.id,
+      copiedFromEventId: sourceEvent.id,
+    });
 
     const events = [
       {
@@ -356,8 +379,86 @@ describe('eventCopy service', () => {
       events,
     });
 
-    expect(mockPrisma.$queryRaw).toHaveBeenCalled();
-    const rawArgs = mockPrisma.$queryRaw.mock.calls[0].slice(1);
+    expect(mockPrisma.$executeRaw).toHaveBeenCalled();
+    const rawArgs = mockPrisma.$executeRaw.mock.calls[0].slice(1);
     expect(rawArgs).toContain(targetCycle.id);
+  });
+
+  it('returns durable source provenance in the created result', async () => {
+    const actorId = 'admin-1';
+    const mockPrisma = createMockPrisma();
+    mockPrisma.events.create.mockResolvedValue({
+      id: 'new-event-1',
+      copiedFromCycleId: sourceCycle.id,
+      copiedFromEventId: sourceEvent.id,
+      copiedByUserId: actorId,
+      copiedAt: new Date('2026-07-27T00:00:00.000Z'),
+    });
+
+    const events = [
+      {
+        sourceEventId: sourceEvent.id,
+        eventName: 'Info Session Copy',
+        eventStartDate: '2026-09-01T18:00:00.000Z',
+        eventEndDate: '2026-09-01T20:00:00.000Z',
+        eventLocation: 'Room B',
+        showToCandidates: false,
+      },
+    ];
+
+    const result = await commitCycleEventCopy({
+      prisma: mockPrisma,
+      sourceCycleId: sourceCycle.id,
+      targetCycleId: targetCycle.id,
+      events,
+      actorId,
+    });
+
+    expect(result.created[0]).toMatchObject({
+      id: 'new-event-1',
+      sourceEventId: sourceEvent.id,
+      sourceCycleId: sourceCycle.id,
+      actorId,
+    });
+    const createData = mockPrisma.events.create.mock.calls[0][0].data;
+    expect(createData.copiedFromCycleId).toBe(sourceCycle.id);
+    expect(createData.copiedFromEventId).toBe(sourceEvent.id);
+    expect(createData.copiedByUserId).toBe(actorId);
+    expect(createData.copiedAt).toBeInstanceOf(Date);
+  });
+
+  it('skips reruns by source provenance even if the target event was renamed', async () => {
+    const targetEvents = [
+      { id: 'copied-event', eventName: 'Renamed Info Session', copiedFromEventId: sourceEvent.id },
+    ];
+    const mockPrisma = createMockPrisma({ targetEvents });
+
+    const events = [
+      {
+        sourceEventId: sourceEvent.id,
+        eventName: 'Info Session',
+        eventStartDate: '2026-09-01T18:00:00.000Z',
+        eventEndDate: '2026-09-01T20:00:00.000Z',
+        eventLocation: 'Room B',
+        showToCandidates: false,
+      },
+    ];
+
+    const result = await commitCycleEventCopy({
+      prisma: mockPrisma,
+      sourceCycleId: sourceCycle.id,
+      targetCycleId: targetCycle.id,
+      events,
+      force: true,
+    });
+
+    expect(result.copiedCount).toBe(0);
+    expect(result.skippedCount).toBe(1);
+    expect(result.skipped[0]).toMatchObject({
+      sourceEventId: sourceEvent.id,
+      targetEventId: 'copied-event',
+      reason: 'copied_from_source_exists',
+    });
+    expect(mockPrisma.events.create).not.toHaveBeenCalled();
   });
 });

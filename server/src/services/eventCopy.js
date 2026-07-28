@@ -62,11 +62,15 @@ export async function previewCycleEventCopy({ prisma, sourceCycleId, targetCycle
     }),
     prisma.events.findMany({
       where: { cycleId: targetCycleId },
-      select: { id: true, eventName: true, eventStartDate: true },
+      select: { id: true, eventName: true, eventStartDate: true, copiedFromEventId: true },
     }),
   ]);
 
-  const targetNames = new Set(targetEvents.map((e) => e.eventName.toLowerCase()));
+  // Idempotent copy check uses the durable source-cycle/source-event/target-cycle
+  // provenance key, not the mutable event name.
+  const targetBySource = new Map(
+    targetEvents.filter((e) => e.copiedFromEventId).map((e) => [e.copiedFromEventId, e])
+  );
 
   const events = sourceEvents.map((source) => ({
     sourceEventId: source.id,
@@ -78,7 +82,7 @@ export async function previewCycleEventCopy({ prisma, sourceCycleId, targetCycle
     rsvpForm: source.rsvpForm || '',
     attendanceForm: source.attendanceForm || '',
     memberRsvpUrl: source.memberRsvpUrl || '',
-    alreadyExists: targetNames.has(source.eventName.toLowerCase()),
+    alreadyExists: targetBySource.has(source.id),
   }));
 
   return {
@@ -184,90 +188,139 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
   let skipped = [];
 
   if (events.length > 0) {
-    await prisma.$transaction(async (tx) => {
-      // Serialize copy commits for this target cycle to prevent concurrent
-      // duplicate inserts. Long-term idempotency (reruns with the same source
-      // event) still needs a durable copy key/unique constraint on the events
-      // table or a dedicated copy audit table.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('event_copy_' || ${targetCycleId})::bigint)`;
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Serialize copy commits for this target cycle to prevent concurrent
+        // duplicate inserts. The durable unique key (cycleId, copiedFromCycleId,
+        // copiedFromEventId) makes reruns idempotent even when the target event
+        // is later renamed.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('event_copy_' || ${targetCycleId})::bigint)`;
 
-      const targetEvents = await tx.events.findMany({
-        where: { cycleId: targetCycleId },
-        select: { id: true, eventName: true },
+        const targetEvents = await tx.events.findMany({
+          where: { cycleId: targetCycleId },
+          select: {
+            id: true,
+            eventName: true,
+            copiedFromEventId: true,
+          },
+        });
+        const targetBySource = new Map(
+          targetEvents.filter((e) => e.copiedFromEventId).map((e) => [e.copiedFromEventId, e])
+        );
+        const targetByName = new Map(targetEvents.map((e) => [e.eventName.toLowerCase(), e]));
+
+        const eventsToCreate = [];
+
+        for (let i = 0; i < events.length; i++) {
+          const evt = events[i];
+          const source = sourceById.get(evt.sourceEventId);
+          const start = toIsoString(evt.eventStartDate);
+          const end = toIsoString(evt.eventEndDate);
+
+          // 1. Idempotent source→target provenance check.
+          const existingBySource = targetBySource.get(evt.sourceEventId);
+          if (existingBySource) {
+            if (force) {
+              skipped.push({
+                sourceEventId: evt.sourceEventId,
+                eventName: existingBySource.eventName,
+                targetEventId: existingBySource.id,
+                reason: 'copied_from_source_exists',
+              });
+              continue;
+            }
+            throw new Error(
+              `Source event already copied to the target cycle as "${existingBySource.eventName}". Pass force=true to re-run.`
+            );
+          }
+
+          // 2. Mutable name check against existing target events that were not
+          // created by a copy (or where provenance was cleared), preserving the
+          // pre-existing guard without depending on it for idempotency.
+          const existingByName = targetByName.get(evt.eventName.toLowerCase());
+          if (existingByName) {
+            if (force) {
+              skipped.push({
+                sourceEventId: evt.sourceEventId,
+                eventName: evt.eventName,
+                targetEventId: existingByName.id,
+                reason: 'name_conflict',
+              });
+              continue;
+            }
+            throw new Error(
+              `An event named "${evt.eventName}" already exists in the target cycle. Pass force=true to re-run.`
+            );
+          }
+
+          eventsToCreate.push({
+            cycleId: targetCycleId,
+            eventName: evt.eventName.trim(),
+            eventStartDate: new Date(start),
+            eventEndDate: new Date(end),
+            eventLocation: evt.eventLocation ? evt.eventLocation.trim() : null,
+            showToCandidates: Boolean(evt.showToCandidates),
+            rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
+            attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
+            memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
+            copiedFromCycleId: sourceCycleId,
+            copiedFromEventId: evt.sourceEventId,
+            copiedByUserId: actorId || null,
+            copiedAt: new Date(),
+            _sourceEventId: evt.sourceEventId,
+            _sourceCycleId: sourceCycleId,
+            _actorId: actorId,
+          });
+        }
+
+        const inserted = eventsToCreate.length > 0
+          ? await Promise.all(
+              eventsToCreate.map((data) => {
+                const { _sourceEventId, _sourceCycleId, _actorId, ...createData } = data;
+                return tx.events.create({
+                  data: createData,
+                  select: {
+                    id: true,
+                    eventName: true,
+                    eventStartDate: true,
+                    eventEndDate: true,
+                    eventLocation: true,
+                    cycleId: true,
+                    showToCandidates: true,
+                    rsvpForm: true,
+                    attendanceForm: true,
+                    memberRsvpUrl: true,
+                    createdAt: true,
+                    copiedFromCycleId: true,
+                    copiedFromEventId: true,
+                    copiedByUserId: true,
+                    copiedAt: true,
+                  },
+                });
+              })
+            )
+          : [];
+
+        created = inserted.map((c) => ({
+          ...c,
+          sourceEventId: c.copiedFromEventId,
+          sourceCycleId: c.copiedFromCycleId,
+          actorId: c.copiedByUserId,
+        }));
       });
-      const targetNames = new Map(targetEvents.map((e) => [e.eventName.toLowerCase(), e]));
-
-      const eventsToCreate = [];
-
-      for (let i = 0; i < events.length; i++) {
-        const evt = events[i];
-        const source = sourceById.get(evt.sourceEventId);
-        const start = toIsoString(evt.eventStartDate);
-        const end = toIsoString(evt.eventEndDate);
-
-        const existing = targetNames.get(evt.eventName.toLowerCase());
-        if (existing && !force) {
+    } catch (error) {
+      // Surface a Prisma unique-constraint violation on the provenance key as a
+      // deterministic conflict rather than a raw database error.
+      if (error.code === 'P2002') {
+        const target = error.meta?.target?.join('_');
+        if (target && target.includes('events_cycleId_copiedFromCycleId_copiedFromEventId_key')) {
           throw new Error(
-            `An event named "${evt.eventName}" already exists in the target cycle. Pass force=true to re-run.`
+            'A source event was already copied to the target cycle by a concurrent request. Pass force=true to re-run.'
           );
         }
-
-        if (existing && force) {
-          skipped.push({ sourceEventId: evt.sourceEventId, eventName: evt.eventName, targetEventId: existing.id });
-          continue;
-        }
-
-        eventsToCreate.push({
-          cycleId: targetCycleId,
-          eventName: evt.eventName.trim(),
-          eventStartDate: new Date(start),
-          eventEndDate: new Date(end),
-          eventLocation: evt.eventLocation ? evt.eventLocation.trim() : null,
-          showToCandidates: Boolean(evt.showToCandidates),
-          rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
-          attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
-          memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
-          // Provenance fields (sourceEventId, sourceCycleId, actorId, copiedAt)
-          // cannot be persisted without adding them to the Events model or
-          // creating a copy-audit table. The service returns the mapping in the
-          // response for now and validates the source reference server-side.
-          _sourceEventId: evt.sourceEventId,
-          _sourceCycleId: sourceCycleId,
-          _actorId: actorId,
-        });
       }
-
-      const inserted = eventsToCreate.length > 0
-        ? await Promise.all(
-            eventsToCreate.map((data) => {
-              const { _sourceEventId, _sourceCycleId, _actorId, ...createData } = data;
-              return tx.events.create({
-                data: createData,
-                select: {
-                  id: true,
-                  eventName: true,
-                  eventStartDate: true,
-                  eventEndDate: true,
-                  eventLocation: true,
-                  cycleId: true,
-                  showToCandidates: true,
-                  rsvpForm: true,
-                  attendanceForm: true,
-                  memberRsvpUrl: true,
-                  createdAt: true,
-                },
-              });
-            })
-          )
-        : [];
-
-      created = inserted.map((c, i) => ({
-        ...c,
-        sourceEventId: eventsToCreate[i]._sourceEventId,
-        sourceCycleId: eventsToCreate[i]._sourceCycleId,
-        actorId: eventsToCreate[i]._actorId,
-      }));
-    });
+      throw error;
+    }
   }
 
   return {
