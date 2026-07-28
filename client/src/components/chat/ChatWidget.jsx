@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChatBubbleLeftRightIcon, XMarkIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid';
+import { ChatBubbleLeftRightIcon, XMarkIcon, PaperAirplaneIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
 import useConversation from '../../hooks/useConversation';
 import { useAuth } from '../../context/AuthContext';
 import MemberAvatar from '../MemberAvatar';
@@ -21,7 +21,7 @@ function formatDayLabel(date) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
 }
 
-function MessageList({ messages, currentUserId }) {
+function MessageList({ messages, currentUserId, onRetry }) {
   const items = useMemo(() => {
     const result = [];
     let lastDay = null;
@@ -65,7 +65,23 @@ function MessageList({ messages, currentUserId }) {
               {showSender && <div className="chat-message-row__sender">{msg.sender.fullName}</div>}
               <div className="chat-message-bubble">{msg.body}</div>
               <div className="chat-message-row__meta">
-                {msg._failed ? 'Failed to send' : msg._pending ? 'Sending…' : formatTime(msg.createdAt)}
+                {msg._failed ? (
+                  <>
+                    Failed to send
+                    <button
+                      type="button"
+                      className="chat-message-row__retry"
+                      onClick={() => onRetry?.(msg.id)}
+                      aria-label="Retry"
+                    >
+                      <ArrowPathIcon style={{ width: 12, height: 12 }} />
+                    </button>
+                  </>
+                ) : msg._pending ? (
+                  'Sending…'
+                ) : (
+                  formatTime(msg.createdAt)
+                )}
               </div>
             </div>
           </div>
@@ -82,7 +98,7 @@ export default function ChatWidget({ resolve, title, subtitle }) {
   const messagesRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const { conversation, messages, loading, sending, error, unreadCount, send, markRead } =
+  const { conversation, messages, loading, sending, error, unreadCount, connected, send, retry, markRead } =
     useConversation({ resolve, currentUser: user });
 
   useLayoutEffect(() => {
@@ -97,9 +113,9 @@ export default function ChatWidget({ resolve, title, subtitle }) {
   const handleSubmit = async (e) => {
     e?.preventDefault();
     const body = draft.trim();
-    if (!body) return;
+    if (!body || sending) return;
     setDraft('');
-    send(body);
+    await send(body);
     textareaRef.current?.focus();
   };
 
@@ -111,6 +127,9 @@ export default function ChatWidget({ resolve, title, subtitle }) {
   };
 
   if (!user) return null;
+
+  const isUnauthorized = !loading && error && /Forbidden|Unauthorized/i.test(error);
+  const canSend = draft.trim() && conversation && !sending;
 
   return (
     <>
@@ -145,16 +164,27 @@ export default function ChatWidget({ resolve, title, subtitle }) {
             </button>
           </div>
 
+          {!connected && (
+            <div className="chat-widget-panel__status chat-widget-panel__status--disconnected">
+              Realtime disconnected — messages will refresh on reconnect
+            </div>
+          )}
+
           <div className="chat-widget-panel__messages" ref={messagesRef}>
             {loading && <div className="chat-widget-panel__loading">Loading…</div>}
-            {!loading && error && <div className="chat-widget-panel__error">{error}</div>}
+            {!loading && isUnauthorized && (
+              <div className="chat-widget-panel__error chat-widget-panel__error--unauthorized">
+                You do not have access to this conversation.
+              </div>
+            )}
+            {!loading && !isUnauthorized && error && <div className="chat-widget-panel__error">{error}</div>}
             {!loading && !error && messages.length === 0 && (
               <div className="chat-widget-panel__empty">
                 No messages yet. Say hi to your fellow interviewers.
               </div>
             )}
             {!loading && !error && messages.length > 0 && (
-              <MessageList messages={messages} currentUserId={user.id} />
+              <MessageList messages={messages} currentUserId={user.id} onRetry={retry} />
             )}
           </div>
 
@@ -166,12 +196,12 @@ export default function ChatWidget({ resolve, title, subtitle }) {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={!conversation}
+              disabled={!conversation || sending}
             />
             <button
               type="submit"
               className="chat-widget-panel__send"
-              disabled={!draft.trim() || !conversation}
+              disabled={!canSend}
               aria-label="Send"
             >
               <PaperAirplaneIcon style={{ width: 16, height: 16 }} />
