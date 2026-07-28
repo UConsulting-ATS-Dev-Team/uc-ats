@@ -55,6 +55,11 @@ vi.mock('../prismaClient.js', () => {
         if (!value?.in && record.status !== value) return false;
         continue;
       }
+      // Generic support for any field using an `in` array filter.
+      if (value?.in && Array.isArray(value.in)) {
+        if (!value.in.includes(record[key])) return false;
+        continue;
+      }
       if (key === 'dueAt' && value?.lte !== undefined) {
         const rec = record.dueAt ? new Date(record.dueAt).getTime() : null;
         if (rec === null || rec > new Date(value.lte).getTime()) return false;
@@ -76,6 +81,18 @@ vi.mock('../prismaClient.js', () => {
       if (key === 'attemptedAt' && value?.lte !== undefined) {
         const rec = record.attemptedAt ? new Date(record.attemptedAt).getTime() : null;
         if (rec === null || rec > new Date(value.lte).getTime()) return false;
+        continue;
+      }
+      if (value && typeof value === 'object' && 'gt' in value) {
+        const rec = record[key] !== undefined && record[key] !== null ? Number(record[key]) : null;
+        const threshold = value.gt === undefined ? null : Number(value.gt);
+        if (rec === null || threshold === null || rec <= threshold) return false;
+        continue;
+      }
+      if (value && typeof value === 'object' && 'lt' in value) {
+        const rec = record[key] !== undefined && record[key] !== null ? Number(record[key]) : null;
+        const threshold = value.lt === undefined ? null : Number(value.lt);
+        if (rec === null || threshold === null || rec >= threshold) return false;
         continue;
       }
       if (record[key] !== value) return false;
@@ -243,6 +260,9 @@ import {
   getFeedbackJobs,
   retryFeedbackJob,
   reconcileFeedbackJob,
+  expireFeedbackResponses,
+  getDecisionSendJobs,
+  reconcileDecisionSend,
   JOB_STATUS,
   ATTEMPT_STATUS,
   FEEDBACK_JOB_TYPE,
@@ -274,6 +294,9 @@ function cycleFixture(overrides = {}) {
     feedbackEnabled: true,
     feedbackPrivacyPolicy: 'Responses are confidential and retained for 12 months for recruiting improvement.',
     feedbackRetentionDays: 365,
+    feedbackAccessModel: 'CONFIDENTIAL',
+    feedbackApproved: true,
+    feedbackApprovedBy: 'test-admin',
     ...overrides,
   };
 }
@@ -479,7 +502,8 @@ describe('processFeedbackJobs', () => {
       'Jane Doe',
       'Fall 2026',
       job.feedbackFormUrl,
-      expect.any(String)
+      expect.any(String),
+      expect.any(Object)
     );
     expect(results[0].action).toBe('sent');
     expect(results[0].messageId).toBe('msg-1');
@@ -518,7 +542,8 @@ describe('processFeedbackJobs', () => {
       'Jane Doe',
       'Fall 2026',
       'https://snapshot.example.com/feedback',
-      expect.any(String)
+      expect.any(String),
+      expect.any(Object)
     );
 
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
@@ -962,5 +987,154 @@ describe('reconcileFeedbackJob', () => {
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.PENDING });
     await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, actor: 'test-admin' })).rejects.toThrow(/Cannot reconcile job in status PENDING/);
+  });
+});
+
+describe('expireFeedbackResponses', () => {
+  beforeEach(() => {
+    resetState();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-27T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('deletes feedback responses older than the cycle retention period', async () => {
+    const cycle = await seedCycle({ feedbackEnabled: true, feedbackRetentionDays: 30 });
+    const response = await prisma.feedbackResponse.create({
+      data: { cycleId: cycle.id, content: 'old', answers: {} },
+    });
+    await prisma.feedbackResponse.update({
+      where: { id: response.id },
+      data: { createdAt: new Date('2026-06-01T12:00:00.000Z') },
+    });
+    await prisma.feedbackResponse.create({
+      data: { cycleId: cycle.id, content: 'recent', answers: {} },
+    });
+
+    const deleted = await expireFeedbackResponses();
+
+    expect(deleted).toBe(1);
+    expect(prisma.__state.feedbackResponses).toHaveLength(1);
+    expect(prisma.__state.feedbackResponses[0].content).toBe('recent');
+  });
+
+  it('does not delete responses for cycles with no retention period', async () => {
+    const cycle = await seedCycle({ feedbackEnabled: true, feedbackRetentionDays: null });
+    await prisma.feedbackResponse.create({
+      data: { cycleId: cycle.id, content: 'old', answers: {} },
+    });
+
+    const deleted = await expireFeedbackResponses();
+
+    expect(deleted).toBe(0);
+    expect(prisma.__state.feedbackResponses).toHaveLength(1);
+  });
+});
+
+describe('decision send reconciliation', () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  async function seedDecisionSendApplication(overrides = {}) {
+    return prisma.application.create({
+      data: applicationFixture({
+        status: 'REJECTED',
+        decisionSendStatus: 'UNKNOWN',
+        decisionSendMessageId: null,
+        decisionSentAt: null,
+        ...overrides,
+      }),
+    });
+  }
+
+  it('lists ambiguous decision sends', async () => {
+    const app = await seedDecisionSendApplication();
+    const result = await getDecisionSendJobs();
+
+    expect(result.applications).toHaveLength(1);
+    expect(result.applications[0].id).toBe(app.id);
+    expect(result.applications[0].decisionSendStatus).toBe('UNKNOWN');
+  });
+
+  it('reconciles an UNKNOWN decision send to SENT with actor audit', async () => {
+    const app = await seedDecisionSendApplication();
+    const result = await reconcileDecisionSend(app.id, { status: 'SENT', messageId: 'msg-789', reason: 'Provider log confirmed delivery', actor: 'ops-admin' });
+
+    expect(result.decisionSendStatus).toBe('SENT');
+    expect(result.decisionSendMessageId).toBe('msg-789');
+    expect(result.decisionSentAt).toBeTruthy();
+    expect(result.decisionSendReconciledBy).toBe('ops-admin');
+    expect(result.decisionSendReconciledFromStatus).toBe('UNKNOWN');
+    expect(result.decisionSendReconciledReason).toBe('Provider log confirmed delivery');
+  });
+
+  it('reconciles an UNKNOWN decision send to FAILED and clears delivery evidence', async () => {
+    const app = await seedDecisionSendApplication();
+    const result = await reconcileDecisionSend(app.id, { status: 'FAILED', reason: 'Bounced', actor: 'ops-admin' });
+
+    expect(result.decisionSendStatus).toBe('FAILED');
+    expect(result.decisionSendMessageId).toBeNull();
+    expect(result.decisionSentAt).toBeNull();
+    expect(result.decisionSendReconciledFromStatus).toBe('UNKNOWN');
+  });
+
+  it('throws when reconciling without an actor', async () => {
+    const app = await seedDecisionSendApplication();
+    await expect(reconcileDecisionSend(app.id, { status: 'SENT', messageId: 'msg-1' })).rejects.toThrow(/Actor is required/);
+  });
+
+  it('throws when reconciling from a confirmed SENT state', async () => {
+    const app = await seedDecisionSendApplication({ decisionSendStatus: 'SENT', decisionSendMessageId: 'msg-1' });
+    await expect(reconcileDecisionSend(app.id, { status: 'FAILED', actor: 'ops-admin' })).rejects.toThrow(/only SENDING or UNKNOWN/);
+  });
+
+  it('throws when reconciling to SENT without a message id', async () => {
+    const app = await seedDecisionSendApplication();
+    await expect(reconcileDecisionSend(app.id, { status: 'SENT', actor: 'ops-admin' })).rejects.toThrow(/messageId is required/);
+  });
+});
+
+describe('active send abort boundary', () => {
+  beforeEach(() => {
+    resetState();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
+    sendApplicantFeedbackRequest.mockResolvedValue({ success: true, messageId: 'msg-1' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('cancels the provider call when the application status reverses between the final read and send', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    let findUniqueCalls = 0;
+    const originalFindUnique = prisma.application.findUnique;
+    prisma.application.findUnique = vi.fn(async (args) => {
+      const record = prisma.__state.applications.find((a) => a.id === args.where.id);
+      if (!record) return record;
+      findUniqueCalls += 1;
+      // The second read inside `guardedSend` flips the status, exercising the
+      // abort signal path after the final eligibility read but before the
+      // provider call.
+      if (findUniqueCalls >= 2) {
+        record.status = 'WAITLISTED';
+      }
+      return { ...record };
+    });
+
+    const results = await processFeedbackJobs();
+    prisma.application.findUnique = originalFindUnique;
+
+    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results[0].action).toBe('cancelled');
+    expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
   });
 });

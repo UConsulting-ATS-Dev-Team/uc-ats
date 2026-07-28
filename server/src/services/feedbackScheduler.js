@@ -26,6 +26,11 @@ export const ATTEMPT_STATUS = {
 
 const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
 
+// In-flight send cancellation boundary. `handleApplicationStatusChange` can
+// abort a job that is already between the durable SENDING intent and the
+// provider call, preventing mail to candidates whose status has reversed.
+const activeFeedbackSends = new Map();
+
 function isRejectedStatus(status) {
   return status === 'REJECTED';
 }
@@ -84,7 +89,13 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
     throw new Error('decisionSentAt is required to schedule a feedback request');
   }
 
-  if (cycle?.feedbackEnabled === false || !cycle?.feedbackPrivacyPolicy) {
+  if (
+    cycle?.feedbackEnabled === false ||
+    !cycle?.feedbackPrivacyPolicy ||
+    !cycle?.feedbackRetentionDays ||
+    cycle?.feedbackRetentionDays <= 0 ||
+    cycle?.feedbackApproved !== true
+  ) {
     await cancelPendingFeedbackRequest(application.id);
     return null;
   }
@@ -184,12 +195,22 @@ export async function cancelPendingFeedbackRequest(applicationId) {
   return jobs.length;
 }
 
+function abortActiveFeedbackSendsForApplication(applicationId, reason) {
+  for (const [jobId, { controller, applicationId: appId }] of activeFeedbackSends) {
+    if (appId === applicationId) {
+      controller.abort(reason || 'Application status changed away from REJECTED');
+      activeFeedbackSends.delete(jobId);
+    }
+  }
+}
+
 export async function handleApplicationStatusChange(applicationId, newStatus) {
   // Only rejected candidates should receive a feedback request, so any
-  // transition away from REJECTED cancels pending/processing/failed jobs
-  // and clears any prior final-decision timestamp so a new final decision
-  // can be processed idempotently.
+  // transition away from REJECTED cancels pending/processing/failed jobs,
+  // aborts any in-flight send, and clears any prior final-decision timestamp
+  // so a new final decision can be processed idempotently.
   if (!isRejectedStatus(newStatus)) {
+    abortActiveFeedbackSendsForApplication(applicationId, 'Application status changed away from REJECTED');
     const cancelled = await cancelPendingFeedbackRequest(applicationId);
     await prisma.application.update({
       where: { id: applicationId },
@@ -198,6 +219,10 @@ export async function handleApplicationStatusChange(applicationId, newStatus) {
         decisionSendStatus: null,
         decisionSendMessageId: null,
         decisionSendAttemptedAt: null,
+        decisionSendReconciledBy: null,
+        decisionSendReconciledAt: null,
+        decisionSendReconciledReason: null,
+        decisionSendReconciledFromStatus: null,
       },
     });
     return cancelled;
@@ -392,11 +417,17 @@ async function markJobUnknown(job, token, messageId, now, reason) {
   ]);
 }
 
-async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey) {
+async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey, signal) {
   // The durable SENDING delivery attempt is the authoritative send boundary.
   // Re-read the attempt, job claim, and application eligibility immediately
   // before the provider call so a concurrent status reversal or claim loss is
-  // observed here and the provider is never invoked.
+  // observed here and the provider is never invoked. The AbortController/signal
+  // closes the remaining race between the read and the network call: a status
+  // reversal aborts the in-flight send before `transporter.sendMail` executes.
+  if (signal?.aborted) {
+    return { cancelled: true, reason: signal.reason || 'Send aborted before provider call' };
+  }
+
   const [currentJob, currentAttempt, currentApp] = await Promise.all([
     prisma.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
     prisma.applicationFeedbackDeliveryAttempt.findFirst({
@@ -405,6 +436,10 @@ async function guardedSend(job, token, to, candidateName, cycleName, feedbackFor
     }),
     prisma.application.findUnique({ where: { id: job.applicationId } }),
   ]);
+
+  if (signal?.aborted) {
+    return { cancelled: true, reason: 'Send aborted between eligibility read and provider call' };
+  }
 
   if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
     return { cancelled: true, reason: 'Job claim lost or token mismatch at send boundary' };
@@ -418,7 +453,7 @@ async function guardedSend(job, token, to, candidateName, cycleName, feedbackFor
     return { cancelled: true, reason: 'Application eligibility changed or final decision was reversed at send boundary' };
   }
 
-  return sendApplicantFeedbackRequest(to, candidateName, cycleName, feedbackFormUrl, messageKey);
+  return sendApplicantFeedbackRequest(to, candidateName, cycleName, feedbackFormUrl, messageKey, { signal });
 }
 
 async function processSingleFeedbackJob(job, now = new Date()) {
@@ -489,9 +524,15 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'failed', error: validationError };
   }
 
-  if (cycle?.feedbackEnabled !== true || !cycle?.feedbackPrivacyPolicy) {
-    await cancelClaimedJob(currentJob, token, 'Feedback privacy policy is not configured for this recruiting cycle');
-    return { id: job.id, action: 'cancelled', reason: 'Feedback privacy policy is not configured for this recruiting cycle' };
+  if (
+    cycle?.feedbackEnabled !== true ||
+    !cycle?.feedbackPrivacyPolicy ||
+    !cycle?.feedbackRetentionDays ||
+    cycle.feedbackRetentionDays <= 0 ||
+    cycle?.feedbackApproved !== true
+  ) {
+    await cancelClaimedJob(currentJob, token, 'Feedback policy is not fully approved or configured for this recruiting cycle');
+    return { id: job.id, action: 'cancelled', reason: 'Feedback policy is not fully approved or configured for this recruiting cycle' };
   }
 
   // The feedback token is a durable provider/outbox key for this job.
@@ -510,15 +551,20 @@ async function processSingleFeedbackJob(job, now = new Date()) {
   }
 
   // The provider is only invoked after the durable SENDING attempt and current
-  // eligibility are re-verified by guardedSend. This makes the outbox/claim the
-  // authoritative boundary; a reversal after the boundary is durably recorded
-  // as a cancelled attempt and the provider is not called.
+  // eligibility are re-verified by guardedSend. An AbortController is registered
+  // so `handleApplicationStatusChange` can cancel the send between the final
+  // eligibility read and the network call, making the outbox intent
+  // authoritative even during the provider call.
+  const abortController = new AbortController();
+  activeFeedbackSends.set(job.id, { controller: abortController, applicationId: job.applicationId });
   let sendResult;
   try {
-    sendResult = await guardedSend(currentJob, token, to, candidateName, cycleName, feedbackFormUrl, messageKey);
+    sendResult = await guardedSend(currentJob, token, to, candidateName, cycleName, feedbackFormUrl, messageKey, abortController.signal);
   } catch (sendErr) {
     await markJobFailed(currentJob, token, sendErr.message);
     return { id: job.id, action: 'failed', error: sendErr.message };
+  } finally {
+    activeFeedbackSends.delete(job.id);
   }
 
   if (sendResult.cancelled) {
@@ -842,4 +888,115 @@ export async function cancelFeedbackJob(id) {
   }
 
   return prisma.applicationFeedbackJob.findUnique({ where: { id } });
+}
+
+// Enforce the cycle's candidate-facing retention promise by deleting feedback
+// responses older than the configured retention period. Called by a cron job.
+export async function expireFeedbackResponses(now = new Date()) {
+  const cycles = await prisma.recruitingCycle.findMany({
+    where: {
+      feedbackEnabled: true,
+      feedbackRetentionDays: { gt: 0 },
+    },
+    select: { id: true, feedbackRetentionDays: true },
+  });
+
+  let deleted = 0;
+  for (const cycle of cycles) {
+    const cutoff = new Date(now.getTime() - cycle.feedbackRetentionDays * 24 * 60 * 60 * 1000);
+    const result = await prisma.feedbackResponse.deleteMany({
+      where: {
+        cycleId: cycle.id,
+        createdAt: { lt: cutoff },
+      },
+    });
+    deleted += result.count;
+  }
+  return deleted;
+}
+
+export async function getDecisionSendJobs({ status, page = 1, limit = 50 } = {}) {
+  const where = {
+    decisionSendStatus: status ? status : { in: ['SENDING', 'UNKNOWN'] },
+  };
+
+  const skip = (page - 1) * limit;
+  const [applications, total] = await Promise.all([
+    prisma.application.findMany({
+      where,
+      orderBy: { decisionSendAttemptedAt: 'desc' },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        status: true,
+        cycleId: true,
+        decisionSendStatus: true,
+        decisionSendMessageId: true,
+        decisionSentAt: true,
+        decisionSendAttemptedAt: true,
+        decisionSendReconciledBy: true,
+        decisionSendReconciledAt: true,
+        decisionSendReconciledReason: true,
+        decisionSendReconciledFromStatus: true,
+      },
+    }),
+    prisma.application.count({ where }),
+  ]);
+
+  return { applications, total, page, limit, totalPages: Math.ceil(total / limit) };
+}
+
+export async function reconcileDecisionSend(applicationId, { status, messageId, reason, actor }) {
+  if (!actor) throw new Error('Actor is required to reconcile a decision send');
+
+  const existing = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: {
+      id: true,
+      decisionSendStatus: true,
+      decisionSendMessageId: true,
+      decisionSentAt: true,
+    },
+  });
+
+  if (!existing) throw new Error('Application not found');
+
+  const reconcilableStatuses = ['SENDING', 'UNKNOWN'];
+  if (!reconcilableStatuses.includes(existing.decisionSendStatus)) {
+    throw new Error(`Cannot reconcile decision send in status ${existing.decisionSendStatus}; only SENDING or UNKNOWN may be reconciled`);
+  }
+
+  if (status !== 'SENT' && status !== 'FAILED') {
+    throw new Error('Reconcile status must be SENT or FAILED');
+  }
+
+  if (status === 'SENT' && !messageId) {
+    throw new Error('messageId is required to reconcile a decision send as SENT');
+  }
+
+  const now = new Date();
+  const updateData = {
+    decisionSendStatus: status,
+    decisionSendReconciledBy: actor,
+    decisionSendReconciledAt: now,
+    decisionSendReconciledReason: reason || null,
+    decisionSendReconciledFromStatus: existing.decisionSendStatus,
+  };
+
+  if (status === 'SENT') {
+    updateData.decisionSendMessageId = messageId;
+    updateData.decisionSentAt = existing.decisionSentAt || now;
+  } else {
+    updateData.decisionSendMessageId = null;
+    updateData.decisionSentAt = null;
+  }
+
+  return prisma.application.update({
+    where: { id: applicationId },
+    data: updateData,
+  });
 }

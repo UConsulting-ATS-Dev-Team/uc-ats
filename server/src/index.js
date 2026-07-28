@@ -5,7 +5,7 @@ import cron from 'node-cron';
 import config from './config.js';
 import prisma from './prismaClient.js';
 import syncFormResponses from './services/syncResponses.js';
-import { processFeedbackJobs } from './services/feedbackScheduler.js';
+import { processFeedbackJobs, expireFeedbackResponses } from './services/feedbackScheduler.js';
 import applicationsRoutes from './routes/applications.js';
 import filesRoutes from './routes/files.js';
 import authRoutes from './routes/auth.js';
@@ -126,6 +126,16 @@ const runFeedbackJobWorker = () => {
 
 runFeedbackJobWorker();
 cron.schedule('* * * * *', runFeedbackJobWorker);
+
+// Enforce feedback response retention daily.
+const runFeedbackExpiry = () => {
+  console.log('Running feedback response expiry...');
+  expireFeedbackResponses().catch((error) => {
+    console.error('Feedback response expiry failed:', error);
+  });
+};
+runFeedbackExpiry();
+cron.schedule('0 0 * * *', runFeedbackExpiry);
 
 app.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);

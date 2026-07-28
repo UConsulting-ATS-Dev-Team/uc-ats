@@ -34,7 +34,10 @@ import {
   processFeedbackJobs,
   getFeedbackJobs,
   retryFeedbackJob,
-  reconcileFeedbackJob
+  reconcileFeedbackJob,
+  expireFeedbackResponses,
+  getDecisionSendJobs,
+  reconcileDecisionSend,
 } from '../services/feedbackScheduler.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
@@ -193,6 +196,35 @@ function parseFeedbackQuestions(questions) {
     }
   }
   return null;
+}
+
+function parsePositiveInteger(value, fallback = null) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return fallback;
+  return n;
+}
+
+function validateFeedbackConfig(data) {
+  if (!data.feedbackEnabled) return;
+  const privacyPolicy = typeof data.feedbackPrivacyPolicy === 'string' ? data.feedbackPrivacyPolicy.trim() : '';
+  if (!privacyPolicy) {
+    throw new Error('A feedback privacy/retention policy is required when feedback is enabled');
+  }
+  const retentionDays = parsePositiveInteger(data.feedbackRetentionDays);
+  if (retentionDays === null) {
+    throw new Error('A positive integer feedback retention period (days) is required when feedback is enabled');
+  }
+  if (!data.feedbackAccessModel || !['CONFIDENTIAL', 'ANONYMOUS'].includes(data.feedbackAccessModel)) {
+    throw new Error('A valid feedback access model (CONFIDENTIAL or ANONYMOUS) is required when feedback is enabled');
+  }
+  if (data.feedbackApproved !== true) {
+    throw new Error('Feedback must be explicitly approved before it can be enabled');
+  }
+  const approvedBy = typeof data.feedbackApprovedBy === 'string' ? data.feedbackApprovedBy.trim() : '';
+  if (!approvedBy) {
+    throw new Error('An approver name is required when feedback is enabled');
+  }
 }
 
 // Protect all admin routes
@@ -1398,25 +1430,29 @@ router.get('/cycles/active', async (req, res) => {
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
-    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays } = req.body;
-    const created = await prisma.recruitingCycle.create({
-      data: {
-        name,
-        formUrl: formUrl || null,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
-        isActive: Boolean(isActive) || false,
-        resumeDeadline: resumeDeadline || null,
-        coverLetterDeadline: coverLetterDeadline || null,
-        videoDeadline: videoDeadline || null,
-        feedbackEnabled: feedbackEnabled !== undefined ? Boolean(feedbackEnabled) : false,
-        feedbackCadenceHours: Number.isFinite(feedbackCadenceHours) && feedbackCadenceHours > 0 ? feedbackCadenceHours : 48,
-        feedbackPrompt: feedbackPrompt || null,
-        feedbackQuestions: parseFeedbackQuestions(feedbackQuestions),
-        feedbackPrivacyPolicy: feedbackPrivacyPolicy || null,
-        feedbackRetentionDays: Number.isFinite(feedbackRetentionDays) && feedbackRetentionDays > 0 ? feedbackRetentionDays : null,
-      }
-    });
+    const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel, feedbackApproved, feedbackApprovedBy } = req.body;
+    const data = {
+      name,
+      formUrl: formUrl || null,
+      startDate: startDate ? new Date(startDate) : null,
+      endDate: endDate ? new Date(endDate) : null,
+      isActive: Boolean(isActive) || false,
+      resumeDeadline: resumeDeadline || null,
+      coverLetterDeadline: coverLetterDeadline || null,
+      videoDeadline: videoDeadline || null,
+      feedbackEnabled: feedbackEnabled !== undefined ? Boolean(feedbackEnabled) : false,
+      feedbackCadenceHours: parsePositiveInteger(feedbackCadenceHours, 48),
+      feedbackPrompt: feedbackPrompt || null,
+      feedbackQuestions: parseFeedbackQuestions(feedbackQuestions),
+      feedbackPrivacyPolicy: feedbackPrivacyPolicy || null,
+      feedbackRetentionDays: parsePositiveInteger(feedbackRetentionDays),
+      feedbackAccessModel: feedbackAccessModel || 'CONFIDENTIAL',
+      feedbackApproved: Boolean(feedbackApproved),
+      feedbackApprovedBy: feedbackApprovedBy || null,
+      feedbackApprovedAt: feedbackApproved ? new Date() : null,
+    };
+    validateFeedbackConfig(data);
+    const created = await prisma.recruitingCycle.create({ data });
     // If created as active, deactivate others
     if (created.isActive) {
       await prisma.recruitingCycle.updateMany({
@@ -1458,9 +1494,12 @@ router.post('/cycles/:id/activate', async (req, res) => {
 // Update a cycle
 router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays } = req.body;
+  const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline, feedbackEnabled, feedbackCadenceHours, feedbackPrompt, feedbackQuestions, feedbackPrivacyPolicy, feedbackRetentionDays, feedbackAccessModel, feedbackApproved, feedbackApprovedBy } = req.body;
   try {
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
+
+    const existing = await prisma.recruitingCycle.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Cycle not found' });
 
     const updateData = {
       ...(name !== undefined ? { name } : {}),
@@ -1475,7 +1514,7 @@ router.patch('/cycles/:id', async (req, res) => {
       updateData.feedbackEnabled = Boolean(feedbackEnabled);
     }
     if (feedbackCadenceHours !== undefined) {
-      updateData.feedbackCadenceHours = Number.isFinite(feedbackCadenceHours) && feedbackCadenceHours > 0 ? feedbackCadenceHours : 48;
+      updateData.feedbackCadenceHours = parsePositiveInteger(feedbackCadenceHours, 48);
     }
     if (feedbackPrompt !== undefined) {
       updateData.feedbackPrompt = feedbackPrompt || null;
@@ -1487,8 +1526,19 @@ router.patch('/cycles/:id', async (req, res) => {
       updateData.feedbackPrivacyPolicy = feedbackPrivacyPolicy || null;
     }
     if (feedbackRetentionDays !== undefined) {
-      updateData.feedbackRetentionDays = Number.isFinite(feedbackRetentionDays) && feedbackRetentionDays > 0 ? feedbackRetentionDays : null;
+      updateData.feedbackRetentionDays = parsePositiveInteger(feedbackRetentionDays);
     }
+    if (feedbackAccessModel !== undefined) {
+      updateData.feedbackAccessModel = feedbackAccessModel || 'CONFIDENTIAL';
+    }
+    if (feedbackApproved !== undefined) {
+      updateData.feedbackApproved = Boolean(feedbackApproved);
+      updateData.feedbackApprovedBy = feedbackApprovedBy || null;
+    }
+    if (updateData.feedbackApproved && !existing.feedbackApprovedAt) {
+      updateData.feedbackApprovedAt = new Date();
+    }
+    validateFeedbackConfig(updateData);
 
     // Add deadline fields if they exist in the schema
     if (resumeDeadline !== undefined) {
@@ -3558,6 +3608,37 @@ router.post('/feedback-jobs/:id/reconcile', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/feedback-jobs/:id/reconcile]', error);
     res.status(400).json({ error: 'Failed to reconcile feedback job', details: error.message });
+  }
+});
+
+// List final-decision sends that are in an ambiguous state (SENDING or UNKNOWN)
+// and require operator reconciliation.
+router.get('/decision-sends', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const { status } = req.query;
+    const result = await getDecisionSendJobs({ status, page, limit });
+    res.json(result);
+  } catch (error) {
+    console.error('[GET /api/admin/decision-sends]', error);
+    res.status(500).json({ error: 'Failed to fetch decision sends', details: error.message });
+  }
+});
+
+// Reconcile a final-decision send as SENT (with provider message id) or FAILED
+// after an operator has confirmed the provider outcome. Actor-audited and
+// constrained to SENDING/UNKNOWN source states; no retry is performed.
+router.post('/decision-sends/:id/reconcile', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, messageId, reason } = req.body;
+    const actor = req.user?.email || req.user?.id || 'unknown';
+    const application = await reconcileDecisionSend(id, { status, messageId, reason, actor });
+    res.json({ message: 'Decision send reconciled', application });
+  } catch (error) {
+    console.error('[POST /api/admin/decision-sends/:id/reconcile]', error);
+    res.status(400).json({ error: 'Failed to reconcile decision send', details: error.message });
   }
 });
 

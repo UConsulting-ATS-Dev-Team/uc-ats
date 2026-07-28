@@ -8,6 +8,7 @@ import MemberSignUp from './pages/MemberSignUp';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import AccessControl from './components/AccessControl';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import CandidateManagement from './pages/CandidateManagement';
@@ -379,7 +380,9 @@ const AppRoutes = () => {
         path="/admin/feedback-jobs"
         element={
           <ProtectedRoute>
-            <AdminFeedbackJobs />
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminFeedbackJobs />
+            </AccessControl>
           </ProtectedRoute>
         }
       />
@@ -389,7 +392,9 @@ const AppRoutes = () => {
         path="/admin/feedback-responses"
         element={
           <ProtectedRoute>
-            <AdminFeedbackResponses />
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminFeedbackResponses />
+            </AccessControl>
           </ProtectedRoute>
         }
       />

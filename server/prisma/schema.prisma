@@ -84,6 +84,10 @@ model Application {
   decisionSendStatus    String?
   decisionSendMessageId String?
   decisionSendAttemptedAt DateTime?
+  decisionSendReconciledBy String?
+  decisionSendReconciledAt DateTime?
+  decisionSendReconciledReason String?
+  decisionSendReconciledFromStatus String?
   email                 String
   firstName             String
   lastName              String
@@ -140,6 +144,10 @@ model RecruitingCycle {
   feedbackQuestions    Json?
   feedbackPrivacyPolicy String?
   feedbackRetentionDays Int?
+  feedbackAccessModel   String                 @default("CONFIDENTIAL")
+  feedbackApproved      Boolean                @default(false)
+  feedbackApprovedBy    String?
+  feedbackApprovedAt    DateTime?
   resumeDeadline       String?
   coverLetterDeadline  String?
   videoDeadline        String?
@@ -219,6 +227,7 @@ model FeedbackResponse {
   answers         Json?
   promptSnapshot  String?
   questionsSnapshot Json?
+  createdAt       DateTime                 @default(now())
   cycle           RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
   @@index([cycleId])

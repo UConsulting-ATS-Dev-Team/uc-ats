@@ -123,8 +123,14 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined) => {
+const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined, options = {}) => {
   try {
+    if (options?.signal?.aborted) {
+      const reason = options.signal.reason || 'Send aborted by cancellation signal';
+      console.log('Email send aborted before transporter call:', reason);
+      return { success: false, error: reason, cancelled: true };
+    }
+
     const transporter = createTransporter();
 
     const mailOptions = {
@@ -853,10 +859,16 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
   };
 };
 
-export const sendApplicantFeedbackRequest = async (candidateEmail, candidateName, currentCycleName, feedbackFormUrl, messageId = undefined) => {
+export const sendApplicantFeedbackRequest = async (candidateEmail, candidateName, currentCycleName, feedbackFormUrl, messageId = undefined, options = {}) => {
   try {
+    if (options?.signal?.aborted) {
+      const reason = options.signal.reason || 'Send aborted by cancellation signal';
+      console.log(`Feedback request send aborted for ${candidateEmail}:`, reason);
+      return { success: false, error: reason, cancelled: true };
+    }
+
     const emailContent = createApplicantFeedbackRequestEmail(candidateName, currentCycleName, feedbackFormUrl);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId, options);
 
     if (result.success) {
       console.log(`Feedback request email sent to ${candidateEmail} for cycle: ${currentCycleName}`);

@@ -21,6 +21,9 @@ import {
   Tooltip,
   Switch,
   FormControlLabel,
+  FormLabel,
+  Radio,
+  RadioGroup,
   Divider,
 } from '@mui/material';
 import { Edit as EditIcon, Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
@@ -48,6 +51,9 @@ export default function CycleManagement() {
     feedbackQuestions: [],
     feedbackPrivacyPolicy: '',
     feedbackRetentionDays: '',
+    feedbackAccessModel: 'CONFIDENTIAL',
+    feedbackApproved: false,
+    feedbackApprovedBy: '',
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -82,6 +88,18 @@ export default function CycleManagement() {
       setError('A positive feedback retention period (days) is required when feedback is enabled');
       return;
     }
+    if (form.feedbackEnabled && !form.feedbackAccessModel) {
+      setError('A feedback access model is required when feedback is enabled');
+      return;
+    }
+    if (form.feedbackEnabled && !form.feedbackApproved) {
+      setError('Feedback must be explicitly approved before it can be enabled');
+      return;
+    }
+    if (form.feedbackEnabled && (!form.feedbackApprovedBy || !form.feedbackApprovedBy.trim())) {
+      setError('An approver name is required when feedback is enabled');
+      return;
+    }
 
     try {
       setError('');
@@ -92,6 +110,7 @@ export default function CycleManagement() {
         name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
         feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
         feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
+        feedbackAccessModel: 'CONFIDENTIAL', feedbackApproved: false, feedbackApprovedBy: '',
       });
       await fetchCycles();
       
@@ -125,6 +144,18 @@ export default function CycleManagement() {
       setError('A positive feedback retention period (days) is required when feedback is enabled');
       return;
     }
+    if (form.feedbackEnabled && !form.feedbackAccessModel) {
+      setError('A feedback access model is required when feedback is enabled');
+      return;
+    }
+    if (form.feedbackEnabled && !form.feedbackApproved) {
+      setError('Feedback must be explicitly approved before it can be enabled');
+      return;
+    }
+    if (form.feedbackEnabled && (!form.feedbackApprovedBy || !form.feedbackApprovedBy.trim())) {
+      setError('An approver name is required when feedback is enabled');
+      return;
+    }
 
     try {
       setError('');
@@ -137,6 +168,7 @@ export default function CycleManagement() {
         name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
         feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
         feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
+        feedbackAccessModel: 'CONFIDENTIAL', feedbackApproved: false, feedbackApprovedBy: '',
       });
       await fetchCycles();
       
@@ -165,6 +197,9 @@ export default function CycleManagement() {
       feedbackQuestions: Array.isArray(cycle.feedbackQuestions) ? cycle.feedbackQuestions : [],
       feedbackPrivacyPolicy: cycle.feedbackPrivacyPolicy || '',
       feedbackRetentionDays: cycle.feedbackRetentionDays || '',
+      feedbackAccessModel: cycle.feedbackAccessModel || 'CONFIDENTIAL',
+      feedbackApproved: cycle.feedbackApproved === true,
+      feedbackApprovedBy: cycle.feedbackApprovedBy || '',
     });
     setEditOpen(true);
   };
@@ -177,6 +212,7 @@ export default function CycleManagement() {
       name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
       feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
       feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
+      feedbackAccessModel: 'CONFIDENTIAL', feedbackApproved: false, feedbackApprovedBy: '',
     });
     setError('');
   };
@@ -374,6 +410,36 @@ export default function CycleManagement() {
                 required={form.feedbackEnabled}
               />
             )}
+            {form.feedbackEnabled && (
+              <>
+                <FormLabel component="legend" disabled={!form.feedbackEnabled}>Feedback access model</FormLabel>
+                <RadioGroup
+                  row
+                  value={form.feedbackAccessModel}
+                  onChange={(e) => setForm({ ...form, feedbackAccessModel: e.target.value })}
+                >
+                  <FormControlLabel value="CONFIDENTIAL" control={<Radio disabled={!form.feedbackEnabled} />} label="Confidential (named admin readers)" />
+                  <FormControlLabel value="ANONYMOUS" control={<Radio disabled={!form.feedbackEnabled} />} label="Anonymous (content only, no reader identity)" />
+                </RadioGroup>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Switch
+                    checked={form.feedbackApproved}
+                    onChange={(e) => setForm({ ...form, feedbackApproved: e.target.checked })}
+                    disabled={!form.feedbackEnabled || submitting}
+                  />
+                  <Typography>Feedback policy approved</Typography>
+                </Stack>
+                <TextField
+                  label="Approved by"
+                  value={form.feedbackApprovedBy}
+                  onChange={(e) => setForm({ ...form, feedbackApprovedBy: e.target.value })}
+                  fullWidth
+                  placeholder="Name of person who approved the access and retention policy"
+                  disabled={!form.feedbackEnabled || !form.feedbackApproved}
+                  required={form.feedbackEnabled && form.feedbackApproved}
+                />
+              </>
+            )}
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>
               {(form.feedbackQuestions || []).map((q, index) => (
@@ -518,6 +584,36 @@ export default function CycleManagement() {
                 disabled={!form.feedbackEnabled}
                 required={form.feedbackEnabled}
               />
+            )}
+            {form.feedbackEnabled && (
+              <>
+                <FormLabel component="legend" disabled={!form.feedbackEnabled}>Feedback access model</FormLabel>
+                <RadioGroup
+                  row
+                  value={form.feedbackAccessModel}
+                  onChange={(e) => setForm({ ...form, feedbackAccessModel: e.target.value })}
+                >
+                  <FormControlLabel value="CONFIDENTIAL" control={<Radio disabled={!form.feedbackEnabled} />} label="Confidential (named admin readers)" />
+                  <FormControlLabel value="ANONYMOUS" control={<Radio disabled={!form.feedbackEnabled} />} label="Anonymous (content only, no reader identity)" />
+                </RadioGroup>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Switch
+                    checked={form.feedbackApproved}
+                    onChange={(e) => setForm({ ...form, feedbackApproved: e.target.checked })}
+                    disabled={!form.feedbackEnabled || submitting}
+                  />
+                  <Typography>Feedback policy approved</Typography>
+                </Stack>
+                <TextField
+                  label="Approved by"
+                  value={form.feedbackApprovedBy}
+                  onChange={(e) => setForm({ ...form, feedbackApprovedBy: e.target.value })}
+                  fullWidth
+                  placeholder="Name of person who approved the access and retention policy"
+                  disabled={!form.feedbackEnabled || !form.feedbackApproved}
+                  required={form.feedbackEnabled && form.feedbackApproved}
+                />
+              </>
             )}
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>

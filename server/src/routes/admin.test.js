@@ -7,7 +7,9 @@ import { sendFinalRejectionEmail } from '../services/emailNotifications.js';
 import {
   scheduleFeedbackRequest,
   getFeedbackJobs,
-  reconcileFeedbackJob
+  reconcileFeedbackJob,
+  getDecisionSendJobs,
+  reconcileDecisionSend,
 } from '../services/feedbackScheduler.js';
 
 vi.mock('../prismaClient.js', () => ({
@@ -36,6 +38,9 @@ vi.mock('../services/feedbackScheduler.js', () => ({
   getFeedbackJobs: vi.fn(),
   retryFeedbackJob: vi.fn(),
   reconcileFeedbackJob: vi.fn(),
+  expireFeedbackResponses: vi.fn(),
+  getDecisionSendJobs: vi.fn(),
+  reconcileDecisionSend: vi.fn(),
 }));
 
 const adminUser = {
@@ -702,5 +707,80 @@ describe('Admin feedback scheduler routes', () => {
     expect(res.status).toBe(200);
     expect(body.job.status).toBe('SENT');
     expect(reconcileFeedbackJob).toHaveBeenCalledWith('job-1', { status: 'SENT', messageId: 'msg-123', reason: undefined, actor: 'admin@example.com' });
+  });
+});
+
+describe('Admin decision send reconciliation routes', () => {
+  let app;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/admin', adminRoutes);
+    server = app.listen(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('GET /api/admin/decision-sends returns ambiguous sends from the service', async () => {
+    getDecisionSendJobs.mockResolvedValue({
+      applications: [{ id: 'app-1', email: 'jane@example.com', decisionSendStatus: 'UNKNOWN' }],
+      total: 1,
+      page: 1,
+      limit: 50,
+      totalPages: 1,
+    });
+
+    const res = await fetch(`http://localhost:${port}/api/admin/decision-sends`, {
+      headers: { Authorization: `Bearer ${tokenFor(adminUser)}` },
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.applications).toHaveLength(1);
+    expect(getDecisionSendJobs).toHaveBeenCalledWith(expect.objectContaining({ page: 1, limit: 50 }));
+  });
+
+  it('POST /api/admin/decision-sends/:id/reconcile invokes the reconcile service with actor', async () => {
+    reconcileDecisionSend.mockResolvedValue({ id: 'app-1', decisionSendStatus: 'SENT' });
+
+    const res = await fetch(`http://localhost:${port}/api/admin/decision-sends/app-1/reconcile`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokenFor(adminUser)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'SENT', messageId: 'msg-456', reason: 'Provider log confirmed' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.application.decisionSendStatus).toBe('SENT');
+    expect(reconcileDecisionSend).toHaveBeenCalledWith('app-1', { status: 'SENT', messageId: 'msg-456', reason: 'Provider log confirmed', actor: 'admin@example.com' });
+  });
+
+  it('rejects a 400 when reconciliation service throws a validation error', async () => {
+    reconcileDecisionSend.mockRejectedValue(new Error('Cannot reconcile decision send in status SENT'));
+
+    const res = await fetch(`http://localhost:${port}/api/admin/decision-sends/app-1/reconcile`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokenFor(adminUser)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'FAILED', reason: 'Bounced' }),
+    });
+
+    expect(res.status).toBe(400);
   });
 });
