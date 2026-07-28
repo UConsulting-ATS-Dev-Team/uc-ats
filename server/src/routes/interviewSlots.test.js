@@ -38,6 +38,7 @@ import { sendInterviewSlotSignupConfirmation } from '../services/emailNotificati
 
 const adminUser = { id: 'admin-1', role: 'ADMIN', isActive: true, email: 'admin@example.com', fullName: 'Admin User' };
 const memberUser = { id: 'member-1', role: 'MEMBER', isActive: true, email: 'member@example.com', fullName: 'Member User' };
+const memberUser2 = { id: 'member-2', role: 'MEMBER', isActive: true, email: 'member2@example.com', fullName: 'Member Two' };
 const candidateUser = { id: 'candidate-1', role: 'USER', isActive: true, email: 'candidate@example.com', fullName: 'Candidate User' };
 const activeCycle = { id: 'cycle-1', name: 'Fall 2026', isActive: true };
 
@@ -118,6 +119,7 @@ describe('Interview slot routes', () => {
     prisma.user.findUnique.mockImplementation(({ where: { id } }) => {
       if (id === adminUser.id) return adminUser;
       if (id === memberUser.id) return memberUser;
+      if (id === memberUser2.id) return memberUser2;
       if (id === candidateUser.id) return candidateUser;
       return null;
     });
@@ -231,6 +233,25 @@ describe('Interview slot routes', () => {
       expect(res.status).toBe(200);
       expect(sendInterviewSlotSignupConfirmation).toHaveBeenCalled();
       expect(prisma.interviewSlotSignup.update).toHaveBeenCalled();
+    });
+
+    it('rejects invalid startTime or endTime on update', async () => {
+      const slot = { ...slotFixture(), interview: coffeeChatInterview, signups: [] };
+      prisma.interviewSlot.findUnique.mockResolvedValue(slot);
+
+      const res1 = await fetch(`http://localhost:${adminPort}/interviews/slots/slot-1`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenFor(adminUser)}` },
+        body: JSON.stringify({ startTime: 'not-a-date' }),
+      });
+      expect(res1.status).toBe(400);
+
+      const res2 = await fetch(`http://localhost:${adminPort}/interviews/slots/slot-1`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenFor(adminUser)}` },
+        body: JSON.stringify({ endTime: 'also-not-a-date' }),
+      });
+      expect(res2.status).toBe(400);
     });
   });
 
@@ -382,6 +403,116 @@ describe('Interview slot routes', () => {
 
       const res = await postMember('/interviews/slots/slot-1/signup', {});
       expect(res.status).toBe(201);
+      expect(sendInterviewSlotSignupConfirmation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Concurrent signup races', () => {
+    function signupAs(slotId, user) {
+      return fetch(`http://localhost:${memberPort}/interviews/slots/${slotId}/signup`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenFor(user)}` },
+      });
+    }
+
+    beforeEach(() => {
+      const usersById = {
+        [memberUser.id]: memberUser,
+        [memberUser2.id]: memberUser2,
+      };
+      let signups = [];
+      let signupSeq = 0;
+      const finalSeatSlot = { ...slotFixture({ capacity: 1 }), interview: coffeeChatInterview, signups: [] };
+      const slotA = { ...slotFixture({ id: 'slot-a', capacity: 1 }), interview: coffeeChatInterview, signups: [] };
+      const slotB = {
+        ...slotFixture({
+          id: 'slot-b',
+          capacity: 1,
+          startTime: new Date('2026-10-02T14:30:00Z'),
+          endTime: new Date('2026-10-02T15:30:00Z'),
+        }),
+        interview: coffeeChatInterview,
+        signups: [],
+      };
+      const slotsById = {
+        'slot-1': finalSeatSlot,
+        'slot-a': slotA,
+        'slot-b': slotB,
+      };
+
+      function findOverlappingSignup(where) {
+        const requestedStart = where.slot?.endTime?.gt;
+        const requestedEnd = where.slot?.startTime?.lt;
+        for (const signup of signups) {
+          if (signup.userId !== where.userId || signup.removedAt) continue;
+          const slot = slotsById[signup.slotId];
+          if (!slot) continue;
+          if (where.slot?.interview?.cycleId && slot.interview.cycleId !== where.slot.interview.cycleId) continue;
+          if (requestedStart && requestedEnd && slot.startTime < requestedEnd && slot.endTime > requestedStart) {
+            return signup;
+          }
+        }
+        return null;
+      }
+
+      prisma.interviewSlot.findUnique.mockImplementation(({ where: { id } }) => slotsById[id] || null);
+      prisma.interviewSlotSignup.count.mockImplementation(({ where }) =>
+        signups.filter((s) => s.slotId === where.slotId && !s.removedAt).length
+      );
+      prisma.interviewSlotSignup.findFirst.mockImplementation(({ where }) =>
+        Promise.resolve(findOverlappingSignup(where))
+      );
+      prisma.interviewSlotSignup.create.mockImplementation(({ data }) => {
+        const user = usersById[data.userId];
+        const slot = slotsById[data.slotId];
+        const signup = {
+          id: `signup-${++signupSeq}`,
+          slotId: data.slotId,
+          userId: data.userId,
+          signedUpAt: new Date(),
+          confirmationStatus: 'PENDING',
+          confirmationError: null,
+          confirmationSentAt: null,
+          removedAt: null,
+          removedBy: null,
+          user: { id: user.id, fullName: user.fullName, email: user.email },
+          slot: {
+            ...slot,
+            interview: { title: coffeeChatInterview.title, interviewType: coffeeChatInterview.interviewType },
+          },
+        };
+        signups.push(signup);
+        return Promise.resolve(signup);
+      });
+      prisma.interviewSlotSignup.update.mockImplementation(({ where: { id }, data }) => {
+        const idx = signups.findIndex((s) => s.id === id);
+        if (idx >= 0) {
+          signups[idx] = { ...signups[idx], ...data };
+          return Promise.resolve(signups[idx]);
+        }
+        return Promise.resolve(null);
+      });
+    });
+
+    it('only allows one member to claim the final seat (two simultaneous requests)', async () => {
+      const [res1, res2] = await Promise.all([
+        signupAs('slot-1', memberUser),
+        signupAs('slot-1', memberUser2),
+      ]);
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 409]);
+      expect(prisma.interviewSlotSignup.create).toHaveBeenCalledTimes(1);
+      expect(sendInterviewSlotSignupConfirmation).toHaveBeenCalledTimes(1);
+    });
+
+    it('prevents the same member from taking two overlapping slots (two simultaneous requests)', async () => {
+      const [res1, res2] = await Promise.all([
+        signupAs('slot-a', memberUser),
+        signupAs('slot-b', memberUser),
+      ]);
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 409]);
+      expect(prisma.interviewSlotSignup.create).toHaveBeenCalledTimes(1);
       expect(sendInterviewSlotSignupConfirmation).toHaveBeenCalledTimes(1);
     });
   });

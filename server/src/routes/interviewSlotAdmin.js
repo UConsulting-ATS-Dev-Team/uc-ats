@@ -211,10 +211,18 @@ router.put('/slots/:slotId', async (req, res) => {
     let start = slot.startTime;
     let end = slot.endTime;
     if (startTime !== undefined) {
-      start = parseSlotTime(startTime) || start;
+      const parsed = parseSlotTime(startTime);
+      if (!parsed) {
+        return res.status(400).json({ error: 'startTime is invalid' });
+      }
+      start = parsed;
     }
     if (endTime !== undefined) {
-      end = parseSlotTime(endTime) || end;
+      const parsed = parseSlotTime(endTime);
+      if (!parsed) {
+        return res.status(400).json({ error: 'endTime is invalid' });
+      }
+      end = parsed;
     }
     if (end <= start) {
       return res.status(400).json({ error: 'endTime must be after startTime' });

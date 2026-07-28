@@ -85,10 +85,8 @@ router.get('/slots', requireAuth, async (req, res) => {
           orderBy: { startTime: 'asc' },
           include: {
             signups: {
-              where: { removedAt: null },
-              include: {
-                user: { select: { id: true, fullName: true, email: true } },
-              },
+              where: { userId, removedAt: null },
+              select: { id: true, signedUpAt: true, confirmationStatus: true, confirmationError: true },
             },
             _count: {
               select: { signups: { where: { removedAt: null } } },
@@ -109,7 +107,7 @@ router.get('/slots', requireAuth, async (req, res) => {
       slots: interview.slots.map((slot) => {
         const signupCount = slot._count?.signups || 0;
         const remainingSeats = slot.capacity - signupCount;
-        const userSignup = slot.signups.find((s) => s.userId === userId) || null;
+        const userSignup = slot.signups[0] || null;
         return {
           id: slot.id,
           startTime: slot.startTime,
@@ -118,7 +116,6 @@ router.get('/slots', requireAuth, async (req, res) => {
           remainingSeats,
           isFull: remainingSeats <= 0,
           userSignup,
-          signups: slot.signups,
         };
       }),
     }));
