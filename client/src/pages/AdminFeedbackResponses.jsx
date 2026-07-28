@@ -72,7 +72,7 @@ export default function AdminFeedbackResponses() {
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        Anonymous Feedback
+        Confidential Feedback Responses
       </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>
@@ -106,7 +106,6 @@ export default function AdminFeedbackResponses() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Date Submitted</TableCell>
                   <TableCell>Cycle</TableCell>
                   <TableCell>Feedback</TableCell>
                 </TableRow>
@@ -114,14 +113,13 @@ export default function AdminFeedbackResponses() {
               <TableBody>
                 {responses.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} align="center">
+                    <TableCell colSpan={2} align="center">
                       No feedback responses yet.
                     </TableCell>
                   </TableRow>
                 )}
                 {responses.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>{new Date(r.submittedAt).toLocaleString()}</TableCell>
                     <TableCell>{r.cycle?.name || 'Unknown'}</TableCell>
                     <TableCell sx={{ whiteSpace: 'pre-wrap' }}>
                       {r.answers && Object.keys(r.answers).length > 0 ? (

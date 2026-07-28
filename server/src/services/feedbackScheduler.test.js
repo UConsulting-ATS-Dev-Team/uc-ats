@@ -88,7 +88,7 @@ vi.mock('../prismaClient.js', () => {
     for (const [key, value] of Object.entries(data)) {
       if (value && typeof value === 'object' && 'increment' in value) {
         record[key] = (record[key] || 0) + value.increment;
-      } else if (['dueAt', 'sentAt', 'decisionSentAt', 'claimedAt', 'attemptedAt', 'respondedAt', 'submittedAt', 'createdAt', 'updatedAt'].includes(key)) {
+      } else if (['dueAt', 'sentAt', 'decisionSentAt', 'claimedAt', 'attemptedAt', 'createdAt', 'updatedAt'].includes(key)) {
         record[key] = value ? new Date(value) : null;
       } else {
         record[key] = value;
@@ -242,6 +242,7 @@ import {
   processFeedbackJobs,
   getFeedbackJobs,
   retryFeedbackJob,
+  reconcileFeedbackJob,
   JOB_STATUS,
   ATTEMPT_STATUS,
   FEEDBACK_JOB_TYPE,
@@ -309,6 +310,12 @@ async function seedJob(overrides = {}) {
 describe('scheduleFeedbackRequest', () => {
   beforeEach(() => {
     resetState();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-27T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('creates a PENDING feedback job due 48 hours after decisionSentAt for REJECTED', async () => {
@@ -838,5 +845,60 @@ describe('retryFeedbackJob', () => {
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.SENT });
     await expect(retryFeedbackJob(job.id)).rejects.toThrow(/Cannot retry job in status SENT/);
+  });
+});
+
+describe('reconcileFeedbackJob', () => {
+  beforeEach(() => {
+    resetState();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reconciles an UNKNOWN job to SENT with a provider message id', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      status: JOB_STATUS.UNKNOWN,
+      lastError: 'Lease expired',
+    });
+
+    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, messageId: 'msg-123' });
+
+    expect(result.status).toBe(JOB_STATUS.SENT);
+    expect(result.lastError).toBeNull();
+    expect(result.deliveryAttempts).toHaveLength(1);
+    expect(result.deliveryAttempts[0].status).toBe(ATTEMPT_STATUS.SENT);
+    expect(result.deliveryAttempts[0].messageId).toBe('msg-123');
+  });
+
+  it('reconciles an UNKNOWN job to FAILED with a reason', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      status: JOB_STATUS.UNKNOWN,
+    });
+
+    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, reason: 'Bounced by provider' });
+
+    expect(result.status).toBe(JOB_STATUS.FAILED);
+    expect(result.lastError).toBe('Bounced by provider');
+    expect(result.deliveryAttempts[0].status).toBe(ATTEMPT_STATUS.FAILED);
+    expect(result.deliveryAttempts[0].error).toBe('Bounced by provider');
+  });
+
+  it('throws when reconciling to SENT without a message id', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.UNKNOWN });
+    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT })).rejects.toThrow(/messageId is required/);
   });
 });

@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
@@ -32,13 +33,114 @@ import {
   handleApplicationStatusChange,
   processFeedbackJobs,
   getFeedbackJobs,
-  retryFeedbackJob
+  retryFeedbackJob,
+  reconcileFeedbackJob
 } from '../services/feedbackScheduler.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
 const router = express.Router();
 
 const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
+const DECISION_SEND_TIMEOUT_MS = 5 * 60 * 1000;
+
+async function reconcileStalledDecisionSends(now = new Date()) {
+  const leaseExpiry = new Date(now.getTime() - DECISION_SEND_TIMEOUT_MS);
+  const stuckApplications = await prisma.application.findMany({
+    where: {
+      decisionSendStatus: 'SENDING',
+      decisionSendAttemptedAt: { lte: leaseExpiry },
+    },
+  });
+
+  for (const app of stuckApplications) {
+    if (app.decisionSendMessageId) {
+      // The provider call succeeded before the final SENT state write.
+      await prisma.application.update({
+        where: { id: app.id },
+        data: {
+          decisionSendStatus: 'SENT',
+          decisionSentAt: app.decisionSendAttemptedAt,
+        },
+      });
+      if (app.status === 'REJECTED' && app.cycleId) {
+        const cycle = await prisma.recruitingCycle.findFirst({ where: { id: app.cycleId } });
+        await scheduleFeedbackRequest(app, cycle, app.decisionSendAttemptedAt);
+      }
+    } else {
+      // The worker crashed before the provider was called; allow retry.
+      await prisma.application.update({
+        where: { id: app.id },
+        data: {
+          decisionSendStatus: 'FAILED',
+          decisionSendAttemptedAt: null,
+        },
+      });
+    }
+  }
+
+  return stuckApplications.length;
+}
+
+async function claimFinalDecisionSend(application, decision, now) {
+  const isAccept = decision === 'yes';
+  const status = isAccept ? 'ACCEPTED' : 'REJECTED';
+  const currentRound = isAccept ? '5' : '4';
+  const approved = isAccept;
+
+  const result = await prisma.application.updateMany({
+    where: {
+      id: application.id,
+      decisionSendStatus: { in: [null, 'FAILED'] },
+    },
+    data: {
+      status,
+      currentRound,
+      approved,
+      decisionSendStatus: 'SENDING',
+      decisionSendAttemptedAt: now,
+      decisionSendMessageId: null,
+    },
+  });
+
+  return result.count > 0;
+}
+
+async function markFinalDecisionSent(application, messageId, now) {
+  try {
+    // Persist the provider message id first; if the SENT state write fails, the
+    // message id proves the provider accepted the message and reconciliation can
+    // complete without resending.
+    await prisma.application.updateMany({
+      where: { id: application.id, decisionSendStatus: 'SENDING' },
+      data: { decisionSendMessageId: messageId },
+    });
+
+    const result = await prisma.application.updateMany({
+      where: { id: application.id, decisionSendStatus: 'SENDING' },
+      data: {
+        decisionSendStatus: 'SENT',
+        decisionSentAt: now,
+      },
+    });
+
+    return result.count > 0;
+  } catch (err) {
+    // The message id is durable; reconciliation will finish the SENT state.
+    console.error(`Failed to mark final decision SENT for ${application.id}:`, err.message);
+    return false;
+  }
+}
+
+async function markFinalDecisionFailed(application) {
+  await prisma.application.updateMany({
+    where: { id: application.id, decisionSendStatus: 'SENDING' },
+    data: {
+      decisionSendStatus: 'FAILED',
+      decisionSendAttemptedAt: null,
+      decisionSendMessageId: null,
+    },
+  });
+}
 
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
@@ -3431,7 +3533,20 @@ router.post('/feedback-jobs/:id/retry', async (req, res) => {
   }
 });
 
-// Admin view for anonymous feedback responses.
+// Reconcile an UNKNOWN/SENDING/PROCESSING feedback job based on operator audit.
+router.post('/feedback-jobs/:id/reconcile', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, messageId, reason } = req.body;
+    const job = await reconcileFeedbackJob(id, { status, messageId, reason });
+    res.json({ message: 'Feedback job reconciled', job });
+  } catch (error) {
+    console.error('[POST /api/admin/feedback-jobs/:id/reconcile]', error);
+    res.status(400).json({ error: 'Failed to reconcile feedback job', details: error.message });
+  }
+});
+
+// Admin view for confidential feedback responses.
 router.get('/feedback-responses', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -3445,7 +3560,7 @@ router.get('/feedback-responses', async (req, res) => {
     const [responses, total] = await Promise.all([
       prisma.feedbackResponse.findMany({
         where,
-        orderBy: { submittedAt: 'desc' },
+        orderBy: { id: 'desc' },
         skip,
         take: limit,
         include: {
@@ -4734,6 +4849,9 @@ router.post('/process-final-decisions', async (req, res) => {
       emailsFailed: 0
     };
 
+    const now = new Date();
+    await reconcileStalledDecisionSends(now);
+
     for (const application of applications) {
       try {
         if (!application.candidate) {
@@ -4748,9 +4866,9 @@ router.post('/process-final-decisions', async (req, res) => {
         // Decision from approved field (we already filtered for clear decisions)
         const decision = application.approved === true ? 'yes' : 'no';
 
-        // Final-decision emails are idempotent per application. If a decision email has
-        // already been sent, do not resend or reschedule a feedback job.
-        if (application.decisionSentAt) {
+        // Re-read to detect concurrent sends; the initial list may be stale.
+        const currentApp = await prisma.application.findUnique({ where: { id: application.id } });
+        if (currentApp?.decisionSentAt || currentApp?.decisionSendStatus === 'SENT') {
           const entry = {
             applicationId: application.id,
             candidateId: application.candidate?.id,
@@ -4766,108 +4884,108 @@ router.post('/process-final-decisions', async (req, res) => {
           }
           continue;
         }
-
-        if (decision === 'yes') {
-          // Accept candidate - move to final stage (round 5)
-          let updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'ACCEPTED',
-              currentRound: '5',
-              approved: true // final acceptance
-            }
-          });
-
-          let emailResult;
-          try {
-            emailResult = await sendFinalAcceptanceEmail(
-              application.email,
-              `${application.firstName} ${application.lastName}`,
-              active.name
-            );
-          } catch (emailError) {
-            console.error(`Error sending final acceptance email to ${application.email}:`, emailError);
-            emailResult = { success: false, error: emailError.message };
-          }
-
-          if (emailResult.success) {
-            const decisionSentAt = new Date();
-            updatedApp = await prisma.application.update({
-              where: { id: application.id },
-              data: { decisionSentAt }
-            });
-            // Feedback requests are only sent to rejected candidates.
-            await cancelPendingFeedbackRequest(application.id);
-
-            results.emailsSent++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: true
-            });
+        if (currentApp?.decisionSendStatus === 'SENDING') {
+          const entry = {
+            applicationId: application.id,
+            candidateId: application.candidate?.id,
+            candidateName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            emailSent: true,
+            note: 'Decision email send in progress'
+          };
+          if (decision === 'yes') {
+            results.accepted.push(entry);
           } else {
-            results.emailsFailed++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
+            results.rejected.push(entry);
           }
-        } else if (decision === 'no') {
-          // Reject
-          let updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'REJECTED',
-              currentRound: '4',
-              approved: false
-            }
-          });
+          continue;
+        }
 
-          let emailResult;
-          try {
-            emailResult = await sendFinalRejectionEmail(
-              application.email,
-              `${application.firstName} ${application.lastName}`,
-              active.name
-            );
-          } catch (emailError) {
-            console.error(`Error sending final rejection email to ${application.email}:`, emailError);
-            emailResult = { success: false, error: emailError.message };
-          }
-
-          if (emailResult.success) {
-            const decisionSentAt = new Date();
-            updatedApp = await prisma.application.update({
-              where: { id: application.id },
-              data: { decisionSentAt }
-            });
-            await cancelPendingFeedbackRequest(application.id);
-            await scheduleFeedbackRequest(updatedApp, active, decisionSentAt);
-
-            results.emailsSent++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: true
-            });
+        // Atomically claim this application for a single final-decision send.
+        const claimed = await claimFinalDecisionSend(application, decision, now);
+        if (!claimed) {
+          const refreshed = await prisma.application.findUnique({ where: { id: application.id } });
+          const note = refreshed?.decisionSendStatus === 'SENDING'
+            ? 'Decision email send in progress'
+            : 'Decision email already sent';
+          const entry = {
+            applicationId: application.id,
+            candidateId: application.candidate?.id,
+            candidateName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            emailSent: true,
+            note
+          };
+          if (decision === 'yes') {
+            results.accepted.push(entry);
           } else {
-            results.emailsFailed++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
+            results.rejected.push(entry);
+          }
+          continue;
+        }
+
+        const sendFn = decision === 'yes' ? sendFinalAcceptanceEmail : sendFinalRejectionEmail;
+        const messageId = randomUUID();
+        let emailResult;
+        try {
+          emailResult = await sendFn(
+            application.email,
+            `${application.firstName} ${application.lastName}`,
+            active.name,
+            messageId
+          );
+        } catch (emailError) {
+          console.error(`Error sending final ${decision === 'yes' ? 'acceptance' : 'rejection'} email to ${application.email}:`, emailError);
+          emailResult = { success: false, error: emailError.message };
+        }
+
+        if (emailResult.success) {
+          const providerMessageId = emailResult.messageId || messageId;
+          const marked = await markFinalDecisionSent(application, providerMessageId, now);
+
+          if (marked) {
+            await cancelPendingFeedbackRequest(application.id);
+            if (decision === 'no') {
+              const updatedApp = await prisma.application.findUnique({ where: { id: application.id } });
+              await scheduleFeedbackRequest(updatedApp, active, now);
+            }
+          } else {
+            // The provider accepted the message but the final SENT state write failed.
+            // The message id is durable; do not schedule a feedback job here because
+            // reconciliation will finish the state and schedule if appropriate.
+          }
+
+          results.emailsSent++;
+          const entry = {
+            applicationId: application.id,
+            candidateId: application.candidate.id,
+            candidateName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            emailSent: true,
+            messageId: providerMessageId,
+            note: marked ? undefined : 'Delivery succeeded; state reconciliation pending'
+          };
+          if (decision === 'yes') {
+            results.accepted.push(entry);
+          } else {
+            results.rejected.push(entry);
+          }
+        } else {
+          await markFinalDecisionFailed(application);
+
+          results.emailsFailed++;
+          const entry = {
+            applicationId: application.id,
+            candidateId: application.candidate.id,
+            candidateName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            emailSent: false,
+            emailError: emailResult.error
+          };
+          if (decision === 'yes') {
+            results.accepted.push(entry);
+          } else {
+            results.rejected.push(entry);
           }
         }
       } catch (error) {

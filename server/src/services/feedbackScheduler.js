@@ -193,7 +193,12 @@ export async function handleApplicationStatusChange(applicationId, newStatus) {
     const cancelled = await cancelPendingFeedbackRequest(applicationId);
     await prisma.application.update({
       where: { id: applicationId },
-      data: { decisionSentAt: null },
+      data: {
+        decisionSentAt: null,
+        decisionSendStatus: null,
+        decisionSendMessageId: null,
+        decisionSendAttemptedAt: null,
+      },
     });
     return cancelled;
   }
@@ -698,6 +703,15 @@ export async function retryFeedbackJob(id) {
 
   if (!existing) throw new Error('Feedback job not found');
 
+  if (
+    existing.status === JOB_STATUS.SENT ||
+    existing.status === JOB_STATUS.UNKNOWN ||
+    existing.status === JOB_STATUS.SENDING ||
+    existing.status === JOB_STATUS.PROCESSING
+  ) {
+    throw new Error(`Cannot retry job in status ${existing.status}; reconcile it first`);
+  }
+
   const updated = await prisma.applicationFeedbackJob.updateMany({
     where: {
       id,
@@ -710,7 +724,7 @@ export async function retryFeedbackJob(id) {
       lastError: null,
       claimToken: null,
       claimedAt: null,
-      respondedAt: null,
+      responded: false,
     },
   });
 
@@ -719,6 +733,66 @@ export async function retryFeedbackJob(id) {
   }
 
   return prisma.applicationFeedbackJob.findUnique({ where: { id } });
+}
+
+export async function reconcileFeedbackJob(id, { status, messageId, reason }) {
+  const existing = await prisma.applicationFeedbackJob.findUnique({
+    where: { id },
+    include: { deliveryAttempts: { orderBy: { attemptedAt: 'desc' }, take: 1 } },
+  });
+
+  if (!existing) throw new Error('Feedback job not found');
+
+  if (status !== JOB_STATUS.SENT && status !== JOB_STATUS.FAILED) {
+    throw new Error('Reconcile status must be SENT or FAILED');
+  }
+
+  if (status === JOB_STATUS.SENT && !messageId) {
+    throw new Error('messageId is required to reconcile a job as SENT');
+  }
+
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    // Mark any in-flight delivery attempts as reconciled.
+    if (status === JOB_STATUS.SENT) {
+      await tx.applicationFeedbackDeliveryAttempt.updateMany({
+        where: { jobId: id, status: ATTEMPT_STATUS.SENDING },
+        data: { status: ATTEMPT_STATUS.CANCELLED, error: 'Reconciled to SENT by operator' },
+      });
+    } else {
+      await tx.applicationFeedbackDeliveryAttempt.updateMany({
+        where: { jobId: id, status: { in: [ATTEMPT_STATUS.PENDING, ATTEMPT_STATUS.SENDING] } },
+        data: { status: ATTEMPT_STATUS.FAILED, error: reason || 'Reconciled to FAILED by operator' },
+      });
+    }
+
+    await tx.applicationFeedbackDeliveryAttempt.create({
+      data: {
+        jobId: id,
+        status: status === JOB_STATUS.SENT ? ATTEMPT_STATUS.SENT : ATTEMPT_STATUS.FAILED,
+        messageId: status === JOB_STATUS.SENT ? messageId : null,
+        error: status === JOB_STATUS.FAILED ? reason || 'Reconciled to FAILED by operator' : null,
+        attemptedAt: now,
+      },
+    });
+
+    await tx.applicationFeedbackJob.update({
+      where: { id },
+      data: {
+        status,
+        sentAt: status === JOB_STATUS.SENT ? now : existing.sentAt,
+        lastError: status === JOB_STATUS.FAILED ? reason || null : null,
+        claimToken: null,
+        claimedAt: null,
+      },
+    });
+  });
+
+  return prisma.applicationFeedbackJob.findUnique({
+    where: { id },
+    include: { deliveryAttempts: { orderBy: { attemptedAt: 'desc' } } },
+  });
 }
 
 export async function cancelFeedbackJob(id) {

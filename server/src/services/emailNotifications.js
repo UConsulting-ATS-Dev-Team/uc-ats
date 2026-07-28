@@ -762,10 +762,10 @@ export const sendFirstRoundRejectionEmail = async (candidateEmail, candidateName
 };
 
 // Send final round acceptance email
-export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
+export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName, messageId = undefined) => {
   try {
     const emailContent = createFinalAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
     
     if (result.success) {
       console.log(`Final acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -781,10 +781,10 @@ export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, cu
 };
 
 // Send final round rejection email
-export const sendFinalRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
+export const sendFinalRejectionEmail = async (candidateEmail, candidateName, currentCycleName, messageId = undefined) => {
   try {
     const emailContent = createFinalRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
     
     if (result.success) {
       console.log(`Final rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -806,7 +806,7 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
   candidateName = escapeHtml(candidateName);
   currentCycleName = escapeHtml(currentCycleName);
   feedbackFormUrl = escapeHtml(feedbackFormUrl);
-  const text = `Dear ${candidateName},\n\nThank you for your interest in UConsulting and for participating in our ${currentCycleName} recruitment process.\n\nWe would greatly appreciate your anonymous feedback via this short form:\n${feedbackFormUrl}\n\nYour responses help us improve our process for future candidates.\n\nBest regards,\nUConsulting Recruitment Team`;
+  const text = `Dear ${candidateName},\n\nThank you for your interest in UConsulting and for participating in our ${currentCycleName} recruitment process.\n\nWe would greatly appreciate your confidential feedback via this short form:\n${feedbackFormUrl}\n\nYour responses will be kept confidential and used only to improve our process for future candidates.\n\nBest regards,\nUConsulting Recruitment Team`;
   return {
     subject: `Feedback Request - ${subjectCycle}`,
     html: `
@@ -827,15 +827,15 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
           </p>
 
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We would greatly appreciate your anonymous feedback via this short form:
+            We would greatly appreciate your confidential feedback via this short form:
           </p>
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
-            <a href="${feedbackFormUrl}" style="display: inline-block; background-color: #0c74c1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Give Anonymous Feedback</a>
+            <a href="${feedbackFormUrl}" style="display: inline-block; background-color: #0c74c1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Give Confidential Feedback</a>
           </div>
 
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Your responses help us improve our process for future candidates.
+            Your responses will be kept confidential and used only to improve our process for future candidates.
           </p>
 
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">

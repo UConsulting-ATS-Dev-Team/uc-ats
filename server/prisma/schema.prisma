@@ -81,6 +81,9 @@ model Application {
   responseID            String                          @unique
   submittedAt           DateTime                        @default(now())
   decisionSentAt        DateTime?
+  decisionSendStatus    String?
+  decisionSendMessageId String?
+  decisionSendAttemptedAt DateTime?
   email                 String
   firstName             String
   lastName              String
@@ -168,7 +171,7 @@ model ApplicationFeedbackJob {
   feedbackToken  String?                         @unique
   feedbackPrompt String?
   feedbackQuestions Json?
-  respondedAt    DateTime?
+  responded      Boolean                @default(false)
   claimToken     String?
   claimedAt      DateTime?
   messageId      String?
@@ -206,10 +209,9 @@ model FeedbackResponse {
   answers         Json?
   promptSnapshot  String?
   questionsSnapshot Json?
-  submittedAt     DateTime                @default(now())
   cycle           RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
-  @@index([cycleId, submittedAt])
+  @@index([cycleId])
   @@map("feedback_responses")
 }
 

@@ -27,14 +27,11 @@ vi.mock('../prismaClient.js', () => {
         let ok = true;
         if (where.id !== undefined && j.id !== where.id) ok = false;
         if (where.status !== undefined && j.status !== where.status) ok = false;
-        if (where.respondedAt !== undefined) {
-          if (where.respondedAt === null && j.respondedAt !== null) ok = false;
-        }
+        if (where.responded !== undefined && j.responded !== where.responded) ok = false;
         return ok;
       });
       matches.forEach((j) => {
         Object.assign(j, data);
-        if (data.respondedAt) j.respondedAt = new Date(data.respondedAt);
       });
       return { count: matches.length };
     },
@@ -108,7 +105,7 @@ describe('GET /api/feedback/:token', () => {
       id: 'job-1',
       feedbackToken: 'token-1',
       status: 'SENT',
-      respondedAt: null,
+      responded: false,
       cycleId: 'cycle-1',
       feedbackPrompt: 'Please share your thoughts.',
       feedbackQuestions: [{ id: 'q1', label: 'What went well?', required: false }],
@@ -129,7 +126,7 @@ describe('GET /api/feedback/:token', () => {
       id: 'job-1',
       feedbackToken: 'token-1',
       status: 'SENT',
-      respondedAt: new Date(),
+      responded: true,
       cycleId: 'cycle-1',
       feedbackPrompt: null,
       feedbackQuestions: null,
@@ -171,12 +168,12 @@ describe('POST /api/feedback/:token', () => {
     });
   }
 
-  it('creates an anonymous response and consumes the token', async () => {
+  it('creates a confidential response and consumes the token', async () => {
     prisma.__state.jobs.push({
       id: 'job-1',
       feedbackToken: 'token-1',
       status: 'SENT',
-      respondedAt: null,
+      responded: false,
       cycleId: 'cycle-1',
       feedbackPrompt: 'Tell us more.',
       feedbackQuestions: [{ id: 'q1', label: 'Overall experience', required: false }],
@@ -191,7 +188,7 @@ describe('POST /api/feedback/:token', () => {
     expect(prisma.__state.responses[0].questionsSnapshot).toEqual([
       { id: 'q1', label: 'Overall experience', required: false },
     ]);
-    expect(prisma.__state.jobs[0].respondedAt).not.toBeNull();
+    expect(prisma.__state.jobs[0].responded).toBe(true);
   });
 
   it('returns 409 for a second submission after the token is consumed', async () => {
@@ -199,7 +196,7 @@ describe('POST /api/feedback/:token', () => {
       id: 'job-1',
       feedbackToken: 'token-1',
       status: 'SENT',
-      respondedAt: new Date(),
+      responded: true,
       cycleId: 'cycle-1',
       feedbackPrompt: null,
       feedbackQuestions: null,
@@ -216,7 +213,7 @@ describe('POST /api/feedback/:token', () => {
       id: 'job-1',
       feedbackToken: 'token-1',
       status: 'SENT',
-      respondedAt: null,
+      responded: false,
       cycleId: 'cycle-1',
       feedbackPrompt: 'Thoughts?',
       feedbackQuestions: [{ id: 'q1', label: 'Feedback', required: false }],

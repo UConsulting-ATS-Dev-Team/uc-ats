@@ -321,7 +321,7 @@ export default function CycleManagement() {
               value={form.feedbackPrompt}
               onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
               fullWidth
-              placeholder="We would greatly appreciate your anonymous feedback."
+              placeholder="We would greatly appreciate your confidential feedback."
               disabled={!form.feedbackEnabled}
             />
             <Box>
@@ -441,7 +441,7 @@ export default function CycleManagement() {
               value={form.feedbackPrompt}
               onChange={(e) => setForm({ ...form, feedbackPrompt: e.target.value })}
               fullWidth
-              placeholder="We would greatly appreciate your anonymous feedback."
+              placeholder="We would greatly appreciate your confidential feedback."
               disabled={!form.feedbackEnabled}
             />
             <Box>

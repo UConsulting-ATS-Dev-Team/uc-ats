@@ -36,7 +36,7 @@ router.get('/:token', async (req, res) => {
       return res.status(404).json({ error: 'Feedback link is invalid or expired.' });
     }
 
-    if (job.status !== 'SENT' || job.respondedAt) {
+    if (job.status !== 'SENT' || job.responded) {
       return res.status(409).json({ error: 'Feedback has already been submitted for this link.' });
     }
 
@@ -54,7 +54,7 @@ router.get('/:token', async (req, res) => {
   }
 });
 
-// Public: submit anonymous feedback using the token from the email.
+// Public: submit confidential feedback using the token from the email.
 router.post('/:token', async (req, res) => {
   try {
     const { token } = req.params;
@@ -115,12 +115,12 @@ router.post('/:token', async (req, res) => {
     }
 
     // Atomically claim the one-use token: only the first transaction that
-    // updates respondedAt from null creates a response. Concurrent submissions
+    // flips responded from false to true creates a response. Concurrent submissions
     // get a 409 without creating duplicate rows.
     await prisma.$transaction(async (tx) => {
       const claim = await tx.applicationFeedbackJob.updateMany({
-        where: { id: job.id, status: 'SENT', respondedAt: null },
-        data: { respondedAt: new Date() },
+        where: { id: job.id, status: 'SENT', responded: false },
+        data: { responded: true },
       });
       if (claim.count === 0) {
         throw new Error('Feedback has already been submitted for this link.');
