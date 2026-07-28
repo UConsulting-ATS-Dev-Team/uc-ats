@@ -23,6 +23,7 @@ import {
   findLatestOfferLetterSend,
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
+import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
 const router = express.Router();
 
@@ -1825,6 +1826,45 @@ router.get('/events/:id/attendance', async (req, res) => {
   } catch (error) {
     console.error(`[GET /api/admin/events/${req.params.id}/attendance]`, error);
     res.status(500).json({ error: 'Failed to fetch event attendance' });
+  }
+});
+
+// Cycle-portable event copy routes
+
+// Preview events that would be copied from a source cycle to a target cycle
+router.post('/events/copy-preview', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId } = req.body;
+    const preview = await previewCycleEventCopy({ prisma, sourceCycleId, targetCycleId });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the copy of events from a source cycle to a target cycle
+router.post('/events/copy-commit', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId, events, force } = req.body;
+    const result = await commitCycleEventCopy({
+      prisma,
+      sourceCycleId,
+      targetCycleId,
+      events,
+      actorId: req.user?.id,
+      force: Boolean(force)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-commit]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
   }
 });
 

@@ -23,11 +23,15 @@ import {
   Alert,
   Tooltip,
   Autocomplete,
+  Switch,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
-import { formatInLA } from '../../../server/src/utils/timezoneUtils';
+import { useAuth } from '../context/AuthContext';
+import { formatInLA, localInputToUTC } from '../../../server/src/utils/timezoneUtils';
 
 export default function EventManagement() {
   const [events, setEvents] = useState([]);
@@ -67,14 +71,39 @@ export default function EventManagement() {
     memberInviteeIds: []
   });
 
+  // Cycle-portable event copy state
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyPreviewLoading, setCopyPreviewLoading] = useState(false);
+  const [copyCommitLoading, setCopyCommitLoading] = useState(false);
+  const [copySourceCycleId, setCopySourceCycleId] = useState('');
+  const [copyTargetCycleId, setCopyTargetCycleId] = useState('');
+  const [copyPreview, setCopyPreview] = useState(null);
+  const [copyEvents, setCopyEvents] = useState([]);
+  const [copyForce, setCopyForce] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const [copySuccess, setCopySuccess] = useState('');
+
+  const { user } = useAuth();
+
   function formatForDateTimeLocal(date, timeZone) {
-    const d = new Date(
-      new Date(date).toLocaleString("en-US", { timeZone })
-    )
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
 
-    const pad = (n) => String(n).padStart(2, "0")
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
 
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    const parts = Object.fromEntries(
+      formatter.formatToParts(d).map((p) => [p.type, p.value])
+    );
+
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
 
 
@@ -112,12 +141,175 @@ export default function EventManagement() {
     }
   };
 
+<<<<<<< HEAD
   const fetchMembers = async () => {
     try {
       const data = await apiClient.get('/admin/users?role=MEMBER');
       setMembers(data);
     } catch (e) {
       console.error('Failed to fetch members:', e);
+=======
+  const openCopyDialog = () => {
+    setCopyOpen(true);
+    setCopySourceCycleId('');
+    setCopyTargetCycleId('');
+    setCopyPreview(null);
+    setCopyEvents([]);
+    setCopyForce(false);
+    setCopyError('');
+    setCopySuccess('');
+  };
+
+  const closeCopyDialog = () => {
+    setCopyOpen(false);
+    setCopySourceCycleId('');
+    setCopyTargetCycleId('');
+    setCopyPreview(null);
+    setCopyEvents([]);
+    setCopyForce(false);
+    setCopyError('');
+    setCopySuccess('');
+  };
+
+  const loadCopyPreview = async () => {
+    try {
+      setCopyPreviewLoading(true);
+      setCopyError('');
+      setCopySuccess('');
+
+      if (!copySourceCycleId || !copyTargetCycleId) {
+        setCopyError('Please select both a source and target cycle');
+        return;
+      }
+
+      const data = await apiClient.post('/admin/events/copy-preview', {
+        sourceCycleId: copySourceCycleId,
+        targetCycleId: copyTargetCycleId,
+      });
+
+      // Convert preview dates to datetime-local values for inline editing
+      const events = data.events.map((evt) => ({
+        ...evt,
+        selected: true,
+        eventStartDate: evt.eventStartDate ? formatForDateTimeLocal(evt.eventStartDate, 'America/Los_Angeles') : '',
+        eventEndDate: evt.eventEndDate ? formatForDateTimeLocal(evt.eventEndDate, 'America/Los_Angeles') : '',
+      }));
+
+      setCopyPreview(data);
+      setCopyEvents(events);
+    } catch (e) {
+      setCopyError(e.message || 'Failed to load copy preview');
+    } finally {
+      setCopyPreviewLoading(false);
+    }
+  };
+
+  const updateCopyEvent = (index, field, value) => {
+    setCopyEvents((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const toggleAllCopyEvents = (checked) => {
+    setCopyEvents((prev) => prev.map((evt) => ({ ...evt, selected: checked })));
+  };
+
+  const toggleCopyEvent = (index, checked) => {
+    setCopyEvents((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], selected: checked };
+      return updated;
+    });
+  };
+
+  const validateCopyEvents = () => {
+    const errors = [];
+    const selected = copyEvents.filter((evt) => evt.selected);
+    if (selected.length === 0) {
+      errors.push('Select at least one event to copy');
+    }
+    for (let i = 0; i < copyEvents.length; i++) {
+      const evt = copyEvents[i];
+      if (!evt.selected) continue;
+      if (!evt.sourceEventId) {
+        errors.push(`Row ${i + 1}: Source event reference is missing`);
+      }
+      if (!evt.eventName || !evt.eventName.trim()) {
+        errors.push(`Row ${i + 1}: Event name is required`);
+      }
+      if (!evt.eventStartDate) {
+        errors.push(`Row ${i + 1}: Start date is required`);
+      }
+      if (!evt.eventEndDate) {
+        errors.push(`Row ${i + 1}: End date is required`);
+      }
+      const startUTC = evt.eventStartDate ? localInputToUTC(evt.eventStartDate) : null;
+      const endUTC = evt.eventEndDate ? localInputToUTC(evt.eventEndDate) : null;
+      if (startUTC && endUTC && startUTC >= endUTC) {
+        errors.push(`Row ${i + 1}: End date must be after start date`);
+      }
+      const urlFields = ['rsvpForm', 'attendanceForm', 'memberRsvpUrl'];
+      for (const field of urlFields) {
+        if (evt[field] && !isValidCopyUrl(evt[field])) {
+          errors.push(`Row ${i + 1}: ${field} must be a valid URL`);
+        }
+      }
+    }
+    return errors;
+  };
+
+  const isValidCopyUrl = (value) => {
+    if (!value) return true;
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const commitCopy = async () => {
+    try {
+      setCopyCommitLoading(true);
+      setCopyError('');
+      setCopySuccess('');
+
+      const validationErrors = validateCopyEvents();
+      if (validationErrors.length > 0) {
+        setCopyError(validationErrors.join('. '));
+        return;
+      }
+
+      const eventsToCommit = copyEvents
+        .filter((evt) => evt.selected)
+        .map((evt) => ({
+          ...evt,
+          eventStartDate: localInputToUTC(evt.eventStartDate).toISOString(),
+          eventEndDate: localInputToUTC(evt.eventEndDate).toISOString(),
+        }));
+
+      const result = await apiClient.post('/admin/events/copy-commit', {
+        sourceCycleId: copySourceCycleId,
+        targetCycleId: copyTargetCycleId,
+        events: eventsToCommit,
+        force: copyForce,
+      });
+
+      let message = `Copied ${result.copiedCount} event(s) to ${result.targetCycle.name}`;
+      if (result.skippedCount > 0) {
+        message += ` (${result.skippedCount} skipped as duplicates)`;
+      }
+      setCopySuccess(message);
+
+      // Refresh the event list if the target cycle is currently active
+      await fetchEvents();
+    } catch (e) {
+      setCopyError(e.message || 'Failed to copy events');
+    } finally {
+      setCopyCommitLoading(false);
+>>>>>>> 17414cb4 (feat: admin cycle-portable event copy with preview and explicit commit (#113))
     }
   };
 
@@ -446,6 +638,11 @@ export default function EventManagement() {
           )}
         </Stack>
         <Stack direction="row" spacing={2}>
+          {user?.role === 'ADMIN' && (
+            <Button variant="outlined" onClick={openCopyDialog}>
+              Copy from Cycle
+            </Button>
+          )}
           <Button 
             variant="outlined" 
             onClick={syncAllEvents}
@@ -940,6 +1137,226 @@ export default function EventManagement() {
             disabled={editLoading}
           >
             {editLoading ? <CircularProgress size={20} /> : 'Update Event'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Cycle-portable event copy dialog */}
+      <Dialog open={copyOpen} onClose={closeCopyDialog} fullWidth maxWidth="lg">
+        <DialogTitle>Copy Events from Another Cycle</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} mt={1}>
+            <Typography variant="body2" color="text.secondary">
+              Copy event records only. Registrations, candidate data, calendar events, attachments, and source records are not copied.
+            </Typography>
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                label="Source Cycle"
+                select
+                fullWidth
+                SelectProps={{ native: true }}
+                value={copySourceCycleId}
+                onChange={(e) => setCopySourceCycleId(e.target.value)}
+              >
+                <option value="">Select a source cycle</option>
+                {cycles.map((cycle) => (
+                  <option key={cycle.id} value={cycle.id}>
+                    {cycle.name}
+                  </option>
+                ))}
+              </TextField>
+              <TextField
+                label="Target Cycle"
+                select
+                fullWidth
+                SelectProps={{ native: true }}
+                value={copyTargetCycleId}
+                onChange={(e) => setCopyTargetCycleId(e.target.value)}
+              >
+                <option value="">Select a target cycle</option>
+                {cycles.map((cycle) => (
+                  <option key={cycle.id} value={cycle.id}>
+                    {cycle.name}{cycle.isActive ? ' (Active)' : ''}
+                  </option>
+                ))}
+              </TextField>
+            </Stack>
+
+            <Button
+              variant="outlined"
+              onClick={loadCopyPreview}
+              disabled={copyPreviewLoading || !copySourceCycleId || !copyTargetCycleId}
+            >
+              {copyPreviewLoading ? <CircularProgress size={20} /> : 'Preview Events'}
+            </Button>
+
+            {copyError && <Alert severity="error">{copyError}</Alert>}
+            {copySuccess && <Alert severity="success">{copySuccess}</Alert>}
+
+            {copyPreview && (
+              <>
+                <Typography variant="subtitle2">
+                  Preview: {copyPreview.events.length} event(s) from {copyPreview.sourceCycle.name} to {copyPreview.targetCycle.name} ({copyEvents.filter((e) => e.selected).length} selected)
+                </Typography>
+
+                <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                  <TableContainer component={Paper} sx={{ minWidth: 1100 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              size="small"
+                              checked={copyEvents.length > 0 && copyEvents.every((e) => e.selected)}
+                              indeterminate={
+                                copyEvents.some((e) => e.selected) && !copyEvents.every((e) => e.selected)
+                              }
+                              onChange={(e) => toggleAllCopyEvents(e.target.checked)}
+                              inputProps={{ 'aria-label': 'Select all events to copy' }}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ minWidth: 220 }}>Name</TableCell>
+                          <TableCell>Start</TableCell>
+                          <TableCell>End</TableCell>
+                          <TableCell>Location</TableCell>
+                          <TableCell>Show to Candidates</TableCell>
+                          <TableCell>RSVP Form</TableCell>
+                          <TableCell>Attendance Form</TableCell>
+                          <TableCell>Member RSVP</TableCell>
+                          <TableCell>Status</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {copyEvents.map((evt, index) => (
+                          <TableRow key={evt.sourceEventId || index}>
+                            <TableCell padding="checkbox">
+                              <Checkbox
+                                size="small"
+                                checked={Boolean(evt.selected)}
+                                onChange={(e) => toggleCopyEvent(index, e.target.checked)}
+                                inputProps={{ 'aria-label': `Copy ${evt.eventName}` }}
+                              />
+                            </TableCell>
+                            <TableCell sx={{ minWidth: 220 }}>
+                              <TextField
+                                size="small"
+                                value={evt.eventName}
+                                onChange={(e) => updateCopyEvent(index, 'eventName', e.target.value)}
+                                aria-label={`Event name for ${evt.eventName}`}
+                                placeholder="Event name"
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                type="datetime-local"
+                                size="small"
+                                value={evt.eventStartDate}
+                                onChange={(e) => updateCopyEvent(index, 'eventStartDate', e.target.value)}
+                                InputLabelProps={{ shrink: true }}
+                                aria-label={`Start date for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                type="datetime-local"
+                                size="small"
+                                value={evt.eventEndDate}
+                                onChange={(e) => updateCopyEvent(index, 'eventEndDate', e.target.value)}
+                                InputLabelProps={{ shrink: true }}
+                                aria-label={`End date for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                size="small"
+                                value={evt.eventLocation}
+                                onChange={(e) => updateCopyEvent(index, 'eventLocation', e.target.value)}
+                                aria-label={`Location for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <FormControlLabel
+                                control={
+                                  <Switch
+                                    size="small"
+                                    checked={evt.showToCandidates}
+                                    onChange={(e) => updateCopyEvent(index, 'showToCandidates', e.target.checked)}
+                                    inputProps={{ 'aria-label': `Show to candidates for ${evt.eventName}` }}
+                                  />
+                                }
+                                label=""
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                size="small"
+                                value={evt.rsvpForm}
+                                onChange={(e) => updateCopyEvent(index, 'rsvpForm', e.target.value)}
+                                placeholder="https://forms.gle/..."
+                                aria-label={`RSVP form URL for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                size="small"
+                                value={evt.attendanceForm}
+                                onChange={(e) => updateCopyEvent(index, 'attendanceForm', e.target.value)}
+                                placeholder="https://forms.gle/..."
+                                aria-label={`Attendance form URL for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                size="small"
+                                value={evt.memberRsvpUrl}
+                                onChange={(e) => updateCopyEvent(index, 'memberRsvpUrl', e.target.value)}
+                                placeholder="https://forms.gle/..."
+                                aria-label={`Member RSVP URL for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              {evt.alreadyExists ? (
+                                <Chip label="Exists" size="small" color="warning" variant="outlined" />
+                              ) : (
+                                <Chip label="New" size="small" color="success" variant="outlined" />
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={copyForce}
+                      onChange={(e) => setCopyForce(e.target.checked)}
+                    />
+                  }
+                  label="Re-run (skip duplicates)"
+                />
+              </>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeCopyDialog}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={commitCopy}
+            disabled={copyCommitLoading || !copyEvents.some((evt) => evt.selected)}
+          >
+            {copyCommitLoading ? <CircularProgress size={20} /> : 'Copy Events'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -310,12 +310,17 @@ model Events {
   memberRsvpUrl         String?
   showToCandidates      Boolean           @default(false)
   googleCalendarEventId String?
+  copiedFromCycleId     String?
+  copiedFromEventId     String?
+  copiedByUserId        String?
+  copiedAt              DateTime?
   eventAttendance       EventAttendance[]
   eventRsvp             EventRsvp[]
   cycle                 RecruitingCycle   @relation(fields: [cycleId], references: [id])
   memberEventRsvp       MemberEventRsvp[]
   invitees              EventInvitee[]
 
+  @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@map("events")
 }
 
