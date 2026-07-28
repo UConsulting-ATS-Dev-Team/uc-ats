@@ -3,63 +3,13 @@
     "id": "2026-07-28-admin-release-notes",
     "releaseDate": "2026-07-28",
     "title": "Admin-only ATS release notes page",
-    "summary": "Admins can now view a curated history of ATS changes directly in the app, including release date, category, affected area, and related links.",
-    "details": "The new page is reachable from the admin sidebar under \"What's new.\" Entries are sorted newest-first and include an expandable detail section. The content is maintained as a versioned JSON file so release history persists across recruiting cycles. Member and candidate accounts cannot access the page or its API.",
+    "summary": "Admins can now view a curated, in-product history of ATS changes directly in the app.",
+    "details": "The new page is reachable from the admin sidebar under \"What's new.\" Entries are sorted newest-first and include release date, category, affected area, summary, and expandable detail text with optional related links. The content is maintained as a versioned JSON file so release history persists across recruiting cycles. Member and candidate accounts cannot access the page or its API.",
     "category": "feature",
     "affectedArea": "Admin experience / navigation",
     "status": "new",
     "links": [
       { "label": "Issue #114", "url": "https://github.com/UConsulting-ATS-Dev-Team/uc-ats/issues/114" }
     ]
-  },
-  {
-    "id": "2025-07-27-system-aware-dark-mode",
-    "releaseDate": "2025-07-27",
-    "title": "System-aware dark mode",
-    "summary": "The ATS now supports a dark theme that follows the user's system preference and can be toggled manually.",
-    "details": "All admin and member pages were updated to use CSS custom properties so colors adapt consistently. The toggle is persisted in localStorage and respects the user's system setting on first visit.",
-    "category": "enhancement",
-    "affectedArea": "UI / accessibility",
-    "status": "resolved",
-    "links": [
-      { "label": "Issue #104", "url": "https://github.com/UConsulting-ATS-Dev-Team/uc-ats/issues/104" }
-    ]
-  },
-  {
-    "id": "2025-07-25-graduation-class-filter",
-    "releaseDate": "2025-07-25",
-    "title": "Graduation-class filter and graduated-member deactivation",
-    "summary": "User management now supports filtering by graduation class and bulk deactivation of graduated members.",
-    "details": "Admins can filter the user list by graduation class, mark members as graduated, and deactivate accounts in bulk. Deactivated users cannot log in and are excluded from future cycles.",
-    "category": "feature",
-    "affectedArea": "User management",
-    "status": "resolved",
-    "links": [
-      { "label": "Issue #105", "url": "https://github.com/UConsulting-ATS-Dev-Team/uc-ats/issues/105" }
-    ]
-  },
-  {
-    "id": "2025-07-23-cycle-event-copy",
-    "releaseDate": "2025-07-23",
-    "title": "Cycle-portable event copy with preview",
-    "summary": "Admins can copy events from a previous recruiting cycle into the current cycle with a preview-and-commit flow.",
-    "details": "The event copy workflow shows a preview of events before committing them, reduces duplicate work across cycles, and keeps cycle-specific RSVPs and attendance separate.",
-    "category": "enhancement",
-    "affectedArea": "Cycle / event management",
-    "status": "resolved",
-    "links": [
-      { "label": "Issue #23", "url": "https://github.com/UConsulting-ATS-Dev-Team/uc-ats/issues/23" }
-    ]
-  },
-  {
-    "id": "2025-07-20-fix-document-grading-sort",
-    "releaseDate": "2025-07-20",
-    "title": "Fixed document grading sort order",
-    "summary": "Document grading tables now sort by last-updated date by default instead of creation date.",
-    "details": "Previously the document grading page sorted by creation date, making it hard to see recent submissions. It now defaults to the submittedAt field and persists the chosen sort in the URL query string.",
-    "category": "fix",
-    "affectedArea": "Document grading",
-    "status": "resolved",
-    "links": []
   }
 ]

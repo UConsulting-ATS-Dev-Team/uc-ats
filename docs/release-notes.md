@@ -24,24 +24,28 @@ Each entry in `server/data/release-notes.json` must be an object with these fiel
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `id` | yes | Stable, URL-safe identifier (e.g., `2025-07-28-admin-release-notes`). |
-| `releaseDate` | yes | ISO date string `YYYY-MM-DD`. Used for sorting newest-first. |
+| `id` | yes | Stable, URL-safe identifier (e.g., `2026-07-28-admin-release-notes`). |
+| `releaseDate` | yes | ISO date string `YYYY-MM-DD`. Must be today or earlier; future dates are rejected. Used for sorting newest-first. |
 | `title` | yes | Short, user-facing title. |
 | `summary` | yes | One or two sentence operational summary. |
 | `details` | no | Longer implementation or operational notes. Supports line breaks via `\n`. |
 | `category` | no | One of `feature`, `enhancement`, `fix`, `policy/operations`, `breaking change`. |
 | `affectedArea` | no | Free-text area such as "User management" or "Document grading". |
 | `status` | no | One of `new`, `updated`, `resolved`. Helps admins distinguish active work. |
-| `links` | no | Array of `{ label, url }` objects pointing to GitHub issues, docs, or process maps. |
+| `links` | no | Array of `{ label, url }` objects pointing to GitHub issues, docs, or process maps. URLs must be valid. |
 
 ## Process for adding a release entry
 
 1. Open `server/data/release-notes.json`.
 2. Add a new object to the top of the array with the required fields above.
-   - Use the current ISO date for `releaseDate`.
+   - Use the current or past ISO date for `releaseDate` (future dates are rejected by validation).
    - Choose the most specific `category` and `status` values.
    - Write the `summary` and `details` for an admin audience, not an engineering audience. Avoid internal/security details.
-3. Validate the file with `npx jsonlint server/data/release-notes.json` or by running `cd server && npm test -- src/routes/releaseNotes.test.js`.
+   - Use the actual merged/deploy date of the change. If you cannot verify a date, do not seed it; add the entry after the change ships.
+3. Validate the file before committing:
+   - `npx jsonlint server/data/release-notes.json` checks syntax.
+   - `cd server && npx vitest run src/services/releaseNotes.test.js` validates schema, uniqueness, and dates.
+   - `cd server && npx vitest run src/routes/releaseNotes.test.js` checks the API surface.
 4. Commit the file as part of the change PR or as a follow-up documentation PR.
 5. After deployment, admins will see the new entry at **What's new** in the admin sidebar.
 
