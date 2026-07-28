@@ -101,6 +101,8 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
         decisionSentAt: new Date(decisionSentAt),
         feedbackToken,
         feedbackFormUrl,
+        feedbackPrompt: cycle?.feedbackPrompt ?? null,
+        feedbackQuestions: cycle?.feedbackQuestions ?? null,
         lastError: `Feedback form URL is missing or not allowed: ${feedbackFormUrl}`,
       },
     });
@@ -120,6 +122,8 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
         decisionSentAt: new Date(decisionSentAt),
         feedbackToken,
         feedbackFormUrl,
+        feedbackPrompt: cycle?.feedbackPrompt ?? null,
+        feedbackQuestions: cycle?.feedbackQuestions ?? null,
       },
     });
     return job;
@@ -178,9 +182,16 @@ export async function cancelPendingFeedbackRequest(applicationId) {
 
 export async function handleApplicationStatusChange(applicationId, newStatus) {
   // Only rejected candidates should receive a feedback request, so any
-  // transition away from REJECTED cancels pending/processing/failed jobs.
+  // transition away from REJECTED cancels pending/processing/failed jobs
+  // and clears any prior final-decision timestamp so a new final decision
+  // can be processed idempotently.
   if (!isRejectedStatus(newStatus)) {
-    return cancelPendingFeedbackRequest(applicationId);
+    const cancelled = await cancelPendingFeedbackRequest(applicationId);
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: { decisionSentAt: null },
+    });
+    return cancelled;
   }
   return 0;
 }
@@ -289,7 +300,54 @@ async function cancelClaimedJob(job, token, reason) {
   ]);
 }
 
+async function markAttemptSent(job, token, messageId, now) {
+  const result = await prisma.applicationFeedbackDeliveryAttempt.updateMany({
+    where: { jobId: job.id, claimToken: token },
+    data: {
+      status: ATTEMPT_STATUS.SENT,
+      messageId,
+      attemptedAt: now,
+    },
+  });
+  if (result.count === 0) {
+    throw new Error('Delivery attempt not found for claim token');
+  }
+}
+
+async function markJobSent(job, now, messageId, token) {
+  const result = await prisma.applicationFeedbackJob.updateMany({
+    where: { id: job.id, claimToken: token, status: JOB_STATUS.PROCESSING },
+    data: {
+      status: JOB_STATUS.SENT,
+      sentAt: now,
+      messageId,
+      claimToken: null,
+      claimedAt: null,
+      lastError: null,
+    },
+  });
+  if (result.count === 0) {
+    throw new Error('Job state changed after delivery or claim token mismatch');
+  }
+}
+
 async function processSingleFeedbackJob(job, now = new Date()) {
+  // If a previous delivery attempt was already confirmed SENT (e.g., the provider
+  // succeeded but the job SENT state write failed), do not call the provider again.
+  const existingSentAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
+    where: { jobId: job.id, status: ATTEMPT_STATUS.SENT },
+    orderBy: { attemptedAt: 'desc' },
+  });
+  if (existingSentAttempt) {
+    const messageId = existingSentAttempt.messageId || existingSentAttempt.claimToken;
+    try {
+      await markJobSent(job, now, messageId, generateClaimToken());
+    } catch {
+      // The durable SENT attempt already records the external effect.
+    }
+    return { id: job.id, action: 'sent', messageId, note: 'reconciled from durable delivery attempt' };
+  }
+
   const token = generateClaimToken();
   const claimed = await claimJob(job, token, now);
 
@@ -302,16 +360,19 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'cancelled', reason: eligible.reason };
   }
 
+  // Use the freshly claimed job record for immutable snapshots and the
+  // originally included relations for application/cycle data.
+  const currentJob = claimed;
   const { application, cycle } = job;
 
   if (cycle?.feedbackEnabled === false) {
-    await cancelClaimedJob(job, token, 'Feedback disabled for this recruiting cycle');
+    await cancelClaimedJob(currentJob, token, 'Feedback disabled for this recruiting cycle');
     return { id: job.id, action: 'cancelled', reason: 'Feedback disabled for this recruiting cycle' };
   }
 
   const to = application?.email;
   const candidateName = application ? `${application.firstName} ${application.lastName}` : '';
-  const feedbackFormUrl = job.feedbackFormUrl;
+  const feedbackFormUrl = currentJob.feedbackFormUrl;
   const cycleName = cycle?.name || 'UConsulting';
 
   let validationError = null;
@@ -322,57 +383,56 @@ async function processSingleFeedbackJob(job, now = new Date()) {
   }
 
   if (validationError) {
-    await markJobFailed(job, token, validationError);
+    await markJobFailed(currentJob, token, validationError);
     return { id: job.id, action: 'failed', error: validationError };
   }
+
+  // The feedback token is a durable provider/outbox key for this job.
+  const messageKey = currentJob.feedbackToken || token;
 
   try {
     const sendResult = await sendApplicantFeedbackRequest(
       to,
       candidateName,
       cycleName,
-      feedbackFormUrl
+      feedbackFormUrl,
+      messageKey
     );
 
-    if (sendResult.success) {
-      const [attemptUpdate, jobUpdate] = await prisma.$transaction([
-        prisma.applicationFeedbackDeliveryAttempt.updateMany({
-          where: { jobId: job.id, claimToken: token },
-          data: { status: ATTEMPT_STATUS.SENT, messageId: sendResult.messageId },
-        }),
-        prisma.applicationFeedbackJob.updateMany({
-          where: { id: job.id, claimToken: token, status: JOB_STATUS.PROCESSING },
-          data: {
-            status: JOB_STATUS.SENT,
-            sentAt: now,
-            messageId: sendResult.messageId,
-            claimToken: null,
-            claimedAt: null,
-            lastError: null,
-          },
-        }),
-      ]);
-
-      if (attemptUpdate.count === 0) {
-        return { id: job.id, action: 'sent', messageId: sendResult.messageId, note: 'delivery attempt record not updated' };
-      }
-      if (jobUpdate.count === 0) {
-        return { id: job.id, action: 'sent', messageId: sendResult.messageId, note: 'job state changed after delivery' };
-      }
-
-      return { id: job.id, action: 'sent', messageId: sendResult.messageId };
+    if (!sendResult.success) {
+      await markJobFailed(currentJob, token, sendResult.error);
+      return { id: job.id, action: 'failed', error: sendResult.error };
     }
 
-    await markJobFailed(job, token, sendResult.error);
-    return { id: job.id, action: 'failed', error: sendResult.error };
+    const messageId = sendResult.messageId || messageKey;
+
+    // Persist the SENT delivery attempt before updating the job so the
+    // external effect survives a failure of the job-state write.
+    await markAttemptSent(currentJob, token, messageId, now);
+
+    try {
+      await markJobSent(currentJob, now, messageId, token);
+    } catch (jobUpdateError) {
+      // The delivery attempt is already SENT; the job state will be reconciled.
+      return { id: job.id, action: 'sent', messageId, note: 'job state update failed; delivery attempt is durable and will be reconciled' };
+    }
+
+    return { id: job.id, action: 'sent', messageId };
   } catch (err) {
-    await markJobFailed(job, token, err.message);
+    // If the delivery attempt was already marked SENT by this run, do not fail it.
+    const sentAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
+      where: { jobId: currentJob.id, claimToken: token, status: ATTEMPT_STATUS.SENT },
+    });
+    if (sentAttempt) {
+      return { id: job.id, action: 'sent', messageId: sentAttempt.messageId, note: 'job state update failed; delivery attempt is durable and will be reconciled' };
+    }
+    await markJobFailed(currentJob, token, err.message);
     return { id: job.id, action: 'failed', error: err.message };
   }
 }
 
 async function reconcileStalledJobs(now = new Date()) {
-  // Reconcile PROCESSING jobs that already have a SENT delivery attempt recorded.
+  // Reconcile any job that already has a confirmed SENT delivery attempt recorded.
   // This covers the provider-success -> job-state-write-failure case.
   const sentAttempts = await prisma.applicationFeedbackDeliveryAttempt.findMany({
     where: { status: ATTEMPT_STATUS.SENT },
@@ -380,7 +440,7 @@ async function reconcileStalledJobs(now = new Date()) {
   });
 
   for (const attempt of sentAttempts) {
-    if (attempt.job && attempt.job.status === JOB_STATUS.PROCESSING) {
+    if (attempt.job && attempt.job.status !== JOB_STATUS.SENT) {
       await prisma.applicationFeedbackJob.update({
         where: { id: attempt.job.id },
         data: {
@@ -470,10 +530,7 @@ export async function getFeedbackJobs({ cycleId, status, applicationId, page = 1
           select: { id: true, firstName: true, lastName: true, email: true, status: true, decisionSentAt: true },
         },
         cycle: {
-          select: { id: true, name: true, feedbackFormUrl: true, feedbackEnabled: true, feedbackCadenceHours: true, feedbackPrompt: true, feedbackQuestions: true },
-        },
-        response: {
-          select: { id: true, submittedAt: true },
+          select: { id: true, name: true, feedbackEnabled: true, feedbackCadenceHours: true, feedbackPrompt: true, feedbackQuestions: true },
         },
         deliveryAttempts: {
           orderBy: { attemptedAt: 'desc' },

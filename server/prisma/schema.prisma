@@ -163,6 +163,8 @@ model ApplicationFeedbackJob {
   decisionSentAt DateTime
   feedbackFormUrl String?
   feedbackToken  String?                         @unique
+  feedbackPrompt String?
+  feedbackQuestions Json?
   respondedAt    DateTime?
   claimToken     String?
   claimedAt      DateTime?
@@ -172,7 +174,6 @@ model ApplicationFeedbackJob {
   application    Application                     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   cycle          RecruitingCycle?                @relation(fields: [cycleId], references: [id], onDelete: SetNull)
   deliveryAttempts ApplicationFeedbackDeliveryAttempt[]
-  response       FeedbackResponse?
 
   @@unique([applicationId, type, decisionSentAt])
   @@index([status, dueAt])
@@ -196,14 +197,14 @@ model ApplicationFeedbackDeliveryAttempt {
 }
 
 model FeedbackResponse {
-  id            String                  @id @default(uuid())
-  cycleId       String
-  feedbackJobId String?                 @unique
-  content       String
-  answers       Json?
-  submittedAt   DateTime                @default(now())
-  cycle         RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
-  job           ApplicationFeedbackJob?  @relation(fields: [feedbackJobId], references: [id], onDelete: SetNull)
+  id              String                  @id @default(uuid())
+  cycleId         String
+  content         String
+  answers         Json?
+  promptSnapshot  String?
+  questionsSnapshot Json?
+  submittedAt     DateTime                @default(now())
+  cycle           RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
   @@index([cycleId, submittedAt])
   @@map("feedback_responses")

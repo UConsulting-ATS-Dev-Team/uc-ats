@@ -28,8 +28,7 @@ router.get('/:token', async (req, res) => {
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
       include: {
-        cycle: { select: { name: true, feedbackPrompt: true, feedbackQuestions: true } },
-        response: { select: { id: true } },
+        cycle: { select: { name: true } },
       },
     });
 
@@ -37,16 +36,16 @@ router.get('/:token', async (req, res) => {
       return res.status(404).json({ error: 'Feedback link is invalid or expired.' });
     }
 
-    if (job.status !== 'SENT' || job.respondedAt || job.response) {
+    if (job.status !== 'SENT' || job.respondedAt) {
       return res.status(409).json({ error: 'Feedback has already been submitted for this link.' });
     }
 
-    const questions = normalizeQuestions(job.cycle?.feedbackQuestions);
+    const questions = normalizeQuestions(job.feedbackQuestions);
 
     return res.json({
       valid: true,
       cycleName: job.cycle?.name || '',
-      prompt: job.cycle?.feedbackPrompt || null,
+      prompt: job.feedbackPrompt || null,
       questions: questions && questions.length > 0 ? questions : null,
     });
   } catch (error) {
@@ -64,8 +63,7 @@ router.post('/:token', async (req, res) => {
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
       include: {
-        cycle: { select: { feedbackPrompt: true, feedbackQuestions: true } },
-        response: { select: { id: true } },
+        cycle: { select: { name: true } },
       },
     });
 
@@ -73,7 +71,7 @@ router.post('/:token', async (req, res) => {
       return res.status(404).json({ error: 'Feedback link is invalid or expired.' });
     }
 
-    if (job.respondedAt || job.response) {
+    if (job.respondedAt) {
       return res.status(409).json({ error: 'Feedback has already been submitted for this link.' });
     }
 
@@ -81,7 +79,7 @@ router.post('/:token', async (req, res) => {
       return res.status(400).json({ error: 'Feedback link is not yet active.' });
     }
 
-    const questions = normalizeQuestions(job.cycle?.feedbackQuestions);
+    const questions = normalizeQuestions(job.feedbackQuestions);
 
     let finalAnswers = {};
     let finalContent = '';
@@ -120,9 +118,10 @@ router.post('/:token', async (req, res) => {
       prisma.feedbackResponse.create({
         data: {
           cycleId: job.cycleId,
-          feedbackJobId: job.id,
           content: finalContent,
           answers: Object.keys(finalAnswers).length > 0 ? finalAnswers : null,
+          promptSnapshot: job.feedbackPrompt,
+          questionsSnapshot: job.feedbackQuestions,
         },
       }),
       prisma.applicationFeedbackJob.update({

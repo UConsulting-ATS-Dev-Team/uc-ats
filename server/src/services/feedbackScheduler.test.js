@@ -101,7 +101,6 @@ vi.mock('../prismaClient.js', () => {
         .filter((a) => a.jobId === record.id)
         .sort((a, b) => new Date(b.attemptedAt).getTime() - new Date(a.attemptedAt).getTime());
     }
-    if (include.response) copy.response = state.feedbackResponses.find((r) => r.feedbackJobId === record.id) || null;
     if (include.job) copy.job = state.jobs.find((j) => j.id === record.jobId) || null;
     return copy;
   }
@@ -159,8 +158,6 @@ vi.mock('../prismaClient.js', () => {
           record = store.find((r) => r.id === where.id);
         } else if (where.feedbackToken) {
           record = store.find((r) => r.feedbackToken === where.feedbackToken);
-        } else if (where.feedbackJobId) {
-          record = store.find((r) => r.feedbackJobId === where.feedbackJobId);
         } else if (where.applicationId_type_decisionSentAt) {
           record = store.find((r) => matches(r, where));
         }
@@ -295,6 +292,8 @@ async function seedJob(overrides = {}) {
       decisionSentAt,
       feedbackToken,
       feedbackFormUrl,
+      feedbackPrompt: cycle?.feedbackPrompt ?? null,
+      feedbackQuestions: cycle?.feedbackQuestions ?? null,
       ...overrides,
     },
   });
@@ -390,8 +389,9 @@ describe('handleApplicationStatusChange', () => {
     resetState();
   });
 
-  it('cancels pending jobs and their attempts when status changes away from final', async () => {
-    const app = await seedApplication({ status: 'WAITLISTED' });
+  it('cancels pending jobs and clears decisionSentAt when status changes away from final', async () => {
+    const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
+    const app = await seedApplication({ status: 'WAITLISTED', decisionSentAt });
     const job = await seedJob({ applicationId: app.id, status: JOB_STATUS.PENDING });
     await prisma.applicationFeedbackDeliveryAttempt.create({
       data: { jobId: job.id, status: ATTEMPT_STATUS.PENDING, feedbackFormUrl: job.feedbackFormUrl },
@@ -404,6 +404,8 @@ describe('handleApplicationStatusChange', () => {
     expect(updated.claimToken).toBeNull();
     const attempt = prisma.__state.attempts.find((a) => a.jobId === job.id);
     expect(attempt.status).toBe(ATTEMPT_STATUS.CANCELLED);
+    const updatedApp = prisma.__state.applications.find((a) => a.id === app.id);
+    expect(updatedApp.decisionSentAt).toBeNull();
   });
 
   it('does nothing for rejected status', async () => {
@@ -437,7 +439,8 @@ describe('processFeedbackJobs', () => {
       'jane@example.com',
       'Jane Doe',
       'Fall 2026',
-      job.feedbackFormUrl
+      job.feedbackFormUrl,
+      expect.any(String)
     );
     expect(results[0].action).toBe('sent');
     expect(results[0].messageId).toBe('msg-1');
@@ -475,7 +478,8 @@ describe('processFeedbackJobs', () => {
       'jane@example.com',
       'Jane Doe',
       'Fall 2026',
-      'https://snapshot.example.com/feedback'
+      'https://snapshot.example.com/feedback',
+      expect.any(String)
     );
 
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
@@ -581,7 +585,7 @@ describe('processFeedbackJobs', () => {
     expect(updated.status).toBe(JOB_STATUS.SENT);
   });
 
-  it('does not resend when provider succeeds but the job SENT state write fails', async () => {
+  it('does not resend when the job SENT state write fails after provider success', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
@@ -589,16 +593,16 @@ describe('processFeedbackJobs', () => {
     const originalUpdateMany = prisma.applicationFeedbackJob.updateMany;
     prisma.applicationFeedbackJob.updateMany = vi.fn(async (args) => {
       if (args?.data?.status === JOB_STATUS.SENT) {
-        return { count: 0 };
+        throw new Error('Simulated job SENT state write failure');
       }
       return originalUpdateMany(args);
     });
 
     const first = await processFeedbackJobs();
     expect(first[0].action).toBe('sent');
-    expect(first[0].note).toMatch(/job state changed after delivery/);
+    expect(first[0].note).toMatch(/delivery attempt is durable/);
 
-    // Restore and run reconciliation; the SENT attempt should keep the email from being retried.
+    // Restore and run reconciliation; the durable SENT attempt should keep the email from being retried.
     prisma.applicationFeedbackJob.updateMany = originalUpdateMany;
     const second = await processFeedbackJobs();
     expect(second).toEqual([]);

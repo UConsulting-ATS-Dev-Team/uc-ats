@@ -123,7 +123,7 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html, attachments = [], text = null) => {
+const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined) => {
   try {
     const transporter = createTransporter();
 
@@ -141,6 +141,10 @@ const sendEmail = async (to, subject, html, attachments = [], text = null) => {
 
     if (attachments && attachments.length > 0) {
       mailOptions.attachments = attachments;
+    }
+
+    if (messageId) {
+      mailOptions.messageId = messageId;
     }
 
     const info = await transporter.sendMail(mailOptions);
@@ -849,10 +853,10 @@ const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, fe
   };
 };
 
-export const sendApplicantFeedbackRequest = async (candidateEmail, candidateName, currentCycleName, feedbackFormUrl) => {
+export const sendApplicantFeedbackRequest = async (candidateEmail, candidateName, currentCycleName, feedbackFormUrl, messageId = undefined) => {
   try {
     const emailContent = createApplicantFeedbackRequestEmail(candidateName, currentCycleName, feedbackFormUrl);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
 
     if (result.success) {
       console.log(`Feedback request email sent to ${candidateEmail} for cycle: ${currentCycleName}`);

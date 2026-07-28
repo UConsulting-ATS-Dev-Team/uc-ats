@@ -126,12 +126,18 @@ export default function AdminFeedbackResponses() {
                     <TableCell sx={{ whiteSpace: 'pre-wrap' }}>
                       {r.answers && Object.keys(r.answers).length > 0 ? (
                         <Stack spacing={1}>
-                          {Object.entries(r.answers).map(([key, value]) => (
-                            <Box key={key}>
-                              <Typography variant="subtitle2">{key}</Typography>
-                              <Typography variant="body2" color="text.secondary">{value}</Typography>
-                            </Box>
-                          ))}
+                          {Object.entries(r.answers).map(([key, value]) => {
+                            const question = Array.isArray(r.questionsSnapshot)
+                              ? r.questionsSnapshot.find((q) => q.id === key)
+                              : null;
+                            const label = question?.label || key;
+                            return (
+                              <Box key={key}>
+                                <Typography variant="subtitle2">{label}</Typography>
+                                <Typography variant="body2" color="text.secondary">{value}</Typography>
+                              </Box>
+                            );
+                          })}
                         </Stack>
                       ) : (
                         r.content

@@ -10,6 +10,7 @@ server/.env
 .env
 server/google-cloud-key.json
 server/storage/
+server/uploads/profile-images/
 
 node_modules
 

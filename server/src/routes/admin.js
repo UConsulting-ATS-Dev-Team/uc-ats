@@ -4654,6 +4654,25 @@ router.post('/process-final-decisions', async (req, res) => {
         // Decision from approved field (we already filtered for clear decisions)
         const decision = application.approved === true ? 'yes' : 'no';
 
+        // Final-decision emails are idempotent per application. If a decision email has
+        // already been sent, do not resend or reschedule a feedback job.
+        if (application.decisionSentAt) {
+          const entry = {
+            applicationId: application.id,
+            candidateId: application.candidate?.id,
+            candidateName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            emailSent: true,
+            note: 'Decision email already sent'
+          };
+          if (decision === 'yes') {
+            results.accepted.push(entry);
+          } else {
+            results.rejected.push(entry);
+          }
+          continue;
+        }
+
         if (decision === 'yes') {
           // Accept candidate - move to final stage (round 5)
           let updatedApp = await prisma.application.update({
