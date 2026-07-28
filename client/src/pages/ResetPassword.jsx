@@ -3,15 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Button,
-  CssBaseline,
   Paper,
   TextField,
-  ThemeProvider,
   Typography,
   Alert,
   Container,
 } from '@mui/material';
-import authTheme from '../styles/authTheme';
 import UConsultingLogo from '../components/UConsultingLogo';
 
 export default function ResetPassword() {
@@ -75,9 +72,7 @@ export default function ResetPassword() {
   };
 
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -145,6 +140,5 @@ export default function ResetPassword() {
           </Paper>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 }

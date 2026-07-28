@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ThemeProvider,
-  CssBaseline,
   Box,
   Typography,
   Button,
@@ -18,7 +16,6 @@ import {
   Tooltip,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon, DeleteOutline as DeleteIcon } from '@mui/icons-material';
-import globalTheme from '../styles/globalTheme';
 import AccessControl from '../components/AccessControl';
 import apiClient from '../utils/api';
 import CasePageImage from '../components/case/CasePageImage';
@@ -232,9 +229,7 @@ export default function CaseTagging() {
 
   return (
     <AccessControl allowedRoles={['ADMIN']}>
-      <ThemeProvider theme={globalTheme}>
-        <CssBaseline />
-        <Box sx={{ p: 3 }}>
+      <Box sx={{ p: 3 }}>
           <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/cases')} sx={{ mb: 1 }}>
             Back to Cases
           </Button>
@@ -246,7 +241,6 @@ export default function CaseTagging() {
           </Typography>
           {content()}
         </Box>
-      </ThemeProvider>
     </AccessControl>
   );
 }

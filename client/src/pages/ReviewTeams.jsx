@@ -156,7 +156,7 @@ function DraggableApplication({ application, teamId, onRemove, onClick, isDraggi
                 color: 'primary.main',
                 '&:hover': {
                   backgroundColor: 'primary.light',
-                  color: 'primary.contrastText'
+                  color: 'text.primary'
                 }
               }}
             >

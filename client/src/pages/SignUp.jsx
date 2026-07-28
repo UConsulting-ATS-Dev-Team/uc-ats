@@ -6,8 +6,6 @@ import {
   Button,
   Typography,
   Paper,
-  ThemeProvider,
-  CssBaseline,
   Alert,
   Container,
   FormControl,
@@ -16,7 +14,6 @@ import {
   MenuItem,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
-import authTheme from '../styles/authTheme';
 import UConsultingLogo from '../components/UConsultingLogo';
 
 const SignUp = () => {
@@ -76,9 +73,7 @@ const SignUp = () => {
   };
 
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -190,7 +185,6 @@ const SignUp = () => {
           </Paper>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 };
 
