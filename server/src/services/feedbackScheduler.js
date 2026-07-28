@@ -334,8 +334,11 @@ async function cancelClaimedJob(job, token, reason) {
 }
 
 async function markAttemptSent(job, token, messageId, now) {
+  // Point-of-no-return: the provider call has already been initiated for this
+  // claim token, so the SENT outcome is authoritative even if a concurrent
+  // status reversal marked the attempt CANCELLED while the email was in flight.
   const result = await prisma.applicationFeedbackDeliveryAttempt.updateMany({
-    where: { jobId: job.id, claimToken: token, status: ATTEMPT_STATUS.SENDING },
+    where: { jobId: job.id, claimToken: token },
     data: {
       status: ATTEMPT_STATUS.SENT,
       messageId,
@@ -343,13 +346,16 @@ async function markAttemptSent(job, token, messageId, now) {
     },
   });
   if (result.count === 0) {
-    throw new Error('Delivery attempt not in SENDING state for claim token');
+    throw new Error('Delivery attempt not found for claim token');
   }
 }
 
 async function markJobSent(job, now, messageId, token) {
+  // Point-of-no-return: once the provider confirmed delivery, the job is SENT
+  // regardless of any concurrent cancellation that raced after the final
+  // eligibility read. The claim token is cleared so retries cannot re-claim.
   const result = await prisma.applicationFeedbackJob.updateMany({
-    where: { id: job.id, claimToken: token, status: JOB_STATUS.PROCESSING },
+    where: { id: job.id },
     data: {
       status: JOB_STATUS.SENT,
       sentAt: now,
@@ -360,13 +366,15 @@ async function markJobSent(job, now, messageId, token) {
     },
   });
   if (result.count === 0) {
-    throw new Error('Job state changed after delivery or claim token mismatch');
+    throw new Error('Feedback job not found after delivery');
   }
 }
 
 async function reconcileJobSent(job, now, messageId) {
+  // A confirmed SENT delivery attempt is authoritative: reconcile the job to SENT
+  // regardless of any concurrent cancellation that raced with the provider.
   const result = await prisma.applicationFeedbackJob.updateMany({
-    where: { id: job.id, status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING] } },
+    where: { id: job.id, status: { not: JOB_STATUS.SENT } },
     data: {
       status: JOB_STATUS.SENT,
       sentAt: now,
@@ -406,12 +414,14 @@ async function markJobUnknown(job, token, messageId, now, reason) {
 }
 
 async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey) {
-  // The durable SENDING delivery attempt is the authoritative send boundary.
-  // `onBeforeSend` is invoked by `sendEmail` immediately before the network
-  // call, so a concurrent status reversal, claim loss, or SENDING cancellation
-  // is observed at the last possible moment. This is cross-process safe: another
-  // instance/worker updates the same Prisma records, and the DB read inside the
-  // hook sees the current state instead of a process-local `AbortController`.
+  // The `onBeforeSend` hook is the point of no return. It is invoked by `sendEmail`
+  // immediately before the provider call, after mail options are prepared, so the
+  // gap between the final eligibility read and `transporter.sendMail` is reduced
+  // to a single function call. Cross-process status reversals that commit before
+  // this hook are observed and cancel the send; reversals that commit after this
+  // boundary cannot recall an in-flight email. The SENT delivery attempt is then
+  // authoritative and the job/attempt are marked SENT regardless of any late
+  // cancellation race.
   const onBeforeSend = async () => {
     const [currentJob, currentAttempt, currentApp] = await Promise.all([
       prisma.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
@@ -596,7 +606,7 @@ async function reconcileStalledJobs(now = new Date()) {
   for (const attempt of sentAttempts) {
     if (attempt.job && attempt.job.status !== JOB_STATUS.SENT) {
       await prisma.applicationFeedbackJob.updateMany({
-        where: { id: attempt.job.id, status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.UNKNOWN] } },
+        where: { id: attempt.job.id, status: { not: JOB_STATUS.SENT } },
         data: {
           status: JOB_STATUS.SENT,
           sentAt: attempt.attemptedAt,

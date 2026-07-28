@@ -125,24 +125,6 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 // Send email function
 const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined, options = {}) => {
   try {
-    // Call the durable, provider-safe intent/cancellation hook right before the
-    // network call. This is the last moment at which a reversal can be observed
-    // from any worker instance because the hook reads from the shared database.
-    if (options?.onBeforeSend) {
-      const beforeResult = await options.onBeforeSend();
-      if (beforeResult && beforeResult.cancelled) {
-        const reason = beforeResult.reason || 'Send cancelled by before-send hook';
-        console.log('Email send cancelled by before-send hook:', reason);
-        return { success: false, error: reason, cancelled: true };
-      }
-    }
-
-    if (options?.signal?.aborted) {
-      const reason = options.signal.reason || 'Send aborted by cancellation signal';
-      console.log('Email send aborted before transporter call:', reason);
-      return { success: false, error: reason, cancelled: true };
-    }
-
     const transporter = createTransporter();
 
     const mailOptions = {
@@ -163,6 +145,27 @@ const sendEmail = async (to, subject, html, attachments = [], text = null, messa
 
     if (messageId) {
       mailOptions.messageId = messageId;
+    }
+
+    // Call the durable, provider-safe intent/cancellation hook at the last
+    // possible moment before the provider call. This defines the point of no
+    // return: once the hook passes, the provider is invoked and the result is
+    // authoritative. A status reversal that commits after this boundary cannot
+    // recall an in-flight email, but the SENT delivery attempt records the
+    // outcome for operator reconciliation.
+    if (options?.onBeforeSend) {
+      const beforeResult = await options.onBeforeSend();
+      if (beforeResult && beforeResult.cancelled) {
+        const reason = beforeResult.reason || 'Send cancelled by before-send hook';
+        console.log('Email send cancelled by before-send hook:', reason);
+        return { success: false, error: reason, cancelled: true };
+      }
+    }
+
+    if (options?.signal?.aborted) {
+      const reason = options.signal.reason || 'Send aborted by cancellation signal';
+      console.log('Email send aborted before transporter call:', reason);
+      return { success: false, error: reason, cancelled: true };
     }
 
     const info = await transporter.sendMail(mailOptions);

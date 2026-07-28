@@ -205,48 +205,14 @@ function parsePositiveInteger(value, fallback = null) {
   return n;
 }
 
-function normalizeFeedbackApproval(data) {
-  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
-  if (data.feedbackEnabled && requiredApprover) {
-    if (data.feedbackApproved === true && data.feedbackApprovedBy === requiredApprover && data.feedbackApprovedAt) {
-      // Preserve the existing approval record; do not reset the timestamp.
-    } else {
-      data.feedbackApproved = true;
-      data.feedbackApprovedBy = requiredApprover;
-      data.feedbackApprovedAt = data.feedbackApprovedAt || new Date();
-    }
-  } else {
-    data.feedbackApproved = false;
-    data.feedbackApprovedBy = null;
-    data.feedbackApprovedAt = null;
-  }
-}
-
 function validateFeedbackConfig(data) {
   if (!data.feedbackEnabled) return;
 
-  const requiredApprover = process.env.FEEDBACK_APPROVER?.trim();
-  if (!requiredApprover) {
-    throw new Error('Feedback cannot be enabled until Ryan approves the access, reader, and retention policy on issue #31');
-  }
-
-  if (data.feedbackAccessModel !== 'CONFIDENTIAL') {
-    throw new Error('Feedback access model must be CONFIDENTIAL (admin readers) until an anonymous model is approved');
-  }
-
-  const retentionDays = parsePositiveInteger(data.feedbackRetentionDays);
-  if (retentionDays === null) {
-    throw new Error('A positive integer feedback retention period (days) is required when feedback is enabled');
-  }
-
-  const privacyPolicy = typeof data.feedbackPrivacyPolicy === 'string' ? data.feedbackPrivacyPolicy.trim() : '';
-  if (!privacyPolicy) {
-    throw new Error('A feedback privacy/retention policy is required when feedback is enabled');
-  }
-
-  if (data.feedbackApproved !== true || data.feedbackApprovedBy !== requiredApprover) {
-    throw new Error(`Feedback must be approved by ${requiredApprover}`);
-  }
+  // Issue #31 still requires Ryan to record the approved confidential access model,
+  // authorized readers, and retention/deletion period. Until that decision is
+  // recorded and encoded as immutable approval evidence, candidate-facing feedback
+  // remains server-disabled.
+  throw new Error('Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31');
 }
 
 // Protect all admin routes
@@ -1469,11 +1435,7 @@ router.post('/cycles', async (req, res) => {
       feedbackPrivacyPolicy: feedbackPrivacyPolicy || null,
       feedbackRetentionDays: parsePositiveInteger(feedbackRetentionDays),
       feedbackAccessModel: feedbackAccessModel || 'CONFIDENTIAL',
-      feedbackApproved: false,
-      feedbackApprovedBy: null,
-      feedbackApprovedAt: null,
     };
-    normalizeFeedbackApproval(data);
     validateFeedbackConfig(data);
     const created = await prisma.recruitingCycle.create({ data });
     // If created as active, deactivate others
@@ -1567,17 +1529,10 @@ router.patch('/cycles/:id', async (req, res) => {
     }
 
     // Validate the effective state after merging the existing cycle with the
-    // partial payload. Approval is derived from the FEEDBACK_APPROVER environment
-    // setting so an ATS admin cannot self-approve an unresolved policy.
+    // partial payload. Candidate-facing feedback remains server-disabled until
+    // Ryan records the approved access/reader/retention policy on issue #31.
     const effectiveData = { ...existing, ...updateData };
-    normalizeFeedbackApproval(effectiveData);
     validateFeedbackConfig(effectiveData);
-
-    // Persist the normalized approval record along with the rest of the update.
-    updateData.feedbackEnabled = effectiveData.feedbackEnabled;
-    updateData.feedbackApproved = effectiveData.feedbackApproved;
-    updateData.feedbackApprovedBy = effectiveData.feedbackApprovedBy;
-    updateData.feedbackApprovedAt = effectiveData.feedbackApprovedAt;
 
     console.log('[PATCH /api/admin/cycles/:id] Update data:', updateData);
 

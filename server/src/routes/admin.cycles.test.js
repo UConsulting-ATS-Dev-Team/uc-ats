@@ -99,7 +99,6 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
   });
 
   beforeEach(() => {
-    process.env.FEEDBACK_APPROVER = 'test-admin';
     prisma.recruitingCycle.findMany.mockImplementation(async () => []);
   });
 
@@ -111,8 +110,7 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
     });
   }
 
-  it('rejects enabling feedback until the configured approver is set', async () => {
-    process.env.FEEDBACK_APPROVER = '';
+  it('rejects enabling feedback until Ryan records the approved policy on issue #31', async () => {
     const res = await postCycle({
       name: 'Fall 2026',
       feedbackEnabled: true,
@@ -123,27 +121,27 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
 
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/Feedback cannot be enabled until Ryan approves/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
   it('rejects enabling feedback with an anonymous access model', async () => {
     const res = await postCycle({
       name: 'Fall 2026',
       feedbackEnabled: true,
-      feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
+      feedbackPrivacyPolicy: 'Anonymous feedback.',
       feedbackRetentionDays: '30',
       feedbackAccessModel: 'ANONYMOUS',
     });
 
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/Feedback access model must be CONFIDENTIAL/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
-  it('parses a string retention payload and creates an enabled cycle approved by the configured approver', async () => {
+  it('parses a string retention payload and creates a disabled cycle', async () => {
     const res = await postCycle({
       name: 'Fall 2026',
-      feedbackEnabled: true,
+      feedbackEnabled: false,
       feedbackPrivacyPolicy: 'Confidential, retained 365 days, admin readers.',
       feedbackRetentionDays: '365',
       feedbackAccessModel: 'CONFIDENTIAL',
@@ -151,10 +149,10 @@ describe('POST /api/admin/cycles feedback enablement gate', () => {
 
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.feedbackEnabled).toBe(true);
+    expect(body.feedbackEnabled).toBe(false);
     expect(body.feedbackRetentionDays).toBe(365);
     expect(body.feedbackAccessModel).toBe('CONFIDENTIAL');
-    expect(body.feedbackApprovedBy).toBe('test-admin');
+    expect(body.feedbackApproved).toBeFalsy();
   });
 });
 
@@ -178,9 +176,8 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
   });
 
   beforeEach(() => {
-    process.env.FEEDBACK_APPROVER = 'test-admin';
     prisma.recruitingCycle.findMany.mockImplementation(async () => []);
-    // Seed an enabled cycle with a valid, approved feedback configuration.
+    // Seed a disabled cycle with draft feedback fields.
     prisma.recruitingCycle.findUnique.mockImplementation(async ({ where: { id } }) => {
       if (id !== cycleId) return null;
       return {
@@ -193,16 +190,16 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
         resumeDeadline: null,
         coverLetterDeadline: null,
         videoDeadline: null,
-        feedbackEnabled: true,
+        feedbackEnabled: false,
         feedbackCadenceHours: 48,
         feedbackPrompt: null,
         feedbackQuestions: [],
         feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
         feedbackRetentionDays: 30,
         feedbackAccessModel: 'CONFIDENTIAL',
-        feedbackApproved: true,
-        feedbackApprovedBy: 'test-admin',
-        feedbackApprovedAt: new Date(),
+        feedbackApproved: false,
+        feedbackApprovedBy: null,
+        feedbackApprovedAt: null,
       };
     });
     prisma.recruitingCycle.update.mockImplementation(async ({ where: { id }, data }) => {
@@ -217,16 +214,16 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
         resumeDeadline: null,
         coverLetterDeadline: null,
         videoDeadline: null,
-        feedbackEnabled: true,
+        feedbackEnabled: false,
         feedbackCadenceHours: 48,
         feedbackPrompt: null,
         feedbackQuestions: [],
         feedbackPrivacyPolicy: 'Confidential, retained 30 days, admin readers.',
         feedbackRetentionDays: 30,
         feedbackAccessModel: 'CONFIDENTIAL',
-        feedbackApproved: true,
-        feedbackApprovedBy: 'test-admin',
-        feedbackApprovedAt: new Date(),
+        feedbackApproved: false,
+        feedbackApprovedBy: null,
+        feedbackApprovedAt: null,
       };
       return { ...existingRecord, ...data };
     });
@@ -240,47 +237,39 @@ describe('PATCH /api/admin/cycles/:id partial payload validation', () => {
     });
   }
 
-  it('rejects a partial PATCH that clears the privacy policy on an enabled cycle', async () => {
-    const res = await patchCycle({ feedbackPrivacyPolicy: '' });
+  it('rejects a partial PATCH that tries to enable feedback', async () => {
+    const res = await patchCycle({ feedbackEnabled: true });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/A feedback privacy\/retention policy is required/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
-  it('rejects a partial PATCH that clears the retention period on an enabled cycle', async () => {
-    const res = await patchCycle({ feedbackRetentionDays: '' });
+  it('rejects a partial PATCH that enables feedback with an anonymous access model', async () => {
+    const res = await patchCycle({ feedbackEnabled: true, feedbackAccessModel: 'ANONYMOUS' });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/A positive integer feedback retention period/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
-  it('rejects a partial PATCH that sets an invalid retention period string on an enabled cycle', async () => {
-    const res = await patchCycle({ feedbackRetentionDays: 'abc' });
+  it('rejects a partial PATCH that enables feedback with a missing retention period', async () => {
+    const res = await patchCycle({ feedbackEnabled: true, feedbackRetentionDays: '' });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/A positive integer feedback retention period/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
-  it('rejects a partial PATCH that switches to ANONYMOUS on an enabled cycle', async () => {
-    const res = await patchCycle({ feedbackAccessModel: 'ANONYMOUS' });
+  it('rejects a partial PATCH that enables feedback with an invalid retention string', async () => {
+    const res = await patchCycle({ feedbackEnabled: true, feedbackRetentionDays: 'abc' });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.details).toMatch(/Feedback access model must be CONFIDENTIAL/);
+    expect(body.details).toMatch(/Candidate-facing feedback is disabled until Ryan records the approved access, reader, and retention policy on issue #31/);
   });
 
-  it('ignores a partial PATCH that tries to un-approve an enabled cycle and preserves the approved reader/retention policy', async () => {
-    const res = await patchCycle({ feedbackApproved: false, feedbackApprovedBy: '' });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.feedbackEnabled).toBe(true);
-    expect(body.feedbackApprovedBy).toBe('test-admin');
-    expect(body.feedbackAccessModel).toBe('CONFIDENTIAL');
-  });
-
-  it('accepts a partial PATCH with a valid string retention payload on an enabled cycle', async () => {
+  it('parses a string retention payload on a disabled cycle', async () => {
     const res = await patchCycle({ feedbackRetentionDays: '365' });
     expect(res.status).toBe(200);
     const body = await res.json();
+    expect(body.feedbackEnabled).toBe(false);
     expect(body.feedbackRetentionDays).toBe(365);
   });
 });

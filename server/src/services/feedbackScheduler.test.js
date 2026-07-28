@@ -52,7 +52,9 @@ vi.mock('../prismaClient.js', () => {
       }
       if (key === 'status') {
         if (value?.in && !value.in.includes(record.status)) return false;
-        if (!value?.in && record.status !== value) return false;
+        if (value?.not !== undefined && value.not === record.status) return false;
+        if (value?.not?.in && value.not.in.includes(record.status)) return false;
+        if (!value?.in && value?.not === undefined && record.status !== value) return false;
         continue;
       }
       // Generic support for any field using an `in` array filter.
@@ -93,6 +95,11 @@ vi.mock('../prismaClient.js', () => {
         const rec = record[key] !== undefined && record[key] !== null ? Number(record[key]) : null;
         const threshold = value.lt === undefined ? null : Number(value.lt);
         if (rec === null || threshold === null || rec >= threshold) return false;
+        continue;
+      }
+      if (value && typeof value === 'object' && 'not' in value) {
+        if (value.not !== undefined && record[key] === value.not) return false;
+        if (value.not?.in && value.not.in.includes(record[key])) return false;
         continue;
       }
       if (record[key] !== value) return false;
@@ -1195,5 +1202,46 @@ describe('active send abort boundary', () => {
     expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
     const updated = prisma.__state.jobs.find((j) => j.applicationId === app.id);
     expect(updated.status).toBe(JOB_STATUS.CANCELLED);
+  });
+
+  it('records SENT when a status reversal races after the final eligibility read but before the provider call', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    // Simulate the point-of-no-return contract: the provider mock invokes the
+    // final `onBeforeSend` eligibility read, then a concurrent status-reversal
+    // commits (cancelling the job/attempt), and then the provider reports
+    // success. The SENT outcome is authoritative because the reversal was too
+    // late to recall the in-flight email.
+    sendApplicantFeedbackRequest.mockImplementation(async (to, name, cycleName, url, messageKey, options = {}) => {
+      if (options?.onBeforeSend) {
+        const result = await options.onBeforeSend();
+        if (result && result.cancelled) {
+          return { success: false, error: result.reason, cancelled: true };
+        }
+      }
+
+      const application = prisma.__state.applications.find((a) => a.email === to);
+      if (application) {
+        await handleApplicationStatusChange(application.id, 'WAITLISTED');
+      }
+
+      return { success: true, messageId: 'msg-pnr' };
+    });
+
+    const results = await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
+    expect(results[0].action).toBe('sent');
+    expect(results[0].messageId).toBe('msg-pnr');
+
+    const updatedJob = prisma.__state.jobs.find((j) => j.applicationId === app.id);
+    expect(updatedJob.status).toBe(JOB_STATUS.SENT);
+    expect(updatedJob.messageId).toBe('msg-pnr');
+
+    const updatedAttempt = prisma.__state.attempts.find((a) => a.jobId === updatedJob.id);
+    expect(updatedAttempt.status).toBe(ATTEMPT_STATUS.SENT);
+    expect(updatedAttempt.messageId).toBe('msg-pnr');
   });
 });
