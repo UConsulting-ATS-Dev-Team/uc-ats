@@ -1,3 +1,4 @@
+import { v5 as uuidv5 } from 'uuid';
 import prisma from '../../prismaClient.js';
 import {
   createCalendarEvent,
@@ -8,6 +9,22 @@ import {
 
 const DEFAULT_SLOT_DURATION_MS = 30 * 60 * 1000;
 const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
+
+// Namespace for deriving deterministic MeetingSlot IDs from request fields.
+// This lets POST /api/member/meeting-slots recover the original slot on a retry
+// without an additional schema column.
+const SLOT_ID_NAMESPACE = 'd27a3ee7-fa8f-436d-8757-d872928b45bb';
+
+export function deriveMeetingSlotId({ memberId, location, startTime, endTime, capacity }) {
+  const normalized = [
+    String(memberId).trim().toLowerCase(),
+    String(location).trim().toLowerCase(),
+    String(startTime).trim(),
+    String(endTime ?? '').trim(),
+    Number(capacity),
+  ].join(':');
+  return uuidv5(normalized, SLOT_ID_NAMESPACE);
+}
 
 // Google Calendar event IDs must be base32hex: lowercase a-v and 0-9, 5-1024 chars.
 export function deriveCalendarEventId(slotId) {
@@ -125,15 +142,28 @@ export async function syncMeetingSlotCalendar(slotId, { force = false } = {}) {
   }
 
   // Until GOOGLE_CALENDAR_ID is configured, do not call the provider.
-  // Record the state so retries don't stack up and delivery stays gated.
+  // If the slot already has a provider event ID, the configuration is missing
+  // when we need to update/cancel it, so record a failure instead of silently
+  // pretending the sync succeeded.
   if (!isCalendarConfigured()) {
+    if (slot.calendarEventId) {
+      const retryAt = await recordFailure(slot, new Error('Google Calendar is not configured'));
+      return {
+        success: false,
+        status: 'FAILED',
+        error: 'Google Calendar is not configured',
+        eventId: slot.calendarEventId,
+        retryAt,
+      };
+    }
+
     await persistSyncStatus(slot.id, {
       calendarSyncStatus: 'NOT_CONFIGURED',
       calendarSyncError: null,
       calendarRetryCount: 0,
       calendarRetryAt: null,
     });
-    return { success: true, status: 'NOT_CONFIGURED', eventId: slot.calendarEventId || null };
+    return { success: true, status: 'NOT_CONFIGURED', eventId: null };
   }
 
   const eventDetails = buildSlotEventDetails(slot);
@@ -198,6 +228,23 @@ export async function cancelMeetingSlotCalendar(slotId) {
 
   // A deterministic ID lets us retry cancellation later without losing the handle.
   const providerEventId = slot.calendarEventId || deriveCalendarEventId(slot.id);
+  const hasStoredEventId = Boolean(slot.calendarEventId);
+
+  // If we have a stored provider event ID but Calendar is not configured, we cannot
+  // verify the cancellation and must not delete the local handle.
+  if (hasStoredEventId && !isCalendarConfigured()) {
+    const retryAt = await recordFailure(slot, new Error('Google Calendar is not configured'), {
+      calendarSyncStatus: 'CANCEL_PENDING',
+      calendarEventId: providerEventId,
+    });
+    return {
+      success: false,
+      status: 'CANCEL_PENDING',
+      error: 'Google Calendar is not configured',
+      eventId: providerEventId,
+      retryAt,
+    };
+  }
 
   if (providerEventId) {
     try {

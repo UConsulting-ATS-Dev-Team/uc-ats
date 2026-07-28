@@ -110,9 +110,13 @@ export async function updateCalendarEvent(calendarEventId, eventDetails, attende
 }
 
 // Cancels a Google Calendar event (notifies attendees it's off). Safe to call with an ID that's
-// already gone.
+// already gone. If a calendarEventId is provided but GOOGLE_CALENDAR_ID is not configured, throws
+// so callers do not silently lose the provider handle.
 export async function cancelCalendarEvent(calendarEventId) {
-  if (!isCalendarConfigured() || !calendarEventId) return;
+  if (!calendarEventId) return;
+  if (!isCalendarConfigured()) {
+    throw new Error('Google Calendar is not configured');
+  }
 
   const calendar = await getCalendarClient();
   try {

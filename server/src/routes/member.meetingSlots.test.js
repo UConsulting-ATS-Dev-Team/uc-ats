@@ -45,6 +45,7 @@ vi.mock('../services/google/meetingSlotCalendar.js', () => ({
     warning: result.success ? null : result.error,
     retryAt: null,
   })),
+  deriveMeetingSlotId: vi.fn().mockReturnValue('slot-1'),
 }));
 
 import prisma from '../prismaClient.js';
@@ -106,6 +107,48 @@ describe('member meeting slot routes', () => {
     });
   }
 
+  describe('POST /api/member/meeting-slots', () => {
+    const body = { location: 'Zoom', startTime: '2026-08-01T10:00', endTime: '2026-08-01T10:30', capacity: 2 };
+
+    it('creates a slot, syncs it, and returns sync state', async () => {
+      prisma.meetingSlot.create.mockResolvedValue(SLOT);
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+
+      const res = await post('/api/member/meeting-slots', body);
+
+      expect(res.status).toBe(200);
+      expect(prisma.meetingSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ id: 'slot-1' }) })
+      );
+      expect(syncMeetingSlotCalendar).toHaveBeenCalledWith('slot-1', { force: true });
+    });
+
+    it('recovers the original slot on a retry and does not create a second provider event', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+
+      let createCall = 0;
+      prisma.meetingSlot.create.mockImplementation(() => {
+        createCall += 1;
+        if (createCall === 1) {
+          const err = new Error('Unique constraint');
+          err.code = 'P2002';
+          throw err;
+        }
+        return Promise.resolve(SLOT);
+      });
+
+      const res = await post('/api/member/meeting-slots', body);
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.slot.id).toBe('slot-1');
+      expect(prisma.meetingSlot.create).toHaveBeenCalledTimes(1);
+      expect(syncMeetingSlotCalendar).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('DELETE /api/member/meeting-slots/:id', () => {
     it('blocks deletion and returns sync state when calendar cancellation fails', async () => {
       prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
@@ -134,6 +177,24 @@ describe('member meeting slot routes', () => {
 
       expect(res.status).toBe(200);
       expect(cancelMeetingSlotCalendar).toHaveBeenCalledWith('slot-1');
+    });
+
+    it('blocks deletion when calendar is not configured but a provider event id exists', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      cancelMeetingSlotCalendar.mockResolvedValue({
+        success: false,
+        status: 'CANCEL_PENDING',
+        error: 'Google Calendar is not configured',
+        eventId: 'evt-1',
+      });
+
+      const res = await del('/api/member/meeting-slots/slot-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(502);
+      expect(body.calendarSync.status).toBe('CANCEL_PENDING');
+      expect(body.calendarSync.error).toMatch(/not configured/i);
+      expect(prisma.meetingSlot.delete).not.toHaveBeenCalled();
     });
   });
 

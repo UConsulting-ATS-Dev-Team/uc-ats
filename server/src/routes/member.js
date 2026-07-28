@@ -4,7 +4,12 @@ import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
-import { syncMeetingSlotCalendar, cancelMeetingSlotCalendar, calendarSyncResponse } from '../services/google/meetingSlotCalendar.js';
+import {
+  syncMeetingSlotCalendar,
+  cancelMeetingSlotCalendar,
+  calendarSyncResponse,
+  deriveMeetingSlotId,
+} from '../services/google/meetingSlotCalendar.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getGroupMemberUsers,
@@ -870,22 +875,46 @@ router.post('/meeting-slots', requireAuth, async (req, res) => {
     if (!location || !startTime) {
       return res.status(400).json({ error: 'Location and start time are required' });
     }
-    
-    console.log('Received startTime:', startTime);
-    console.log('Received endTime:', endTime);
 
-    const slot = await prisma.meetingSlot.create({
-      data: {
-        memberId: req.user.id,
-        location,
-        startTime: localInputToUTC(startTime),
-        endTime: endTime ? localInputToUTC(endTime) : null,
-        capacity: Number.isInteger(capacity) ? capacity : 2
-      }
+    const normalizedCapacity = Number.isInteger(capacity) ? capacity : 2;
+    // Derive a deterministic slot ID from the request fields so a retry of the
+    // same POST recovers the original slot instead of creating a duplicate.
+    const slotId = deriveMeetingSlotId({
+      memberId: req.user.id,
+      location,
+      startTime,
+      endTime,
+      capacity: normalizedCapacity,
     });
-    
-    console.log('Created slot startTime:', slot.startTime);
-    console.log('Created slot endTime:', slot.endTime);
+
+    let slot;
+    try {
+      slot = await prisma.meetingSlot.create({
+        data: {
+          id: slotId,
+          memberId: req.user.id,
+          location,
+          startTime: localInputToUTC(startTime),
+          endTime: endTime ? localInputToUTC(endTime) : null,
+          capacity: normalizedCapacity,
+        },
+      });
+    } catch (createError) {
+      if (createError?.code === 'P2002') {
+        // A previous request with the same natural key already persisted the row.
+        // Recover it and sync the existing slot so the client gets the same result.
+        const existingSlot = await prisma.meetingSlot.findUnique({
+          where: { id: slotId },
+          include: { signups: true },
+        });
+        if (!existingSlot) {
+          throw new Error('Slot creation conflict could not be recovered');
+        }
+        slot = existingSlot;
+      } else {
+        throw createError;
+      }
+    }
 
     // Sync the GTKUC slot to Google Calendar. Failures are persisted on the slot
     // but do not roll back the creation.

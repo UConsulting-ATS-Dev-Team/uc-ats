@@ -5,6 +5,7 @@ import {
   buildSlotEventDetails,
   getAttendeeEmails,
   deriveCalendarEventId,
+  deriveMeetingSlotId,
   calendarSyncResponse,
 } from './meetingSlotCalendar.js';
 import {
@@ -91,6 +92,23 @@ describe('meetingSlotCalendar', () => {
     it('removes invalid characters from a non-uuid id', () => {
       const id = deriveCalendarEventId('gtkuc_abc123-WXYZ');
       expect(id).toBe('gtkucabc123');
+    });
+  });
+
+  describe('deriveMeetingSlotId', () => {
+    it('returns a stable UUID from the same request fields', () => {
+      const params = { memberId: 'member-1', location: 'Zoom', startTime: '2026-08-01T10:00', endTime: '2026-08-01T10:30', capacity: 2 };
+      const a = deriveMeetingSlotId(params);
+      const b = deriveMeetingSlotId(params);
+      expect(a).toBe(b);
+      expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    });
+
+    it('produces different ids for different request fields', () => {
+      const base = { memberId: 'member-1', location: 'Zoom', startTime: '2026-08-01T10:00', endTime: '2026-08-01T10:30', capacity: 2 };
+      const a = deriveMeetingSlotId(base);
+      const b = deriveMeetingSlotId({ ...base, location: 'Kerckhoff' });
+      expect(a).not.toBe(b);
     });
   });
 
@@ -254,7 +272,7 @@ describe('meetingSlotCalendar', () => {
       expect(updateCalendarEvent).toHaveBeenCalledOnce();
     });
 
-    it('marks NOT_CONFIGURED and does not call the provider when calendar is not set up', async () => {
+    it('marks NOT_CONFIGURED and does not call the provider when calendar is not set up and no event exists', async () => {
       isCalendarConfigured.mockReturnValue(false);
 
       const result = await syncMeetingSlotCalendar(SLOT_ID);
@@ -267,6 +285,19 @@ describe('meetingSlotCalendar', () => {
           data: expect.objectContaining({ calendarSyncStatus: 'NOT_CONFIGURED' }),
         })
       );
+    });
+
+    it('fails when calendar is not configured but a provider event id is already stored', async () => {
+      slotState = makeSlot({ calendarEventId: 'evt-existing' });
+      isCalendarConfigured.mockReturnValue(false);
+
+      const result = await syncMeetingSlotCalendar(SLOT_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('FAILED');
+      expect(result.error).toMatch(/not configured/i);
+      expect(result.eventId).toBe('evt-existing');
+      expect(slotState.calendarSyncStatus).toBe('FAILED');
     });
 
     it('builds a 30-minute end time when the slot has no end time', () => {
@@ -328,6 +359,21 @@ describe('meetingSlotCalendar', () => {
       expect(slotState.calendarSyncStatus).toBe('CANCEL_PENDING');
       expect(slotState.calendarEventId).toBe('evt-cancel');
       expect(slotState.calendarRetryCount).toBe(1);
+    });
+
+    it('records CANCEL_PENDING when calendar is not configured but a provider event id is stored', async () => {
+      slotState = makeSlot({ calendarEventId: 'evt-cancel' });
+      isCalendarConfigured.mockReturnValue(false);
+
+      const result = await cancelMeetingSlotCalendar(SLOT_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('CANCEL_PENDING');
+      expect(result.error).toMatch(/not configured/i);
+      expect(result.eventId).toBe('evt-cancel');
+      expect(cancelCalendarEvent).not.toHaveBeenCalled();
+      expect(slotState.calendarSyncStatus).toBe('CANCEL_PENDING');
+      expect(slotState.calendarEventId).toBe('evt-cancel');
     });
   });
 });
