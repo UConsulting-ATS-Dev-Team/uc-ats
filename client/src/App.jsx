@@ -43,6 +43,7 @@ import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
 import './styles/variables.css';
@@ -165,6 +166,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <UserManagement />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            {user?.role === 'USER' ? <Navigate to="/" /> : <Profile />}
           </ProtectedRoute>
         }
       />
@@ -366,11 +376,10 @@ const AppRoutes = () => {
 };
 
 export default function App() {
-  // Apply global Montserrat Light for body, Montserrat Bold for headings
+  // Apply global Montserrat Light for body
   useEffect(() => {
     document.body.style.fontFamily = 'Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif';
-    document.body.style.fontWeight = '300'; // Montserrat Light as default body weight
-    document.body.style.backgroundColor = '#ffffff'; // Clean white background
+    document.body.style.fontWeight = '300';
   }, []);
 
   return (

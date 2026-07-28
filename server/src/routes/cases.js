@@ -116,7 +116,7 @@ router.get('/', requireAdmin, async (req, res) => {
     const cases = await prisma.case.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
-        creator: { select: { fullName: true } },
+        creator: { select: { fullName: true, profileImage: true } },
         cycle: { select: { name: true } },
         _count: { select: { pages: true, assignments: true } },
       },

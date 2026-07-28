@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTheme, alpha } from '@mui/material/styles';
 import {
     Box,
     Typography,
@@ -24,9 +25,7 @@ import {
     Alert,
     Snackbar,
     TextField,
-    CircularProgress,
-    ThemeProvider,
-    CssBaseline
+    CircularProgress
 } from '@mui/material';
 import {
     Edit as EditIcon,
@@ -36,7 +35,6 @@ import {
     Refresh as RefreshIcon,
     Refresh
 } from '@mui/icons-material';
-import globalTheme from '../styles/globalTheme';
 import '../styles/CandidateManagement.css';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
@@ -111,47 +109,59 @@ const mockStats = {
 };
 
 const StatusIndicator = ({ status }) => {
+    const theme = useTheme();
     const getStatusStyles = (status) => {
         switch (status) {
             case 'Submitted':
+            case 'Under Review':
                 return {
-                    color: '#1976d2',
-                    backgroundColor: '#e3f2fd',
-                    borderColor: '#1976d2',
+                    color: theme.palette.info.dark,
+                    backgroundColor: alpha(theme.palette.info.main, 0.12),
+                    borderColor: theme.palette.info.main,
                     '&:hover': {
-                        backgroundColor: '#bbdefb',
+                        backgroundColor: alpha(theme.palette.info.main, 0.18),
                         transform: 'scale(1.05)'
                     }
                 };
-            case 'Under Review':
-                return {
-                    color: '#0288d1',
-                    backgroundColor: '#e1f5fe',
-                    borderColor: '#0288d1'
-                };
             case 'Accepted':
                 return {
-                    color: '#2e7d32',
-                    backgroundColor: '#e8f5e8',
-                    borderColor: '#2e7d32'
+                    color: theme.palette.success.dark,
+                    backgroundColor: alpha(theme.palette.success.main, 0.12),
+                    borderColor: theme.palette.success.main,
+                    '&:hover': {
+                        backgroundColor: alpha(theme.palette.success.main, 0.18),
+                        transform: 'scale(1.05)'
+                    }
                 };
             case 'Rejected':
                 return {
-                    color: '#d32f2f',
-                    backgroundColor: '#ffebee',
-                    borderColor: '#d32f2f'
+                    color: theme.palette.error.dark,
+                    backgroundColor: alpha(theme.palette.error.main, 0.12),
+                    borderColor: theme.palette.error.main,
+                    '&:hover': {
+                        backgroundColor: alpha(theme.palette.error.main, 0.18),
+                        transform: 'scale(1.05)'
+                    }
                 };
             case 'Waitlisted':
                 return {
-                    color: '#f57c00',
-                    backgroundColor: '#fff3e0',
-                    borderColor: '#f57c00'
+                    color: theme.palette.warning.dark,
+                    backgroundColor: alpha(theme.palette.warning.main, 0.12),
+                    borderColor: theme.palette.warning.main,
+                    '&:hover': {
+                        backgroundColor: alpha(theme.palette.warning.main, 0.18),
+                        transform: 'scale(1.05)'
+                    }
                 };
             default:
                 return {
-                    color: '#757575',
-                    backgroundColor: '#f5f5f5',
-                    borderColor: '#757575'
+                    color: theme.palette.text.secondary,
+                    backgroundColor: theme.palette.action.hover,
+                    borderColor: theme.palette.text.secondary,
+                    '&:hover': {
+                        backgroundColor: theme.palette.action.selected,
+                        transform: 'scale(1.05)'
+                    }
                 };
         }
     };
@@ -691,8 +701,6 @@ export default function CandidateManagement() {
 
     return (
         <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
-            <ThemeProvider theme={globalTheme}>
-            <CssBaseline />
             <Box className="candidate-management">
                 <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
                 <Typography variant="h4" gutterBottom sx={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', fontWeight: 700 }}>Round Management</Typography>
@@ -1411,7 +1419,6 @@ export default function CandidateManagement() {
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
             />
             </Box>
-        </ThemeProvider>
         </AccessControl>
     );
 }

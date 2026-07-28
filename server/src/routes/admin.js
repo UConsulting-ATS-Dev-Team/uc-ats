@@ -1,13 +1,22 @@
 import express from 'express';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { syncInterviewCalendarEvent, cancelInterviewCalendarEvent } from '../services/interviewCalendar.js';
+import {
+  getDeactivationCandidates,
+  parseGraduationYear
+} from '../services/userDeactivation.js';
+import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
 import {
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
@@ -18,6 +27,7 @@ import {
   findLatestOfferLetterSend,
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
+import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
 const router = express.Router();
 
@@ -31,6 +41,8 @@ async function bestEffortCalendarSync(interviewId, reason) {
     return { status: 'FAILED', error: 'Calendar invite could not be sent. Use "Send invites" to retry.' };
   }
 }
+
+const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
 
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
@@ -267,8 +279,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               },
               orderBy: { createdAt: 'desc' }
@@ -279,8 +290,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 interview: {
                   select: {
@@ -298,8 +308,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             },
@@ -309,15 +318,13 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 resolver: {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -329,8 +336,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -340,8 +346,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -351,8 +356,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -364,8 +368,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -379,8 +382,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -394,8 +396,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -435,26 +436,65 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
-// Get all users (with optional role and event RSVP filter)
+// Helper to build the shared role/event RSVP where-clause for user endpoints.
+// Does NOT apply graduation-class filtering; that is handled by each route.
+function buildBaseUserWhereClause({ role, memberEventRsvpEventId, includeInactive }) {
+  const whereClause = {};
+
+  // Deactivated accounts are hidden from user management unless explicitly requested
+  if (!includeInactive) {
+    whereClause.isActive = true;
+  }
+
+  // Map INTERVIEWER to MEMBER role since that's what we have in the enum
+  if (role === 'INTERVIEWER') {
+    whereClause.role = 'MEMBER';
+  } else if (role) {
+    whereClause.role = role;
+  }
+
+  // Member event RSVP filter
+  if (memberEventRsvpEventId) {
+    whereClause.memberEventRsvp = {
+      some: { eventId: memberEventRsvpEventId }
+    };
+  }
+
+  return whereClause;
+}
+
+// Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role, memberEventRsvpEventId } = req.query;
-    
-    // Map INTERVIEWER to MEMBER role since that's what we have in the enum
-    let whereClause = {};
-    if (role === 'INTERVIEWER') {
-      whereClause = { role: 'MEMBER' };
-    } else if (role) {
-      whereClause = { role };
+    const { role, memberEventRsvpEventId, graduationClass, includeInactive } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({
+      role,
+      memberEventRsvpEventId,
+      includeInactive: includeInactive === 'true'
+    });
+
+    // Graduation class filter
+    if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
+      if (typeof graduationClass !== 'string') {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      const normalizedClass = graduationClass.trim();
+      if (normalizedClass.length > 100) {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      if (normalizedClass === MISSING_GRADUATION_CLASS) {
+        whereClause.OR = [
+          { graduationClass: null },
+          { graduationClass: '' }
+        ];
+      } else {
+        whereClause.graduationClass = normalizedClass;
+      }
     }
 
-    // Member event RSVP filter
-    if (memberEventRsvpEventId) {
-      whereClause.memberEventRsvp = {
-        some: { eventId: memberEventRsvpEventId }
-      };
-    }
-    
     const users = await prisma.user.findMany({
       where: whereClause,
       select: {
@@ -463,15 +503,64 @@ router.get('/users', async (req, res) => {
         email: true,
         role: true,
         graduationClass: true,
-        profileImage: true
+        profileImage: true,
+        isActive: true,
+        deactivatedAt: true
       },
       orderBy: { fullName: 'asc' }
     });
-    
+
     res.json(users);
   } catch (error) {
     console.error('[GET /api/admin/users]', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get graduation class options and counts for the admin user filter.
+// Independent of the graduation-class filter itself so the dropdown stays usable
+// even when a class filter is already persisted.
+router.get('/users/classes', async (req, res) => {
+  try {
+    const { role, memberEventRsvpEventId } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
+
+    const users = await prisma.user.findMany({
+      where: whereClause,
+      select: { graduationClass: true }
+    });
+
+    const classCounts = new Map();
+    let unknownCount = 0;
+    let totalCount = 0;
+
+    users.forEach((userItem) => {
+      totalCount++;
+      const c = (userItem.graduationClass || '').trim();
+      if (!c) {
+        unknownCount++;
+      } else {
+        classCounts.set(c, (classCounts.get(c) || 0) + 1);
+      }
+    });
+
+    const classes = Array.from(classCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: value, count }));
+
+    res.json({
+      total: totalCount,
+      classes,
+      unknown: {
+        value: MISSING_GRADUATION_CLASS,
+        label: 'Unknown / No class',
+        count: unknownCount
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/users/classes]', error);
+    res.status(500).json({ error: 'Failed to fetch class options' });
   }
 });
 
@@ -1731,6 +1820,45 @@ router.get('/events/:id/attendance', async (req, res) => {
   }
 });
 
+// Cycle-portable event copy routes
+
+// Preview events that would be copied from a source cycle to a target cycle
+router.post('/events/copy-preview', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId } = req.body;
+    const preview = await previewCycleEventCopy({ prisma, sourceCycleId, targetCycleId });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the copy of events from a source cycle to a target cycle
+router.post('/events/copy-commit', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId, events, force } = req.body;
+    const result = await commitCycleEventCopy({
+      prisma,
+      sourceCycleId,
+      targetCycleId,
+      events,
+      actorId: req.user?.id,
+      force: Boolean(force)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-commit]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Interview Management Routes
 
 // Get all interviews
@@ -2035,8 +2163,7 @@ router.get('/interviews/:id/config', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         });
@@ -2234,8 +2361,7 @@ router.get('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2269,8 +2395,7 @@ router.post('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2308,8 +2433,7 @@ router.patch('/interviews/:id/action-items/:actionItemId', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2567,21 +2691,24 @@ router.get('/applications', async (req, res) => {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberTwoUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberThreeUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
+              email: true, profileImage: true }
+          },
+          groupMembers: {
+            select: {
+              userId: true,
+              user: { select: { id: true, fullName: true, email: true, profileImage: true } }
             }
           }
         }
@@ -2683,11 +2810,7 @@ router.get('/applications', async (req, res) => {
       if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
       // Get all assigned team members with user info (filter out null/undefined)
-      const teamMembers = [
-        group.memberOneUser,
-        group.memberTwoUser,
-        group.memberThreeUser
-      ].filter(Boolean);
+      const teamMembers = getGroupMemberUsers(group);
       
       if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
@@ -3047,9 +3170,14 @@ router.get('/staging/candidates', async (req, res) => {
       where: { id: { in: reviewTeamIds } },
       select: {
         id: true,
-        memberOneUser: { select: { fullName: true } },
-        memberTwoUser: { select: { fullName: true } },
-        memberThreeUser: { select: { fullName: true } }
+        memberOneUser: { select: { fullName: true, profileImage: true } },
+        memberTwoUser: { select: { fullName: true, profileImage: true } },
+        memberThreeUser: { select: { fullName: true, profileImage: true } },
+        groupMembers: {
+          select: {
+            user: { select: { fullName: true, profileImage: true } }
+          }
+        }
       }
     });
     console.log('Review teams fetched:', allReviewTeams.length);
@@ -3111,11 +3239,7 @@ router.get('/staging/candidates', async (req, res) => {
     });
 
     allReviewTeams.forEach(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       reviewTeamsMap.set(team.id, {
         id: team.id,
@@ -3358,25 +3482,13 @@ router.get('/review-teams', async (req, res) => {
       select: {
         id: true,
         name: true,
-        memberOneUser: {
+        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        groupMembers: {
           select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       },
@@ -3385,11 +3497,7 @@ router.get('/review-teams', async (req, res) => {
 
     // Transform to include team name and member count
     const transformedTeams = reviewTeams.map(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       // Use the name from the database if it exists, otherwise generate a fallback name
       const teamName = team.name || (members.length > 0 
@@ -3848,8 +3956,7 @@ router.get('/applications/:id/final-round-interview-evaluations', async (req, re
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         application: {
           select: {
@@ -4080,8 +4187,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         rubricScores: {
           orderBy: { category: 'asc' }
@@ -4107,8 +4213,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5152,8 +5257,7 @@ router.post('/flag-document', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5214,15 +5318,13 @@ router.get('/flagged-documents', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5273,15 +5375,13 @@ router.patch('/flagged-documents/:id/resolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5333,8 +5433,7 @@ router.patch('/flagged-documents/:id/unresolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5363,9 +5462,7 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
               include: {
                 assignedGroup: {
                   include: {
-                    memberOneUser: true,
-                    memberTwoUser: true,
-                    memberThreeUser: true
+                    ...groupMemberUserInclude
                   }
                 }
               }
@@ -5386,20 +5483,15 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
 
     // Get the group members who should grade this document
     const group = flaggedDocument.application.candidate?.assignedGroup;
-    const groupMembers = [];
-    
-    if (group) {
-      if (group.memberOneUser) groupMembers.push(group.memberOneUser);
-      if (group.memberTwoUser) groupMembers.push(group.memberTwoUser);
-      if (group.memberThreeUser) groupMembers.push(group.memberThreeUser);
-    }
+    const groupMembers = group ? getGroupMemberUsers(group) : [];
 
     res.json({
       message: 'Document sent back to members for grading',
       groupMembers: groupMembers.map(member => ({
         id: member.id,
         fullName: member.fullName,
-        email: member.email
+        email: member.email,
+        profileImage: member.profileImage
       })),
       candidate: {
         id: flaggedDocument.application.candidate?.id,
@@ -5480,8 +5572,7 @@ router.patch('/resume-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5535,8 +5626,7 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5585,8 +5675,7 @@ router.patch('/video-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5810,7 +5899,7 @@ router.delete('/meeting-slots/:id', async (req, res) => {
 
     const existingSlot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { signups: true, member: { select: { fullName: true, email: true } } }
+      include: { signups: true, member: { select: { fullName: true, email: true, profileImage: true } } }
     });
 
     if (!existingSlot) {
@@ -5922,7 +6011,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     const signup = await prisma.meetingSignup.findUnique({
       where: { id },
-      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
+      include: { slot: { include: { member: { select: { fullName: true, email: true, profileImage: true } } } } }
     });
 
     if (!signup) {
@@ -5980,6 +6069,118 @@ router.delete('/meeting-signups/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to delete signup' });
+  }
+});
+
+// Preview graduated-member deactivation for a selected graduation class.
+// Returns eligible members, blocked members (active/current-cycle), and ineligible
+// members (not yet reached deactivation date), with relation counts.
+router.post('/users/deactivate-preview', async (req, res) => {
+  try {
+    const { graduationClass } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const result = await getDeactivationCandidates({
+      graduationClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate-preview]', error);
+    res.status(500).json({ error: 'Failed to generate deactivation preview' });
+  }
+});
+
+// Deactivate graduated members for a selected class.
+// Requires typed confirmation equal to the graduation class and a matching count.
+router.post('/users/deactivate', async (req, res) => {
+  try {
+    const { graduationClass, confirmationText, confirmedCount, dryRun } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const normalizedClass = graduationClass.trim();
+    if (normalizedClass.length > 100) {
+      return res.status(400).json({ error: 'Invalid graduation class' });
+    }
+
+    if (confirmationText !== normalizedClass) {
+      return res.status(400).json({ error: 'Confirmation text does not match graduation class' });
+    }
+
+    if (parseGraduationYear(normalizedClass) === null) {
+      return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const preview = await getDeactivationCandidates({
+      graduationClass: normalizedClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (preview.error) {
+      return res.status(400).json({ error: preview.error });
+    }
+
+    if (typeof confirmedCount !== 'number' || confirmedCount !== preview.eligibleCount) {
+      return res.status(400).json({ error: 'Confirmed count does not match eligible count' });
+    }
+
+    if (dryRun) {
+      return res.json({ ...preview, dryRun: true });
+    }
+
+    if (preview.eligible.length === 0) {
+      return res.json({ ...preview, deactivatedCount: 0, dryRun: false });
+    }
+
+    const eligibleIds = preview.eligible.map(u => u.id);
+
+    const [updateResult] = await prisma.$transaction([
+      prisma.user.updateMany({
+        where: { id: { in: eligibleIds } },
+        data: {
+          isActive: false,
+          deactivatedAt: new Date(),
+          deactivatedBy: req.user.id
+        }
+      })
+    ]);
+
+    // Cut existing sessions immediately rather than after the cache TTL
+    invalidateUserCache(eligibleIds);
+
+    res.json({
+      ...preview,
+      dryRun: false,
+      deactivatedCount: updateResult.count
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate]', error);
+    res.status(500).json({ error: 'Failed to deactivate users' });
   }
 });
 

@@ -23,6 +23,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import MemberAvatar from '../components/MemberAvatar';
 import '../styles/AdminAssignedInterviews.css';
 
 const CALENDAR_STATUS_LABELS = {
@@ -1423,6 +1424,7 @@ export default function AdminAssignedInterviews() {
                                                         updateMemberGroup(interview.id, group.id, { memberIds: Array.from(next) });
                                                       }}
                                                     />
+                                                    <MemberAvatar member={m} size={24} style={{ marginRight: '8px' }} />
                                                     <span className="member-name">{m.displayName}</span>
                                                   </label>
                                                 ))}
@@ -1444,6 +1446,7 @@ export default function AdminAssignedInterviews() {
                                                         updateMemberGroup(interview.id, group.id, { memberIds: Array.from(next) });
                                                       }}
                                                     />
+                                                    <MemberAvatar member={m} size={24} style={{ marginRight: '8px' }} />
                                                     <span className="member-name">{m.displayName}</span>
                                                   </label>
                                                 ))}

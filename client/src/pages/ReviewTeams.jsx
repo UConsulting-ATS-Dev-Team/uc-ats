@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import MemberAvatar from '../components/MemberAvatar';
+import AuthenticatedAvatar from '../components/AuthenticatedAvatar';
 import {
   DndContext,
   closestCenter,
@@ -154,7 +156,7 @@ function DraggableApplication({ application, teamId, onRemove, onClick, isDraggi
                 color: 'primary.main',
                 '&:hover': {
                   backgroundColor: 'primary.light',
-                  color: 'primary.contrastText'
+                  color: 'text.primary'
                 }
               }}
             >
@@ -287,9 +289,7 @@ export default function ReviewTeams() {
         const memberIds = newTeamData.selectedMembers.map(member => member.id);
         
         const newTeam = await apiClient.post('/review-teams', {
-          memberOne: memberIds[0] || null,
-          memberTwo: memberIds[1] || null,
-          memberThree: memberIds[2] || null,
+          memberIds,
           cycleId: activeCycle.id
         });
         
@@ -302,7 +302,7 @@ export default function ReviewTeams() {
         setNewTeamDialogOpen(false);
       } catch (err) {
         console.error('Error creating team:', err);
-        setError('Failed to create team');
+        setError(err.message || 'Failed to create team');
       }
     }
   };
@@ -355,22 +355,9 @@ export default function ReviewTeams() {
       const team = teams.find(t => t.id === selectedTeam);
       if (!team) return;
 
-      // Determine which member slot is available
-      let memberField = null;
-      if (!team.members || team.members.length === 0) {
-        memberField = 'memberOne';
-      } else if (team.members.length === 1) {
-        memberField = 'memberTwo';
-      } else if (team.members.length === 2) {
-        memberField = 'memberThree';
-      } else {
-        setError('Team already has maximum number of members');
-        return;
-      }
-
-      // Update the team with the new member
+      // Add the new member to the team
       await apiClient.put(`/review-teams/${selectedTeam}/members`, {
-        [memberField]: memberId
+        memberId
       });
 
       // Refresh the data
@@ -383,7 +370,7 @@ export default function ReviewTeams() {
       
     } catch (error) {
       console.error('Error adding team member:', error);
-      setError('Failed to add team member');
+      setError(error.message || 'Failed to add team member');
     }
   };
 
@@ -400,7 +387,7 @@ export default function ReviewTeams() {
       
     } catch (error) {
       console.error('Error removing team member:', error);
-      setError('Failed to remove team member');
+      setError(error.message || 'Failed to remove team member');
     }
   };
 
@@ -918,9 +905,7 @@ export default function ReviewTeams() {
                         >
                             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
                               <Stack direction="row" spacing={1} alignItems="center">
-                                <Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: '0.75rem' }}>
-                                  {member.name.split(' ').map(name => name[0]).join('')}
-                                </Avatar>
+                                <MemberAvatar member={member} size={34} />
                                 <Box>
                                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                                     {member.name}
@@ -1020,9 +1005,7 @@ export default function ReviewTeams() {
                         key={member.id}
                         label={member.name}
                         avatar={
-                          <Avatar src={member.avatar}>
-                            {!member.avatar && member.name.split(' ').map(name => name[0]).join('')}
-                          </Avatar>
+                          <AuthenticatedAvatar member={member} size={24} />
                         }
                         sx={{ backgroundColor: 'rgba(4, 39, 66, 0.08)' }}
                       />
@@ -1033,20 +1016,19 @@ export default function ReviewTeams() {
                   <IconButton
                     size="small"
                     onClick={() => handleAddMember(team.id)}
-                    disabled={team.members && team.members.length >= 3}
                     sx={{
                       width: 32,
                       height: 32,
                       border: '1px dashed',
-                      borderColor: team.members && team.members.length >= 3 ? 'grey.300' : 'divider',
-                      color: team.members && team.members.length >= 3 ? 'grey.400' : 'text.secondary',
-                      cursor: team.members && team.members.length >= 3 ? 'not-allowed' : 'pointer',
+                      borderColor: 'divider',
+                      color: 'text.secondary',
+                      cursor: 'pointer',
                       '&:hover': {
-                        borderColor: team.members && team.members.length >= 3 ? 'grey.300' : 'primary.main',
-                        backgroundColor: team.members && team.members.length >= 3 ? 'transparent' : 'rgba(4, 39, 66, 0.04)'
+                        borderColor: 'primary.main',
+                        backgroundColor: 'rgba(4, 39, 66, 0.04)'
                       }
                     }}
-                    title={team.members && team.members.length >= 3 ? 'Team is full (max 3 members)' : 'Add team member'}
+                    title="Add team member"
                   >
                     <UserPlusIcon style={{ width: '1rem', height: '1rem' }} />
                   </IconButton>
@@ -1168,20 +1150,14 @@ export default function ReviewTeams() {
               getOptionLabel={(option) => option.fullName || ''}
               value={newTeamData.selectedMembers}
               onChange={(_, newValue) => {
-                // Limit to 3 members
-                const limitedValue = newValue.slice(0, 3);
-                setNewTeamData({ ...newTeamData, selectedMembers: limitedValue });
+                setNewTeamData({ ...newTeamData, selectedMembers: newValue });
               }}
               renderInput={(params) => (
                 <TextField
                   {...params}
                   label="Search and select team members"
                   placeholder="Type to search for members..."
-                  helperText={
-                    newTeamData.selectedMembers.length >= 3 
-                      ? "Maximum 3 team members selected" 
-                      : `Select up to 3 team members (${3 - newTeamData.selectedMembers.length} remaining)`
-                  }
+                  helperText="Select team members"
                 />
               )}
               renderOption={(props, option) => {
@@ -1189,17 +1165,7 @@ export default function ReviewTeams() {
                 return (
                   <Box component="li" key={key} {...otherProps}>
                     <Stack direction="row" alignItems="center" spacing={2}>
-                      <Avatar
-                        sx={{ 
-                          width: 32, 
-                          height: 32, 
-                          bgcolor: 'primary.main',
-                          fontSize: '0.75rem'
-                        }}
-                        src={option.profileImage}
-                      >
-                        {!option.profileImage && option.fullName.split(' ').map(n => n[0]).join('')}
-                      </Avatar>
+                      <AuthenticatedAvatar member={option} size={32} />
                       <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="body2" sx={{ fontWeight: 500, noWrap: false }}>
                           {option.fullName}
@@ -1219,24 +1185,13 @@ export default function ReviewTeams() {
                     key={option.id}
                     label={option.fullName}
                     avatar={
-                      <Avatar
-                        sx={{ 
-                          width: 20, 
-                          height: 20, 
-                          bgcolor: 'primary.main',
-                          fontSize: '0.625rem'
-                        }}
-                        src={option.profileImage}
-                      >
-                        {!option.profileImage && option.fullName.split(' ').map(n => n[0]).join('')}
-                      </Avatar>
+                      <AuthenticatedAvatar member={option} size={20} />
                     }
                     size="small"
                   />
                 ))
               }
               isOptionEqualToValue={(option, value) => option.id === value?.id}
-              limitTags={3}
               sx={{
                 '& .MuiAutocomplete-listbox': {
                   maxHeight: '200px'
@@ -1336,9 +1291,7 @@ export default function ReviewTeams() {
                   >
                     <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
                       <Stack direction="row" spacing={2} alignItems="center">
-                        <Avatar sx={{ bgcolor: 'primary.main' }}>
-                          {user.fullName.split(' ').map(n => n[0]).join('')}
-                        </Avatar>
+                        <MemberAvatar member={user} size={40} />
                         <Box>
                           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                             {user.fullName}

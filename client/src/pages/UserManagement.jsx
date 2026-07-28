@@ -13,7 +13,6 @@ import {
   Card, 
   CardContent, 
   CardActions, 
-  Avatar, 
   Chip, 
   Dialog, 
   DialogTitle, 
@@ -23,13 +22,16 @@ import {
   IconButton,
   CircularProgress,
   Stack,
-  Divider
+  Divider,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import { 
   Add as AddIcon, 
   Search as SearchIcon, 
-  Edit as EditIcon, 
-  Delete as DeleteIcon, 
+  Edit as EditIcon,
+  Block as BlockIcon,
+  RestartAlt as RestartAltIcon,
   PhotoCamera as PhotoCameraIcon,
   Close as CloseIcon,
   ContentCopy as ContentCopyIcon
@@ -37,9 +39,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 
 const UserManagement = () => {
-  const { user } = useAuth();
+  const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
+
+  const { user, updateUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,9 +54,24 @@ const UserManagement = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_searchTerm') : '') || ''
+  );
+  const [roleFilter, setRoleFilter] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_roleFilter') : '') || 'ALL'
+  );
   const [memberEventRsvpFilter, setMemberEventRsvpFilter] = useState('');
+  // Deactivated accounts are hidden by default; this reveals them so they can be reactivated
+  const [showInactive, setShowInactive] = useState(false);
+  const [graduationClassFilter, setGraduationClassFilter] = useState(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('um_graduationClassFilter') : '') || ''
+  );
+  const [classOptions, setClassOptions] = useState([]);
+  const [classOptionData, setClassOptionData] = useState({
+    total: 0,
+    classes: [],
+    unknown: { value: MISSING_GRADUATION_CLASS, label: 'Unknown / No class', count: 0 }
+  });
   const [events, setEvents] = useState([]);
 
   // Form states
@@ -70,6 +90,14 @@ const UserManagement = () => {
   });
 
   const [imageFile, setImageFile] = useState(null);
+
+  // Graduated-member deactivation state
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deactivatePreview, setDeactivatePreview] = useState(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
+  const [deactivateError, setDeactivateError] = useState(null);
+  const [deactivateSuccess, setDeactivateSuccess] = useState(null);
+  const [deactivateConfirmation, setDeactivateConfirmation] = useState('');
 
   // Fetch events for filter dropdown
   useEffect(() => {
@@ -100,6 +128,8 @@ const UserManagement = () => {
       const params = new URLSearchParams();
       if (roleFilter !== 'ALL') params.append('role', roleFilter);
       if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
+      if (graduationClassFilter) params.append('graduationClass', graduationClassFilter);
+      if (showInactive) params.append('includeInactive', 'true');
       const queryString = params.toString();
       const response = await apiClient.get(`/admin/users${queryString ? '?' + queryString : ''}`);
       setUsers(response);
@@ -123,7 +153,8 @@ const UserManagement = () => {
         graduationClass: '',
         role: 'USER'
       });
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
     } catch (err) {
       setError('Failed to create user');
       console.error('Error creating user:', err);
@@ -133,11 +164,15 @@ const UserManagement = () => {
   const handleUpdateUser = async (e) => {
     e.preventDefault();
     try {
-      await apiClient.patch(`/users/${selectedUser.id}`, editForm);
+      const response = await apiClient.patch(`/users/${selectedUser.id}`, editForm);
       setShowEditModal(false);
       setSelectedUser(null);
       setSuccess('User information updated successfully!');
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
+      if (response?.id === user?.id) {
+        updateUser(response);
+      }
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -150,7 +185,8 @@ const UserManagement = () => {
     try {
       await apiClient.patch(`/users/${userId}/role`, { role: newRole });
       setSuccess('User role updated successfully!');
-      fetchUsers();
+      await fetchUsers();
+      await fetchClassOptions();
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -174,6 +210,9 @@ const UserManagement = () => {
       setImageFile(null);
       setSuccess('Profile image uploaded successfully!');
       fetchUsers();
+      if (response?.user?.id === user?.id) {
+        updateUser(response.user);
+      }
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -182,15 +221,25 @@ const UserManagement = () => {
     }
   };
 
-  const handleDeleteUser = async (userId) => {
-    if (!window.confirm('Are you sure you want to delete this user?')) return;
+  const handleToggleUserActive = async (userItem) => {
+    const isDeactivating = userItem.isActive !== false;
+    const confirmMessage = isDeactivating
+      ? `Deactivate ${userItem.fullName}? They will no longer be able to sign in, but all of their scores, evaluations and comments are kept.`
+      : `Reactivate ${userItem.fullName}? They will be able to sign in again.`;
+
+    if (!window.confirm(confirmMessage)) return;
 
     try {
-      await apiClient.delete(`/users/${userId}`);
-      fetchUsers();
+      const action = isDeactivating ? 'deactivate' : 'reactivate';
+      await apiClient.patch(`/users/${userItem.id}/${action}`, {});
+      setError(null);
+      setSuccess(isDeactivating ? 'User deactivated' : 'User reactivated');
+      setTimeout(() => setSuccess(null), 3000);
+      await fetchUsers();
+      await fetchClassOptions();
     } catch (err) {
-      setError('Failed to delete user');
-      console.error('Error deleting user:', err);
+      setError(err.message || `Failed to ${isDeactivating ? 'deactivate' : 'reactivate'} user`);
+      console.error('Error updating user status:', err);
     }
   };
 
@@ -228,13 +277,148 @@ const UserManagement = () => {
     if (user?.role === 'ADMIN') {
       fetchUsers();
     }
-  }, [roleFilter, memberEventRsvpFilter]);
+  }, [roleFilter, memberEventRsvpFilter, graduationClassFilter, showInactive]);
+
+  // Persist filters across refreshes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_searchTerm', searchTerm);
+    }
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_roleFilter', roleFilter);
+    }
+  }, [roleFilter]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('um_graduationClassFilter', graduationClassFilter);
+    }
+  }, [graduationClassFilter]);
 
   const filteredUsers = users.filter(userItem => {
     const matchesSearch = userItem.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          userItem.email.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesSearch;
   });
+
+  // Load class options from an independent endpoint that ignores the class
+  // filter so the dropdown still shows every class after a refresh.
+  const fetchClassOptions = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (roleFilter !== 'ALL') params.append('role', roleFilter);
+      if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
+      const queryString = params.toString();
+      const data = await apiClient.get(`/admin/users/classes${queryString ? '?' + queryString : ''}`);
+      setClassOptionData(data);
+    } catch (err) {
+      console.error('Error fetching class options:', err);
+    }
+  };
+
+  const buildClassOptions = (data) => {
+    const options = [
+      { value: '', label: `All Classes (${data.total})` }
+    ];
+    data.classes.forEach((c) => {
+      options.push({ value: c.value, label: `${c.label} (${c.count})` });
+    });
+    if (data.unknown.count > 0 || graduationClassFilter === data.unknown.value) {
+      options.push({ value: data.unknown.value, label: `${data.unknown.label} (${data.unknown.count})` });
+    }
+    if (graduationClassFilter && graduationClassFilter !== data.unknown.value && !data.classes.some((c) => c.value === graduationClassFilter)) {
+      options.push({ value: graduationClassFilter, label: `${graduationClassFilter} (0)` });
+    }
+    setClassOptions(options);
+  };
+
+  useEffect(() => {
+    if (user?.role === 'ADMIN') {
+      fetchClassOptions();
+    }
+  }, [user, roleFilter, memberEventRsvpFilter]);
+
+  useEffect(() => {
+    buildClassOptions(classOptionData);
+  }, [classOptionData, graduationClassFilter]);
+
+  const parseGraduationYear = (cls) => {
+    if (typeof cls !== 'string') return null;
+    const match = cls.match(/\b(19|20)\d{2}\b/);
+    return match ? parseInt(match[0], 10) : null;
+  };
+
+  const canDeactivateClass = (cls) => {
+    if (!cls || cls === MISSING_GRADUATION_CLASS) return false;
+    const year = parseGraduationYear(cls);
+    if (!year) return false;
+    return new Date() >= new Date(year, 11, 31, 23, 59, 59, 999);
+  };
+
+  const openDeactivateModal = () => {
+    setDeactivateModalOpen(true);
+    setDeactivatePreview(null);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    setDeactivateConfirmation('');
+    fetchDeactivatePreview();
+  };
+
+  const closeDeactivateModal = () => {
+    setDeactivateModalOpen(false);
+    setDeactivatePreview(null);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    setDeactivateConfirmation('');
+  };
+
+  const fetchDeactivatePreview = async () => {
+    if (!graduationClassFilter || graduationClassFilter === MISSING_GRADUATION_CLASS) return;
+    setDeactivateLoading(true);
+    setDeactivateError(null);
+    try {
+      const data = await apiClient.post('/admin/users/deactivate-preview', { graduationClass: graduationClassFilter });
+      setDeactivatePreview(data);
+    } catch (err) {
+      setDeactivateError(err.message || 'Failed to load deactivation preview');
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
+
+  const executeDeactivate = async (dryRun = false) => {
+    if (!graduationClassFilter) return;
+    if (deactivateConfirmation !== graduationClassFilter) {
+      setDeactivateError(`Type "${graduationClassFilter}" to confirm`);
+      return;
+    }
+    setDeactivateLoading(true);
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    try {
+      const data = await apiClient.post('/admin/users/deactivate', {
+        graduationClass: graduationClassFilter,
+        confirmationText: deactivateConfirmation,
+        confirmedCount: deactivatePreview?.eligibleCount ?? 0,
+        dryRun
+      });
+      if (dryRun) {
+        setDeactivatePreview(data);
+        setDeactivateSuccess(`Dry run complete: ${data.eligibleCount} eligible, ${data.blockedCount} blocked, ${data.ineligibleCount} ineligible`);
+      } else {
+        setDeactivateSuccess(`Deactivated ${data.deactivatedCount} member(s)`);
+        await fetchUsers();
+        await fetchClassOptions();
+      }
+    } catch (err) {
+      setDeactivateError(err.message || 'Deactivation failed');
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
 
   const getRoleColor = (role) => {
     switch (role) {
@@ -346,7 +530,7 @@ const UserManagement = () => {
                             {/* Search and Filters */}
           <Paper sx={{ p: 1, mb: 2, width: '100%', boxSizing: 'border-box' }}>
             <Grid container spacing={1} sx={{ width: '100%' }}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12} sm={6} md={3}>
                 <TextField
                   fullWidth
                   label="Search Users"
@@ -359,7 +543,7 @@ const UserManagement = () => {
                   size="small"
                 />
               </Grid>
-              <Grid item xs={12} md={3}>
+              <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Filter by Role</InputLabel>
                   <Select
@@ -374,7 +558,7 @@ const UserManagement = () => {
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} md={3}>
+              <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Member Event RSVP</InputLabel>
                   <Select
@@ -390,6 +574,72 @@ const UserManagement = () => {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Filter by Class</InputLabel>
+                  <Select
+                    value={graduationClassFilter}
+                    label="Filter by Class"
+                    onChange={(e) => setGraduationClassFilter(e.target.value)}
+                  >
+                    {classOptions.map((option) => (
+                      <MenuItem key={`class-${option.value}`} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  flexWrap="wrap"
+                  alignItems="center"
+                  sx={{ pt: 1 }}
+                >
+                  {roleFilter !== 'ALL' && (
+                    <Chip
+                      label={`Role: ${roleFilter}`}
+                      size="small"
+                      onDelete={() => setRoleFilter('ALL')}
+                    />
+                  )}
+                  {graduationClassFilter && (
+                    <Chip
+                      label={`Class: ${graduationClassFilter === MISSING_GRADUATION_CLASS ? 'Unknown / No class' : graduationClassFilter}`}
+                      size="small"
+                      onDelete={() => setGraduationClassFilter('')}
+                    />
+                  )}
+                  {!loading && (
+                    <Typography variant="body2" color="text.secondary">
+                      {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+                    </Typography>
+                  )}
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={showInactive}
+                        onChange={(e) => setShowInactive(e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="body2">Show deactivated</Typography>}
+                    sx={{ ml: 0 }}
+                  />
+                  {canDeactivateClass(graduationClassFilter) && (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="warning"
+                      onClick={openDeactivateModal}
+                    >
+                      Deactivate Graduated Members
+                    </Button>
+                  )}
+                </Stack>
               </Grid>
             </Grid>
           </Paper>
@@ -407,23 +657,11 @@ const UserManagement = () => {
                     <CardContent sx={{ flexGrow: 1, p: 1.5 }}>
                                           {/* User Header */}
                       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
-                        <Avatar
-                          key={`${userItem.id}-${userItem.profileImage || 'no-image'}`}
-                          src={userItem.profileImage ? `${userItem.profileImage}?t=${Date.now()}` : undefined}
-                          sx={{ 
-                            width: 48, 
-                            height: 48, 
-                            mr: 1.5,
-                            bgcolor: 'primary.main',
-                            fontSize: '1.25rem'
-                          }}
-                          onError={(e) => {
-                            // Hide the image and show the fallback initials
-                            e.target.style.display = 'none';
-                          }}
-                        >
-                          {userItem.fullName.charAt(0).toUpperCase()}
-                        </Avatar>
+                        <MemberAvatar
+                          member={userItem}
+                          size={48}
+                          style={{ marginRight: '12px' }}
+                        />
                         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                           <Typography variant="h6" noWrap sx={{ fontSize: '1rem' }}>
                             {userItem.fullName}
@@ -462,6 +700,18 @@ const UserManagement = () => {
                           {userItem._count?.comments || 0} comments, {userItem._count?.evaluations || 0} evaluations
                         </Typography>
                       </Box>
+                      {userItem.isActive === false && (
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2" color="text.secondary">Status:</Typography>
+                          <Chip
+                            label={userItem.deactivatedAt
+                              ? `Deactivated ${new Date(userItem.deactivatedAt).toLocaleDateString()}`
+                              : 'Deactivated'}
+                            color="default"
+                            size="small"
+                          />
+                        </Box>
+                      )}
                     </Stack>
 
                     <Divider sx={{ my: 2 }} />
@@ -503,12 +753,12 @@ const UserManagement = () => {
                     {userItem.id !== user?.id && (
                       <Button
                         size="small"
-                        color="error"
-                        startIcon={<DeleteIcon />}
-                        onClick={() => handleDeleteUser(userItem.id)}
+                        color={userItem.isActive === false ? 'success' : 'error'}
+                        startIcon={userItem.isActive === false ? <RestartAltIcon /> : <BlockIcon />}
+                        onClick={() => handleToggleUserActive(userItem)}
                         sx={{ minWidth: 'auto', px: 1 }}
                       >
-                        Delete
+                        {userItem.isActive === false ? 'Reactivate' : 'Deactivate'}
                       </Button>
                     )}
                   </CardActions>
@@ -525,7 +775,7 @@ const UserManagement = () => {
               No users found
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {searchTerm || roleFilter !== 'ALL' 
+              {searchTerm || roleFilter !== 'ALL' || graduationClassFilter
                 ? 'Try adjusting your search or filter criteria.'
                 : 'Get started by creating a new user.'
               }
@@ -657,6 +907,101 @@ const UserManagement = () => {
             </DialogActions>
           </form>
                  </Dialog>
+
+        {/* Deactivate Graduated Members Modal */}
+        <Dialog open={deactivateModalOpen} onClose={closeDeactivateModal} maxWidth="md" fullWidth>
+          <DialogTitle>Deactivate Graduated Members</DialogTitle>
+          <DialogContent>
+            {deactivateLoading && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress />
+              </Box>
+            )}
+            {deactivateError && (
+              <Alert severity="error" sx={{ mb: 2 }}>{deactivateError}</Alert>
+            )}
+            {deactivateSuccess && (
+              <Alert severity="success" sx={{ mb: 2 }}>{deactivateSuccess}</Alert>
+            )}
+            {!deactivateLoading && deactivatePreview && (
+              <Stack spacing={2} sx={{ mt: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Graduation class: <strong>{deactivatePreview.graduationClass}</strong>
+                  <br />
+                  Deactivation date: {deactivatePreview.deactivationDate?.split('T')[0]}
+                </Typography>
+                <Stack direction="row" spacing={2} flexWrap="wrap">
+                  <Chip label={`Found: ${deactivatePreview.totalFound}`} size="small" />
+                  <Chip label={`Eligible: ${deactivatePreview.eligibleCount}`} size="small" color="warning" />
+                  <Chip label={`Blocked: ${deactivatePreview.blockedCount}`} size="small" color="error" />
+                  <Chip label={`Ineligible: ${deactivatePreview.ineligibleCount}`} size="small" />
+                </Stack>
+
+                {deactivatePreview.eligible?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Eligible members</Typography>
+                    {deactivatePreview.eligible.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} ({u.email}) — {u.relations?.total ?? 0} relations
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                {deactivatePreview.blocked?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Blocked (active/current-cycle)</Typography>
+                    {deactivatePreview.blocked.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} — {u.reason}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                {deactivatePreview.ineligible?.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2">Ineligible</Typography>
+                    {deactivatePreview.ineligible.map((u) => (
+                      <Typography key={u.id} variant="body2" color="text.secondary">
+                        {u.fullName} — {u.reason}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={`Type "${graduationClassFilter}" to confirm`}
+                  value={deactivateConfirmation}
+                  onChange={(e) => setDeactivateConfirmation(e.target.value)}
+                  disabled={deactivateLoading}
+                />
+              </Stack>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeDeactivateModal} disabled={deactivateLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => executeDeactivate(true)}
+              disabled={deactivateLoading || deactivateConfirmation !== graduationClassFilter}
+              variant="outlined"
+            >
+              Dry Run
+            </Button>
+            <Button
+              onClick={() => executeDeactivate(false)}
+              disabled={deactivateLoading || deactivateConfirmation !== graduationClassFilter}
+              variant="contained"
+              color="warning"
+            >
+              Deactivate
+            </Button>
+          </DialogActions>
+        </Dialog>
        </Box>
     </AccessControl>
    );

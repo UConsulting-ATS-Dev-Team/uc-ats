@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
-import AuthenticatedImage from '../components/AuthenticatedImage';
+import CandidateAvatar from '../components/CandidateAvatar';
 import ImageCache from '../utils/imageCache';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
@@ -168,12 +168,6 @@ export default function CandidateList() {
 
   // Check if any filters are active
   const hasActiveFilters = Object.values(appliedFilters).some(v => v !== '') || appliedSearch !== '';
-
-  const getInitials = (name) => {
-    if (!name) return '?';
-    const nameParts = name.split(' ');
-    return nameParts.map(part => part.charAt(0)).join('').toUpperCase().slice(0, 2);
-  };
 
   const handleFilterChange = (filterType, value) => {
     setPendingFilters(prev => ({
@@ -371,27 +365,7 @@ export default function CandidateList() {
                 <div className="candidate-header">
                   <div className="candidate-info">
                     {/* Profile Picture with fallback - extract from application */}
-                    {candidate.applications && candidate.applications.length > 0 && candidate.applications[0].headshotUrl ? (
-                      <AuthenticatedImage
-                        src={candidate.applications[0].headshotUrl}
-                        alt={candidate.applications[0] ? 
-                          `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 
-                          `${candidate.firstName} ${candidate.lastName}`}
-                        className="candidate-avatar"
-                        style={{
-                          width: '60px',
-                          height: '60px',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                    ) : (
-                      <div className="candidate-avatar-fallback">
-                        {getInitials(candidate.applications?.[0] ? 
-                          `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 
-                          `${candidate.firstName} ${candidate.lastName}`)}
-                      </div>
-                    )}
+                    <CandidateAvatar applicant={candidate} />
                     <div className="candidate-details">
                       <h3>{candidate.applications?.[0] ? 
                         `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 

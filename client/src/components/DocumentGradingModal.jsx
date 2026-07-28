@@ -549,7 +549,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                     />
@@ -559,7 +559,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                       title={`${config.previewTitle}`}
@@ -729,7 +729,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                   </Box>
 
                   {/* Overall Score */}
-                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.light', color: 'white' }}>
+                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.main', color: 'primary.contrastText' }}>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>
                       Overall Score: {calculateOverallScore()}/{getMaxScore()}
                     </Typography>

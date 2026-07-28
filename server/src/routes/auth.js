@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import crypto from 'crypto';
-import { sendPasswordResetEmail } from '../services/emailNotifications.js';
+import { sendPasswordResetEmail, sendPasswordResetConfirmationEmail } from '../services/emailNotifications.js';
 
 const router = express.Router(); 
 
@@ -124,6 +124,10 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
+    }
     
     // Generate JWT token
     const token = jwt.sign(
@@ -162,6 +166,10 @@ router.get('/verify', async (req, res) => {
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
     }
     
     const { password: _, ...userWithoutPassword } = user;
@@ -237,6 +245,18 @@ router.post('/reset-password', async (req, res) => {
         resetTokenExpiry: null,
       },
     });
+
+    // Send confirmation email to the account email only; never expose the token or new password.
+    if (user.email) {
+      try {
+        const confirmationResult = await sendPasswordResetConfirmationEmail(user.email, user.fullName);
+        if (!confirmationResult.success) {
+          console.error('Failed to send password reset confirmation email:', confirmationResult.error);
+        }
+      } catch (confirmationError) {
+        console.error('Error sending password reset confirmation email:', confirmationError);
+      }
+    }
 
     res.json({ message: 'Password reset successful' });
   } catch (error) {

@@ -22,7 +22,6 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import CaseViewer from '../components/case/CaseViewer';
 import { usePreviewActive } from '../utils/previewMode';
-import { useCelebration } from '../context/CelebrationContext';
 import '../styles/FinalRoundInterviewInterface.css';
 
 export default function FinalRoundInterviewInterface() {
@@ -31,7 +30,6 @@ export default function FinalRoundInterviewInterface() {
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
   
-  const { triggerCelebration } = useCelebration();
   const candidatePreviewActive = usePreviewActive();
   
   const [interview, setInterview] = useState(null);
@@ -406,7 +404,6 @@ export default function FinalRoundInterviewInterface() {
       }
       
       alert('Evaluation saved successfully');
-      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluation:', error);
       alert('Failed to save evaluation');
@@ -443,7 +440,6 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      triggerCelebration();
       alert('All evaluations saved successfully!');
     } catch (error) {
       console.error('Failed to save evaluations:', error);
@@ -590,12 +586,12 @@ export default function FinalRoundInterviewInterface() {
                       width: '100%',
                       marginBottom: '16px',
                       padding: '12px',
-                      backgroundColor: '#eff6ff', 
-                      borderLeft: '4px solid #2563eb',
+                      backgroundColor: 'var(--status-info-bg)',
+                      borderLeft: '4px solid var(--status-info-border)',
                       borderRadius: '4px'
                     }}>
                       <p style={{ 
-                        color: '#1e40af', 
+                        color: 'var(--status-info-text)',
                         fontWeight: '600',
                         marginBottom: '6px',
                         fontSize: '0.875rem',
@@ -603,8 +599,8 @@ export default function FinalRoundInterviewInterface() {
                       }}>
                         Test For (Admin Note):
                       </p>
-                      <p style={{ 
-                        color: '#1e40af',
+                      <p style={{
+                        color: 'var(--status-info-text)',
                         margin: 0,
                         fontSize: '0.875rem',
                         lineHeight: '1.5',
@@ -772,7 +768,7 @@ export default function FinalRoundInterviewInterface() {
                       {!rubricCollapsed[application.id] && (
                         <div className="case-split__rubric">
                           <div className="case-split__rubric-header">
-                            <span style={{ fontWeight: 700, color: '#042742', fontSize: '0.9rem' }}>
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
                               Casing Rubric
                             </span>
                             <button

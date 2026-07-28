@@ -14,6 +14,7 @@ import {
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import FeatureRequestModal from './FeatureRequestModal';
+import ThemeToggle from './ThemeToggle';
 import '../styles/CandidateLayout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -80,6 +81,7 @@ const CandidateLayout = ({ children }) => {
                 <p className="user-name">{user?.fullName}</p>
                 <p className="user-role">CANDIDATE</p>
               </div>
+              <ThemeToggle />
               <button
                 onClick={handleLogout}
                 className="logout-btn"
