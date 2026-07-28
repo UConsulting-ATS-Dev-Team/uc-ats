@@ -24,6 +24,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
+import CandidateGroupCopyModal from '../components/CandidateGroupCopyModal';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component for Admin
@@ -232,6 +233,9 @@ export default function AdminAssignedInterviews() {
   const [memberSearchByGroup, setMemberSearchByGroup] = useState({}); // Search terms for members within each group
   const [appGroupSearchByGroup, setAppGroupSearchByGroup] = useState({}); // Search terms for app groups when assigning
   const [applicationSearchByGroup, setApplicationSearchByGroup] = useState({}); // Search terms for applications within app groups
+
+  // Candidate group copy modal
+  const [copyModalInterview, setCopyModalInterview] = useState(null);
 
   // Fetch initial data
   useEffect(() => {
@@ -701,6 +705,23 @@ export default function AdminAssignedInterviews() {
       console.error('Failed to persist interview config', e);
       if (!silent) alert(e.message || 'Failed to save interview data');
     }
+  };
+
+  const handleCopyCommit = (result) => {
+    const { interview, destinationGroup } = result;
+    const current = interviewData[interview.id] || { memberGroups: [], applicationGroups: [], groupAssignments: {} };
+    const existingIndex = current.applicationGroups.findIndex(g => g.id === destinationGroup.id);
+    const nextApplicationGroups = existingIndex >= 0
+      ? current.applicationGroups.map((g, i) => i === existingIndex ? destinationGroup : g)
+      : [...current.applicationGroups, destinationGroup];
+    const nextData = {
+      ...current,
+      applicationGroups: nextApplicationGroups,
+    };
+    persistInterviewConfig(interview.id, nextData, { silent: true });
+    setInterviewData(prev => ({ ...prev, [interview.id]: nextData }));
+    setCopyModalInterview(null);
+    alert(`Copied ${result.additionCount} candidate(s) into ${destinationGroup.name}`);
   };
 
 
@@ -1373,9 +1394,14 @@ export default function AdminAssignedInterviews() {
                           <div className="groups-column">
                             <div className="column-header">
                               <h4><DocumentDuplicateIcon className="section-icon" /> Application Groups</h4>
-                              <button className="btn-secondary small" onClick={() => addApplicationGroup(interview.id)}>
-                                <PlusIcon className="btn-icon" /> Add
-                              </button>
+                              <div className="column-header-actions">
+                                <button className="btn-secondary small" onClick={() => addApplicationGroup(interview.id)}>
+                                  <PlusIcon className="btn-icon" /> Add
+                                </button>
+                                <button className="btn-secondary small" onClick={() => setCopyModalInterview(interview)}>
+                                  <DocumentDuplicateIcon className="btn-icon" /> Copy
+                                </button>
+                              </div>
                             </div>
                             {/* Search for application groups */}
                             {data.applicationGroups?.length > 0 && (
@@ -1556,6 +1582,15 @@ export default function AdminAssignedInterviews() {
         )}
       </div>
     </div>
+
+    {copyModalInterview && (
+      <CandidateGroupCopyModal
+        interview={copyModalInterview}
+        applicationGroups={interviewData[copyModalInterview.id]?.applicationGroups || []}
+        onClose={() => setCopyModalInterview(null)}
+        onCopy={handleCopyCommit}
+      />
+    )}
     </AccessControl>
   );
 }

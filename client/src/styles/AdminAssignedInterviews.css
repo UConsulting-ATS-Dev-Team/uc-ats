@@ -2881,3 +2881,113 @@
   padding: 2rem;
   color: var(--text-tertiary);  font-style: italic;
 }
+
+/* Candidate group copy modal */
+.column-header-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.group-copy-modal {
+  max-width: 560px;
+  width: 90vw;
+}
+
+.modal-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.copy-preview {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.copy-preview h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.preview-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.preview-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--border-radius);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.preview-stat.success {
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+}
+
+.preview-stat.warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
+}
+
+.preview-stat.error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+}
+
+.preview-section h5 {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.preview-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.preview-list li {
+  margin-bottom: 0.25rem;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: var(--border-radius);
+  font-size: 0.85rem;
+}
+
+.alert-error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 480px) {
+  .column-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .preview-summary {
+    flex-direction: column;
+  }
+}
