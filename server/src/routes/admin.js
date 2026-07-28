@@ -4572,8 +4572,8 @@ router.post('/process-final-decisions', async (req, res) => {
               where: { id: application.id },
               data: { decisionSentAt }
             });
+            // Feedback requests are only sent to rejected candidates.
             await cancelPendingFeedbackRequest(application.id);
-            await scheduleFeedbackRequest(updatedApp, active, decisionSentAt);
 
             results.emailsSent++;
             results.accepted.push({

@@ -22,8 +22,8 @@ export const ATTEMPT_STATUS = {
 
 const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
 
-function isFinalStatus(status) {
-  return status === 'ACCEPTED' || status === 'REJECTED';
+function isRejectedStatus(status) {
+  return status === 'REJECTED';
 }
 
 function isValidEmail(email) {
@@ -62,7 +62,8 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
   if (!application?.id) {
     throw new Error('Application is required to schedule a feedback request');
   }
-  if (!isFinalStatus(application.status)) {
+  // Feedback requests are only sent to rejected candidates.
+  if (!isRejectedStatus(application.status)) {
     await cancelPendingFeedbackRequest(application.id);
     return null;
   }
@@ -155,7 +156,9 @@ export async function cancelPendingFeedbackRequest(applicationId) {
 }
 
 export async function handleApplicationStatusChange(applicationId, newStatus) {
-  if (!isFinalStatus(newStatus)) {
+  // Only rejected candidates should receive a feedback request, so any
+  // transition away from REJECTED cancels pending/processing/failed jobs.
+  if (!isRejectedStatus(newStatus)) {
     return cancelPendingFeedbackRequest(applicationId);
   }
   return 0;
@@ -205,7 +208,7 @@ async function verifySendEligibility(job, token, now) {
       return { ok: false, reason: 'Job claim lost or token mismatch' };
     }
 
-    if (!currentApp || !isFinalStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
+    if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
       const error = 'Application eligibility changed or final decision was reversed';
       await Promise.all([
         tx.applicationFeedbackJob.updateMany({

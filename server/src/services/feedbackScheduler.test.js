@@ -244,7 +244,7 @@ function resetState() {
 
 function applicationFixture(overrides = {}) {
   return {
-    status: 'ACCEPTED',
+    status: 'REJECTED',
     firstName: 'Jane',
     lastName: 'Doe',
     email: 'jane@example.com',
@@ -292,8 +292,8 @@ describe('scheduleFeedbackRequest', () => {
     resetState();
   });
 
-  it('creates a PENDING feedback job due 48 hours after decisionSentAt for ACCEPTED', async () => {
-    const app = await seedApplication();
+  it('creates a PENDING feedback job due 48 hours after decisionSentAt for REJECTED', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
     const cycle = await seedCycle();
     const decisionSentAt = new Date('2026-07-27T10:00:00.000Z');
 
@@ -370,10 +370,10 @@ describe('handleApplicationStatusChange', () => {
     expect(attempt.status).toBe(ATTEMPT_STATUS.CANCELLED);
   });
 
-  it('does nothing for final statuses', async () => {
-    const app = await seedApplication();
+  it('does nothing for rejected status', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
     await seedJob({ applicationId: app.id });
-    await handleApplicationStatusChange(app.id, 'ACCEPTED');
+    await handleApplicationStatusChange(app.id, 'REJECTED');
     expect(prisma.__state.jobs[0].status).toBe(JOB_STATUS.PENDING);
   });
 });
