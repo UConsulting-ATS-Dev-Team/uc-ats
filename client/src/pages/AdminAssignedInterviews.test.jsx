@@ -110,4 +110,104 @@ describe('AdminAssignedInterviews create flow', () => {
 
     expect(alert).toHaveBeenCalled();
   });
+
+  it('uses the authoritative committed config and preserves unrelated interview config', async () => {
+    const interview = {
+      id: 'iv-1',
+      title: 'Coffee Chat',
+      interviewType: 'COFFEE_CHAT',
+      startDate: new Date().toISOString(),
+      endDate: new Date().toISOString(),
+      location: 'Zoom',
+      dresscode: 'Casual',
+      description: JSON.stringify({
+        memberGroups: [{ id: 'keep', name: 'Keep Group' }],
+        applicationGroups: [],
+        groupAssignments: { g1: ['a1'] },
+      }),
+    };
+
+    apiClient.get.mockImplementation((endpoint) => {
+      if (endpoint === '/admin/interviews') return Promise.resolve([interview]);
+      if (endpoint === '/admin/cycles/active') return Promise.resolve({ id: 'cycle-1', name: 'Test Cycle' });
+      if (endpoint === '/admin/profile') return Promise.resolve({ id: 'admin-1', fullName: 'Test Admin', role: 'ADMIN' });
+      if (endpoint === '/review-teams') return Promise.resolve([{ id: 'group-1', name: 'Team Alpha', applications: [{ id: 'app-1' }, { id: 'app-2' }] }]);
+      if (endpoint === '/admin/applications') return Promise.resolve([]);
+      if (endpoint.startsWith('/admin/users')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    const preview = {
+      additionCount: 2,
+      duplicateCount: 0,
+      skippedCount: 0,
+      additions: [
+        { applicationId: 'app-1', name: 'Alice Anderson', email: 'alice@example.com' },
+        { applicationId: 'app-2', name: 'Bob Baker', email: 'bob@example.com' },
+      ],
+      duplicates: [],
+      skipped: [],
+      destinationGroup: { id: 'new-group', name: 'Team Alpha', existingApplicationCount: 0, isNew: true },
+    };
+
+    const committedConfig = {
+      memberGroups: [{ id: 'keep', name: 'Keep Group' }],
+      applicationGroups: [{
+        id: 'new-group',
+        name: 'Team Alpha',
+        applicationIds: ['app-1', 'app-2'],
+      }],
+      groupAssignments: { g1: ['a1'] },
+    };
+
+    const commitResult = {
+      interview: { id: 'iv-1', title: 'Coffee Chat', cycleId: 'cycle-1' },
+      destinationGroup: { id: 'new-group', name: 'Team Alpha', applicationIds: ['app-1', 'app-2'] },
+      additionCount: 2,
+      duplicateCount: 0,
+      skippedCount: 0,
+      config: committedConfig,
+    };
+
+    apiClient.post
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce(commitResult);
+
+    renderWithRouter(<AdminAssignedInterviews />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Coffee Chat')).toBeInTheDocument();
+    });
+
+    // Expand the interview card to reveal the Copy button.
+    fireEvent.click(screen.getByTitle('Expand'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Copy Candidate Group')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Source Candidate Group'), { target: { value: 'group-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('2 addition(s)')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Candidates' }));
+
+    await waitFor(() => {
+      expect(apiClient.patch).not.toHaveBeenCalled();
+      expect(alert).toHaveBeenCalledWith('Copied 2 candidate(s) into Team Alpha');
+    });
+
+    // Unrelated member group and the newly copied application group are both rendered.
+    expect(screen.getByDisplayValue('Keep Group')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Team Alpha')).toBeInTheDocument();
+  });
 });

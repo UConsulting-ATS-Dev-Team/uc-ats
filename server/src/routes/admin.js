@@ -27,6 +27,10 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
+import {
+  previewCandidateGroupCopy,
+  commitCandidateGroupCopy,
+} from '../services/candidateGroupCopy.js';
 
 const router = express.Router();
 
@@ -1846,6 +1850,69 @@ router.post('/events/copy-commit', async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+
+// Candidate group → interview group copy routes
+
+// Preview the result of copying a source candidate group into a destination interview.
+router.post(
+  '/interviews/:id/copy-candidate-group-preview',
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { sourceGroupId, destinationGroupId } = req.body;
+      const preview = await previewCandidateGroupCopy({
+        prisma,
+        sourceGroupId,
+        destinationInterviewId: req.params.id,
+        destinationGroupId,
+      });
+      res.json(preview);
+    } catch (error) {
+      console.error('[POST /api/admin/interviews/:id/copy-candidate-group-preview]', error);
+      if (error.name === 'NotFoundError') {
+        return res.status(404).json({ error: error.message });
+      }
+      if (error.name === 'CycleMismatchError') {
+        return res.status(409).json({ error: error.message });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Commit the copy. Add-only by default.
+router.post(
+  '/interviews/:id/copy-candidate-group',
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { sourceGroupId, destinationGroupId, mode } = req.body;
+      if (mode && mode !== 'add') {
+        return res.status(400).json({ error: 'Only add-only mode is supported' });
+      }
+      const result = await commitCandidateGroupCopy({
+        prisma,
+        sourceGroupId,
+        destinationInterviewId: req.params.id,
+        destinationGroupId,
+        actorId: req.user?.id,
+        mode: 'add',
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      console.error('[POST /api/admin/interviews/:id/copy-candidate-group]', error);
+      if (error.name === 'NotFoundError') {
+        return res.status(404).json({ error: error.message });
+      }
+      if (error.name === 'CycleMismatchError') {
+        return res.status(409).json({ error: error.message });
+      }
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
 
 // Interview Management Routes
 

@@ -47,6 +47,7 @@ model User {
   sentMessages               Message[]                       @relation("MessageSender")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+  candidateGroupCopyEvents   CandidateGroupCopyEvent[]
 
   @@map("users")
 }
@@ -200,9 +201,10 @@ model Groups {
   memberOneUser      User?              @relation("GroupMemberOne", fields: [memberOne], references: [id])
   memberThreeUser    User?              @relation("GroupMemberThree", fields: [memberThree], references: [id])
   memberTwoUser      User?              @relation("GroupMemberTwo", fields: [memberTwo], references: [id])
-  groupMembers       GroupMember[]
-  resumeScores       ResumeScore[]
-  videoScores        VideoScore[]
+  groupMembers           GroupMember[]
+  resumeScores           ResumeScore[]
+  videoScores            VideoScore[]
+  sourceGroupCopyEvents  CandidateGroupCopyEvent[]
 
   @@map("groups")
 }
@@ -457,8 +459,30 @@ model Interview {
   creator               User                            @relation("InterviewCreator", fields: [createdBy], references: [id])
   cycle                 RecruitingCycle                 @relation(fields: [cycleId], references: [id])
   caseAssignments       CaseAssignment[]
+  copyEvents            CandidateGroupCopyEvent[]
 
   @@map("interviews")
+}
+
+model CandidateGroupCopyEvent {
+  id                  String    @id @default(uuid())
+  interviewId         String
+  sourceGroupId       String
+  destinationGroupId  String?
+  actorId             String?
+  operationKey        String
+  additions           Json      @default("[]")
+  skipped             Json      @default("[]")
+  additionCount       Int       @default(0)
+  skippedCount        Int       @default(0)
+  copiedAt            DateTime  @default(now())
+  interview           Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  sourceGroup         Groups    @relation(fields: [sourceGroupId], references: [id], onDelete: Cascade)
+  actor               User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@unique([interviewId, operationKey])
+  @@index([interviewId, copiedAt])
+  @@map("candidate_group_copy_events")
 }
 
 model InterviewAssignment {
