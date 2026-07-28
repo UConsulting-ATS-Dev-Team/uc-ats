@@ -397,6 +397,18 @@ describe('scheduleFeedbackRequest', () => {
     expect(job.dueAt.getTime()).toBe(decisionSentAt.getTime() + 24 * 60 * 60 * 1000);
   });
 
+  it('clamps an overdue dueAt to the current time', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle({ feedbackCadenceHours: 24 });
+    const decisionSentAt = new Date('2026-07-25T10:00:00.000Z');
+
+    const job = await scheduleFeedbackRequest(app, cycle, decisionSentAt);
+    const now = new Date();
+
+    expect(job.status).toBe(JOB_STATUS.PENDING);
+    expect(job.dueAt.getTime()).toBe(now.getTime());
+  });
+
   it('does not schedule a job when feedback is disabled for the cycle', async () => {
     const app = await seedApplication({ status: 'REJECTED' });
     const cycle = await seedCycle({ feedbackEnabled: false });
