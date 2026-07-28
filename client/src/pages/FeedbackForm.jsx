@@ -84,14 +84,14 @@ export default function FeedbackForm() {
             Thank You
           </Typography>
           <Typography color="text.secondary">
-            Your anonymous feedback has been submitted.
+            Your feedback has been submitted.
           </Typography>
         </Paper>
       </Container>
     );
   }
 
-  const defaultPrompt = prompt || 'We would greatly appreciate your anonymous feedback.';
+  const defaultPrompt = prompt || 'We would greatly appreciate your feedback.';
 
   return (
     <Container maxWidth="sm" sx={{ pt: 8, pb: 4 }}>
@@ -99,7 +99,7 @@ export default function FeedbackForm() {
         <Box sx={{ textAlign: 'center', mb: 3 }}>
           <UConsultingLogo size="medium" />
           <Typography variant="h5" sx={{ mt: 2 }}>
-            Anonymous Feedback
+            Feedback
           </Typography>
           {cycleName && (
             <Typography color="text.secondary" sx={{ mt: 1 }}>

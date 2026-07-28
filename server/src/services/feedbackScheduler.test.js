@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import config from '../config.js';
 
 vi.mock('../prismaClient.js', () => {
   function uid(prefix = 'id') {
@@ -247,6 +248,7 @@ function resetState() {
   prisma.__state.reset();
   vi.clearAllMocks();
   process.env.BASE_URL = 'http://localhost:3001';
+  config.clientUrl = 'http://localhost:3001';
 }
 
 function applicationFixture(overrides = {}) {
@@ -319,6 +321,16 @@ describe('scheduleFeedbackRequest', () => {
     expect(prisma.__state.jobs).toHaveLength(1);
   });
 
+  it('builds the candidate feedback link from config.clientUrl with /feedback/:token', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    config.clientUrl = 'http://localhost:5173';
+
+    const job = await scheduleFeedbackRequest(app, cycle, new Date());
+
+    expect(job.feedbackFormUrl).toMatch(/^http:\/\/localhost:5173\/feedback\/.+/);
+  });
+
   it('creates a PENDING feedback job for REJECTED', async () => {
     const app = await seedApplication({ status: 'REJECTED' });
     const cycle = await seedCycle();
@@ -331,7 +343,7 @@ describe('scheduleFeedbackRequest', () => {
   it('creates a FAILED job when the generated feedback URL is invalid', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
-    process.env.BASE_URL = 'ftp://invalid';
+    config.clientUrl = 'ftp://invalid';
 
     const job = await scheduleFeedbackRequest(app, cycle, new Date());
 
@@ -611,6 +623,52 @@ describe('processFeedbackJobs', () => {
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
     expect(updated.status).toBe(JOB_STATUS.SENT);
     expect(updated.messageId).toBe('msg-1');
+  });
+
+  it('does not resend when the delivery-attempt SENT write fails after provider success', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    const originalUpdateMany = prisma.applicationFeedbackDeliveryAttempt.updateMany;
+    prisma.applicationFeedbackDeliveryAttempt.updateMany = vi.fn(async (args) => {
+      if (args?.data?.status === ATTEMPT_STATUS.SENT) {
+        throw new Error('Simulated delivery attempt SENT write failure');
+      }
+      return originalUpdateMany(args);
+    });
+
+    const first = await processFeedbackJobs();
+    expect(first[0].action).toBe('sent');
+    expect(first[0].note).toMatch(/delivery attempt is durable/);
+
+    // The attempt remains SENDING; restore and run reconciliation, which should
+    // reconcile from the durable SENDING attempt and not call the provider again.
+    prisma.applicationFeedbackDeliveryAttempt.updateMany = originalUpdateMany;
+    const second = await processFeedbackJobs();
+    expect(second).toEqual([]);
+
+    expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.SENT);
+    const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.SENT);
+    expect(attempts[0].messageId).toBe(job.feedbackToken);
+  });
+
+  it('cancels the send when the application status is reversed at the delivery boundary', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    // The job is due, but the applicant status flips before the SENDING intent is written.
+    prisma.__state.applications.find((a) => a.id === app.id).status = 'WAITLISTED';
+    await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    const results = await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results[0].action).toBe('cancelled');
+    expect(results[0].reason).toMatch(/eligibility changed/);
   });
 });
 

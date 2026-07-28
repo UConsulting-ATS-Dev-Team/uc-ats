@@ -114,8 +114,18 @@ router.post('/:token', async (req, res) => {
       finalContent = content.trim();
     }
 
-    await prisma.$transaction([
-      prisma.feedbackResponse.create({
+    // Atomically claim the one-use token: only the first transaction that
+    // updates respondedAt from null creates a response. Concurrent submissions
+    // get a 409 without creating duplicate rows.
+    await prisma.$transaction(async (tx) => {
+      const claim = await tx.applicationFeedbackJob.updateMany({
+        where: { id: job.id, status: 'SENT', respondedAt: null },
+        data: { respondedAt: new Date() },
+      });
+      if (claim.count === 0) {
+        throw new Error('Feedback has already been submitted for this link.');
+      }
+      await tx.feedbackResponse.create({
         data: {
           cycleId: job.cycleId,
           content: finalContent,
@@ -123,16 +133,15 @@ router.post('/:token', async (req, res) => {
           promptSnapshot: job.feedbackPrompt,
           questionsSnapshot: job.feedbackQuestions,
         },
-      }),
-      prisma.applicationFeedbackJob.update({
-        where: { id: job.id },
-        data: { respondedAt: new Date() },
-      }),
-    ]);
+      });
+    });
 
     return res.status(201).json({ message: 'Thank you for your feedback.' });
   } catch (error) {
     console.error('[POST /api/feedback/:token]', error);
+    if (error.message === 'Feedback has already been submitted for this link.') {
+      return res.status(409).json({ error: error.message });
+    }
     return res.status(500).json({ error: 'Failed to submit feedback', details: error.message });
   }
 });
