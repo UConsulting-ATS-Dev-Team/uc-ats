@@ -28,7 +28,7 @@ router.get('/:token', async (req, res) => {
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
       include: {
-        cycle: { select: { name: true } },
+        cycle: { select: { name: true, feedbackPrivacyPolicy: true, feedbackRetentionDays: true } },
       },
     });
 
@@ -47,6 +47,8 @@ router.get('/:token', async (req, res) => {
       cycleName: job.cycle?.name || '',
       prompt: job.feedbackPrompt || null,
       questions: questions && questions.length > 0 ? questions : null,
+      privacyPolicy: job.cycle?.feedbackPrivacyPolicy || null,
+      retentionDays: job.cycle?.feedbackRetentionDays || null,
     });
   } catch (error) {
     console.error('[GET /api/feedback/:token]', error);
@@ -63,7 +65,7 @@ router.post('/:token', async (req, res) => {
     const job = await prisma.applicationFeedbackJob.findUnique({
       where: { feedbackToken: token },
       include: {
-        cycle: { select: { name: true } },
+        cycle: { select: { name: true, feedbackPrivacyPolicy: true, feedbackRetentionDays: true } },
       },
     });
 
@@ -71,7 +73,7 @@ router.post('/:token', async (req, res) => {
       return res.status(404).json({ error: 'Feedback link is invalid or expired.' });
     }
 
-    if (job.respondedAt) {
+    if (job.responded) {
       return res.status(409).json({ error: 'Feedback has already been submitted for this link.' });
     }
 

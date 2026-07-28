@@ -42,10 +42,12 @@ export default function CycleManagement() {
     startDate: '',
     endDate: '',
     isActive: false,
-    feedbackEnabled: true,
+    feedbackEnabled: false,
     feedbackCadenceHours: 48,
     feedbackPrompt: '',
     feedbackQuestions: [],
+    feedbackPrivacyPolicy: '',
+    feedbackRetentionDays: '',
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -72,6 +74,15 @@ export default function CycleManagement() {
       return;
     }
 
+    if (form.feedbackEnabled && (!form.feedbackPrivacyPolicy || !form.feedbackPrivacyPolicy.trim())) {
+      setError('A feedback privacy/retention policy is required when feedback is enabled');
+      return;
+    }
+    if (form.feedbackEnabled && (!form.feedbackRetentionDays || Number(form.feedbackRetentionDays) <= 0)) {
+      setError('A positive feedback retention period (days) is required when feedback is enabled');
+      return;
+    }
+
     try {
       setError('');
       setSubmitting(true);
@@ -79,7 +90,8 @@ export default function CycleManagement() {
       setCreateOpen(false);
       setForm({
         name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
-        feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+        feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+        feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
       });
       await fetchCycles();
       
@@ -105,6 +117,15 @@ export default function CycleManagement() {
       return;
     }
 
+    if (form.feedbackEnabled && (!form.feedbackPrivacyPolicy || !form.feedbackPrivacyPolicy.trim())) {
+      setError('A feedback privacy/retention policy is required when feedback is enabled');
+      return;
+    }
+    if (form.feedbackEnabled && (!form.feedbackRetentionDays || Number(form.feedbackRetentionDays) <= 0)) {
+      setError('A positive feedback retention period (days) is required when feedback is enabled');
+      return;
+    }
+
     try {
       setError('');
       setSubmitting(true);
@@ -114,7 +135,8 @@ export default function CycleManagement() {
       setEditingCycle(null);
       setForm({
         name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
-        feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+        feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+        feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
       });
       await fetchCycles();
       
@@ -137,10 +159,12 @@ export default function CycleManagement() {
       startDate: cycle.startDate ? new Date(cycle.startDate).toISOString().split('T')[0] : '',
       endDate: cycle.endDate ? new Date(cycle.endDate).toISOString().split('T')[0] : '',
       isActive: cycle.isActive,
-      feedbackEnabled: cycle.feedbackEnabled !== false,
+      feedbackEnabled: cycle.feedbackEnabled === true,
       feedbackCadenceHours: cycle.feedbackCadenceHours || 48,
       feedbackPrompt: cycle.feedbackPrompt || '',
       feedbackQuestions: Array.isArray(cycle.feedbackQuestions) ? cycle.feedbackQuestions : [],
+      feedbackPrivacyPolicy: cycle.feedbackPrivacyPolicy || '',
+      feedbackRetentionDays: cycle.feedbackRetentionDays || '',
     });
     setEditOpen(true);
   };
@@ -151,7 +175,8 @@ export default function CycleManagement() {
     setEditingCycle(null);
     setForm({
       name: '', formUrl: '', startDate: '', endDate: '', isActive: false,
-      feedbackEnabled: true, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+      feedbackEnabled: false, feedbackCadenceHours: 48, feedbackPrompt: '', feedbackQuestions: [],
+      feedbackPrivacyPolicy: '', feedbackRetentionDays: '',
     });
     setError('');
   };
@@ -324,6 +349,31 @@ export default function CycleManagement() {
               placeholder="We would greatly appreciate your confidential feedback."
               disabled={!form.feedbackEnabled}
             />
+            {form.feedbackEnabled && (
+              <TextField
+                label="Feedback privacy / retention policy"
+                value={form.feedbackPrivacyPolicy}
+                onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
+                fullWidth
+                multiline
+                minRows={3}
+                placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
+                disabled={!form.feedbackEnabled}
+                required={form.feedbackEnabled}
+              />
+            )}
+            {form.feedbackEnabled && (
+              <TextField
+                label="Retention period (days)"
+                type="number"
+                value={form.feedbackRetentionDays}
+                onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
+                fullWidth
+                inputProps={{ min: 1 }}
+                disabled={!form.feedbackEnabled}
+                required={form.feedbackEnabled}
+              />
+            )}
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>
               {(form.feedbackQuestions || []).map((q, index) => (
@@ -444,6 +494,31 @@ export default function CycleManagement() {
               placeholder="We would greatly appreciate your confidential feedback."
               disabled={!form.feedbackEnabled}
             />
+            {form.feedbackEnabled && (
+              <TextField
+                label="Feedback privacy / retention policy"
+                value={form.feedbackPrivacyPolicy}
+                onChange={(e) => setForm({ ...form, feedbackPrivacyPolicy: e.target.value })}
+                fullWidth
+                multiline
+                minRows={3}
+                placeholder="Candidates will see this before submitting feedback. State who can view responses and how long they are retained."
+                disabled={!form.feedbackEnabled}
+                required={form.feedbackEnabled}
+              />
+            )}
+            {form.feedbackEnabled && (
+              <TextField
+                label="Retention period (days)"
+                type="number"
+                value={form.feedbackRetentionDays}
+                onChange={(e) => setForm({ ...form, feedbackRetentionDays: e.target.value })}
+                fullWidth
+                inputProps={{ min: 1 }}
+                disabled={!form.feedbackEnabled}
+                required={form.feedbackEnabled}
+              />
+            )}
             <Box>
               <Typography variant="subtitle2" gutterBottom>Questions</Typography>
               {(form.feedbackQuestions || []).map((q, index) => (

@@ -271,6 +271,9 @@ function applicationFixture(overrides = {}) {
 function cycleFixture(overrides = {}) {
   return {
     name: 'Fall 2026',
+    feedbackEnabled: true,
+    feedbackPrivacyPolicy: 'Responses are confidential and retained for 12 months for recruiting improvement.',
+    feedbackRetentionDays: 365,
     ...overrides,
   };
 }
@@ -718,7 +721,7 @@ describe('processFeedbackJobs', () => {
 
     expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
     expect(results[0].action).toBe('cancelled');
-    expect(results[0].reason).toMatch(/eligibility changed.*after send boundary/);
+    expect(results[0].reason).toMatch(/eligibility changed.*at send boundary/);
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
     expect(updated.status).toBe(JOB_STATUS.CANCELLED);
   });
@@ -871,7 +874,7 @@ describe('reconcileFeedbackJob', () => {
     vi.useRealTimers();
   });
 
-  it('reconciles an UNKNOWN job to SENT with a provider message id', async () => {
+  it('reconciles an UNKNOWN job to SENT with a provider message id and audits the actor', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({
@@ -881,16 +884,20 @@ describe('reconcileFeedbackJob', () => {
       lastError: 'Lease expired',
     });
 
-    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, messageId: 'msg-123' });
+    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, messageId: 'msg-123', actor: 'test-admin' });
 
     expect(result.status).toBe(JOB_STATUS.SENT);
     expect(result.lastError).toBeNull();
+    expect(result.reconciledBy).toBe('test-admin');
+    expect(result.reconciledFromStatus).toBe(JOB_STATUS.UNKNOWN);
     expect(result.deliveryAttempts).toHaveLength(1);
     expect(result.deliveryAttempts[0].status).toBe(ATTEMPT_STATUS.SENT);
     expect(result.deliveryAttempts[0].messageId).toBe('msg-123');
+    expect(result.deliveryAttempts[0].reconciledBy).toBe('test-admin');
+    expect(result.deliveryAttempts[0].priorStatus).toBe(JOB_STATUS.UNKNOWN);
   });
 
-  it('reconciles an UNKNOWN job to FAILED with a reason', async () => {
+  it('reconciles an UNKNOWN job to FAILED with a reason and audits the actor', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({
@@ -899,18 +906,61 @@ describe('reconcileFeedbackJob', () => {
       status: JOB_STATUS.UNKNOWN,
     });
 
-    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, reason: 'Bounced by provider' });
+    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, reason: 'Bounced by provider', actor: 'test-admin' });
 
     expect(result.status).toBe(JOB_STATUS.FAILED);
     expect(result.lastError).toBe('Bounced by provider');
+    expect(result.reconciledBy).toBe('test-admin');
+    expect(result.reconciledFromStatus).toBe(JOB_STATUS.UNKNOWN);
     expect(result.deliveryAttempts[0].status).toBe(ATTEMPT_STATUS.FAILED);
     expect(result.deliveryAttempts[0].error).toBe('Bounced by provider');
+    expect(result.deliveryAttempts[0].reconciledBy).toBe('test-admin');
+    expect(result.deliveryAttempts[0].priorStatus).toBe(JOB_STATUS.UNKNOWN);
+  });
+
+  it('reconciles a stale PROCESSING job to SENT', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      status: JOB_STATUS.PROCESSING,
+      claimToken: 'stale-token',
+      claimedAt: new Date('2026-07-28T09:00:00.000Z'),
+    });
+
+    const result = await reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, messageId: 'msg-456', actor: 'test-admin' });
+
+    expect(result.status).toBe(JOB_STATUS.SENT);
+    expect(result.reconciledFromStatus).toBe(JOB_STATUS.PROCESSING);
+    expect(result.deliveryAttempts[0].priorStatus).toBe(JOB_STATUS.PROCESSING);
   });
 
   it('throws when reconciling to SENT without a message id', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.UNKNOWN });
-    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT })).rejects.toThrow(/messageId is required/);
+    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, actor: 'test-admin' })).rejects.toThrow(/messageId is required/);
+  });
+
+  it('throws when actor is missing', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.UNKNOWN });
+    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.SENT, messageId: 'msg-123' })).rejects.toThrow(/Actor is required/);
+  });
+
+  it('throws when reconciling from a confirmed SENT job', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.SENT });
+    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, actor: 'test-admin' })).rejects.toThrow(/Cannot reconcile job in status SENT/);
+  });
+
+  it('throws when reconciling from a PENDING job', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, status: JOB_STATUS.PENDING });
+    await expect(reconcileFeedbackJob(job.id, { status: JOB_STATUS.FAILED, actor: 'test-admin' })).rejects.toThrow(/Cannot reconcile job in status PENDING/);
   });
 });

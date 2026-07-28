@@ -84,7 +84,7 @@ export async function scheduleFeedbackRequest(application, cycle, decisionSentAt
     throw new Error('decisionSentAt is required to schedule a feedback request');
   }
 
-  if (cycle?.feedbackEnabled === false) {
+  if (cycle?.feedbackEnabled === false || !cycle?.feedbackPrivacyPolicy) {
     await cancelPendingFeedbackRequest(application.id);
     return null;
   }
@@ -392,23 +392,33 @@ async function markJobUnknown(job, token, messageId, now, reason) {
   ]);
 }
 
-async function verifyAfterPrepare(job, token) {
-  return prisma.$transaction(async (tx) => {
-    const [currentJob, currentApp] = await Promise.all([
-      tx.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
-      tx.application.findUnique({ where: { id: job.applicationId } }),
-    ]);
+async function guardedSend(job, token, to, candidateName, cycleName, feedbackFormUrl, messageKey) {
+  // The durable SENDING delivery attempt is the authoritative send boundary.
+  // Re-read the attempt, job claim, and application eligibility immediately
+  // before the provider call so a concurrent status reversal or claim loss is
+  // observed here and the provider is never invoked.
+  const [currentJob, currentAttempt, currentApp] = await Promise.all([
+    prisma.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
+    prisma.applicationFeedbackDeliveryAttempt.findFirst({
+      where: { jobId: job.id, claimToken: token },
+      orderBy: { attemptedAt: 'desc' },
+    }),
+    prisma.application.findUnique({ where: { id: job.applicationId } }),
+  ]);
 
-    if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
-      return { ok: false, reason: 'Job claim lost or token mismatch after send boundary' };
-    }
+  if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
+    return { cancelled: true, reason: 'Job claim lost or token mismatch at send boundary' };
+  }
 
-    if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
-      return { ok: false, reason: 'Application eligibility changed or final decision was reversed after send boundary' };
-    }
+  if (!currentAttempt || currentAttempt.status !== ATTEMPT_STATUS.SENDING) {
+    return { cancelled: true, reason: 'Delivery attempt was cancelled before provider call' };
+  }
 
-    return { ok: true };
-  });
+  if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
+    return { cancelled: true, reason: 'Application eligibility changed or final decision was reversed at send boundary' };
+  }
+
+  return sendApplicantFeedbackRequest(to, candidateName, cycleName, feedbackFormUrl, messageKey);
 }
 
 async function processSingleFeedbackJob(job, now = new Date()) {
@@ -479,6 +489,11 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'failed', error: validationError };
   }
 
+  if (cycle?.feedbackEnabled !== true || !cycle?.feedbackPrivacyPolicy) {
+    await cancelClaimedJob(currentJob, token, 'Feedback privacy policy is not configured for this recruiting cycle');
+    return { id: job.id, action: 'cancelled', reason: 'Feedback privacy policy is not configured for this recruiting cycle' };
+  }
+
   // The feedback token is a durable provider/outbox key for this job.
   const messageKey = currentJob.feedbackToken || token;
 
@@ -494,26 +509,21 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'failed', error: prepared.reason || 'Send preparation failed' };
   }
 
-  // Re-check eligibility after the SENDING intent is committed but before the
-  // provider is called. A reversal in this gap cancels the attempt and the job.
-  const stillEligible = await verifyAfterPrepare(currentJob, token);
-  if (!stillEligible.ok) {
-    await cancelClaimedJob(currentJob, token, stillEligible.reason);
-    return { id: job.id, action: 'cancelled', reason: stillEligible.reason };
-  }
-
+  // The provider is only invoked after the durable SENDING attempt and current
+  // eligibility are re-verified by guardedSend. This makes the outbox/claim the
+  // authoritative boundary; a reversal after the boundary is durably recorded
+  // as a cancelled attempt and the provider is not called.
   let sendResult;
   try {
-    sendResult = await sendApplicantFeedbackRequest(
-      to,
-      candidateName,
-      cycleName,
-      feedbackFormUrl,
-      messageKey
-    );
+    sendResult = await guardedSend(currentJob, token, to, candidateName, cycleName, feedbackFormUrl, messageKey);
   } catch (sendErr) {
     await markJobFailed(currentJob, token, sendErr.message);
     return { id: job.id, action: 'failed', error: sendErr.message };
+  }
+
+  if (sendResult.cancelled) {
+    await cancelClaimedJob(currentJob, token, sendResult.reason);
+    return { id: job.id, action: 'cancelled', reason: sendResult.reason };
   }
 
   if (!sendResult.success) {
@@ -735,13 +745,24 @@ export async function retryFeedbackJob(id) {
   return prisma.applicationFeedbackJob.findUnique({ where: { id } });
 }
 
-export async function reconcileFeedbackJob(id, { status, messageId, reason }) {
+export async function reconcileFeedbackJob(id, { status, messageId, reason, actor }) {
   const existing = await prisma.applicationFeedbackJob.findUnique({
     where: { id },
     include: { deliveryAttempts: { orderBy: { attemptedAt: 'desc' }, take: 1 } },
   });
 
   if (!existing) throw new Error('Feedback job not found');
+
+  if (!actor) throw new Error('Actor is required to reconcile a feedback job');
+
+  // Only ambiguous or stale in-flight states may be reconciled. Confirmed SENT,
+  // FAILED, CANCELLED, and PENDING jobs must follow the normal workflow.
+  const reconcilableStatuses = [JOB_STATUS.UNKNOWN, JOB_STATUS.PROCESSING];
+  if (!reconcilableStatuses.includes(existing.status)) {
+    throw new Error(
+      `Cannot reconcile job in status ${existing.status}; only UNKNOWN or stale in-flight (PROCESSING) jobs can be reconciled`
+    );
+  }
 
   if (status !== JOB_STATUS.SENT && status !== JOB_STATUS.FAILED) {
     throw new Error('Reconcile status must be SENT or FAILED');
@@ -752,18 +773,24 @@ export async function reconcileFeedbackJob(id, { status, messageId, reason }) {
   }
 
   const now = new Date();
+  const audit = {
+    reconciledBy: actor,
+    reconciledAt: now,
+    reconciledReason: reason || null,
+    reconciledFromStatus: existing.status,
+  };
 
   await prisma.$transaction(async (tx) => {
     // Mark any in-flight delivery attempts as reconciled.
     if (status === JOB_STATUS.SENT) {
       await tx.applicationFeedbackDeliveryAttempt.updateMany({
         where: { jobId: id, status: ATTEMPT_STATUS.SENDING },
-        data: { status: ATTEMPT_STATUS.CANCELLED, error: 'Reconciled to SENT by operator' },
+        data: { status: ATTEMPT_STATUS.CANCELLED, error: `Reconciled to SENT by ${actor}` },
       });
     } else {
       await tx.applicationFeedbackDeliveryAttempt.updateMany({
         where: { jobId: id, status: { in: [ATTEMPT_STATUS.PENDING, ATTEMPT_STATUS.SENDING] } },
-        data: { status: ATTEMPT_STATUS.FAILED, error: reason || 'Reconciled to FAILED by operator' },
+        data: { status: ATTEMPT_STATUS.FAILED, error: reason || `Reconciled to FAILED by ${actor}` },
       });
     }
 
@@ -772,8 +799,10 @@ export async function reconcileFeedbackJob(id, { status, messageId, reason }) {
         jobId: id,
         status: status === JOB_STATUS.SENT ? ATTEMPT_STATUS.SENT : ATTEMPT_STATUS.FAILED,
         messageId: status === JOB_STATUS.SENT ? messageId : null,
-        error: status === JOB_STATUS.FAILED ? reason || 'Reconciled to FAILED by operator' : null,
+        error: status === JOB_STATUS.FAILED ? reason || `Reconciled to FAILED by ${actor}` : null,
         attemptedAt: now,
+        ...audit,
+        priorStatus: existing.status,
       },
     });
 
@@ -785,6 +814,7 @@ export async function reconcileFeedbackJob(id, { status, messageId, reason }) {
         lastError: status === JOB_STATUS.FAILED ? reason || null : null,
         claimToken: null,
         claimedAt: null,
+        ...audit,
       },
     });
   });

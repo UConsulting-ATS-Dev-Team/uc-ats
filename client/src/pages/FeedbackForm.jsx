@@ -21,6 +21,8 @@ export default function FeedbackForm() {
   const [cycleName, setCycleName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [questions, setQuestions] = useState(null);
+  const [privacyPolicy, setPrivacyPolicy] = useState('');
+  const [retentionDays, setRetentionDays] = useState(null);
   const [answers, setAnswers] = useState({});
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -35,6 +37,8 @@ export default function FeedbackForm() {
           setCycleName(data.cycleName || '');
           setPrompt(data.prompt || '');
           setQuestions(data.questions);
+          setPrivacyPolicy(data.privacyPolicy || '');
+          setRetentionDays(data.retentionDays || null);
         }
       } catch (e) {
         if (!cancelled) {
@@ -113,6 +117,13 @@ export default function FeedbackForm() {
         {!error && (
           <form onSubmit={handleSubmit}>
             <Typography sx={{ mb: 2 }}>{defaultPrompt}</Typography>
+
+            {privacyPolicy && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                {privacyPolicy}
+                {retentionDays ? ` Responses will be retained for ${retentionDays} days.` : ''}
+              </Alert>
+            )}
 
             {questions && questions.length > 0 ? (
               <Stack spacing={2} sx={{ mb: 3 }}>

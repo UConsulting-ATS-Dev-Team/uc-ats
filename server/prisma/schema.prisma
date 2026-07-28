@@ -134,10 +134,12 @@ model RecruitingCycle {
   createdAt           DateTime                @default(now())
   formUrl              String?
   feedbackFormUrl      String?
-  feedbackEnabled      Boolean                 @default(true)
+  feedbackEnabled      Boolean                 @default(false)
   feedbackCadenceHours Int                     @default(48)
   feedbackPrompt       String?
   feedbackQuestions    Json?
+  feedbackPrivacyPolicy String?
+  feedbackRetentionDays Int?
   resumeDeadline       String?
   coverLetterDeadline  String?
   videoDeadline        String?
@@ -175,6 +177,10 @@ model ApplicationFeedbackJob {
   claimToken     String?
   claimedAt      DateTime?
   messageId      String?
+  reconciledBy   String?
+  reconciledAt   DateTime?
+  reconciledReason String?
+  reconciledFromStatus String?
   createdAt      DateTime                        @default(now())
   updatedAt      DateTime                        @updatedAt
   application    Application                     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
@@ -196,6 +202,10 @@ model ApplicationFeedbackDeliveryAttempt {
   error          String?
   feedbackFormUrl String?
   attemptedAt    DateTime             @default(now())
+  reconciledBy   String?
+  reconciledAt   DateTime?
+  reconciledReason String?
+  priorStatus    String?
   job            ApplicationFeedbackJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId, attemptedAt])

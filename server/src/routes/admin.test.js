@@ -596,6 +596,52 @@ describe('POST /api/admin/process-final-decisions', () => {
     expect(app.decisionSendStatus).toBe('SENT');
     expect(app.decisionSentAt).not.toBeNull();
   });
+
+  it('marks provider-success -> message-id write failure as UNKNOWN and does not resend', async () => {
+    sendFinalRejectionEmail.mockResolvedValue({ success: true, messageId: 'rejection-1' });
+    scheduleFeedbackRequest.mockResolvedValue({ id: 'job-1' });
+
+    mockApplications.push({
+      id: 'app-1',
+      email: 'jane@example.com',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      currentRound: '4',
+      approved: false,
+      cycleId: 'cycle-1',
+      decisionSentAt: null,
+      candidate: { id: 'cand-1' },
+    });
+
+    const originalUpdateMany = prisma.application.updateMany;
+    prisma.application.updateMany = vi.fn(async ({ where, data }) => {
+      if (data?.decisionSendMessageId && data?.decisionSentAt && !data?.decisionSendStatus) {
+        throw new Error('Simulated provider result write failure');
+      }
+      return originalUpdateMany({ where, data });
+    });
+
+    const first = await (await postProcessFinalDecisions()).json();
+    expect(first.results.emailsSent).toBe(1);
+    expect(first.results.rejected[0].note).toMatch(/reconciliation pending/);
+    expect(sendFinalRejectionEmail).toHaveBeenCalledTimes(1);
+    expect(scheduleFeedbackRequest).toHaveBeenCalledTimes(0);
+    const app = mockApplications[0];
+    expect(app.decisionSendStatus).toBe('SENDING');
+    expect(app.decisionSendMessageId).toBeNull();
+    expect(app.decisionSentAt).toBeNull();
+
+    // Simulate lease expiry so the next run reconciles the SENDING record.
+    app.decisionSendAttemptedAt = new Date('2026-07-27T10:00:00.000Z');
+    prisma.application.updateMany = originalUpdateMany;
+
+    const second = await (await postProcessFinalDecisions()).json();
+    expect(second.results.rejected).toHaveLength(1);
+    expect(second.results.rejected[0].note).toBe('Decision email outcome unknown; requires operator reconciliation');
+    expect(sendFinalRejectionEmail).toHaveBeenCalledTimes(1);
+    expect(scheduleFeedbackRequest).toHaveBeenCalledTimes(0);
+    expect(app.decisionSendStatus).toBe('UNKNOWN');
+  });
 });
 
 describe('Admin feedback scheduler routes', () => {
@@ -655,6 +701,6 @@ describe('Admin feedback scheduler routes', () => {
 
     expect(res.status).toBe(200);
     expect(body.job.status).toBe('SENT');
-    expect(reconcileFeedbackJob).toHaveBeenCalledWith('job-1', { status: 'SENT', messageId: 'msg-123', reason: undefined });
+    expect(reconcileFeedbackJob).toHaveBeenCalledWith('job-1', { status: 'SENT', messageId: 'msg-123', reason: undefined, actor: 'admin@example.com' });
   });
 });
