@@ -73,6 +73,11 @@ vi.mock('../prismaClient.js', () => {
         if (rec === null || rec > new Date(value.lte).getTime()) return false;
         continue;
       }
+      if (key === 'attemptedAt' && value?.lte !== undefined) {
+        const rec = record.attemptedAt ? new Date(record.attemptedAt).getTime() : null;
+        if (rec === null || rec > new Date(value.lte).getTime()) return false;
+        continue;
+      }
       if (record[key] !== value) return false;
     }
 
@@ -597,7 +602,7 @@ describe('processFeedbackJobs', () => {
     expect(updated.status).toBe(JOB_STATUS.SENT);
   });
 
-  it('does not resend when the job SENT state write fails after provider success', async () => {
+  it('reconciles a SENT delivery attempt when the job SENT state write fails after provider success', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
@@ -612,7 +617,7 @@ describe('processFeedbackJobs', () => {
 
     const first = await processFeedbackJobs();
     expect(first[0].action).toBe('sent');
-    expect(first[0].note).toMatch(/delivery attempt is durable/);
+    expect(first[0].note).toMatch(/delivery attempt persisted|reconcil/i);
 
     // Restore and run reconciliation; the durable SENT attempt should keep the email from being retried.
     prisma.applicationFeedbackJob.updateMany = originalUpdateMany;
@@ -625,7 +630,7 @@ describe('processFeedbackJobs', () => {
     expect(updated.messageId).toBe('msg-1');
   });
 
-  it('does not resend when the delivery-attempt SENT write fails after provider success', async () => {
+  it('marks provider-success-before-delivery-attempt-state-write as UNKNOWN and does not resend', async () => {
     const app = await seedApplication();
     const cycle = await seedCycle();
     const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
@@ -639,22 +644,21 @@ describe('processFeedbackJobs', () => {
     });
 
     const first = await processFeedbackJobs();
-    expect(first[0].action).toBe('sent');
-    expect(first[0].note).toMatch(/delivery attempt is durable/);
+    expect(first[0].action).toBe('unknown');
+    expect(first[0].note).toMatch(/operator reconciliation/);
 
-    // The attempt remains SENDING; restore and run reconciliation, which should
-    // reconcile from the durable SENDING attempt and not call the provider again.
+    // Restore and run the worker again; the UNKNOWN outcome should not trigger another provider call.
     prisma.applicationFeedbackDeliveryAttempt.updateMany = originalUpdateMany;
     const second = await processFeedbackJobs();
     expect(second).toEqual([]);
 
     expect(sendApplicantFeedbackRequest).toHaveBeenCalledTimes(1);
     const updated = prisma.__state.jobs.find((j) => j.id === job.id);
-    expect(updated.status).toBe(JOB_STATUS.SENT);
+    expect(updated.status).toBe(JOB_STATUS.UNKNOWN);
+    expect(updated.lastError).toMatch(/Post-send state write failed/);
     const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
     expect(attempts).toHaveLength(1);
-    expect(attempts[0].status).toBe(ATTEMPT_STATUS.SENT);
-    expect(attempts[0].messageId).toBe(job.feedbackToken);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.UNKNOWN);
   });
 
   it('cancels the send when the application status is reversed at the delivery boundary', async () => {
@@ -669,6 +673,105 @@ describe('processFeedbackJobs', () => {
     expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
     expect(results[0].action).toBe('cancelled');
     expect(results[0].reason).toMatch(/eligibility changed/);
+  });
+
+  it('cancels the send when the application status is reversed after the SENDING intent is written but before the provider call', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    const job = await seedJob({ applicationId: app.id, cycleId: cycle.id, dueAt: new Date('2026-07-26T10:00:00.000Z') });
+
+    let findUniqueCalls = 0;
+    const originalFindUnique = prisma.application.findUnique;
+    prisma.application.findUnique = vi.fn(async (args) => {
+      const record = prisma.__state.applications.find((a) => a.id === args.where.id);
+      if (!record) return record;
+      findUniqueCalls += 1;
+      // The first read (inside prepareSend) sees REJECTED; the second read (the
+      // post-prepareSend eligibility check) simulates a concurrent status reversal.
+      if (findUniqueCalls >= 2) {
+        record.status = 'WAITLISTED';
+      }
+      return { ...record };
+    });
+
+    const results = await processFeedbackJobs();
+    prisma.application.findUnique = originalFindUnique;
+
+    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results[0].action).toBe('cancelled');
+    expect(results[0].reason).toMatch(/eligibility changed.*after send boundary/);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.CANCELLED);
+  });
+
+  it('does not falsely reconcile a pre-provider crash as SENT and requires operator reconciliation', async () => {
+    const app = await seedApplication();
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      dueAt: new Date('2026-07-26T10:00:00.000Z'),
+      status: JOB_STATUS.PROCESSING,
+      claimToken: 'pre-provider-crash-token',
+      claimedAt: new Date('2026-07-25T10:00:00.000Z'),
+    });
+    await prisma.applicationFeedbackDeliveryAttempt.create({
+      data: {
+        jobId: job.id,
+        claimToken: 'pre-provider-crash-token',
+        status: ATTEMPT_STATUS.SENDING,
+        messageId: job.feedbackToken,
+        attemptedAt: new Date('2026-07-25T10:01:00.000Z'),
+        feedbackFormUrl: job.feedbackFormUrl,
+      },
+    });
+
+    vi.setSystemTime(new Date('2026-07-28T10:00:00.000Z'));
+
+    const results = await processFeedbackJobs();
+
+    expect(sendApplicantFeedbackRequest).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.UNKNOWN);
+    expect(updated.lastError).toMatch(/Worker lease expired before delivery was confirmed/);
+    const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.UNKNOWN);
+    expect(attempts[0].messageId).toBe(job.feedbackToken);
+  });
+
+  it('cancels a SENDING attempt on status reversal without undefined Prisma status arrays', async () => {
+    const app = await seedApplication({ status: 'REJECTED' });
+    const cycle = await seedCycle();
+    const job = await seedJob({
+      applicationId: app.id,
+      cycleId: cycle.id,
+      dueAt: new Date('2026-07-26T10:00:00.000Z'),
+      status: JOB_STATUS.PROCESSING,
+      claimToken: 'cancel-token',
+      claimedAt: new Date('2026-07-28T09:00:00.000Z'),
+    });
+    await prisma.applicationFeedbackDeliveryAttempt.create({
+      data: {
+        jobId: job.id,
+        claimToken: 'cancel-token',
+        status: ATTEMPT_STATUS.SENDING,
+        messageId: job.feedbackToken,
+        attemptedAt: new Date('2026-07-28T09:01:00.000Z'),
+        feedbackFormUrl: job.feedbackFormUrl,
+      },
+    });
+
+    const cancelled = await handleApplicationStatusChange(app.id, 'WAITLISTED');
+
+    expect(cancelled).toBe(1);
+    const updated = prisma.__state.jobs.find((j) => j.id === job.id);
+    expect(updated.status).toBe(JOB_STATUS.CANCELLED);
+    const attempts = prisma.__state.attempts.filter((a) => a.jobId === job.id);
+    expect(attempts[0].status).toBe(ATTEMPT_STATUS.CANCELLED);
+    const appUpdated = prisma.__state.applications.find((a) => a.id === app.id);
+    expect(appUpdated.decisionSentAt).toBeNull();
   });
 });
 

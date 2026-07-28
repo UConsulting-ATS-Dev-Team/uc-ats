@@ -12,6 +12,7 @@ export const JOB_STATUS = {
   SENT: 'SENT',
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED',
+  UNKNOWN: 'UNKNOWN',
 };
 
 export const ATTEMPT_STATUS = {
@@ -20,6 +21,7 @@ export const ATTEMPT_STATUS = {
   SENT: 'SENT',
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED',
+  UNKNOWN: 'UNKNOWN',
 };
 
 const FEEDBACK_DELAY_MS = 48 * 60 * 60 * 1000;
@@ -151,7 +153,7 @@ export async function cancelPendingFeedbackRequest(applicationId) {
     where: {
       applicationId,
       type: FEEDBACK_JOB_TYPE,
-      status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.FAILED] },
+      status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.FAILED, JOB_STATUS.UNKNOWN] },
     },
     select: { id: true },
   });
@@ -173,7 +175,7 @@ export async function cancelPendingFeedbackRequest(applicationId) {
     prisma.applicationFeedbackDeliveryAttempt.updateMany({
       where: {
         jobId: { in: ids },
-        status: { in: [ATTEMPT_STATUS.PENDING, ATTEMPT_STATUS.PROCESSING] },
+        status: { in: [ATTEMPT_STATUS.PENDING, ATTEMPT_STATUS.SENDING, ATTEMPT_STATUS.UNKNOWN] },
       },
       data: { status: ATTEMPT_STATUS.CANCELLED, error: 'Job cancelled by status change' },
     }),
@@ -361,22 +363,64 @@ async function reconcileJobSent(job, now, messageId) {
   }
 }
 
+async function markJobUnknown(job, token, messageId, now, reason) {
+  await prisma.$transaction([
+    prisma.applicationFeedbackDeliveryAttempt.updateMany({
+      where: { jobId: job.id, claimToken: token, status: ATTEMPT_STATUS.SENDING },
+      data: {
+        status: ATTEMPT_STATUS.UNKNOWN,
+        messageId,
+        attemptedAt: now,
+        error: reason,
+      },
+    }),
+    prisma.applicationFeedbackJob.updateMany({
+      where: { id: job.id, claimToken: token, status: JOB_STATUS.PROCESSING },
+      data: {
+        status: JOB_STATUS.UNKNOWN,
+        messageId,
+        lastError: reason,
+        claimToken: null,
+        claimedAt: null,
+      },
+    }),
+  ]);
+}
+
+async function verifyAfterPrepare(job, token) {
+  return prisma.$transaction(async (tx) => {
+    const [currentJob, currentApp] = await Promise.all([
+      tx.applicationFeedbackJob.findUnique({ where: { id: job.id } }),
+      tx.application.findUnique({ where: { id: job.applicationId } }),
+    ]);
+
+    if (!currentJob || currentJob.status !== JOB_STATUS.PROCESSING || currentJob.claimToken !== token) {
+      return { ok: false, reason: 'Job claim lost or token mismatch after send boundary' };
+    }
+
+    if (!currentApp || !isRejectedStatus(currentApp.status) || !datesEqual(currentApp.decisionSentAt, currentJob.decisionSentAt)) {
+      return { ok: false, reason: 'Application eligibility changed or final decision was reversed after send boundary' };
+    }
+
+    return { ok: true };
+  });
+}
+
 async function processSingleFeedbackJob(job, now = new Date()) {
-  // If a previous run already committed a send intent (SENDING) or a confirmed
-  // delivery (SENT), do not call the provider again. This is the durable
-  // outbox boundary that survives provider success -> persistence failures.
-  const existingDurableAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
-    where: { jobId: job.id, status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING] } },
+  // If a previous run already confirmed delivery (SENT), reconcile the job and
+  // do not call the provider again.
+  const existingSentAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
+    where: { jobId: job.id, status: ATTEMPT_STATUS.SENT },
     orderBy: { attemptedAt: 'desc' },
   });
-  if (existingDurableAttempt) {
-    const messageId = existingDurableAttempt.messageId || existingDurableAttempt.claimToken;
+  if (existingSentAttempt) {
+    const messageId = existingSentAttempt.messageId || existingSentAttempt.claimToken;
     try {
       await reconcileJobSent(job, now, messageId);
     } catch {
-      // The durable delivery attempt already records the external effect.
+      // The confirmed SENT attempt already records the external effect.
     }
-    return { id: job.id, action: 'sent', messageId, note: 'reconciled from durable delivery attempt' };
+    return { id: job.id, action: 'sent', messageId, note: 'reconciled from SENT delivery attempt' };
   }
 
   const token = generateClaimToken();
@@ -386,17 +430,21 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'skipped', reason: 'already claimed or no longer pending' };
   }
 
-  // A concurrent worker may have committed a SENDING/SENT attempt while we
-  // were claiming; reconcile instead of sending.
+  // A concurrent worker may have committed a SENT/SENDING attempt while we were
+  // claiming. Do not send again: SENT means delivered, SENDING/UNKNOWN means
+  // another worker owns the outcome.
   const concurrentDurableAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
-    where: { jobId: job.id, status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING] } },
+    where: { jobId: job.id, status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING, ATTEMPT_STATUS.UNKNOWN] } },
     orderBy: { attemptedAt: 'desc' },
   });
   if (concurrentDurableAttempt) {
     await cancelClaimedJob(claimed, token, 'Reconciled with a durable delivery attempt from another worker');
     const messageId = concurrentDurableAttempt.messageId || concurrentDurableAttempt.claimToken;
-    try { await reconcileJobSent(claimed, now, messageId); } catch {}
-    return { id: job.id, action: 'sent', messageId, note: 'reconciled from durable delivery attempt' };
+    if (concurrentDurableAttempt.status === ATTEMPT_STATUS.SENT) {
+      try { await reconcileJobSent(claimed, now, messageId); } catch {}
+      return { id: job.id, action: 'sent', messageId, note: 'reconciled from SENT delivery attempt' };
+    }
+    return { id: job.id, action: 'unknown', messageId, note: 'concurrent delivery attempt in progress or unresolved' };
   }
 
   // Use the freshly claimed job record for immutable snapshots and the
@@ -441,6 +489,14 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     return { id: job.id, action: 'failed', error: prepared.reason || 'Send preparation failed' };
   }
 
+  // Re-check eligibility after the SENDING intent is committed but before the
+  // provider is called. A reversal in this gap cancels the attempt and the job.
+  const stillEligible = await verifyAfterPrepare(currentJob, token);
+  if (!stillEligible.ok) {
+    await cancelClaimedJob(currentJob, token, stillEligible.reason);
+    return { id: job.id, action: 'cancelled', reason: stillEligible.reason };
+  }
+
   let sendResult;
   try {
     sendResult = await sendApplicantFeedbackRequest(
@@ -467,25 +523,35 @@ async function processSingleFeedbackJob(job, now = new Date()) {
     await markJobSent(currentJob, now, messageId, token);
     return { id: job.id, action: 'sent', messageId };
   } catch (postSendErr) {
-    // The SENDING intent is durable. Do not mark the job FAILED; the attempt
-    // and job state will be reconciled on the next run.
-    return { id: job.id, action: 'sent', messageId, note: 'delivery attempt is durable and will be reconciled' };
+    // The provider reported success, but we could not persist the SENT state.
+    // If the attempt was actually written as SENT, reconcile the job from it.
+    // Otherwise the SENDING intent does not prove delivery: mark UNKNOWN and
+    // require operator reconciliation before any retry.
+    const attempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
+      where: { jobId: currentJob.id, claimToken: token },
+      orderBy: { attemptedAt: 'desc' },
+    });
+    if (attempt?.status === ATTEMPT_STATUS.SENT) {
+      try { await reconcileJobSent(currentJob, now, attempt.messageId || messageId); } catch {}
+      return { id: job.id, action: 'sent', messageId: attempt.messageId || messageId, note: 'delivery attempt persisted; job state will be reconciled' };
+    }
+    await markJobUnknown(currentJob, token, messageId, now, `Post-send state write failed: ${postSendErr.message}`);
+    return { id: job.id, action: 'unknown', messageId, note: 'delivery outcome unknown; requires operator reconciliation' };
   }
 }
 
 async function reconcileStalledJobs(now = new Date()) {
-  // Reconcile any job that already has a durable SENDING or confirmed SENT
-  // delivery attempt recorded. This covers the provider-success -> persistence-
-  // failure cases and prevents duplicate provider calls on retry.
-  const durableAttempts = await prisma.applicationFeedbackDeliveryAttempt.findMany({
-    where: { status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING] } },
+  const leaseExpiry = new Date(now.getTime() - LEASE_TIMEOUT_MS);
+
+  // Confirm any job whose delivery attempt is already SENT.
+  const sentAttempts = await prisma.applicationFeedbackDeliveryAttempt.findMany({
+    where: { status: ATTEMPT_STATUS.SENT },
     include: { job: true },
   });
-
-  for (const attempt of durableAttempts) {
+  for (const attempt of sentAttempts) {
     if (attempt.job && attempt.job.status !== JOB_STATUS.SENT) {
       await prisma.applicationFeedbackJob.updateMany({
-        where: { id: attempt.job.id, status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING] } },
+        where: { id: attempt.job.id, status: { in: [JOB_STATUS.PENDING, JOB_STATUS.PROCESSING, JOB_STATUS.UNKNOWN] } },
         data: {
           status: JOB_STATUS.SENT,
           sentAt: attempt.attemptedAt,
@@ -495,17 +561,44 @@ async function reconcileStalledJobs(now = new Date()) {
           lastError: null,
         },
       });
-      if (attempt.status === ATTEMPT_STATUS.SENDING) {
-        await prisma.applicationFeedbackDeliveryAttempt.updateMany({
-          where: { id: attempt.id },
-          data: { status: ATTEMPT_STATUS.SENT },
-        });
-      }
     }
   }
 
-  // Reset PROCESSING jobs whose lease has expired without a durable attempt.
-  const leaseExpiry = new Date(now.getTime() - LEASE_TIMEOUT_MS);
+  // A SENDING attempt only records local intent; it does not prove the provider
+  // accepted the message. If the lease has expired, the worker is presumed to
+  // have crashed or hung, so mark the attempt and job UNKNOWN for operator
+  // reconciliation. Never promote a SENDING attempt to SENT automatically.
+  const staleSendingAttempts = await prisma.applicationFeedbackDeliveryAttempt.findMany({
+    where: {
+      status: ATTEMPT_STATUS.SENDING,
+      attemptedAt: { lte: leaseExpiry },
+    },
+    include: { job: true },
+  });
+  for (const attempt of staleSendingAttempts) {
+    if (attempt.job && attempt.job.status !== JOB_STATUS.UNKNOWN) {
+      await prisma.$transaction([
+        prisma.applicationFeedbackDeliveryAttempt.updateMany({
+          where: { id: attempt.id, status: ATTEMPT_STATUS.SENDING },
+          data: {
+            status: ATTEMPT_STATUS.UNKNOWN,
+            error: 'Worker lease expired before delivery was confirmed',
+          },
+        }),
+        prisma.applicationFeedbackJob.updateMany({
+          where: { id: attempt.job.id, status: JOB_STATUS.PROCESSING },
+          data: {
+            status: JOB_STATUS.UNKNOWN,
+            lastError: 'Worker lease expired before delivery was confirmed',
+            claimToken: null,
+            claimedAt: null,
+          },
+        }),
+      ]);
+    }
+  }
+
+  // Reset PROCESSING jobs whose lease has expired without any durable attempt.
   const stuckJobs = await prisma.applicationFeedbackJob.findMany({
     where: {
       status: JOB_STATUS.PROCESSING,
@@ -515,10 +608,9 @@ async function reconcileStalledJobs(now = new Date()) {
       ],
     },
   });
-
   for (const job of stuckJobs) {
     const durableAttempt = await prisma.applicationFeedbackDeliveryAttempt.findFirst({
-      where: { jobId: job.id, status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING] } },
+      where: { jobId: job.id, status: { in: [ATTEMPT_STATUS.SENT, ATTEMPT_STATUS.SENDING, ATTEMPT_STATUS.UNKNOWN] } },
       orderBy: { attemptedAt: 'desc' },
     });
 
@@ -535,7 +627,7 @@ async function reconcileStalledJobs(now = new Date()) {
     }
   }
 
-  return durableAttempts.length + stuckJobs.length;
+  return sentAttempts.length + staleSendingAttempts.length + stuckJobs.length;
 }
 
 export async function processFeedbackJobs(now = new Date()) {
