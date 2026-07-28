@@ -66,6 +66,16 @@ export const requireAuth = async (req, res, next) => {
   }
 };
 
+// Drop a user's cached record so role/status changes take effect immediately
+// instead of after the 5-minute TTL
+export const invalidateUserCache = (userId) => {
+  if (Array.isArray(userId)) {
+    userId.forEach(id => userCache.delete(id));
+  } else {
+    userCache.delete(userId);
+  }
+};
+
 // Clean up expired cache entries periodically to prevent memory leaks
 setInterval(() => {
   const now = Date.now();

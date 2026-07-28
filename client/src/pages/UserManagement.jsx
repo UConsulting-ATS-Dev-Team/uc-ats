@@ -22,13 +22,16 @@ import {
   IconButton,
   CircularProgress,
   Stack,
-  Divider
+  Divider,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import { 
   Add as AddIcon, 
   Search as SearchIcon, 
-  Edit as EditIcon, 
-  Delete as DeleteIcon, 
+  Edit as EditIcon,
+  Block as BlockIcon,
+  RestartAlt as RestartAltIcon,
   PhotoCamera as PhotoCameraIcon,
   Close as CloseIcon,
   ContentCopy as ContentCopyIcon
@@ -58,6 +61,8 @@ const UserManagement = () => {
     (typeof window !== 'undefined' ? localStorage.getItem('um_roleFilter') : '') || 'ALL'
   );
   const [memberEventRsvpFilter, setMemberEventRsvpFilter] = useState('');
+  // Deactivated accounts are hidden by default; this reveals them so they can be reactivated
+  const [showInactive, setShowInactive] = useState(false);
   const [graduationClassFilter, setGraduationClassFilter] = useState(() =>
     (typeof window !== 'undefined' ? localStorage.getItem('um_graduationClassFilter') : '') || ''
   );
@@ -124,6 +129,7 @@ const UserManagement = () => {
       if (roleFilter !== 'ALL') params.append('role', roleFilter);
       if (memberEventRsvpFilter) params.append('memberEventRsvpEventId', memberEventRsvpFilter);
       if (graduationClassFilter) params.append('graduationClass', graduationClassFilter);
+      if (showInactive) params.append('includeInactive', 'true');
       const queryString = params.toString();
       const response = await apiClient.get(`/admin/users${queryString ? '?' + queryString : ''}`);
       setUsers(response);
@@ -215,16 +221,25 @@ const UserManagement = () => {
     }
   };
 
-  const handleDeleteUser = async (userId) => {
-    if (!window.confirm('Are you sure you want to delete this user?')) return;
+  const handleToggleUserActive = async (userItem) => {
+    const isDeactivating = userItem.isActive !== false;
+    const confirmMessage = isDeactivating
+      ? `Deactivate ${userItem.fullName}? They will no longer be able to sign in, but all of their scores, evaluations and comments are kept.`
+      : `Reactivate ${userItem.fullName}? They will be able to sign in again.`;
+
+    if (!window.confirm(confirmMessage)) return;
 
     try {
-      await apiClient.delete(`/users/${userId}`);
+      const action = isDeactivating ? 'deactivate' : 'reactivate';
+      await apiClient.patch(`/users/${userItem.id}/${action}`, {});
+      setError(null);
+      setSuccess(isDeactivating ? 'User deactivated' : 'User reactivated');
+      setTimeout(() => setSuccess(null), 3000);
       await fetchUsers();
       await fetchClassOptions();
     } catch (err) {
-      setError('Failed to delete user');
-      console.error('Error deleting user:', err);
+      setError(err.message || `Failed to ${isDeactivating ? 'deactivate' : 'reactivate'} user`);
+      console.error('Error updating user status:', err);
     }
   };
 
@@ -262,7 +277,7 @@ const UserManagement = () => {
     if (user?.role === 'ADMIN') {
       fetchUsers();
     }
-  }, [roleFilter, memberEventRsvpFilter, graduationClassFilter]);
+  }, [roleFilter, memberEventRsvpFilter, graduationClassFilter, showInactive]);
 
   // Persist filters across refreshes
   useEffect(() => {
@@ -603,6 +618,17 @@ const UserManagement = () => {
                       {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
                     </Typography>
                   )}
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={showInactive}
+                        onChange={(e) => setShowInactive(e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="body2">Show deactivated</Typography>}
+                    sx={{ ml: 0 }}
+                  />
                   {canDeactivateClass(graduationClassFilter) && (
                     <Button
                       variant="outlined"
@@ -674,6 +700,18 @@ const UserManagement = () => {
                           {userItem._count?.comments || 0} comments, {userItem._count?.evaluations || 0} evaluations
                         </Typography>
                       </Box>
+                      {userItem.isActive === false && (
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2" color="text.secondary">Status:</Typography>
+                          <Chip
+                            label={userItem.deactivatedAt
+                              ? `Deactivated ${new Date(userItem.deactivatedAt).toLocaleDateString()}`
+                              : 'Deactivated'}
+                            color="default"
+                            size="small"
+                          />
+                        </Box>
+                      )}
                     </Stack>
 
                     <Divider sx={{ my: 2 }} />
@@ -715,12 +753,12 @@ const UserManagement = () => {
                     {userItem.id !== user?.id && (
                       <Button
                         size="small"
-                        color="error"
-                        startIcon={<DeleteIcon />}
-                        onClick={() => handleDeleteUser(userItem.id)}
+                        color={userItem.isActive === false ? 'success' : 'error'}
+                        startIcon={userItem.isActive === false ? <RestartAltIcon /> : <BlockIcon />}
+                        onClick={() => handleToggleUserActive(userItem)}
                         sx={{ minWidth: 'auto', px: 1 }}
                       >
-                        Delete
+                        {userItem.isActive === false ? 'Reactivate' : 'Deactivate'}
                       </Button>
                     )}
                   </CardActions>

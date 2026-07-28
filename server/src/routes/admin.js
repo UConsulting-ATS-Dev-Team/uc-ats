@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
@@ -425,8 +425,13 @@ router.get('/candidates/comprehensive', async (req, res) => {
 
 // Helper to build the shared role/event RSVP where-clause for user endpoints.
 // Does NOT apply graduation-class filtering; that is handled by each route.
-function buildBaseUserWhereClause({ role, memberEventRsvpEventId }) {
+function buildBaseUserWhereClause({ role, memberEventRsvpEventId, includeInactive }) {
   const whereClause = {};
+
+  // Deactivated accounts are hidden from user management unless explicitly requested
+  if (!includeInactive) {
+    whereClause.isActive = true;
+  }
 
   // Map INTERVIEWER to MEMBER role since that's what we have in the enum
   if (role === 'INTERVIEWER') {
@@ -448,9 +453,13 @@ function buildBaseUserWhereClause({ role, memberEventRsvpEventId }) {
 // Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role, memberEventRsvpEventId, graduationClass } = req.query;
+    const { role, memberEventRsvpEventId, graduationClass, includeInactive } = req.query;
 
-    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
+    const whereClause = buildBaseUserWhereClause({
+      role,
+      memberEventRsvpEventId,
+      includeInactive: includeInactive === 'true'
+    });
 
     // Graduation class filter
     if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
@@ -481,7 +490,9 @@ router.get('/users', async (req, res) => {
         email: true,
         role: true,
         graduationClass: true,
-        profileImage: true
+        profileImage: true,
+        isActive: true,
+        deactivatedAt: true
       },
       orderBy: { fullName: 'asc' }
     });
@@ -6001,6 +6012,9 @@ router.post('/users/deactivate', async (req, res) => {
         }
       })
     ]);
+
+    // Cut existing sessions immediately rather than after the cache TTL
+    invalidateUserCache(eligibleIds);
 
     res.json({
       ...preview,
