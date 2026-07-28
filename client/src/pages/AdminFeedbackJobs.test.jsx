@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import AdminFeedbackJobs from './AdminFeedbackJobs';
+import AccessControl from '../components/AccessControl';
+import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 
 vi.mock('../utils/api', () => ({
@@ -11,6 +13,11 @@ vi.mock('../utils/api', () => ({
     post: vi.fn(),
   },
 }));
+
+vi.mock('../context/AuthContext', async () => {
+  const actual = await vi.importActual('../context/AuthContext');
+  return { ...actual, useAuth: vi.fn() };
+});
 
 describe('AdminFeedbackJobs', () => {
   const cycles = [{ id: 'cycle-1', name: 'Fall 2026' }];
@@ -94,5 +101,19 @@ describe('AdminFeedbackJobs', () => {
     await waitFor(() => {
       expect(screen.getByText(/Network down/i)).toBeInTheDocument();
     });
+  });
+
+  it('denies MEMBER users via the ADMIN-only AccessControl wrapper', () => {
+    useAuth.mockReturnValue({ user: { role: 'MEMBER' }, loading: false });
+    render(
+      <MemoryRouter>
+        <AccessControl allowedRoles={['ADMIN']}>
+          <div data-testid="admin-content">Admin content</div>
+        </AccessControl>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(/Access Denied/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-content')).not.toBeInTheDocument();
   });
 });
