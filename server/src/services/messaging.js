@@ -84,6 +84,13 @@ export async function syncInterviewParticipants(interviewId) {
       skipDuplicates: true
     });
   }
+
+  const toRemove = [...currentSet].filter((id) => !desired.has(id));
+  if (toRemove.length > 0) {
+    await prisma.conversationParticipant.deleteMany({
+      where: { conversationId: conversation.id, userId: { in: toRemove } }
+    });
+  }
 }
 
 async function ensureParticipantRow(conversationId, userId) {
@@ -104,6 +111,16 @@ async function ensureParticipantRow(conversationId, userId) {
 export async function userCanAccessConversation(conversation, user) {
   if (!conversation || !user) return false;
   if (user.role === 'ADMIN') return true;
+
+  // Interview conversations are authorized by current assignment, not stale
+  // participant rows, so unassigned interviewers lose access immediately.
+  if (conversation.contextType === 'INTERVIEW') {
+    const assigned = await prisma.interviewAssignment.findUnique({
+      where: { interviewId_userId: { interviewId: conversation.contextId, userId: user.id } }
+    });
+    return !!assigned;
+  }
+
   const row = await prisma.conversationParticipant.findUnique({
     where: { conversationId_userId: { conversationId: conversation.id, userId: user.id } }
   });
@@ -162,7 +179,7 @@ export async function markRead(conversationId, userId, at = new Date()) {
 }
 
 export async function getConversationForUser(conversationId, user) {
-  const conversation = await prisma.conversation.findUnique({
+  let conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: {
       participants: {
@@ -172,6 +189,19 @@ export async function getConversationForUser(conversationId, user) {
   });
   if (!conversation) return null;
   if (!(await userCanAccessConversation(conversation, user))) return null;
+
+  if (conversation.contextType === 'INTERVIEW') {
+    await syncInterviewParticipants(conversation.contextId);
+    conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        participants: {
+          include: { user: { select: senderSelect } }
+        }
+      }
+    });
+  }
+
   return {
     id: conversation.id,
     contextType: conversation.contextType,
@@ -190,9 +220,27 @@ export async function getConversationForUser(conversationId, user) {
 }
 
 export async function listConversationsForUser(user) {
+  const assignedInterviewIds = user.role === 'ADMIN'
+    ? []
+    : (await prisma.interviewAssignment.findMany({
+        where: { userId: user.id },
+        select: { interviewId: true }
+      })).map((a) => a.interviewId);
+
   const where = user.role === 'ADMIN'
     ? {}
-    : { participants: { some: { userId: user.id } } };
+    : {
+        OR: [
+          {
+            contextType: { in: ['APPLICATION', 'CYCLE', 'DIRECT_MESSAGE'] },
+            participants: { some: { userId: user.id } }
+          },
+          {
+            contextType: 'INTERVIEW',
+            contextId: { in: assignedInterviewIds }
+          }
+        ]
+      };
 
   const conversations = await prisma.conversation.findMany({
     where,
@@ -212,6 +260,13 @@ export async function listConversationsForUser(user) {
 
   const result = [];
   for (const c of conversations) {
+    // Interview participants may be missing if a member was assigned after the
+    // conversation was created; ensure a row exists so lastReadAt is tracked.
+    if (c.contextType === 'INTERVIEW' && !c.participants[0]) {
+      await ensureParticipantRow(c.id, user.id);
+      c.participants = [{ lastReadAt: null }];
+    }
+
     const lastReadAt = c.participants[0]?.lastReadAt || null;
     const unreadCount = await prisma.message.count({
       where: {

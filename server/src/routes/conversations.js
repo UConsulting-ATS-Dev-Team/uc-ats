@@ -8,7 +8,8 @@ import {
   listMessages,
   sendMessage,
   markRead,
-  userCanAccessConversation
+  userCanAccessConversation,
+  syncInterviewParticipants
 } from '../services/messaging.js';
 
 const router = express.Router();
@@ -26,17 +27,25 @@ router.get('/', requireAuth, requireAdminOrMember, async (req, res) => {
 router.get('/interviews/:interviewId', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { interviewId } = req.params;
-    const conversation = await getOrCreateInterviewConversation(interviewId);
-    // Until InterviewAssignment is wired into the UI, treat any member who reaches
-    // the interview interface as a participant. Lazily insert their row so they
-    // pass the access check and get unread tracking.
-    if (req.user.role === 'MEMBER') {
-      await prisma.conversationParticipant.upsert({
-        where: { conversationId_userId: { conversationId: conversation.id, userId: req.user.id } },
-        update: {},
-        create: { conversationId: conversation.id, userId: req.user.id }
-      });
+
+    const interview = await prisma.interview.findUnique({
+      where: { id: interviewId },
+      select: {
+        id: true,
+        assignments: { where: { userId: req.user.id }, select: { id: true } }
+      }
+    });
+
+    if (!interview) {
+      return res.status(404).json({ error: 'Interview not found' });
     }
+
+    if (req.user.role === 'MEMBER' && interview.assignments.length === 0) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const conversation = await getOrCreateInterviewConversation(interviewId);
+    await syncInterviewParticipants(interviewId);
     const dto = await getConversationForUser(conversation.id, req.user);
     if (!dto) return res.status(403).json({ error: 'Forbidden' });
     res.json(dto);
