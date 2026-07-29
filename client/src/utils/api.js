@@ -53,7 +53,11 @@ class ApiClient {
       // Include more details in the error message
       const errorMessage = error.error || error.message || 'Request failed';
       const detailedError = `${errorMessage} (Status: ${response.status})`;
-      throw new Error(detailedError);
+      const err = new Error(detailedError);
+      if (error.contactEmail) {
+        err.contactEmail = error.contactEmail;
+      }
+      throw err;
     }
 
     return response.json();

@@ -3,8 +3,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
-import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import { sendPasswordResetEmail, sendPasswordResetConfirmationEmail } from '../services/emailNotifications.js';
 
 const router = express.Router(); 
 
@@ -83,8 +83,9 @@ router.post('/register', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.status(201).json({
@@ -92,7 +93,7 @@ router.post('/register', async (req, res) => {
       user: userWithoutPassword,
       token
     });
-    
+
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Failed to create user' });
@@ -123,13 +124,18 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
+    }
     
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.json({
@@ -137,7 +143,7 @@ router.post('/login', async (req, res) => {
       user: userWithoutPassword,
       token
     });
-    
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
@@ -160,6 +166,10 @@ router.get('/verify', async (req, res) => {
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
     }
     
     const { password: _, ...userWithoutPassword } = user;
@@ -193,31 +203,8 @@ router.post('/forgot-password', async (req, res) => {
       }
     });
 
-    const transporter = nodemailer.createTransport({
-      service: 'Gmail',
-      auth: {
-        user: process.env.EMAIL_USER,  // Add to your .env
-        pass: process.env.EMAIL_PASS   // Add to your .env
-      }
-    });
-
     const resetLink = `${config.clientUrl}/reset-password?token=${resetToken}`;
-    console.log('Sending email to:', email);
-    console.log('Using user:', process.env.EMAIL_USER);
-    console.log('Reset link:', resetLink);
-    await transporter.sendMail({
-      from: `"UConsulting ATS" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Reset Your Password',
-      html: `<p>You requested a password reset.</p>
-             <p><a href="${resetLink}">Click here to reset your password</a></p>`
-    }, (err, info) => {
-      if (err) {
-        console.error('Email send error:', err);
-      } else {
-        console.log('Email sent successfully:', info.response);
-      }
-    });
+    await sendPasswordResetEmail(email, resetLink);
 
     res.json({ message: 'Reset link sent if email exists' });
 
@@ -259,6 +246,18 @@ router.post('/reset-password', async (req, res) => {
       },
     });
 
+    // Send confirmation email to the account email only; never expose the token or new password.
+    if (user.email) {
+      try {
+        const confirmationResult = await sendPasswordResetConfirmationEmail(user.email, user.fullName);
+        if (!confirmationResult.success) {
+          console.error('Failed to send password reset confirmation email:', confirmationResult.error);
+        }
+      } catch (confirmationError) {
+        console.error('Error sending password reset confirmation email:', confirmationError);
+      }
+    }
+
     res.json({ message: 'Password reset successful' });
   } catch (error) {
     console.error('Reset password error:', error); // this is what you check in terminal
@@ -270,10 +269,8 @@ router.post('/reset-password', async (req, res) => {
 router.post('/register-member', async (req, res) => {
   try {
     const { email, password, fullName, graduationClass, studentId, accessToken } = req.body;
-    
-    // Verify access token
-    const requiredToken = 'member-access-2024';
-    if (!accessToken || accessToken !== requiredToken) {
+
+    if (!accessToken || accessToken !== config.memberRegistrationToken) {
       return res.status(403).json({ error: 'Unauthorized access' });
     }
     
@@ -324,8 +321,9 @@ router.post('/register-member', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn },
     );
-    
+
     // Return user info (without password) and token
     const { password: _, ...userWithoutPassword } = user;
     res.status(201).json({

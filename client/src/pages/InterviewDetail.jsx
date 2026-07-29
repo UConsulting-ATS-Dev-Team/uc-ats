@@ -30,6 +30,7 @@ import {
   Switch,
   FormControlLabel,
 } from '@mui/material';
+import MemberAvatar from '../components/MemberAvatar';
 import {
   ArrowLeftIcon,
   UserGroupIcon,
@@ -44,6 +45,7 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import { useIsMobile } from '../hooks/useResponsive';
 
 const INTERVIEW_TYPES = {
   COFFEE_CHAT: {
@@ -85,6 +87,7 @@ const EVALUATION_RUBRICS = {
 };
 
 export default function InterviewDetail() {
+  const isMobile = useIsMobile();
   const { id } = useParams();
   const navigate = useNavigate();
   const [interview, setInterview] = useState(null);
@@ -263,34 +266,40 @@ export default function InterviewDetail() {
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
       <Box>
       {/* Header */}
-      <Stack direction="row" alignItems="center" spacing={2} mb={3}>
-        <IconButton onClick={() => navigate('/interviews')}>
-          <ArrowLeftIcon style={{ width: '1.5rem', height: '1.5rem' }} />
-        </IconButton>
-        <Box>
-          <Typography variant="h4">{interview.name}</Typography>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <span style={{ fontSize: '1.5rem' }}>{interviewType.icon}</span>
-            <Typography variant="body1" color="text.secondary">
-              {interviewType.label}
-            </Typography>
-          </Stack>
-        </Box>
-        <Box flexGrow={1} />
-        <Button
-          variant="contained"
-          startIcon={<Cog6ToothIcon style={{ width: '1.25rem', height: '1.25rem' }} />}
-          onClick={() => setConfigDialog(true)}
-        >
-          Configure
-        </Button>
-        <Button
-          variant="contained"
-          color="success"
-          onClick={handleStartInterview}
-        >
-          Start Interview
-        </Button>
+      <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} spacing={2} mb={3}>
+        <Stack direction="row" alignItems="center" spacing={2} sx={{ width: { xs: '100%', md: 'auto' } }}>
+          <IconButton onClick={() => navigate('/interviews')}>
+            <ArrowLeftIcon style={{ width: '1.5rem', height: '1.5rem' }} />
+          </IconButton>
+          <Box>
+            <Typography variant="h4">{interview.name}</Typography>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <span style={{ fontSize: '1.5rem' }}>{interviewType.icon}</span>
+              <Typography variant="body1" color="text.secondary">
+                {interviewType.label}
+              </Typography>
+            </Stack>
+          </Box>
+        </Stack>
+        <Box flexGrow={1} sx={{ display: { xs: 'none', md: 'block' } }} />
+        <Stack direction="row" spacing={2} sx={{ width: { xs: '100%', md: 'auto' } }}>
+          <Button
+            variant="contained"
+            startIcon={<Cog6ToothIcon style={{ width: '1.25rem', height: '1.25rem' }} />}
+            onClick={() => setConfigDialog(true)}
+            sx={{ flex: { xs: 1, md: 'none' } }}
+          >
+            Configure
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            onClick={handleStartInterview}
+            sx={{ flex: { xs: 1, md: 'none' } }}
+          >
+            Start Interview
+          </Button>
+        </Stack>
       </Stack>
 
       {error && (
@@ -301,7 +310,7 @@ export default function InterviewDetail() {
 
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
+        <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)} variant="scrollable" allowScrollButtonsMobile scrollButtons="auto">
           <Tab label="Overview" />
           <Tab label="Pairings" />
           <Tab label="Schedule" />
@@ -407,9 +416,16 @@ export default function InterviewDetail() {
                     <ListItem key={index} divider>
                       <ListItemText
                         primary={`Group ${index + 1}`}
-                        secondary={pair.map(interviewer => 
-                          `${interviewer.fullName}`
-                        ).join(', ')}
+                        secondary={
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" component="span">
+                            {pair.map(interviewer => (
+                              <Stack key={interviewer.id} direction="row" spacing={0.5} alignItems="center" component="span">
+                                <MemberAvatar member={interviewer} size={20} />
+                                <Typography variant="body2" component="span">{interviewer.fullName}</Typography>
+                              </Stack>
+                            ))}
+                          </Stack>
+                        }
                       />
                     </ListItem>
                   ))}
@@ -436,9 +452,15 @@ export default function InterviewDetail() {
                         <Typography variant="subtitle1" gutterBottom>
                           Interviewer Group {sessionIndex + 1}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          Interviewers: {session.interviewerPair.map(i => i.fullName).join(', ')}
-                        </Typography>
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
+                          <Typography variant="body2" color="text.secondary">Interviewers:</Typography>
+                          {session.interviewerPair.map(i => (
+                            <Stack key={i.id} direction="row" spacing={0.5} alignItems="center">
+                              <MemberAvatar member={i} size={20} />
+                              <Typography variant="body2">{i.fullName}</Typography>
+                            </Stack>
+                          ))}
+                        </Stack>
                         <Typography variant="body2">
                           Candidates: {session.candidatePairs.flat().map(c => 
                             `${c.firstName} ${c.lastName}`
@@ -476,7 +498,7 @@ export default function InterviewDetail() {
       )}
 
       {/* Configuration Dialog */}
-      <Dialog open={configDialog} onClose={() => setConfigDialog(false)} maxWidth="md" fullWidth>
+      <Dialog open={configDialog} onClose={() => setConfigDialog(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
         <DialogTitle>Configure {interviewType.label}</DialogTitle>
         <DialogContent>
           <Stack spacing={3} mt={1}>
@@ -541,7 +563,7 @@ export default function InterviewDetail() {
       </Dialog>
 
       {/* Evaluation Dialog */}
-      <Dialog open={evaluationDialog} onClose={() => setEvaluationDialog(false)} maxWidth="md" fullWidth>
+      <Dialog open={evaluationDialog} onClose={() => setEvaluationDialog(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
         <DialogTitle>Add Evaluation</DialogTitle>
         <DialogContent>
           <EvaluationForm

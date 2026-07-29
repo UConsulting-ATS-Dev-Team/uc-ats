@@ -1,11 +1,48 @@
 import express from 'express';
+import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
-import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from '../services/emailNotifications.js';
+import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { localInputToUTC } from '../utils/timezoneUtils.js';
+import {
+  getDeactivationCandidates,
+  parseGraduationYear
+} from '../services/userDeactivation.js';
+import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
+import {
+  getOfferLetterTemplate,
+  saveOfferLetterTemplate,
+  uploadSignature,
+  getSignatureBuffer,
+  getSignatureSignedUrl,
+  sendOfferLetterToCandidate,
+  findLatestOfferLetterSend,
+  generateOfferLetterPdf
+} from '../services/offerLetter.js';
+import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 
 const router = express.Router();
+
+const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
+
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Signature must be a PNG, JPEG, or WebP image'));
+    }
+  }
+});
 
 // Helper function to safely parse JSON fields that might be plain text
 const safeParseJsonField = (field) => {
@@ -186,7 +223,7 @@ router.get('/candidates', async (req, res) => {
 
     // Search and filter parameters
     const search = req.query.search?.trim() || '';
-    const { year, gender, firstGen, transfer, status: statusFilter } = req.query;
+    const { year, gender, firstGen, transfer, status: statusFilter, eventAttendanceEventId, eventRsvpEventId } = req.query;
 
     // Scope to active cycle if present
     const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
@@ -215,6 +252,26 @@ router.get('/candidates', async (req, res) => {
     if (transfer === 'false') whereClause.isTransferStudent = false;
     if (statusFilter) whereClause.status = statusFilter;
 
+    // Event attendance filter (via candidate relation)
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: {
+          some: { eventId: eventAttendanceEventId }
+        }
+      };
+    }
+
+    // Event RSVP filter (via candidate relation)
+    if (eventRsvpEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventRsvp: {
+          some: { eventId: eventRsvpEventId }
+        }
+      };
+    }
+
     // Fetch paginated data and total count in parallel
     const [candidates, total] = await Promise.all([
       prisma.application.findMany({
@@ -241,7 +298,6 @@ router.get('/candidates', async (req, res) => {
         hasPrevPage: page > 1
       }
     });
-    res.json(candidates);
   } catch (error) {
     console.error('[GET /api/admin/candidates]', error);
     res.status(500).json({ error: 'Failed to fetch candidates' });
@@ -262,8 +318,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               },
               orderBy: { createdAt: 'desc' }
@@ -274,8 +329,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 interview: {
                   select: {
@@ -293,8 +347,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             },
@@ -304,15 +357,13 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 },
                 resolver: {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -324,8 +375,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -335,8 +385,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -346,8 +395,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         },
@@ -359,8 +407,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -374,8 +421,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -389,8 +435,7 @@ router.get('/candidates/comprehensive', async (req, res) => {
                   select: {
                     id: true,
                     fullName: true,
-                    email: true
-                  }
+                    email: true, profileImage: true }
                 }
               }
             }
@@ -430,19 +475,65 @@ router.get('/candidates/comprehensive', async (req, res) => {
   }
 });
 
-// Get all users (with optional role filter)
+// Helper to build the shared role/event RSVP where-clause for user endpoints.
+// Does NOT apply graduation-class filtering; that is handled by each route.
+function buildBaseUserWhereClause({ role, memberEventRsvpEventId, includeInactive }) {
+  const whereClause = {};
+
+  // Deactivated accounts are hidden from user management unless explicitly requested
+  if (!includeInactive) {
+    whereClause.isActive = true;
+  }
+
+  // Map INTERVIEWER to MEMBER role since that's what we have in the enum
+  if (role === 'INTERVIEWER') {
+    whereClause.role = 'MEMBER';
+  } else if (role) {
+    whereClause.role = role;
+  }
+
+  // Member event RSVP filter
+  if (memberEventRsvpEventId) {
+    whereClause.memberEventRsvp = {
+      some: { eventId: memberEventRsvpEventId }
+    };
+  }
+
+  return whereClause;
+}
+
+// Get all users (with optional role, event RSVP filter, and graduation class filter)
 router.get('/users', async (req, res) => {
   try {
-    const { role } = req.query;
-    
-    // Map INTERVIEWER to MEMBER role since that's what we have in the enum
-    let whereClause = {};
-    if (role === 'INTERVIEWER') {
-      whereClause = { role: 'MEMBER' };
-    } else if (role) {
-      whereClause = { role };
+    const { role, memberEventRsvpEventId, graduationClass, includeInactive } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({
+      role,
+      memberEventRsvpEventId,
+      includeInactive: includeInactive === 'true'
+    });
+
+    // Graduation class filter
+    if (graduationClass !== undefined && graduationClass !== null && graduationClass !== '') {
+      if (typeof graduationClass !== 'string') {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      const normalizedClass = graduationClass.trim();
+      if (normalizedClass.length > 100) {
+        return res.status(400).json({ error: 'Invalid graduation class' });
+      }
+
+      if (normalizedClass === MISSING_GRADUATION_CLASS) {
+        whereClause.OR = [
+          { graduationClass: null },
+          { graduationClass: '' }
+        ];
+      } else {
+        whereClause.graduationClass = normalizedClass;
+      }
     }
-    
+
     const users = await prisma.user.findMany({
       where: whereClause,
       select: {
@@ -451,15 +542,64 @@ router.get('/users', async (req, res) => {
         email: true,
         role: true,
         graduationClass: true,
-        profileImage: true
+        profileImage: true,
+        isActive: true,
+        deactivatedAt: true
       },
       orderBy: { fullName: 'asc' }
     });
-    
+
     res.json(users);
   } catch (error) {
     console.error('[GET /api/admin/users]', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get graduation class options and counts for the admin user filter.
+// Independent of the graduation-class filter itself so the dropdown stays usable
+// even when a class filter is already persisted.
+router.get('/users/classes', async (req, res) => {
+  try {
+    const { role, memberEventRsvpEventId } = req.query;
+
+    const whereClause = buildBaseUserWhereClause({ role, memberEventRsvpEventId });
+
+    const users = await prisma.user.findMany({
+      where: whereClause,
+      select: { graduationClass: true }
+    });
+
+    const classCounts = new Map();
+    let unknownCount = 0;
+    let totalCount = 0;
+
+    users.forEach((userItem) => {
+      totalCount++;
+      const c = (userItem.graduationClass || '').trim();
+      if (!c) {
+        unknownCount++;
+      } else {
+        classCounts.set(c, (classCounts.get(c) || 0) + 1);
+      }
+    });
+
+    const classes = Array.from(classCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: value, count }));
+
+    res.json({
+      total: totalCount,
+      classes,
+      unknown: {
+        value: MISSING_GRADUATION_CLASS,
+        label: 'Unknown / No class',
+        count: unknownCount
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/users/classes]', error);
+    res.status(500).json({ error: 'Failed to fetch class options' });
   }
 });
 
@@ -1719,6 +1859,45 @@ router.get('/events/:id/attendance', async (req, res) => {
   }
 });
 
+// Cycle-portable event copy routes
+
+// Preview events that would be copied from a source cycle to a target cycle
+router.post('/events/copy-preview', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId } = req.body;
+    const preview = await previewCycleEventCopy({ prisma, sourceCycleId, targetCycleId });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the copy of events from a source cycle to a target cycle
+router.post('/events/copy-commit', async (req, res) => {
+  try {
+    const { sourceCycleId, targetCycleId, events, force } = req.body;
+    const result = await commitCycleEventCopy({
+      prisma,
+      sourceCycleId,
+      targetCycleId,
+      events,
+      actorId: req.user?.id,
+      force: Boolean(force)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/events/copy-commit]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Interview Management Routes
 
 // Get all interviews
@@ -2397,8 +2576,7 @@ router.get('/interviews/:id/config', async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         });
@@ -2637,8 +2815,7 @@ router.get('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2672,8 +2849,7 @@ router.post('/interviews/:id/action-items', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2711,8 +2887,7 @@ router.patch('/interviews/:id/action-items/:actionItemId', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -2965,6 +3140,7 @@ router.get('/applications', async (req, res) => {
         },
         select: {
           id: true,
+          name: true,
           memberOne: true,
           memberTwo: true,
           memberThree: true,
@@ -2972,21 +3148,24 @@ router.get('/applications', async (req, res) => {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberTwoUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
-            }
+              email: true, profileImage: true }
           },
           memberThreeUser: {
             select: {
               id: true,
               fullName: true,
-              email: true
+              email: true, profileImage: true }
+          },
+          groupMembers: {
+            select: {
+              userId: true,
+              user: { select: { id: true, fullName: true, email: true, profileImage: true } }
             }
           }
         }
@@ -3088,11 +3267,7 @@ router.get('/applications', async (req, res) => {
       if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
       // Get all assigned team members with user info (filter out null/undefined)
-      const teamMembers = [
-        group.memberOneUser,
-        group.memberTwoUser,
-        group.memberThreeUser
-      ].filter(Boolean);
+      const teamMembers = getGroupMemberUsers(group);
       
       if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
@@ -3133,6 +3308,10 @@ router.get('/applications', async (req, res) => {
       const coverLetterStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, coverLetterScores, 'coverLetter');
       const videoStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, videoScores, 'video');
       
+      const assignedGroup = app.candidate.assignedGroupId
+        ? groups.find(g => g.id === app.candidate.assignedGroupId)
+        : null;
+      
       transformedApplications.push({
         id: app.id,
         candidateId: app.candidateId,
@@ -3152,6 +3331,8 @@ router.get('/applications', async (req, res) => {
         coverLetterUrl: app.coverLetterUrl,
         videoUrl: app.videoUrl,
         headshotUrl: app.headshotUrl,
+        groupId: assignedGroup?.id || null,
+        groupName: assignedGroup?.name || (assignedGroup ? `Team ${assignedGroup.id.slice(-4)}` : 'Unknown Team'),
         hasResumeScore: resumeStatus.completed,
         hasCoverLetterScore: coverLetterStatus.completed,
         hasVideoScore: videoStatus.completed,
@@ -3446,9 +3627,14 @@ router.get('/staging/candidates', async (req, res) => {
       where: { id: { in: reviewTeamIds } },
       select: {
         id: true,
-        memberOneUser: { select: { fullName: true } },
-        memberTwoUser: { select: { fullName: true } },
-        memberThreeUser: { select: { fullName: true } }
+        memberOneUser: { select: { fullName: true, profileImage: true } },
+        memberTwoUser: { select: { fullName: true, profileImage: true } },
+        memberThreeUser: { select: { fullName: true, profileImage: true } },
+        groupMembers: {
+          select: {
+            user: { select: { fullName: true, profileImage: true } }
+          }
+        }
       }
     });
     console.log('Review teams fetched:', allReviewTeams.length);
@@ -3510,11 +3696,7 @@ router.get('/staging/candidates', async (req, res) => {
     });
 
     allReviewTeams.forEach(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       reviewTeamsMap.set(team.id, {
         id: team.id,
@@ -3757,25 +3939,13 @@ router.get('/review-teams', async (req, res) => {
       select: {
         id: true,
         name: true,
-        memberOneUser: {
+        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        groupMembers: {
           select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       },
@@ -3784,11 +3954,7 @@ router.get('/review-teams', async (req, res) => {
 
     // Transform to include team name and member count
     const transformedTeams = reviewTeams.map(team => {
-      const members = [
-        team.memberOneUser,
-        team.memberTwoUser,
-        team.memberThreeUser
-      ].filter(Boolean);
+      const members = getGroupMemberUsers(team);
 
       // Use the name from the database if it exists, otherwise generate a fallback name
       const teamName = team.name || (members.length > 0 
@@ -4250,8 +4416,7 @@ router.get('/applications/:id/final-round-interview-evaluations', async (req, re
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         application: {
           select: {
@@ -4482,8 +4647,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         rubricScores: {
           orderBy: { category: 'asc' }
@@ -4509,8 +4673,7 @@ router.get('/applications/:id/interview-evaluations', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5140,6 +5303,366 @@ router.post('/process-final-decisions', async (req, res) => {
   }
 });
 
+// Shared validation for offer-letter send/preview
+function isFinalRoundAccepted(application) {
+  return (
+    application.status === 'ACCEPTED' &&
+    (application.finalRoundDecision === 'yes' || application.currentRound === '5')
+  );
+}
+
+async function validateSendRequest(id, body) {
+  const { position, responseDeadline } = body;
+
+  const application = await prisma.application.findUnique({
+    where: { id },
+    include: { candidate: true, cycle: true }
+  });
+
+  if (!application) {
+    return { error: 'Application not found', status: 404 };
+  }
+
+  if (!application.candidate) {
+    return { error: 'No candidate associated with application', status: 400 };
+  }
+
+  if (!isFinalRoundAccepted(application)) {
+    return { error: 'Offer letters can only be sent to Final Round accepted candidates', status: 400 };
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!application.email || !emailRegex.test(application.email)) {
+    return { error: 'Invalid candidate email address', status: 400 };
+  }
+
+  if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
+    return { error: 'Position and response deadline are required', status: 400 };
+  }
+
+  return { application };
+}
+
+async function loadAndValidateTemplate(cycleId) {
+  const template = await getOfferLetterTemplate(cycleId);
+
+  if (!template.presidentName || !template.presidentName.trim()) {
+    throw new Error('Offer letter template is missing the president name');
+  }
+  if (!template.signaturePath) {
+    throw new Error('Offer letter template is missing the president signature');
+  }
+  if (!template.terms || template.terms.length === 0) {
+    throw new Error('Offer letter template is missing terms/expectations');
+  }
+
+  const signatureBuffer = await getSignatureBuffer(template.signaturePath);
+  if (!signatureBuffer) {
+    throw new Error('President signature image could not be loaded');
+  }
+
+  return { template, signatureBuffer };
+}
+
+// Preview the generated offer-letter PDF for a Final Round accepted candidate
+router.post('/applications/:id/offer-letter-preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { position, startDate, responseDeadline, additionalNotes } = req.body;
+
+    const validation = await validateSendRequest(id, { position, responseDeadline });
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+    const { application } = validation;
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(application.cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
+    const pdfBuffer = await generateOfferLetterPdf(application, application.cycle, template, offerDetails, signatureBuffer);
+
+    res.json({
+      filename: 'UConsulting-Offer-Letter-Preview.pdf',
+      pdf: pdfBuffer.toString('base64')
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/applications/:id/offer-letter-preview]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to generate offer letter preview' });
+  }
+});
+
+// Send offer letter to a Final Round accepted candidate
+router.post('/applications/:id/send-offer-letter', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { position, startDate, responseDeadline, additionalNotes, force } = req.body;
+    const userId = req.user?.id;
+
+    const validation = await validateSendRequest(id, { position, responseDeadline });
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+    const { application } = validation;
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(application.cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = { position, startDate, responseDeadline: deadline, additionalNotes };
+
+    const result = await sendOfferLetterToCandidate(
+      application,
+      application.cycle,
+      template,
+      signatureBuffer,
+      offerDetails,
+      userId,
+      force
+    );
+
+    if (result.alreadySent) {
+      return res.status(409).json({ error: result.error });
+    }
+    if (!result.success) {
+      return res.status(500).json({ error: 'Failed to send offer letter', details: result.error });
+    }
+
+    res.json({
+      success: true,
+      messageId: result.messageId,
+      message: 'Offer letter sent successfully'
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/applications/:id/send-offer-letter]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to send offer letter' });
+  }
+});
+
+// Get the offer-letter template for a recruiting cycle
+router.get('/cycles/:cycleId/offer-letter-template', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const template = await getOfferLetterTemplate(cycleId);
+    res.json(template);
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-template]', error);
+    res.status(500).json({ error: 'Failed to load offer letter template', details: error.message });
+  }
+});
+
+// Get a short-lived signed URL for the president signature image
+router.get('/cycles/:cycleId/offer-letter-template/signature', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const template = await getOfferLetterTemplate(cycleId);
+    if (!template.signaturePath) {
+      return res.status(404).json({ error: 'No signature configured for this cycle' });
+    }
+    const signedUrl = await getSignatureSignedUrl(template.signaturePath, 300);
+    if (!signedUrl) {
+      return res.status(404).json({ error: 'Signature not found' });
+    }
+    res.json({ signedUrl });
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-template/signature]', error);
+    res.status(500).json({ error: 'Failed to get signature URL', details: error.message });
+  }
+});
+
+// Save the offer-letter template for a recruiting cycle
+router.post('/cycles/:cycleId/offer-letter-template', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { introText, terms, closingText, checklist, presidentName, presidentTitle, responseDeadline, signatureLabel, printedNameLabel, officialOfferLabel, confidentialityLabel, signaturePath } = req.body;
+    const template = {
+      introText,
+      terms: Array.isArray(terms) ? terms.filter(Boolean) : [],
+      closingText,
+      checklist: Array.isArray(checklist) ? checklist.filter(Boolean) : [],
+      presidentName,
+      presidentTitle,
+      responseDeadline,
+      signatureLabel,
+      printedNameLabel,
+      officialOfferLabel,
+      confidentialityLabel,
+      signaturePath
+    };
+    const saved = await saveOfferLetterTemplate(cycleId, template);
+    res.json(saved);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-template]', error);
+    res.status(500).json({ error: 'Failed to save offer letter template', details: error.message });
+  }
+});
+
+// Upload the president signature image for a recruiting cycle
+router.post('/cycles/:cycleId/offer-letter-template/signature', signatureUpload.single('signature'), async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: 'Signature image is required' });
+    }
+    const result = await uploadSignature(cycleId, req.file.buffer, req.file.mimetype);
+    res.json({ path: result.path, contentType: result.contentType });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-template/signature]', error);
+    res.status(500).json({ error: 'Failed to upload signature', details: error.message });
+  }
+});
+
+// Preview the offer letter for a cycle using a sample candidate
+router.post('/cycles/:cycleId/offer-letter-preview', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { responseDeadline, sampleFirstName, sampleLastName } = req.body;
+
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = {
+      responseDeadline: deadline
+    };
+
+    const application = {
+      id: 'sample',
+      firstName: sampleFirstName?.trim() || 'Sample',
+      lastName: sampleLastName?.trim() || 'Candidate',
+      email: 'sample@example.com'
+    };
+
+    const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, offerDetails, signatureBuffer);
+    res.json({
+      filename: 'UConsulting-Offer-Letter-Preview.pdf',
+      pdf: pdfBuffer.toString('base64')
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/offer-letter-preview]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to generate offer letter preview' });
+  }
+});
+
+// List Final Round accepted candidates for a cycle with their offer-letter send status
+router.get('/cycles/:cycleId/offer-letter-candidates', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const applications = await prisma.application.findMany({
+      where: {
+        cycleId,
+        status: 'ACCEPTED',
+        OR: [
+          { finalRoundDecision: 'yes' },
+          { currentRound: '5' }
+        ]
+      },
+      include: { candidate: true }
+    });
+
+    const candidates = await Promise.all(
+      applications.map(async (app) => {
+        const latestSend = await findLatestOfferLetterSend(app.id);
+        return {
+          applicationId: app.id,
+          firstName: app.firstName,
+          lastName: app.lastName,
+          email: app.email,
+          status: latestSend?.status || 'not_sent',
+          sentAt: latestSend?.createdAt || null,
+          messageId: latestSend?.messageId || null
+        };
+      })
+    );
+
+    res.json({ cycleId, cycleName: cycle.name, candidates });
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:cycleId/offer-letter-candidates]', error);
+    res.status(500).json({ error: 'Failed to load offer letter candidates', details: error.message });
+  }
+});
+
+// Send offer letters to multiple Final Round accepted candidates in a cycle
+router.post('/cycles/:cycleId/send-offer-letters', async (req, res) => {
+  try {
+    const { cycleId } = req.params;
+    const { applicationIds, position, startDate, responseDeadline, force } = req.body;
+    const userId = req.user?.id;
+
+    if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
+      return res.status(400).json({ error: 'At least one candidate must be selected' });
+    }
+    if (!position || !position.trim() || !responseDeadline || !responseDeadline.trim()) {
+      return res.status(400).json({ error: 'Position and response deadline are required' });
+    }
+
+    const cycle = await prisma.recruitingCycle.findUnique({ where: { id: cycleId } });
+    if (!cycle) {
+      return res.status(404).json({ error: 'Recruiting cycle not found' });
+    }
+
+    const { template, signatureBuffer } = await loadAndValidateTemplate(cycleId);
+    const deadline = responseDeadline?.trim() || template.responseDeadline || '';
+    const offerDetails = { position, startDate, responseDeadline: deadline };
+
+    const results = [];
+    for (const applicationId of applicationIds) {
+      const application = await prisma.application.findUnique({
+        where: { id: applicationId },
+        include: { candidate: true }
+      });
+
+      if (!application) {
+        results.push({ applicationId, success: false, error: 'Application not found' });
+        continue;
+      }
+
+      if (!isFinalRoundAccepted(application)) {
+        results.push({ applicationId, success: false, error: 'Not a Final Round accepted candidate' });
+        continue;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!application.email || !emailRegex.test(application.email)) {
+        results.push({ applicationId, success: false, error: 'Invalid candidate email address' });
+        continue;
+      }
+
+      const result = await sendOfferLetterToCandidate(
+        application,
+        cycle,
+        template,
+        signatureBuffer,
+        offerDetails,
+        userId,
+        force
+      );
+
+      results.push({
+        applicationId,
+        success: result.success,
+        alreadySent: result.alreadySent || false,
+        messageId: result.messageId || null,
+        error: result.error || null
+      });
+    }
+
+    res.json({ results });
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/:cycleId/send-offer-letters]', error);
+    const status = error.message?.includes('template') || error.message?.includes('signature') ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Failed to send offer letters' });
+  }
+});
+
 // Flag Document Routes
 
 // Flag a document
@@ -5194,8 +5717,7 @@ router.post('/flag-document', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5256,15 +5778,13 @@ router.get('/flagged-documents', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -5315,15 +5835,13 @@ router.patch('/flagged-documents/:id/resolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         resolver: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5375,8 +5893,7 @@ router.patch('/flagged-documents/:id/unresolve', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5405,9 +5922,7 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
               include: {
                 assignedGroup: {
                   include: {
-                    memberOneUser: true,
-                    memberTwoUser: true,
-                    memberThreeUser: true
+                    ...groupMemberUserInclude
                   }
                 }
               }
@@ -5428,20 +5943,15 @@ router.patch('/flagged-documents/:id/send-back', async (req, res) => {
 
     // Get the group members who should grade this document
     const group = flaggedDocument.application.candidate?.assignedGroup;
-    const groupMembers = [];
-    
-    if (group) {
-      if (group.memberOneUser) groupMembers.push(group.memberOneUser);
-      if (group.memberTwoUser) groupMembers.push(group.memberTwoUser);
-      if (group.memberThreeUser) groupMembers.push(group.memberThreeUser);
-    }
+    const groupMembers = group ? getGroupMemberUsers(group) : [];
 
     res.json({
       message: 'Document sent back to members for grading',
       groupMembers: groupMembers.map(member => ({
         id: member.id,
         fullName: member.fullName,
-        email: member.email
+        email: member.email,
+        profileImage: member.profileImage
       })),
       candidate: {
         id: flaggedDocument.application.candidate?.id,
@@ -5522,8 +6032,7 @@ router.patch('/resume-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5577,8 +6086,7 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5627,8 +6135,7 @@ router.patch('/video-scores/:id', async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });
@@ -5712,6 +6219,428 @@ router.delete('/applications/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/applications/:id]', error);
     res.status(500).json({ error: 'Failed to delete application' });
+  }
+});
+
+// ===========================================================================
+// Get to Know UC (GTKUC) meeting-slot administration
+// Admin-wide management of every member's slots, signups, attendance, and the
+// communications log. All routes are already protected by requireAuth +
+// requireAdmin via router.use() at the top of this file.
+// ===========================================================================
+
+// Admin: list ALL meeting slots (across every member) with host details,
+// signups, and the communications log. Clients compute slot count / attendance
+// rate from this payload (optionally after filtering by cycle client-side).
+router.get('/meeting-slots', async (req, res) => {
+  try {
+    const slots = await prisma.meetingSlot.findMany({
+      orderBy: { startTime: 'asc' },
+      include: {
+        member: {
+          select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true }
+        },
+        signups: {
+          orderBy: { createdAt: 'asc' }
+        },
+        communications: {
+          orderBy: { sentAt: 'desc' }
+        }
+      }
+    });
+
+    // Convenience aggregate stats over the full (unfiltered) set.
+    const totalSlots = slots.length;
+    const totalSignups = slots.reduce((sum, s) => sum + s.signups.length, 0);
+    const attendedSignups = slots.reduce(
+      (sum, s) => sum + s.signups.filter((su) => su.attended).length,
+      0
+    );
+    const totalCapacity = slots.reduce((sum, s) => sum + (s.capacity || 0), 0);
+
+    res.json({
+      slots,
+      stats: {
+        totalSlots,
+        totalSignups,
+        attendedSignups,
+        totalCapacity,
+        attendanceRate: totalSignups > 0 ? attendedSignups / totalSignups : 0
+      }
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/meeting-slots]', error);
+    res.status(500).json({ error: 'Failed to fetch meeting slots' });
+  }
+});
+
+// Admin: create a meeting slot on behalf of any member (defaults to self).
+router.post('/meeting-slots', async (req, res) => {
+  try {
+    const { memberId, location, startTime, endTime, capacity } = req.body || {};
+    if (!location || !startTime) {
+      return res.status(400).json({ error: 'Location and start time are required' });
+    }
+
+    const hostId = memberId || req.user.id;
+    const host = await prisma.user.findUnique({ where: { id: hostId } });
+    if (!host) {
+      return res.status(400).json({ error: 'Host member not found' });
+    }
+
+    const slot = await prisma.meetingSlot.create({
+      data: {
+        memberId: hostId,
+        location,
+        startTime: localInputToUTC(startTime),
+        endTime: endTime ? localInputToUTC(endTime) : null,
+        capacity: Number.isInteger(capacity) ? capacity : 2
+      },
+      include: {
+        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
+        signups: true,
+        communications: { orderBy: { sentAt: 'desc' } }
+      }
+    });
+
+    res.json(slot);
+  } catch (error) {
+    console.error('[POST /api/admin/meeting-slots]', error);
+    res.status(500).json({ error: 'Failed to create meeting slot' });
+  }
+});
+
+// Admin: update any meeting slot (full override — including host and time).
+router.put('/meeting-slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { memberId, location, startTime, endTime, capacity } = req.body || {};
+
+    const existingSlot = await prisma.meetingSlot.findUnique({ where: { id } });
+    if (!existingSlot) {
+      return res.status(404).json({ error: 'Meeting slot not found' });
+    }
+
+    if (memberId !== undefined && memberId !== existingSlot.memberId) {
+      const host = await prisma.user.findUnique({ where: { id: memberId } });
+      if (!host) {
+        return res.status(400).json({ error: 'Host member not found' });
+      }
+    }
+
+    const updateData = {};
+    if (memberId !== undefined) updateData.memberId = memberId;
+    if (location !== undefined) updateData.location = location;
+    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
+    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
+    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
+
+    const updatedSlot = await prisma.meetingSlot.update({
+      where: { id },
+      data: updateData,
+      include: {
+        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
+        signups: { orderBy: { createdAt: 'asc' } },
+        communications: { orderBy: { sentAt: 'desc' } }
+      }
+    });
+
+    res.json(updatedSlot);
+  } catch (error) {
+    console.error('[PUT /api/admin/meeting-slots/:id]', error);
+    res.status(500).json({ error: 'Failed to update meeting slot' });
+  }
+});
+
+// Admin: delete any meeting slot; notify + log cancellation for every signup.
+router.delete('/meeting-slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingSlot = await prisma.meetingSlot.findUnique({
+      where: { id },
+      include: { signups: true, member: { select: { fullName: true, email: true, profileImage: true } } }
+    });
+
+    if (!existingSlot) {
+      return res.status(404).json({ error: 'Meeting slot not found' });
+    }
+
+    const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
+
+    // Notify everyone involved: all signed-up candidates AND the host member.
+    const notifications = [];
+
+    if (existingSlot.signups.length > 0) {
+      existingSlot.signups.forEach((signup) => {
+        notifications.push(
+          sendAndLogMeetingCommunication(
+            () => sendMeetingCancellationEmail(
+              signup.email,
+              signup.fullName,
+              memberName,
+              existingSlot.location,
+              existingSlot.startTime,
+              existingSlot.endTime
+            ),
+            {
+              slotId: existingSlot.id,
+              signupId: signup.id,
+              type: 'CANCELLATION',
+              recipient: signup.email,
+              subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+            }
+          )
+        );
+      });
+    }
+
+    // Notify the host member their slot was cancelled.
+    if (existingSlot.member?.email) {
+      notifications.push(
+        sendAndLogMeetingCommunication(
+          () => sendMeetingCancellationToMember(
+            existingSlot.member.email,
+            memberName,
+            existingSlot.location,
+            existingSlot.startTime,
+            existingSlot.endTime,
+            { signupCount: existingSlot.signups.length }
+          ),
+          {
+            slotId: existingSlot.id,
+            signupId: null,
+            type: 'CANCELLATION',
+            recipient: existingSlot.member.email,
+            subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
+          }
+        )
+      );
+    }
+
+    await Promise.allSettled(notifications);
+
+    // Cascade-delete signups and the slot. The slot's communications rows are
+    // removed with it (onDelete: Cascade) — moot once the slot itself is gone.
+    await prisma.$transaction(async (tx) => {
+      await tx.meetingSignup.deleteMany({ where: { slotId: id } });
+      await tx.meetingSlot.delete({ where: { id } });
+    });
+
+    const recipientCount = existingSlot.signups.length + (existingSlot.member?.email ? 1 : 0);
+    const message = recipientCount > 0
+      ? `Meeting slot deleted. Cancellation emails sent to ${existingSlot.signups.length} candidate(s) and the host member.`
+      : 'Meeting slot deleted successfully.';
+
+    res.json({ message });
+  } catch (error) {
+    console.error('[DELETE /api/admin/meeting-slots/:id]', error);
+    res.status(500).json({ error: 'Failed to delete meeting slot' });
+  }
+});
+
+// Admin: mark attendance for any signup. Setting attended=true feeds the
+// existing dynamic candidate-scoring bonus (read from attended elsewhere).
+router.patch('/meeting-signups/:id/attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { attended } = req.body || {};
+
+    const signup = await prisma.meetingSignup.findUnique({ where: { id } });
+    if (!signup) {
+      return res.status(404).json({ error: 'Signup not found' });
+    }
+
+    const updated = await prisma.meetingSignup.update({
+      where: { id },
+      data: { attended: Boolean(attended) }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/meeting-signups/:id/attendance]', error);
+    res.status(500).json({ error: 'Failed to update attendance' });
+  }
+});
+
+// Admin: delete any signup; notify + log cancellation (slot remains, so the
+// communication persists with signupId set null).
+router.delete('/meeting-signups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const signup = await prisma.meetingSignup.findUnique({
+      where: { id },
+      include: { slot: { include: { member: { select: { fullName: true, email: true, profileImage: true } } } } }
+    });
+
+    if (!signup) {
+      return res.status(404).json({ error: 'Signup not found' });
+    }
+
+    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+
+    // Notify the candidate their signup was cancelled...
+    await sendAndLogMeetingCommunication(
+      () => sendMeetingCancellationEmail(
+        signup.email,
+        signup.fullName,
+        memberName,
+        signup.slot.location,
+        signup.slot.startTime,
+        signup.slot.endTime
+      ),
+      {
+        slotId: signup.slotId,
+        signupId: signup.id,
+        type: 'CANCELLATION',
+        recipient: signup.email,
+        subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+      }
+    );
+
+    // ...and notify the host member the spot reopened.
+    if (signup.slot.member?.email) {
+      await sendAndLogMeetingCommunication(
+        () => sendMeetingCancellationToMember(
+          signup.slot.member.email,
+          memberName,
+          signup.slot.location,
+          signup.slot.startTime,
+          signup.slot.endTime,
+          { candidateName: signup.fullName }
+        ),
+        {
+          slotId: signup.slotId,
+          signupId: signup.id,
+          type: 'CANCELLATION',
+          recipient: signup.slot.member.email,
+          subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
+        }
+      );
+    }
+
+    await prisma.meetingSignup.delete({ where: { id } });
+
+    res.json({
+      message: 'Signup deleted successfully. Cancellation email sent.',
+      deletedSignup: { id: signup.id, fullName: signup.fullName, email: signup.email }
+    });
+  } catch (error) {
+    console.error('[DELETE /api/admin/meeting-signups/:id]', error);
+    res.status(500).json({ error: 'Failed to delete signup' });
+  }
+});
+
+// Preview graduated-member deactivation for a selected graduation class.
+// Returns eligible members, blocked members (active/current-cycle), and ineligible
+// members (not yet reached deactivation date), with relation counts.
+router.post('/users/deactivate-preview', async (req, res) => {
+  try {
+    const { graduationClass } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const result = await getDeactivationCandidates({
+      graduationClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate-preview]', error);
+    res.status(500).json({ error: 'Failed to generate deactivation preview' });
+  }
+});
+
+// Deactivate graduated members for a selected class.
+// Requires typed confirmation equal to the graduation class and a matching count.
+router.post('/users/deactivate', async (req, res) => {
+  try {
+    const { graduationClass, confirmationText, confirmedCount, dryRun } = req.body;
+
+    if (typeof graduationClass !== 'string' || graduationClass.trim().length === 0) {
+      return res.status(400).json({ error: 'graduationClass is required' });
+    }
+
+    const normalizedClass = graduationClass.trim();
+    if (normalizedClass.length > 100) {
+      return res.status(400).json({ error: 'Invalid graduation class' });
+    }
+
+    if (confirmationText !== normalizedClass) {
+      return res.status(400).json({ error: 'Confirmation text does not match graduation class' });
+    }
+
+    if (parseGraduationYear(normalizedClass) === null) {
+      return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
+    }
+
+    const activeCycles = await prisma.recruitingCycle.findMany({
+      where: { isActive: true },
+      select: { id: true }
+    });
+    const activeCycleIds = new Set(activeCycles.map(c => c.id));
+
+    const preview = await getDeactivationCandidates({
+      graduationClass: normalizedClass,
+      requesterId: req.user.id,
+      activeCycleIds
+    });
+
+    if (preview.error) {
+      return res.status(400).json({ error: preview.error });
+    }
+
+    if (typeof confirmedCount !== 'number' || confirmedCount !== preview.eligibleCount) {
+      return res.status(400).json({ error: 'Confirmed count does not match eligible count' });
+    }
+
+    if (dryRun) {
+      return res.json({ ...preview, dryRun: true });
+    }
+
+    if (preview.eligible.length === 0) {
+      return res.json({ ...preview, deactivatedCount: 0, dryRun: false });
+    }
+
+    const eligibleIds = preview.eligible.map(u => u.id);
+
+    const [updateResult] = await prisma.$transaction([
+      prisma.user.updateMany({
+        where: { id: { in: eligibleIds } },
+        data: {
+          isActive: false,
+          deactivatedAt: new Date(),
+          deactivatedBy: req.user.id
+        }
+      })
+    ]);
+
+    // Cut existing sessions immediately rather than after the cache TTL
+    invalidateUserCache(eligibleIds);
+
+    res.json({
+      ...preview,
+      dryRun: false,
+      deactivatedCount: updateResult.count
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/users/deactivate]', error);
+    res.status(500).json({ error: 'Failed to deactivate users' });
   }
 });
 

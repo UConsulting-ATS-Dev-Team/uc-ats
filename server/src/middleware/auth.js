@@ -33,6 +33,7 @@ export const requireAuth = async (req, res, next) => {
         email: true,
         fullName: true,
         role: true,
+        isActive: true,
         graduationClass: true,
         studentId: true,
         profileImage: true,
@@ -43,6 +44,11 @@ export const requireAuth = async (req, res, next) => {
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.isActive === false) {
+      userCache.delete(userId);
+      return res.status(401).json({ error: 'Account deactivated' });
     }
     
     // Cache the user data
@@ -57,6 +63,16 @@ export const requireAuth = async (req, res, next) => {
   } catch (error) {
     console.error('Auth middleware error:', error);
     res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// Drop a user's cached record so role/status changes take effect immediately
+// instead of after the 5-minute TTL
+export const invalidateUserCache = (userId) => {
+  if (Array.isArray(userId)) {
+    userId.forEach(id => userCache.delete(id));
+  } else {
+    userCache.delete(userId);
   }
 };
 

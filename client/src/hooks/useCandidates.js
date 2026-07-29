@@ -5,8 +5,8 @@ import apiClient from '../utils/api';
 const cache = new Map();
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
-function getCacheKey(endpoint, page, limit, search) {
-  return `${endpoint}:${page}:${limit}:${search}`;
+function getCacheKey(endpoint, page, limit, search, eventAttendanceEventId) {
+  return `${endpoint}:${page}:${limit}:${search}:${eventAttendanceEventId}`;
 }
 
 function getFromCache(key) {
@@ -39,6 +39,7 @@ export function useCandidates(options = {}) {
     search = '',
     enabled = true,
     endpoint = '/admin/candidates',
+    eventAttendanceEventId = '',
   } = options;
 
   const [data, setData] = useState({ candidates: [], pagination: null });
@@ -49,7 +50,7 @@ export function useCandidates(options = {}) {
   const fetchCandidates = useCallback(async (skipCache = false) => {
     if (!enabled) return;
 
-    const cacheKey = getCacheKey(endpoint, page, limit, search);
+    const cacheKey = getCacheKey(endpoint, page, limit, search, eventAttendanceEventId);
 
     // Check cache first
     if (!skipCache) {
@@ -68,6 +69,7 @@ export function useCandidates(options = {}) {
       params.append('page', page.toString());
       params.append('limit', limit.toString());
       if (search) params.append('search', search);
+      if (eventAttendanceEventId) params.append('eventAttendanceEventId', eventAttendanceEventId);
 
       const response = await apiClient.get(`${endpoint}?${params.toString()}`);
 
@@ -106,7 +108,7 @@ export function useCandidates(options = {}) {
         setLoading(false);
       }
     }
-  }, [page, limit, search, enabled, endpoint]);
+  }, [page, limit, search, enabled, endpoint, eventAttendanceEventId]);
 
   useEffect(() => {
     isMounted.current = true;

@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import cron from 'node-cron';
 import config from './config.js';
 import prisma from './prismaClient.js';
@@ -13,13 +14,24 @@ import usersRoutes from './routes/users.js';
 import publicRoutes from './routes/public.js';
 import interviewResourcesRoutes from './routes/interviewResources.js';
 import memberRoutes from './routes/member.js';
+import candidateRoutes from './routes/candidate.js';
+import casesRoutes from './routes/cases.js';
 import conversationsRoutes from './routes/conversations.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
+import featureRequestRoutes from './routes/featureRequests.js';
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+app.use(helmet());
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (config.corsOrigin.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+}));
+app.use(express.json({ limit: '1mb' }));
 
 // Serve static files for profile images
 app.use('/api/uploads', express.static('uploads', {
@@ -38,6 +50,9 @@ app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
 app.use('/api/member', memberRoutes);
 app.use('/api/conversations', conversationsRoutes);
+app.use('/api/feature-requests', featureRequestRoutes);
+app.use('/api/cases', casesRoutes);
+app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
 // Test endpoint to check if uploads directory is accessible

@@ -7,6 +7,9 @@ import {
   Typography,
   TextField,
   Button,
+  IconButton,
+  Tabs,
+  Tab,
   Grid,
   Paper,
   Rating,
@@ -27,10 +30,12 @@ import {
   Videocam as VideoIcon
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
+import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 
 const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const { user, token } = useAuth();
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -39,6 +44,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [mobileTab, setMobileTab] = useState(0);
 
   // Resizable columns state
   const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 83.3);
@@ -446,57 +452,79 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       onClose={() => onClose(false)}
       maxWidth="xl"
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
         sx: {
-          height: '90vh',
-          maxHeight: '90vh',
-          minWidth: '1200px'
+          height: { xs: '100%', md: '90vh' },
+          maxHeight: { xs: '100%', md: '90vh' },
+          minWidth: { xs: 'auto', md: '1200px' }
         }
       }}
     >
-      <DialogTitle sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <DialogTitle sx={{
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
         borderBottom: 1,
-        borderColor: 'divider'
+        borderColor: 'divider',
+        gap: 1
       }}>
-        <Box>
-          <Typography variant="h6" component="div">
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h6" component="div" noWrap>
             {application.studentId}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" noWrap>
             {application.major} • {application.year}
           </Typography>
         </Box>
-        <Button
-          onClick={() => onClose(false)}
-          startIcon={<CloseIcon />}
-          variant="outlined"
-          size="small"
-        >
-          Close
-        </Button>
+        {isMobile ? (
+          <IconButton onClick={() => onClose(false)} aria-label="close">
+            <CloseIcon />
+          </IconButton>
+        ) : (
+          <Button
+            onClick={() => onClose(false)}
+            startIcon={<CloseIcon />}
+            variant="outlined"
+            size="small"
+          >
+            Close
+          </Button>
+        )}
       </DialogTitle>
 
+      {isMobile && (
+        <Tabs
+          value={mobileTab}
+          onChange={(_, v) => setMobileTab(v)}
+          variant="fullWidth"
+          sx={{ borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tab icon={config.icon} iconPosition="start" label="Preview" />
+          <Tab icon={<EditIcon />} iconPosition="start" label="Grading" />
+        </Tabs>
+      )}
+
       <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
-        <Box 
+        <Box
           ref={containerRef}
-          sx={{ 
-            height: '100%', 
-            display: 'flex', 
+          sx={{
+            height: '100%',
+            display: 'flex',
+            flexDirection: { xs: 'column', md: 'row' },
             position: 'relative'
           }}
         >
-          {/* Document Preview - Left Side */}
-          <Box 
-            sx={{ 
-              width: `${leftWidth}%`,
-              borderRight: 1, 
-              borderColor: 'divider', 
-              display: 'flex', 
+          {/* Document Preview - Left Side / Mobile tab 0 */}
+          <Box
+            sx={{
+              display: isMobile && mobileTab !== 0 ? 'none' : 'flex',
+              width: { xs: '100%', md: `${leftWidth}%` },
+              borderRight: { xs: 0, md: 1 },
+              borderColor: 'divider',
               flexDirection: 'column',
-              minWidth: '200px'
+              minWidth: { xs: 'auto', md: '200px' },
+              flex: { xs: 1, md: 'none' }
             }}
           >
             <Box sx={{ p: 2, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -521,7 +549,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                     />
@@ -531,7 +559,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                       style={{
                         width: '100%',
                         height: '100%',
-                        border: '1px solid #ddd',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '4px'
                       }}
                       title={`${config.previewTitle}`}
@@ -559,27 +587,30 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
             </Box>
           </Box>
 
-          {/* Resizer */}
-          <Box
-            onMouseDown={handleMouseDown}
-            sx={{
-              width: '4px',
-              backgroundColor: isResizing ? 'primary.main' : 'grey.300',
-              cursor: 'col-resize',
-              '&:hover': {
-                backgroundColor: 'primary.main'
-              },
-              transition: 'background-color 0.2s'
-            }}
-          />
+          {/* Resizer (desktop only) */}
+          {!isMobile && (
+            <Box
+              onMouseDown={handleMouseDown}
+              sx={{
+                width: '4px',
+                backgroundColor: isResizing ? 'primary.main' : 'grey.300',
+                cursor: 'col-resize',
+                '&:hover': {
+                  backgroundColor: 'primary.main'
+                },
+                transition: 'background-color 0.2s'
+              }}
+            />
+          )}
 
-          {/* Grading Rubric - Right Side */}
-          <Box 
-            sx={{ 
-              width: `${100 - leftWidth}%`,
-              display: 'flex', 
+          {/* Grading Rubric - Right Side / Mobile tab 1 */}
+          <Box
+            sx={{
+              display: isMobile && mobileTab !== 1 ? 'none' : 'flex',
+              width: { xs: '100%', md: `${100 - leftWidth}%` },
               flexDirection: 'column',
-              minWidth: '200px'
+              minWidth: { xs: 'auto', md: '200px' },
+              flex: { xs: 1, md: 'none' }
             }}
           >
             <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
@@ -698,7 +729,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                   </Box>
 
                   {/* Overall Score */}
-                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.light', color: 'white' }}>
+                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.main', color: 'primary.contrastText' }}>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>
                       Overall Score: {calculateOverallScore()}/{getMaxScore()}
                     </Typography>

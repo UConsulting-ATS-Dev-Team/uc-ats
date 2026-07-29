@@ -4,6 +4,7 @@ import apiClient from '../utils/api';
 import DocumentGradingModal from '../components/DocumentGradingModal';
 import FlagDocumentModal from '../components/FlagDocumentModal';
 import AccessControl from '../components/AccessControl';
+import MemberAvatar from '../components/MemberAvatar';
 import {
   Box,
   Typography,
@@ -75,6 +76,7 @@ export default function AdminDocumentGrading() {
   const [genderFilter, setGenderFilter] = useState('all');
   const [firstGenFilter, setFirstGenFilter] = useState('all');
   const [transferFilter, setTransferFilter] = useState('all');
+  const [teamFilter, setTeamFilter] = useState('all');
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -277,6 +279,18 @@ export default function AdminDocumentGrading() {
       .filter(year => year && year !== 'N/A')
   )].sort((a, b) => b - a); // Sort descending (newest first)
 
+  // Get unique teams from authorized applications for filter dropdown
+  const availableTeams = [...new Map(
+    (Array.isArray(applications) ? applications : [])
+      .map(app => {
+        const value = app.groupId || 'unknown';
+        const label = app.groupName || 'Uncategorized';
+        return [value, label];
+      })
+  ).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([value, label]) => ({ value, label }));
+
   // Listen for cycle activation events
   useEffect(() => {
     const handleCycleActivated = () => {
@@ -327,8 +341,10 @@ export default function AdminDocumentGrading() {
     const matchesTransfer = transferFilter === 'all' ||
                            (transferFilter === 'yes' && app.isTransferStudent) ||
                            (transferFilter === 'no' && !app.isTransferStudent);
+    const appTeamValue = app.groupId || 'unknown';
+    const matchesTeam = teamFilter === 'all' || appTeamValue === teamFilter;
 
-    return matchesSearch && matchesStatus && matchesYear && matchesGender && matchesFirstGen && matchesTransfer;
+    return matchesSearch && matchesStatus && matchesYear && matchesGender && matchesFirstGen && matchesTransfer && matchesTeam;
   });
 
   // Sort applications
@@ -941,6 +957,22 @@ export default function AdminDocumentGrading() {
               <MenuItem value="no">No</MenuItem>
             </Select>
           </FormControl>
+
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>Team</InputLabel>
+            <Select
+              value={teamFilter}
+              label="Team"
+              onChange={(e) => setTeamFilter(e.target.value)}
+            >
+              <MenuItem value="all">All Teams</MenuItem>
+              {availableTeams.map(team => (
+                <MenuItem key={team.value} value={team.value}>
+                  {team.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </Box>
 
         {/* Document Type Tabs */}
@@ -989,7 +1021,7 @@ export default function AdminDocumentGrading() {
             <Typography color="error">{error}</Typography>
           </Box>
         ) : (
-          <TableContainer>
+          <TableContainer className="responsive-table">
             <Table>
               <TableHead>
                 <TableRow>
@@ -1029,7 +1061,7 @@ export default function AdminDocumentGrading() {
 
                     return flaggedDocuments.map((flaggedDoc) => (
                       <TableRow key={flaggedDoc.id} hover>
-                        <TableCell>
+                        <TableCell data-label="Candidate">
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {flaggedDoc.application.firstName} {flaggedDoc.application.lastName}
                           </Typography>
@@ -1037,7 +1069,7 @@ export default function AdminDocumentGrading() {
                             {flaggedDoc.application.major1} • {flaggedDoc.application.graduationYear}
                           </Typography>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Document">
                           <Button
                             variant="outlined"
                             size="small"
@@ -1045,11 +1077,11 @@ export default function AdminDocumentGrading() {
                             sx={{ textTransform: 'none' }}
                             onClick={() => handleGradeDocument(flaggedDoc.application, flaggedDoc.documentType)}
                           >
-                            {flaggedDoc.documentType === 'resume' ? 'Resume' : 
+                            {flaggedDoc.documentType === 'resume' ? 'Resume' :
                              flaggedDoc.documentType === 'coverLetter' ? 'Cover Letter' : 'Video'}
                           </Button>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Flag Details">
                           <Box>
                             <Typography variant="caption" color="error" sx={{ fontWeight: 600 }}>
                               {flaggedDoc.reason}
@@ -1059,12 +1091,15 @@ export default function AdminDocumentGrading() {
                                 {flaggedDoc.message}
                               </Typography>
                             )}
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              Flagged by {flaggedDoc.flagger.fullName}
-                            </Typography>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={flaggedDoc.flagger} size={20} />
+                              <Typography variant="caption" color="text.secondary">
+                                Flagged by {flaggedDoc.flagger.fullName}
+                              </Typography>
+                            </Stack>
                           </Box>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Status">
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                             <Chip
                               label="Flagged"
@@ -1123,7 +1158,7 @@ export default function AdminDocumentGrading() {
 
                     return resolvedDocuments.map((resolvedDoc) => (
                       <TableRow key={resolvedDoc.id} hover>
-                        <TableCell>
+                        <TableCell data-label="Candidate">
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {resolvedDoc.application.firstName} {resolvedDoc.application.lastName}
                           </Typography>
@@ -1131,7 +1166,7 @@ export default function AdminDocumentGrading() {
                             {resolvedDoc.application.major1} • {resolvedDoc.application.graduationYear}
                           </Typography>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Document">
                           <Button
                             variant="outlined"
                             size="small"
@@ -1139,11 +1174,11 @@ export default function AdminDocumentGrading() {
                             sx={{ textTransform: 'none' }}
                             onClick={() => handleGradeDocument(resolvedDoc.application, resolvedDoc.documentType)}
                           >
-                            {resolvedDoc.documentType === 'resume' ? 'Resume' : 
+                            {resolvedDoc.documentType === 'resume' ? 'Resume' :
                              resolvedDoc.documentType === 'coverLetter' ? 'Cover Letter' : 'Video'}
                           </Button>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Flag Details">
                           <Box>
                             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
                               {resolvedDoc.reason}
@@ -1153,15 +1188,21 @@ export default function AdminDocumentGrading() {
                                 {resolvedDoc.message}
                               </Typography>
                             )}
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              Flagged by {resolvedDoc.flagger.fullName}
-                            </Typography>
-                            <Typography variant="caption" color="success.main" display="block">
-                              Resolved by {resolvedDoc.resolver?.fullName} on {new Date(resolvedDoc.resolvedAt).toLocaleDateString()}
-                            </Typography>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={resolvedDoc.flagger} size={20} />
+                              <Typography variant="caption" color="text.secondary">
+                                Flagged by {resolvedDoc.flagger.fullName}
+                              </Typography>
+                            </Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center" display="block" mt={0.5}>
+                              <MemberAvatar member={resolvedDoc.resolver} size={20} />
+                              <Typography variant="caption" color="success.main">
+                                Resolved by {resolvedDoc.resolver?.fullName} on {new Date(resolvedDoc.resolvedAt).toLocaleDateString()}
+                              </Typography>
+                            </Stack>
                           </Box>
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="Status">
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                             <Chip
                               label="Resolved"
@@ -1213,7 +1254,7 @@ export default function AdminDocumentGrading() {
 
                   return currentGradingData.map((row) => (
                     <TableRow key={row.id} hover>
-                      <TableCell>
+                      <TableCell data-label="Candidate">
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {row.candidate}
                         </Typography>
@@ -1221,7 +1262,7 @@ export default function AdminDocumentGrading() {
                           {row.application?.major} • {row.application?.year}
                         </Typography>
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-label="Document">
                         <Button
                           variant="outlined"
                           size="small"
@@ -1233,14 +1274,14 @@ export default function AdminDocumentGrading() {
                           {row.document}
                         </Button>
                       </TableCell>
-                      <TableCell>
+                      <TableCell data-label="Flag">
                         {(() => {
                           const documentType = tabValue === 0 ? 'resume' : tabValue === 1 ? 'coverLetter' : 'video';
                           const isFlagged = row.application[`${documentType}Flagged`];
-                          
+
                           return (
                             <Tooltip title={isFlagged ? `Flagged: ${isFlagged.reason}` : "Flag document for review"}>
-                              <IconButton 
+                              <IconButton
                                 size="small"
                                 onClick={() => handleFlagDocument(row.application, documentType)}
                                 disabled={!row.hasDocument || isFlagged}
@@ -1252,8 +1293,8 @@ export default function AdminDocumentGrading() {
                           );
                         })()}
                       </TableCell>
-                      <TableCell>
-                        <Tooltip 
+                      <TableCell data-label="Status">
+                        <Tooltip
                           title={getMissingMembersTooltip(row.application, tabValue === 0 ? 'resume' : tabValue === 1 ? 'coverLetter' : 'video')}
                           placement="top"
                           arrow

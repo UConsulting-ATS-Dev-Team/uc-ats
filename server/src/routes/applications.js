@@ -1,7 +1,8 @@
 import express from 'express';
-import prisma from '../prismaClient.js'; 
-import { requireAuth } from '../middleware/auth.js';
+import prisma from '../prismaClient.js';
+import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 import { getFormQuestions, getResponses } from '../services/google/forms.js';
+import { getGroupMemberUsers, groupMemberUserInclude } from '../utils/groupMembers.js';
 import config from '../config.js';
 
 const router = express.Router();
@@ -126,7 +127,7 @@ router.get('/test-google-api', async (req, res) => {
 router.use(requireAuth);
 
 // Create manual application
-router.post('/manual', async (req, res) => {
+router.post('/manual', requireAdmin, async (req, res) => {
   try {
     
     const {
@@ -256,7 +257,7 @@ router.get('/', async (req, res) => {
 
     // Search and filter parameters
     const search = req.query.search?.trim() || '';
-    const { year, gender, firstGen, transfer, status: statusFilter, returning } = req.query;
+    const { year, gender, firstGen, transfer, status: statusFilter, returning, eventAttendanceEventId } = req.query;
 
     // Optional: scope to active recruiting cycle if one exists
     const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
@@ -299,6 +300,14 @@ router.get('/', async (req, res) => {
     if (transfer === 'true') whereClause.isTransferStudent = true;
     if (transfer === 'false') whereClause.isTransferStudent = false;
     if (statusFilter) whereClause.status = statusFilter;
+
+    // Event attendance filter (via candidate relation)
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: { some: { eventId: eventAttendanceEventId } }
+      };
+    }
 
     // Returning is a computed value, so resolve it before count/pagination.
     // This keeps page sizes, totals, and page counts aligned with the filter.
@@ -462,10 +471,42 @@ router.get('/', async (req, res) => {
       };
     }));
 
+    // Attach review team members for each application
+    const candidateIdsForTeams = [...new Set(applications.map(app => app.candidateId).filter(Boolean))];
+    const assignedGroupIdsForCandidates = candidateIdsForTeams.length > 0
+      ? await prisma.candidate.findMany({
+          where: { id: { in: candidateIdsForTeams } },
+          select: { id: true, assignedGroupId: true }
+        })
+      : [];
+    const candidateGroupMap = new Map(assignedGroupIdsForCandidates.map(c => [c.id, c.assignedGroupId]));
+    const groupIdsForTeams = [...new Set(assignedGroupIdsForCandidates.map(c => c.assignedGroupId).filter(Boolean))];
+
+    const reviewTeams = groupIdsForTeams.length > 0
+      ? await prisma.groups.findMany({
+          where: { id: { in: groupIdsForTeams } },
+          include: groupMemberUserInclude
+        })
+      : [];
+    const reviewTeamMap = new Map(reviewTeams.map(team => {
+      const members = getGroupMemberUsers(team);
+      return [team.id, {
+        id: team.id,
+        name: team.name || `Team ${team.id.slice(-4)}`,
+        members
+      }];
+    }));
+
+    const applicationsWithTeams = applicationsWithAverages.map(application => {
+      const assignedGroupId = candidateGroupMap.get(application.candidateId);
+      const reviewTeam = assignedGroupId ? reviewTeamMap.get(assignedGroupId) || null : null;
+      return { ...application, reviewTeam };
+    });
+
     // Return with pagination metadata
     const totalPages = Math.ceil(total / limit);
     res.json({
-      data: applicationsWithAverages,
+      data: applicationsWithTeams,
       pagination: {
         page,
         limit,
@@ -482,13 +523,13 @@ router.get('/', async (req, res) => {
 });
 
 // Comments: list for an application
-router.get('/:id/comments', async (req, res) => {
+router.get('/:id/comments', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const comments = await prisma.comment.findMany({
       where: { applicationId: id },
       orderBy: { createdAt: 'desc' },
-      include: { user: { select: { id: true, email: true, fullName: true } } }
+      include: { user: { select: { id: true, email: true, fullName: true, profileImage: true } } }
     });
     res.json(comments);
   } catch (error) {
@@ -498,7 +539,7 @@ router.get('/:id/comments', async (req, res) => {
 });
 
 // Get latest grades for an application and user (for the old grading system compatibility)
-router.get('/:id/grades/latest', async (req, res) => {
+router.get('/:id/grades/latest', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -541,7 +582,7 @@ router.get('/:id/grades/latest', async (req, res) => {
 });
 
 // Get average grades for an application (for the old grading system compatibility)
-router.get('/:id/grades/average', async (req, res) => {
+router.get('/:id/grades/average', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -615,7 +656,7 @@ router.get('/:id/grades/average', async (req, res) => {
 });
 
 // Save grades for an application (for the old grading system compatibility)
-router.post('/:id/grades', async (req, res) => {
+router.post('/:id/grades', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -679,7 +720,7 @@ router.post('/:id/grades', async (req, res) => {
 });
 
 // Comments: add to an application
-router.post('/:id/comments', async (req, res) => {
+router.post('/:id/comments', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const { content } = req.body;
@@ -709,7 +750,7 @@ router.get('/my-applications', requireAuth, async (req, res) => {
     // First, get the user to find their studentId
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { studentId: true, email: true, fullName: true }
+      select: { studentId: true, email: true, fullName: true, profileImage: true }
     });
 
     console.log('User found:', user);
@@ -776,7 +817,7 @@ router.get('/:id', async (req, res) => {
       include: {
         comments: {
           orderBy: { createdAt: 'desc' },
-          include: { user: { select: { id: true, email: true, fullName: true } } }
+          include: { user: { select: { id: true, email: true, fullName: true, profileImage: true } } }
         },
         candidate: {
           select: {
@@ -798,6 +839,20 @@ router.get('/:id', async (req, res) => {
 
     if (!application) {
       return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'MEMBER') {
+      const ownsByEmail = req.user.email && (
+        application.email === req.user.email ||
+        application.candidate?.email === req.user.email
+      );
+      const ownsByStudentId = req.user.studentId && (
+        application.studentId === req.user.studentId ||
+        application.candidate?.studentId === req.user.studentId
+      );
+      if (!ownsByEmail && !ownsByStudentId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     }
 
     // Fetch past applications for this applicant (excluding current application)
@@ -958,8 +1013,7 @@ router.post('/:id/grades', requireAuth, async (req, res) => {
         select: {
           id: true,
           fullName: true,
-          email: true
-        }
+          email: true, profileImage: true }
       })
     ]);
     
@@ -1311,7 +1365,7 @@ router.get('/:id/events', requireAuth, async (req, res) => {
           slot: {
             include: {
               member: {
-                select: { fullName: true }
+                select: { fullName: true, profileImage: true }
               }
             }
           }

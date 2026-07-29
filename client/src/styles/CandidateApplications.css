@@ -35,7 +35,7 @@
   background-color: var(--bg-white);
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .no-applications h2 {
@@ -63,12 +63,12 @@
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 1.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s ease;
 }
 
 .application-card:hover {
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .application-card.clickable {
@@ -78,7 +78,7 @@
 
 .application-card.clickable:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-lg);
 }
 
 .application-actions {
@@ -116,34 +116,22 @@
 }
 
 .status.submitted {
-  background-color: #fef3c7;
-  color: #92400e;
-}
+  background-color: var(--status-warning-bg);  color: var(--status-warning-text);}
 
 .status.under_review {
-  background-color: #dbeafe;
-  color: #1e40af;
-}
+  background-color: var(--status-info-bg);  color: var(--status-info-text);}
 
 .status.accepted {
-  background-color: #d1fae5;
-  color: #065f46;
-}
+  background-color: var(--status-success-bg);  color: var(--status-success-text);}
 
 .status.rejected {
-  background-color: #fee2e2;
-  color: #991b1b;
-}
+  background-color: var(--status-error-bg);  color: var(--status-error-text);}
 
 .status.waitlisted {
-  background-color: #f3e8ff;
-  color: #7c3aed;
-}
+  background-color: var(--status-purple-bg);  color: var(--status-purple-text);}
 
 .status.under-review {
-  background-color: #dbeafe;
-  color: #1e40af;
-}
+  background-color: var(--status-info-bg);  color: var(--status-info-text);}
 
 .application-details {
   font-size: 0.875rem;
@@ -187,7 +175,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: var(--overlay);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -198,7 +186,7 @@
 .modal-content {
   background-color: var(--bg-white);
   border-radius: var(--border-radius);
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-lg);
   max-width: 800px;
   width: 100%;
   max-height: 90vh;
@@ -348,8 +336,7 @@
 
 .document-link:hover {
   background-color: var(--primary-color);
-  color: white;
-}
+  color: var(--text-white);}
 
 
 

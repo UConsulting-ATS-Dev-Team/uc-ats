@@ -23,6 +23,7 @@ import {
 import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
 
 export default function CycleManagement() {
   const [cycles, setCycles] = useState([]);
@@ -31,6 +32,7 @@ export default function CycleManagement() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
+  const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
   const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
   const [submitting, setSubmitting] = useState(false);
 
@@ -157,7 +159,7 @@ export default function CycleManagement() {
         <Paper sx={{ p: 2, mb: 2, color: 'error.main' }}>{error}</Paper>
       )}
 
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} className="responsive-table">
         <Table>
           <TableHead>
             <TableRow>
@@ -172,18 +174,21 @@ export default function CycleManagement() {
           <TableBody>
             {cycles.map((c) => (
               <TableRow key={c.id}>
-                <TableCell>{c.name}</TableCell>
-                <TableCell style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.formUrl || '-'}</TableCell>
-                <TableCell>{c.startDate ? new Date(c.startDate).toLocaleDateString() : '-'}</TableCell>
-                <TableCell>{c.endDate ? new Date(c.endDate).toLocaleDateString() : '-'}</TableCell>
-                <TableCell>{c.isActive ? 'Yes' : 'No'}</TableCell>
-                <TableCell align="right">
+                <TableCell data-label="Name">{c.name}</TableCell>
+                <TableCell data-label="Form URL" sx={{ maxWidth: { xs: 'none', md: 320 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: { xs: 'normal', md: 'nowrap' }, wordBreak: 'break-all' }}>{c.formUrl || '-'}</TableCell>
+                <TableCell data-label="Start">{c.startDate ? new Date(c.startDate).toLocaleDateString() : '-'}</TableCell>
+                <TableCell data-label="End">{c.endDate ? new Date(c.endDate).toLocaleDateString() : '-'}</TableCell>
+                <TableCell data-label="Active">{c.isActive ? 'Yes' : 'No'}</TableCell>
+                <TableCell data-label="Actions" align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
                     <Tooltip title="Edit cycle">
                       <IconButton size="small" onClick={() => openEditDialog(c)}>
                         <EditIcon />
                       </IconButton>
                     </Tooltip>
+                    <Button size="small" variant="outlined" onClick={() => setOfferLetterCycleId(c.id)}>
+                      Offer Letters
+                    </Button>
                     {!c.isActive && (
                       <Button size="small" variant="outlined" onClick={() => activateCycle(c.id)}>Activate</Button>
                     )}
@@ -309,6 +314,12 @@ export default function CycleManagement() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <CycleOfferLetterDialog
+        cycleId={offerLetterCycleId}
+        open={Boolean(offerLetterCycleId)}
+        onClose={() => setOfferLetterCycleId(null)}
+      />
     </Box>
     </AccessControl>
   );

@@ -8,16 +8,27 @@ import {
   ArrowRightOnRectangleIcon,
   Bars3Icon,
   XMarkIcon,
-  AcademicCapIcon
+  AcademicCapIcon,
+  LightBulbIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
+import FeatureRequestModal from './FeatureRequestModal';
+import ThemeToggle from './ThemeToggle';
 import '../styles/CandidateLayout.css';
+
+const FEATURE_REQUEST_NAV = {
+  name: 'Request a feature',
+  icon: LightBulbIcon,
+  isFeatureRequest: true,
+};
 
 const CandidateLayout = ({ children }) => {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -28,7 +39,9 @@ const CandidateLayout = ({ children }) => {
     { name: 'Dashboard', href: '/', icon: HomeIcon },
     { name: 'Applications', href: '/applications', icon: DocumentTextIcon },
     { name: 'Events', href: '/events', icon: CalendarDaysIcon },
+    { name: 'Get to Know UC', href: '/get-to-know-uc', icon: UserGroupIcon },
     { name: 'Recruitment Resources', href: '/interview-prep', icon: AcademicCapIcon },
+    FEATURE_REQUEST_NAV,
   ];
 
   const isCurrentPath = (path) => location.pathname === path;
@@ -68,6 +81,7 @@ const CandidateLayout = ({ children }) => {
                 <p className="user-name">{user?.fullName}</p>
                 <p className="user-role">CANDIDATE</p>
               </div>
+              <ThemeToggle />
               <button
                 onClick={handleLogout}
                 className="logout-btn"
@@ -87,8 +101,26 @@ const CandidateLayout = ({ children }) => {
             <nav className="sidebar-nav">
               {navigation.map((item) => {
                 const Icon = item.icon;
+
+                if (item.isFeatureRequest) {
+                  return (
+                    <button
+                      key={item.name}
+                      type="button"
+                      onClick={() => {
+                        setFeatureRequestOpen(true);
+                        setSidebarOpen(false);
+                      }}
+                      className="nav-item"
+                    >
+                      <Icon className="nav-icon" />
+                      {item.name}
+                    </button>
+                  );
+                }
+
                 const current = isCurrentPath(item.href);
-                
+
                 return (
                   <Link
                     key={item.name}
@@ -122,6 +154,11 @@ const CandidateLayout = ({ children }) => {
           </main>
         </div>
       </div>
+
+      <FeatureRequestModal
+        open={featureRequestOpen}
+        onClose={() => setFeatureRequestOpen(false)}
+      />
     </div>
   );
 };

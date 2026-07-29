@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
+import { useIsMobile } from '../hooks/useResponsive';
 
 const overlayStyle = {
   position: 'fixed',
@@ -12,15 +13,15 @@ const overlayStyle = {
   zIndex: 1500,
 };
 
-const modalStyle = {
-  width: '90vw',
-  height: '90vh',
+const getModalStyle = (isMobile) => ({
+  width: isMobile ? '100vw' : '90vw',
+  height: isMobile ? '100vh' : '90vh',
   backgroundColor: '#fff',
-  borderRadius: '8px',
+  borderRadius: isMobile ? 0 : '8px',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-};
+});
 
 const headerStyle = {
   padding: '8px 12px',
@@ -40,6 +41,7 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
   const [error, setError] = useState(null);
   const videoRef = useRef(null);
   const { token } = useAuth();
+  const isMobile = useIsMobile();
   
   console.log('DocumentPreviewModal props:', { src, kind, title, onClose });
 
@@ -86,7 +88,7 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
 
   return (
     <div style={overlayStyle} onClick={onClose}>
-      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+      <div style={getModalStyle(isMobile)} onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle}>
           <div style={{ fontWeight: 600 }}>{title || 'Preview'}</div>
           <button onClick={onClose} style={{ padding: '6px 10px' }}>Close</button>

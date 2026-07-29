@@ -50,6 +50,7 @@ const Layout = ({ children }) => {
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },

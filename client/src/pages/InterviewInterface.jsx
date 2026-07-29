@@ -427,12 +427,12 @@ export default function InterviewInterface() {
                     width: '100%',
                     marginBottom: '16px',
                     padding: '12px',
-                    backgroundColor: '#eff6ff', 
-                    borderLeft: '4px solid #2563eb',
+                    backgroundColor: 'var(--status-info-bg)',
+                    borderLeft: '4px solid var(--status-info-border)',
                     borderRadius: '4px'
                   }}>
                     <p style={{ 
-                      color: '#1e40af', 
+                      color: 'var(--status-info-text)',
                       fontWeight: '600',
                       marginBottom: '6px',
                       fontSize: '0.875rem',
@@ -440,8 +440,8 @@ export default function InterviewInterface() {
                     }}>
                       Test For (Admin Note):
                     </p>
-                    <p style={{ 
-                      color: '#1e40af',
+                    <p style={{
+                      color: 'var(--status-info-text)',
                       margin: 0,
                       fontSize: '0.875rem',
                       lineHeight: '1.5',

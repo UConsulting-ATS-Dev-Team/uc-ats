@@ -86,6 +86,19 @@
   gap: 1rem;
 }
 
+.profile-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-decoration: none;
+  color: inherit;
+  transition: opacity 0.2s ease;
+}
+
+.profile-link:hover {
+  opacity: 0.8;
+}
+
 .user-info {
   text-align: right;
 }
@@ -336,20 +349,46 @@ button.nav-item:hover .nav-icon {
   .mobile-menu-btn {
     display: inline-flex;
   }
-  
+
   .logo-subtitle {
     display: none;
   }
-  
+
   .user-info {
     display: none;
   }
-  
+
   .nav-container {
     padding: 0 1rem;
   }
-  
+
   .main-content {
     padding: 1.5rem 1rem;
   }
-} 
+
+  .sidebar {
+    width: min(85vw, 280px);
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-container {
+    padding: 0 0.75rem;
+  }
+
+  .main-content {
+    padding: 1rem 0.75rem;
+  }
+
+  .logout-btn {
+    padding: 0.5rem;
+  }
+
+  .logout-btn .logout-text {
+    display: none;
+  }
+
+  .logout-icon {
+    margin-right: 0;
+  }
+}

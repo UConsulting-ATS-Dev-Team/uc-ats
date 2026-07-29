@@ -1,6 +1,6 @@
 /* CandidateManagement Page Styles */
 .candidate-management {
-  background-color: #ffffff;
+  background-color: var(--bg-primary);
   min-height: 100vh;
   padding: 1.5rem;
   font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
@@ -15,7 +15,7 @@
 .candidate-management h6 {
   font-family: 'Montserrat', sans-serif;
   font-weight: 700;
-  color: #042742;
+  color: var(--text-primary);
 }
 
 /* Ensure Material-UI components use proper fonts */
@@ -32,7 +32,7 @@
 .MuiTypography-h6 {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 700 !important;
-  color: #042742 !important;
+  color: var(--text-primary) !important;
 }
 
 .MuiTypography-body1,
@@ -44,11 +44,32 @@
 .MuiTableCell-head {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 700 !important;
-  color: #042742 !important;
-  background-color: #f8fafc !important;
+  color: var(--text-primary) !important;
+  background-color: var(--bg-secondary) !important;
 }
 
 .MuiTableCell-body {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 300 !important;
-} 
+}
+
+@media (max-width: 768px) {
+  .candidate-management {
+    padding: var(--space-mobile-padding);
+  }
+
+  .candidate-management > .MuiStack-root {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .candidate-management > .MuiStack-root > .MuiStack-root {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .candidate-management > .MuiStack-root > .MuiStack-root > * {
+    width: 100%;
+  }
+}

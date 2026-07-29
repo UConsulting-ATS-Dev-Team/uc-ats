@@ -15,6 +15,7 @@ import {
   Alert
 } from '@mui/material';
 import { Flag as FlagIcon } from '@mui/icons-material';
+import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 
 const FLAG_REASONS = [
@@ -32,6 +33,7 @@ export default function FlagDocumentModal({
   application, 
   documentType 
 }) {
+  const isMobile = useIsMobile();
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -85,11 +87,12 @@ export default function FlagDocumentModal({
   };
 
   return (
-    <Dialog 
-      open={open} 
+    <Dialog
+      open={open}
       onClose={handleClose}
       maxWidth="sm"
       fullWidth
+      fullScreen={isMobile}
     >
       <DialogTitle>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

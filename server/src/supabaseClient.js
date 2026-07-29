@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
+// Supabase Realtime requires a WebSocket transport in Node.js < 22.
+import { WebSocket } from 'ws';
+
 dotenv.config();
 
 // Create Supabase client for server-side operations
@@ -16,7 +19,8 @@ export const supabase = supabaseUrl && supabaseServiceKey
       auth: {
         autoRefreshToken: false,
         persistSession: false
-      }
+      },
+      realtime: { transport: WebSocket }
     })
   : null;
 

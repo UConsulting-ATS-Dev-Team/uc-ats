@@ -2,16 +2,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { ChatBubbleLeftRightIcon, XMarkIcon, PaperAirplaneIcon } from '@heroicons/react/24/solid';
 import useConversation from '../../hooks/useConversation';
 import { useAuth } from '../../context/AuthContext';
+import MemberAvatar from '../MemberAvatar';
 import './ChatWidget.css';
-
-function initialsFor(name = '') {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((n) => n[0]?.toUpperCase() || '')
-    .join('') || '?';
-}
 
 function formatTime(date) {
   const d = new Date(date);
@@ -63,11 +55,11 @@ function MessageList({ messages, currentUserId }) {
         return (
           <div className={classes.join(' ')} key={item.key}>
             {!mine && (
-              <div className="chat-message-row__avatar" title={msg.sender.fullName}>
-                {msg.sender.profileImage
-                  ? <img src={msg.sender.profileImage} alt={msg.sender.fullName} />
-                  : initialsFor(msg.sender.fullName)}
-              </div>
+              <MemberAvatar
+                member={msg.sender}
+                size={28}
+                className="chat-message-row__avatar"
+              />
             )}
             <div className="chat-message-row__bubble-col">
               {showSender && <div className="chat-message-row__sender">{msg.sender.fullName}</div>}

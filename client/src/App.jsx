@@ -9,6 +9,7 @@ import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
+import { CelebrationProvider } from './context/CelebrationContext';
 import CandidateManagement from './pages/CandidateManagement';
 import CycleManagement from './pages/CycleManagement';
 import ForgotPassword from './pages/ForgotPassword';
@@ -25,7 +26,8 @@ import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
 import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
-import RecruitmentResources from './pages/RecruitmentResources';
+import Cases from './pages/Cases';
+import CaseTagging from './pages/CaseTagging';
 import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
 import UserManagement from './pages/UserManagement';
@@ -33,12 +35,15 @@ import EventManagement from './pages/EventManagement';
 import CandidateEvents from './pages/CandidateEvents';
 import MemberEvents from './pages/MemberEvents';
 import CandidateApplications from './pages/CandidateApplications';
+import CandidateGTKUC from './pages/CandidateGTKUC';
 import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
+import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
 import './styles/variables.css';
@@ -137,12 +142,39 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+
+      <Route
+        path="/cases"
+        element={
+          <ProtectedRoute>
+            <Cases />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/cases/:id/tags"
+        element={
+          <ProtectedRoute>
+            <CaseTagging />
+          </ProtectedRoute>
+        }
+      />
       
       <Route
         path="/user-management"
         element={
           <ProtectedRoute>
             <UserManagement />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            {user?.role === 'USER' ? <Navigate to="/" /> : <Profile />}
           </ProtectedRoute>
         }
       />
@@ -221,16 +253,6 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
-      
-      <Route
-        path="/recruitment-resources"
-        element={
-          <ProtectedRoute>
-            <RecruitmentResources />
-          </ProtectedRoute>
-        }
-      />
-      
       
       <Route
         path="/interviews/:id"
@@ -314,6 +336,15 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+
+      <Route
+        path="/get-to-know-uc"
+        element={
+          <ProtectedRoute>
+            <CandidateGTKUC />
+          </ProtectedRoute>
+        }
+      />
       
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
@@ -328,6 +359,15 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+      {/* Admin GTKUC slot + attendance management */}
+      <Route
+        path="/admin/meeting-slots"
+        element={
+          <ProtectedRoute>
+            <AdminMeetingSlots />
+          </ProtectedRoute>
+        }
+      />
 
       {/* 404 - Page Not Found */}
       <Route path="*" element={<NotFound />} />
@@ -336,17 +376,18 @@ const AppRoutes = () => {
 };
 
 export default function App() {
-  // Apply global Montserrat Light for body, Montserrat Bold for headings
+  // Apply global Montserrat Light for body
   useEffect(() => {
     document.body.style.fontFamily = 'Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif';
-    document.body.style.fontWeight = '300'; // Montserrat Light as default body weight
-    document.body.style.backgroundColor = '#ffffff'; // Clean white background
+    document.body.style.fontWeight = '300';
   }, []);
 
   return (
     <AuthProvider>
       <DataProvider>
-        <AppRoutes />
+        <CelebrationProvider>
+          <AppRoutes />
+        </CelebrationProvider>
       </DataProvider>
     </AuthProvider>
   );
