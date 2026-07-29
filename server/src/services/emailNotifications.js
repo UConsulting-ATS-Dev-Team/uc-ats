@@ -123,10 +123,10 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html, attachments = []) => {
+const sendEmail = async (to, subject, html, attachments = [], text = null, messageId = undefined, options = {}) => {
   try {
     const transporter = createTransporter();
-    
+
     const mailOptions = {
       from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
       replyTo: process.env.EMAIL_REPLY_TO,
@@ -135,8 +135,37 @@ const sendEmail = async (to, subject, html, attachments = []) => {
       html: html
     };
 
+    if (text) {
+      mailOptions.text = text;
+    }
+
     if (attachments && attachments.length > 0) {
       mailOptions.attachments = attachments;
+    }
+
+    if (messageId) {
+      mailOptions.messageId = messageId;
+    }
+
+    // Call the durable, provider-safe intent/cancellation hook at the last
+    // possible moment before the provider call. This defines the point of no
+    // return: once the hook passes, the provider is invoked and the result is
+    // authoritative. A status reversal that commits after this boundary cannot
+    // recall an in-flight email, but the SENT delivery attempt records the
+    // outcome for operator reconciliation.
+    if (options?.onBeforeSend) {
+      const beforeResult = await options.onBeforeSend();
+      if (beforeResult && beforeResult.cancelled) {
+        const reason = beforeResult.reason || 'Send cancelled by before-send hook';
+        console.log('Email send cancelled by before-send hook:', reason);
+        return { success: false, error: reason, cancelled: true };
+      }
+    }
+
+    if (options?.signal?.aborted) {
+      const reason = options.signal.reason || 'Send aborted by cancellation signal';
+      console.log('Email send aborted before transporter call:', reason);
+      return { success: false, error: reason, cancelled: true };
     }
 
     const info = await transporter.sendMail(mailOptions);
@@ -754,10 +783,10 @@ export const sendFirstRoundRejectionEmail = async (candidateEmail, candidateName
 };
 
 // Send final round acceptance email
-export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
+export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName, messageId = undefined) => {
   try {
     const emailContent = createFinalAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
     
     if (result.success) {
       console.log(`Final acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -773,10 +802,10 @@ export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, cu
 };
 
 // Send final round rejection email
-export const sendFinalRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
+export const sendFinalRejectionEmail = async (candidateEmail, candidateName, currentCycleName, messageId = undefined) => {
   try {
     const emailContent = createFinalRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId);
     
     if (result.success) {
       console.log(`Final rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -787,6 +816,84 @@ export const sendFinalRejectionEmail = async (candidateEmail, candidateName, cur
     return result;
   } catch (error) {
     console.error('Error in sendFinalRejectionEmail:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Applicant feedback request email template
+
+const createApplicantFeedbackRequestEmail = (candidateName, currentCycleName, feedbackFormUrl) => {
+  const subjectCycle = currentCycleName;
+  candidateName = escapeHtml(candidateName);
+  currentCycleName = escapeHtml(currentCycleName);
+  feedbackFormUrl = escapeHtml(feedbackFormUrl);
+  const text = `Dear ${candidateName},\n\nThank you for your interest in UConsulting and for participating in our ${currentCycleName} recruitment process.\n\nWe would greatly appreciate your confidential feedback via this short form:\n${feedbackFormUrl}\n\nYour responses will be kept confidential and used only to improve our process for future candidates.\n\nBest regards,\nUConsulting Recruitment Team`;
+  return {
+    subject: `Feedback Request - ${subjectCycle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">We'd Love Your Feedback</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Dear ${candidateName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Thank you for your interest in UConsulting and for participating in our <strong>${currentCycleName}</strong> recruitment process.
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            We would greatly appreciate your confidential feedback via this short form:
+          </p>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
+            <a href="${feedbackFormUrl}" style="display: inline-block; background-color: #0c74c1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Give Confidential Feedback</a>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Your responses will be kept confidential and used only to improve our process for future candidates.
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `,
+    text
+  };
+};
+
+export const sendApplicantFeedbackRequest = async (candidateEmail, candidateName, currentCycleName, feedbackFormUrl, messageId = undefined, options = {}) => {
+  try {
+    if (options?.signal?.aborted) {
+      const reason = options.signal.reason || 'Send aborted by cancellation signal';
+      console.log(`Feedback request send aborted for ${candidateEmail}:`, reason);
+      return { success: false, error: reason, cancelled: true };
+    }
+
+    const emailContent = createApplicantFeedbackRequestEmail(candidateName, currentCycleName, feedbackFormUrl);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], emailContent.text, messageId, options);
+
+    if (result.success) {
+      console.log(`Feedback request email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
+    } else {
+      console.error(`Failed to send feedback request email to ${candidateEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendApplicantFeedbackRequest:', error);
     return { success: false, error: error.message };
   }
 };

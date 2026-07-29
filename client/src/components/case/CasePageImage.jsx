@@ -3,7 +3,7 @@ import apiClient from '../../utils/api';
 import ImageCache from '../../utils/imageCache';
 
 // Authenticated <img> for case page images. Unlike AuthenticatedImage, it always
-// fetches with the Bearer token (never an anonymous public attempt) — the case
+// fetches with the Bearer token (never an unauthenticated public attempt) — the case
 // image endpoint is auth-gated. Only requests the given `src`, so the caller
 // controls exactly which page URLs enter the DOM (important for candidate
 // preview mode, where interviewer-only pages must never be requested).

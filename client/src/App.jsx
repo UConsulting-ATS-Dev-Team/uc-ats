@@ -8,6 +8,7 @@ import MemberSignUp from './pages/MemberSignUp';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import AccessControl from './components/AccessControl';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import CandidateManagement from './pages/CandidateManagement';
@@ -44,6 +45,10 @@ import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import FeedbackForm from './pages/FeedbackForm';
+import AdminFeedbackResponses from './pages/AdminFeedbackResponses';
+import AdminFeedbackJobs from './pages/AdminFeedbackJobs';
+import AdminDecisionSends from './pages/AdminDecisionSends';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
@@ -349,6 +354,8 @@ const AppRoutes = () => {
       
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      {/* Public confidential feedback form */}
+      <Route path="/feedback/:token" element={<FeedbackForm />} />
       {/* Public meeting signup page */}
       <Route path="/meet" element={<CoffeeChatsPublic />} />
       {/* Member meeting slots management */}
@@ -370,6 +377,42 @@ const AppRoutes = () => {
         }
       />
 
+      {/* Feedback request scheduler */}
+      <Route
+        path="/admin/feedback-jobs"
+        element={
+          <ProtectedRoute>
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminFeedbackJobs />
+            </AccessControl>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Confidential feedback responses */}
+      <Route
+        path="/admin/feedback-responses"
+        element={
+          <ProtectedRoute>
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminFeedbackResponses />
+            </AccessControl>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Final-decision send reconciliation */}
+      <Route
+        path="/admin/decision-sends"
+        element={
+          <ProtectedRoute>
+            <AccessControl allowedRoles={['ADMIN']}>
+              <AdminDecisionSends />
+            </AccessControl>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Admin release notes */}
       <Route
         path="/admin/release-notes"
@@ -379,7 +422,6 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
-
       {/* 404 - Page Not Found */}
       <Route path="*" element={<NotFound />} />
     </Routes>

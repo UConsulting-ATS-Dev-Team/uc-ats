@@ -80,6 +80,14 @@ model Application {
   status                ApplicationStatus               @default(SUBMITTED)
   responseID            String                          @unique
   submittedAt           DateTime                        @default(now())
+  decisionSentAt        DateTime?
+  decisionSendStatus    String?
+  decisionSendMessageId String?
+  decisionSendAttemptedAt DateTime?
+  decisionSendReconciledBy String?
+  decisionSendReconciledAt DateTime?
+  decisionSendReconciledReason String?
+  decisionSendReconciledFromStatus String?
   email                 String
   firstName             String
   lastName              String
@@ -116,22 +124,34 @@ model Application {
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
+  feedbackJobs          ApplicationFeedbackJob[]
 
   @@map("applications")
 }
 
 model RecruitingCycle {
-  id                  String             @id @default(uuid())
+  id                  String                  @id @default(uuid())
   name                String
-  isActive            Boolean            @default(false)
+  isActive            Boolean                 @default(false)
   startDate           DateTime?
   endDate             DateTime?
-  createdAt           DateTime           @default(now())
-  formUrl             String?
-  resumeDeadline      String?
-  coverLetterDeadline String?
-  videoDeadline       String?
-  applications        Application[]
+  createdAt           DateTime                @default(now())
+  formUrl              String?
+  feedbackFormUrl      String?
+  feedbackEnabled      Boolean                 @default(false)
+  feedbackCadenceHours Int                     @default(48)
+  feedbackPrompt       String?
+  feedbackQuestions    Json?
+  feedbackPrivacyPolicy String?
+  feedbackRetentionDays Int?
+  feedbackAccessModel   String                 @default("CONFIDENTIAL")
+  feedbackApproved      Boolean                @default(false)
+  feedbackApprovedBy    String?
+  feedbackApprovedAt    DateTime?
+  resumeDeadline       String?
+  coverLetterDeadline  String?
+  videoDeadline        String?
+  applications         Application[]
   coverLetterScores   CoverLetterScore[]
   events              Events[]
   groups              Groups[]
@@ -140,8 +160,78 @@ model RecruitingCycle {
   resumeScores        ResumeScore[]
   videoScores         VideoScore[]
   cases               Case[]
+  feedbackJobs        ApplicationFeedbackJob[]
+  feedbackResponses   FeedbackResponse[]
 
   @@map("recruiting_cycles")
+}
+
+model ApplicationFeedbackJob {
+  id             String                          @id @default(uuid())
+  applicationId  String
+  cycleId        String?
+  type           String
+  status         String                          @default("PENDING")
+  dueAt          DateTime
+  sentAt         DateTime?
+  attempts       Int                             @default(0)
+  lastError      String?
+  decisionSentAt DateTime
+  feedbackFormUrl String?
+  feedbackToken  String?                         @unique
+  feedbackPrompt String?
+  feedbackQuestions Json?
+  responded      Boolean                @default(false)
+  claimToken     String?
+  claimedAt      DateTime?
+  messageId      String?
+  reconciledBy   String?
+  reconciledAt   DateTime?
+  reconciledReason String?
+  reconciledFromStatus String?
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @updatedAt
+  application    Application                     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  cycle          RecruitingCycle?                @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  deliveryAttempts ApplicationFeedbackDeliveryAttempt[]
+
+  @@unique([applicationId, type, decisionSentAt])
+  @@index([status, dueAt])
+  @@index([status, claimedAt])
+  @@map("application_feedback_jobs")
+}
+
+model ApplicationFeedbackDeliveryAttempt {
+  id             String               @id @default(uuid())
+  jobId          String
+  claimToken     String?              @unique
+  status         String               @default("PENDING")
+  messageId      String?
+  error          String?
+  feedbackFormUrl String?
+  attemptedAt    DateTime             @default(now())
+  reconciledBy   String?
+  reconciledAt   DateTime?
+  reconciledReason String?
+  priorStatus    String?
+  job            ApplicationFeedbackJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, attemptedAt])
+  @@map("application_feedback_delivery_attempts")
+}
+
+model FeedbackResponse {
+  id              String                  @id @default(uuid())
+  cycleId         String
+  content         String
+  answers         Json?
+  promptSnapshot  String?
+  questionsSnapshot Json?
+  createdAt       DateTime                 @default(now())
+  cycle           RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@index([cycleId])
+  @@map("feedback_responses")
 }
 
 model Comment {
