@@ -1,0 +1,282 @@
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import memberRoutes from './member.js';
+
+vi.mock('../prismaClient.js', () => ({
+  default: {
+    user: { findUnique: vi.fn() },
+    meetingSlot: {
+      findUnique: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+    meetingSignup: {
+      findUnique: vi.fn(),
+      deleteMany: vi.fn(),
+      delete: vi.fn(),
+    },
+    meetingCommunication: { create: vi.fn() },
+  },
+}));
+
+vi.mock('../services/slackService.js', () => ({
+  sendSlackMessage: vi.fn().mockResolvedValue(),
+}));
+
+vi.mock('../services/emailNotifications.js', () => ({
+  sendMeetingCancellationEmail: vi.fn().mockResolvedValue(),
+}));
+
+vi.mock('../services/meetingComms.js', () => ({
+  sendAndLogMeetingCommunication: vi.fn((fn) => fn()),
+  MEETING_COMM_SUBJECTS: { CANCELLATION: 'CANCELLATION' },
+}));
+
+vi.mock('../services/google/meetingSlotCalendar.js', () => ({
+  syncMeetingSlotCalendar: vi.fn(),
+  cancelMeetingSlotCalendar: vi.fn(),
+  calendarSyncResponse: vi.fn((result) => ({
+    status: result.status,
+    eventId: result.eventId || null,
+    error: result.success ? null : result.error,
+    warning: result.success ? null : result.error,
+    retryAt: null,
+  })),
+  deriveMeetingSlotId: vi.fn().mockReturnValue('slot-1'),
+}));
+
+import prisma from '../prismaClient.js';
+import { syncMeetingSlotCalendar, cancelMeetingSlotCalendar } from '../services/google/meetingSlotCalendar.js';
+import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
+
+const MEMBER = { id: 'member-1', email: 'member@example.com', fullName: 'Member', role: 'MEMBER' };
+const SLOT = {
+  id: 'slot-1',
+  memberId: MEMBER.id,
+  location: 'Zoom',
+  startTime: new Date('2026-08-01T17:00:00.000Z'),
+  endTime: new Date('2026-08-01T17:30:00.000Z'),
+  capacity: 2,
+  signups: [],
+  member: { fullName: 'Alice' },
+  calendarEventId: 'evt-1',
+  calendarSyncStatus: 'SYNCED',
+};
+
+const SLOT_WITH_SIGNUPS = {
+  ...SLOT,
+  signups: [
+    { id: 'signup-1', email: 'candidate-1@example.com', fullName: 'Candidate One' },
+    { id: 'signup-2', email: 'candidate-2@example.com', fullName: 'Candidate Two' },
+  ],
+};
+
+function tokenFor(user) {
+  return jwt.sign({ userId: user.id }, process.env.JWT_SECRET);
+}
+
+describe('member meeting slot routes', () => {
+  let app;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/member', memberRoutes);
+    server = app.listen(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.$transaction = vi.fn((cb) => cb(prisma));
+    prisma.user.findUnique.mockImplementation(({ where: { id } }) => {
+      return id === MEMBER.id ? MEMBER : null;
+    });
+  });
+
+  async function del(endpoint, token = tokenFor(MEMBER)) {
+    const headers = { Authorization: `Bearer ${token}` };
+    return fetch(`http://localhost:${port}${endpoint}`, { method: 'DELETE', headers });
+  }
+
+  async function post(endpoint, body, token = tokenFor(MEMBER)) {
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    return fetch(`http://localhost:${port}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  }
+
+  describe('POST /api/member/meeting-slots', () => {
+    const body = { location: 'Zoom', startTime: '2026-08-01T10:00', endTime: '2026-08-01T10:30', capacity: 2 };
+
+    it('creates a slot, syncs it, and returns sync state', async () => {
+      prisma.meetingSlot.create.mockResolvedValue(SLOT);
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+
+      const res = await post('/api/member/meeting-slots', body);
+
+      expect(res.status).toBe(200);
+      expect(prisma.meetingSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ id: 'slot-1' }) })
+      );
+      expect(syncMeetingSlotCalendar).toHaveBeenCalledWith('slot-1', { force: true });
+    });
+
+    it('recovers the original slot on a retry and does not create a second provider event', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+
+      let createCall = 0;
+      prisma.meetingSlot.create.mockImplementation(() => {
+        createCall += 1;
+        if (createCall === 1) {
+          const err = new Error('Unique constraint');
+          err.code = 'P2002';
+          throw err;
+        }
+        return Promise.resolve(SLOT);
+      });
+
+      const res = await post('/api/member/meeting-slots', body);
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.slot.id).toBe('slot-1');
+      expect(prisma.meetingSlot.create).toHaveBeenCalledTimes(1);
+      expect(syncMeetingSlotCalendar).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('DELETE /api/member/meeting-slots/:id', () => {
+    it('blocks deletion and returns sync state when calendar cancellation fails', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      cancelMeetingSlotCalendar.mockResolvedValue({
+        success: false,
+        status: 'CANCEL_PENDING',
+        error: 'Google is down',
+        eventId: 'evt-1',
+      });
+
+      const res = await del('/api/member/meeting-slots/slot-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(502);
+      expect(body.calendarSync.status).toBe('CANCEL_PENDING');
+      expect(body.calendarSync.error).toBe('Google is down');
+      expect(prisma.meetingSlot.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes the slot when calendar cancellation succeeds', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue({ ...SLOT, signups: [] });
+      cancelMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'CANCELLED', eventId: null });
+      prisma.$transaction = vi.fn((cb) => cb(prisma));
+
+      const res = await del('/api/member/meeting-slots/slot-1');
+
+      expect(res.status).toBe(200);
+      expect(cancelMeetingSlotCalendar).toHaveBeenCalledWith('slot-1');
+    });
+
+    it('blocks deletion when calendar is not configured but a provider event id exists', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT);
+      cancelMeetingSlotCalendar.mockResolvedValue({
+        success: false,
+        status: 'CANCEL_PENDING',
+        error: 'Google Calendar is not configured',
+        eventId: 'evt-1',
+      });
+
+      const res = await del('/api/member/meeting-slots/slot-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(502);
+      expect(body.calendarSync.status).toBe('CANCEL_PENDING');
+      expect(body.calendarSync.error).toMatch(/not configured/i);
+      expect(prisma.meetingSlot.delete).not.toHaveBeenCalled();
+    });
+
+    it('does not send cancellation emails when calendar cancellation fails', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue(SLOT_WITH_SIGNUPS);
+      cancelMeetingSlotCalendar.mockResolvedValue({
+        success: false,
+        status: 'CANCEL_PENDING',
+        error: 'Google is down',
+        eventId: 'evt-1',
+      });
+
+      const res = await del('/api/member/meeting-slots/slot-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(502);
+      expect(body.calendarSync.status).toBe('CANCEL_PENDING');
+      expect(sendMeetingCancellationEmail).not.toHaveBeenCalled();
+      expect(prisma.meetingSlot.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/member/meeting-slots/:id/retry-calendar', () => {
+    it('re-cancels and deletes a CANCEL_PENDING slot', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue({ ...SLOT, calendarSyncStatus: 'CANCEL_PENDING' });
+      cancelMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'CANCELLED', eventId: null });
+      prisma.$transaction = vi.fn((cb) => cb(prisma));
+
+      const res = await post('/api/member/meeting-slots/slot-1/retry-calendar');
+
+      expect(res.status).toBe(200);
+      expect(cancelMeetingSlotCalendar).toHaveBeenCalledWith('slot-1');
+      expect(prisma.meetingSlot.delete).toHaveBeenCalledWith({ where: { id: 'slot-1' } });
+    });
+
+    it('returns sync state when retrying a failed sync', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue({ ...SLOT, calendarSyncStatus: 'FAILED' });
+      syncMeetingSlotCalendar.mockResolvedValue({ success: true, status: 'SYNCED', eventId: 'evt-1' });
+
+      const res = await post('/api/member/meeting-slots/slot-1/retry-calendar');
+
+      expect(res.status).toBe(200);
+      expect(syncMeetingSlotCalendar).toHaveBeenCalledWith('slot-1', { force: true });
+    });
+
+    it('sends exactly one cancellation email per signup after a CANCEL_PENDING retry succeeds', async () => {
+      prisma.meetingSlot.findUnique.mockResolvedValue({
+        ...SLOT_WITH_SIGNUPS,
+        calendarSyncStatus: 'CANCEL_PENDING',
+      });
+      cancelMeetingSlotCalendar
+        .mockResolvedValueOnce({ success: false, status: 'CANCEL_PENDING', error: 'Google is down', eventId: 'evt-1' })
+        .mockResolvedValue({ success: true, status: 'CANCELLED', eventId: null });
+
+      const first = await del('/api/member/meeting-slots/slot-1');
+      expect(first.status).toBe(502);
+      expect(sendMeetingCancellationEmail).not.toHaveBeenCalled();
+
+      const second = await post('/api/member/meeting-slots/slot-1/retry-calendar');
+      expect(second.status).toBe(200);
+      expect(sendMeetingCancellationEmail).toHaveBeenCalledTimes(SLOT_WITH_SIGNUPS.signups.length);
+      for (const signup of SLOT_WITH_SIGNUPS.signups) {
+        expect(sendMeetingCancellationEmail).toHaveBeenCalledWith(
+          signup.email,
+          signup.fullName,
+          'Alice',
+          SLOT.location,
+          SLOT.startTime,
+          SLOT.endTime
+        );
+      }
+      expect(prisma.meetingSlot.delete).toHaveBeenCalledWith({ where: { id: 'slot-1' } });
+    });
+  });
+});

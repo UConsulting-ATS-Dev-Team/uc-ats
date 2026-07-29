@@ -38,6 +38,7 @@ export default function CoffeeChatsPublic() {
   const [form, setForm] = useState({ fullName: '', email: '', studentId: '' });
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
+  const [warning, setWarning] = useState('');
 
   const loadActiveCycle = async () => {
     try {
@@ -80,6 +81,7 @@ export default function CoffeeChatsPublic() {
     try {
       setLoading(true);
       setError('');
+      setWarning('');
       const data = await api.get('/meeting-slots');
       setAllSlots(data);
       
@@ -104,6 +106,7 @@ export default function CoffeeChatsPublic() {
       setSelectedSlot(null);
       setForm({ fullName: '', email: '', studentId: '' });
       setError('');
+      setWarning('');
       setSuccess('');
       
       // Reload from server to get updated slots and filter by new active cycle
@@ -123,9 +126,13 @@ export default function CoffeeChatsPublic() {
     try {
       setSubmitting(true);
       setError('');
+      setWarning('');
       setSuccess('');
       const response = await api.post(`/meeting-slots/${selectedSlot}/signup`, form);
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
+      if (response?.calendarSync?.warning) {
+        setWarning(response.calendarSync.warning);
+      }
       
       // If user needs an account, ask if they want to create one
       if (response.needsAccount) {
@@ -349,6 +356,12 @@ export default function CoffeeChatsPublic() {
       {success && (
         <Alert severity="success" sx={{ mb: 3 }} onClose={() => setSuccess('')}>
           {success}
+        </Alert>
+      )}
+
+      {warning && (
+        <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setWarning('')}>
+          {warning}
         </Alert>
       )}
 

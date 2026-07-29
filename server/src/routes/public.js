@@ -3,6 +3,8 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { syncMeetingSlotCalendar, calendarSyncResponse } from '../services/google/meetingSlotCalendar.js';
+import { createMeetingSignup, MeetingBookingConflictError } from '../services/meetingBooking.js';
 
 const router = express.Router();
 
@@ -43,6 +45,8 @@ router.get('/meeting-slots', async (req, res) => {
 // Sign up for a meeting slot. Requires an account: identity comes from the
 // authenticated user, not the request body, so candidates can't book on behalf
 // of someone else. The /meet page stays public to browse; booking is gated.
+// Booking is executed inside a serializable transaction so capacity and one-
+// booking-per-cycle limits are not raceable.
 router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -57,80 +61,27 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
     }
 
-    // Get the active recruiting cycle to check for cycle-specific signups
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
-
-    // Check if user has already signed up for a meeting slot in the current cycle
-    if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
-      const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-      const cycleEndDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-
-      // Find existing signups for this email
-      const existingSignups = await prisma.meetingSignup.findMany({
-        where: { email },
-        include: { slot: true }
-      });
-
-      // Check if any existing signup falls within the current cycle's date range
-      const existingSignupInCycle = existingSignups.find(signup => {
-        const slotDate = new Date(signup.slot.startTime);
-        const isAfterStart = !cycleStartDate || slotDate >= cycleStartDate;
-        const isBeforeEnd = !cycleEndDate || slotDate <= cycleEndDate;
-        return isAfterStart && isBeforeEnd;
-      });
-
-      if (existingSignupInCycle) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.` 
-        });
+    let result;
+    try {
+      result = await createMeetingSignup({ slotId: id, fullName, email, studentId });
+    } catch (error) {
+      if (error instanceof MeetingBookingConflictError) {
+        return res.status(error.statusCode).json({ error: error.message });
       }
-    } else {
-      // If no active cycle or no date range, fall back to checking all signups
-      // (for backwards compatibility)
-      const existingSignup = await prisma.meetingSignup.findFirst({
-        where: { email },
-        include: { slot: true }
-      });
-
-      if (existingSignup) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignup.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot.` 
-        });
+      if (error?.code === 'P2002') {
+        return res.status(400).json({ error: 'You are already signed up for this slot' });
       }
+      if (error?.code === 'P2034') {
+        return res.status(409).json({ error: 'This slot was just booked by someone else. Please try again.' });
+      }
+      throw error;
     }
+
+    const { signup, slot } = result;
 
     // Check if user exists in the system (has an account)
     const existingUser = await prisma.user.findUnique({
       where: { email }
-    });
-
-    const slot = await prisma.meetingSlot.findUnique({
-      where: { id },
-      include: { 
-        signups: true,
-        member: {
-          select: { fullName: true, email: true }
-        }
-      }
-    });
-
-    if (!slot) {
-      return res.status(404).json({ error: 'Slot not found' });
-    }
-
-    if (slot.signups.length >= slot.capacity) {
-      return res.status(400).json({ error: 'This time slot is full' });
-    }
-
-    const signup = await prisma.meetingSignup.create({
-      data: {
-        slotId: id,
-        fullName,
-        email,
-        studentId
-      }
     });
 
     // Send confirmation email to candidate (and log the communication)
@@ -175,18 +126,20 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       );
     }
 
-    res.json({ 
-      success: true, 
+    // Add the candidate to the slot's Google Calendar event. Calendar failures
+    // are persisted on the slot but do not fail the signup.
+    const syncResult = await syncMeetingSlotCalendar(slot.id, { force: true });
+
+    res.json({
+      success: true,
       signup,
       needsAccount: !existingUser,
-      message: existingUser 
+      message: existingUser
         ? 'Successfully signed up! You will receive a confirmation email shortly.'
-        : 'Successfully signed up! You will receive a confirmation email shortly. We recommend creating an account to track your application status.'
+        : 'Successfully signed up! You will receive a confirmation email shortly. We recommend creating an account to track your application status.',
+      calendarSync: calendarSyncResponse(syncResult),
     });
   } catch (error) {
-    if (error?.code === 'P2002') {
-      return res.status(400).json({ error: 'You are already signed up for this slot' });
-    }
     console.error('[POST /api/meeting-slots/:id/signup]', error);
     res.status(500).json({ error: 'Failed to create signup' });
   }
@@ -258,7 +211,10 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
 
     await prisma.meetingSignup.delete({ where: { id } });
 
-    res.json({ message: 'Your signup has been cancelled.' });
+    // Remove the candidate from the slot's calendar event.
+    const syncResult = await syncMeetingSlotCalendar(signup.slotId, { force: true });
+
+    res.json({ message: 'Your signup has been cancelled.', calendarSync: calendarSyncResponse(syncResult) });
   } catch (error) {
     console.error('[DELETE /api/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to cancel signup' });

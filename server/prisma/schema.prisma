@@ -574,17 +574,25 @@ model FlaggedDocument {
 }
 
 model MeetingSlot {
-  id        String          @id @default(uuid())
-  memberId  String
-  location  String
-  startTime DateTime
-  endTime   DateTime?
-  capacity       Int                    @default(2)
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
-  signups        MeetingSignup[]
-  member         User                   @relation(fields: [memberId], references: [id])
-  communications MeetingCommunication[]
+  id                 String          @id @default(uuid())
+  memberId           String
+  location           String
+  startTime          DateTime
+  endTime            DateTime?
+  capacity           Int             @default(2)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  signups            MeetingSignup[]
+  member             User            @relation(fields: [memberId], references: [id])
+  communications     MeetingCommunication[]
+
+  // Google Calendar sync state for the GTKUC slot event.
+  calendarEventId    String?
+  calendarSyncStatus String?         @default("PENDING")
+  calendarSyncError  String?
+  calendarSyncAt     DateTime?
+  calendarRetryCount Int             @default(0)
+  calendarRetryAt    DateTime?
 
   @@map("meeting_slots")
 }

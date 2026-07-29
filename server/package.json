@@ -43,6 +43,7 @@
     "nodemailer": "^7.0.6",
     "pdfmake": "^0.3.11",
     "sharp": "^0.35.3",
+    "uuid": "^9.0.1",
     "ws": "^8.21.1"
   },
   "devDependencies": {

@@ -37,7 +37,8 @@ import {
   OpenInNew as OpenInNewIcon,
   Visibility as VisibilityIcon,
   Event as EventIcon,
-  Delete as DeleteIcon
+  Delete as DeleteIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 
 export default function MemberMeetingSlots() {
@@ -48,6 +49,7 @@ export default function MemberMeetingSlots() {
   const [form, setForm] = useState({ location: '', startTime: '', endTime: '', capacity: 2 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [syncWarning, setSyncWarning] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [dateError, setDateError] = useState('');
   const [editingSlot, setEditingSlot] = useState(null);
@@ -212,11 +214,16 @@ export default function MemberMeetingSlots() {
     try {
       setSubmitting(true);
       setError('');
+      setSyncWarning('');
       setDateError('');
-      
-      
+
+
       const response = await api.post('/member/meeting-slots', form);
-      
+
+      if (response?.calendarSync?.warning) {
+        setSyncWarning(response.calendarSync.warning);
+      }
+
       setForm({ location: '', startTime: '', endTime: '', capacity: 2 });
       await load();
     } catch (e) {
@@ -320,10 +327,14 @@ export default function MemberMeetingSlots() {
     try {
       setSubmitting(true);
       setError('');
+      setSyncWarning('');
       setEditDateError('');
-      
-      
+
+
       const response = await api.put(`/member/meeting-slots/${editingSlot.id}`, editForm);
+      if (response?.calendarSync?.warning) {
+        setSyncWarning(response.calendarSync.warning);
+      }
       setEditingSlot(null);
       setEditForm({ location: '', startTime: '', endTime: '', capacity: 2 });
       await load();
@@ -338,22 +349,41 @@ export default function MemberMeetingSlots() {
     // Find the slot to check if it has signups
     const slot = slots.find(s => s.id === slotId);
     const hasSignups = slot && slot.signups.length > 0;
-    
-    const confirmMessage = hasSignups 
+
+    const confirmMessage = hasSignups
       ? `Are you sure you want to delete this meeting slot? This will cancel the meeting for ${slot.signups.length} signup(s) and send them cancellation emails. This action cannot be undone.`
       : 'Are you sure you want to delete this meeting slot? This action cannot be undone.';
-    
+
     if (!window.confirm(confirmMessage)) {
       return;
     }
-    
+
     try {
       setSubmitting(true);
       setError('');
+      setSyncWarning('');
       await api.delete(`/member/meeting-slots/${slotId}`);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to delete meeting slot');
+      await load();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onRetryCalendar = async (slotId) => {
+    try {
+      setSubmitting(true);
+      setError('');
+      setSyncWarning('');
+      const response = await api.post(`/member/meeting-slots/${slotId}/retry-calendar`);
+      if (response?.calendarSync?.warning) {
+        setSyncWarning(response.calendarSync.warning);
+      }
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to retry calendar sync');
     } finally {
       setSubmitting(false);
     }
@@ -480,6 +510,12 @@ export default function MemberMeetingSlots() {
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
           {error}
+        </Alert>
+      )}
+
+      {syncWarning && (
+        <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setSyncWarning('')}>
+          {syncWarning}
         </Alert>
       )}
 
@@ -782,6 +818,13 @@ export default function MemberMeetingSlots() {
                             color={getStatusColor(status)}
                             size="small"
                           />
+                          {slot.calendarSyncStatus && slot.calendarSyncStatus !== 'SYNCED' && slot.calendarSyncStatus !== 'NOT_CONFIGURED' && (
+                            <Chip
+                              label={slot.calendarSyncStatus === 'CANCEL_PENDING' ? 'Cancel Pending' : 'Calendar Sync Failed'}
+                              color="warning"
+                              size="small"
+                            />
+                          )}
                         </Box>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                           <LocationIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
@@ -798,8 +841,19 @@ export default function MemberMeetingSlots() {
                         </Box>
                       </Box>
                       <Box sx={{ display: 'flex', gap: 1 }}>
+                        {slot.calendarSyncStatus && slot.calendarSyncStatus !== 'SYNCED' && (
+                          <Tooltip title="Retry calendar sync">
+                            <IconButton
+                              size="small"
+                              onClick={() => onRetryCalendar(slot.id)}
+                              disabled={submitting}
+                            >
+                              <RefreshIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         <Tooltip title="Add to Google Calendar">
-                          <IconButton 
+                          <IconButton
                             size="small"
                             onClick={() => handleAddToCalendar(slot)}
                             sx={{ color: 'primary.main' }}
