@@ -45,6 +45,11 @@ const config = {
 
   form: formConfig,
 
+  /** Calendar that interview/event invites are written to (service account must have write access) */
+  googleCalendarId: process.env.GOOGLE_CALENDAR_ID || null,
+  /** When set, all calendar invites are redirected to this address instead of real attendees */
+  calendarInviteTestEmail: process.env.CALENDAR_INVITE_TEST_EMAIL || null,
+
   /** Fine-grained PAT with Issues write on the ATS repo */
   githubFeatureRequestToken: process.env.GITHUB_FEATURE_REQUEST_TOKEN || null,
   /** owner/repo for GitHub Issues API (defaults to primary product repo) */

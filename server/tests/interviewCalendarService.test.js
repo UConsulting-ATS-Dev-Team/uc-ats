@@ -1,0 +1,132 @@
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+
+vi.mock('../src/prismaClient.js', () => ({
+  default: {
+    interview: { findUnique: vi.fn(), update: vi.fn() },
+    user: { findMany: vi.fn() }
+  }
+}));
+
+vi.mock('../src/services/google/calendar.js', () => ({
+  deleteEventById: vi.fn(),
+  insertEventWithId: vi.fn(),
+  patchEventById: vi.fn(),
+  isCalendarConfigured: vi.fn(() => true),
+  resolveAttendees: (attendees) => attendees
+}));
+
+const prisma = (await import('../src/prismaClient.js')).default;
+const { deleteEventById, insertEventWithId, isCalendarConfigured } = await import('../src/services/google/calendar.js');
+const { cancelInterviewCalendarEvent, syncInterviewCalendarEvent } = await import('../src/services/interviewCalendar.js');
+
+const INTERVIEW = { id: 'interview-1', calendarEventId: 'ucatsinterview1' };
+
+const calendarError = (status) => Object.assign(new Error(`calendar ${status}`), { code: status });
+
+describe('cancelInterviewCalendarEvent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isCalendarConfigured.mockReturnValue(true);
+    prisma.interview.findUnique.mockResolvedValue({ ...INTERVIEW });
+  });
+
+  test('refuses to give up a live invite when the calendar is no longer configured', async () => {
+    isCalendarConfigured.mockReturnValue(false);
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('FAILED');
+    expect(result.error).toMatch(/GOOGLE_CALENDAR_ID/);
+    expect(result.calendarEventId).toBe(INTERVIEW.calendarEventId);
+    expect(deleteEventById).not.toHaveBeenCalled();
+    const { data } = prisma.interview.update.mock.calls[0][0];
+    expect(data.calendarSyncStatus).toBe('FAILED');
+    expect(data).not.toHaveProperty('calendarEventId');
+  });
+
+  test('reports nothing to cancel when no event was ever created', async () => {
+    isCalendarConfigured.mockReturnValue(false);
+    prisma.interview.findUnique.mockResolvedValue({ id: INTERVIEW.id, calendarEventId: null });
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('NOT_SYNCED');
+    expect(prisma.interview.update).not.toHaveBeenCalled();
+  });
+
+  test('reports FAILED and keeps the stored event ID when the provider rejects the cancellation', async () => {
+    deleteEventById.mockRejectedValue(calendarError(403));
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('FAILED');
+    // The event ID must survive so the delete can be retried instead of orphaning a live invite.
+    expect(result.calendarEventId).toBe(INTERVIEW.calendarEventId);
+    expect(prisma.interview.update).toHaveBeenCalledTimes(1);
+    const { data } = prisma.interview.update.mock.calls[0][0];
+    expect(data.calendarSyncStatus).toBe('FAILED');
+    expect(data.calendarSyncError).toMatch(/still hold this invite/);
+    expect(data).not.toHaveProperty('calendarEventId');
+  });
+
+  test('treats an already-deleted provider event as cancelled', async () => {
+    deleteEventById.mockRejectedValue(calendarError(410));
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('CANCELLED');
+    const { data } = prisma.interview.update.mock.calls[0][0];
+    expect(data).toMatchObject({
+      calendarEventId: null,
+      calendarAttendees: [],
+      calendarSyncStatus: 'CANCELLED',
+      calendarSyncError: null
+    });
+  });
+
+  test('cancels and clears the event on success', async () => {
+    deleteEventById.mockResolvedValue({});
+
+    const result = await cancelInterviewCalendarEvent(INTERVIEW.id);
+
+    expect(result.status).toBe('CANCELLED');
+    expect(deleteEventById).toHaveBeenCalledWith(INTERVIEW.calendarEventId);
+    expect(prisma.interview.update.mock.calls[0][0].data.calendarEventId).toBeNull();
+  });
+});
+
+describe('syncInterviewCalendarEvent', () => {
+  const SYNCABLE = {
+    id: 'interview-2',
+    title: 'Round One',
+    interviewType: 'ROUND_ONE',
+    startDate: '2026-02-14T17:00:00.000Z',
+    endDate: '2026-02-14T19:30:00.000Z',
+    location: 'Anderson 121',
+    description: null,
+    calendarEventId: null,
+    calendarAttendees: [],
+    cycle: { name: 'Fall 2026' },
+    assignments: [{ userId: 'user-1' }]
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isCalendarConfigured.mockReturnValue(true);
+    prisma.interview.findUnique.mockResolvedValue({ ...SYNCABLE });
+    prisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'lead@ucla.edu', fullName: 'Lead' }]);
+    insertEventWithId.mockResolvedValue({ id: 'ucatsinterview2' });
+  });
+
+  test('still reports the created event when the sync-state write fails', async () => {
+    prisma.interview.update.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await syncInterviewCalendarEvent(SYNCABLE.id, { reason: 'interview created' });
+
+    // Throwing here would fail POST /interviews, and the client's retry would mint a second
+    // interview ID — and therefore a second event.
+    expect(result.status).toBe('SYNCED');
+    expect(result.calendarEventId).toBe('ucatsinterview2');
+    expect(result.error).toMatch(/could not be saved/);
+  });
+});

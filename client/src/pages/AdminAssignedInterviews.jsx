@@ -26,6 +26,37 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
 import '../styles/AdminAssignedInterviews.css';
 
+const CALENDAR_STATUS_LABELS = {
+  SYNCED: 'Interviewer invites sent',
+  FAILED: 'Calendar invite failed',
+  CANCELLED: 'Calendar invite cancelled',
+  NOT_SYNCED: 'No calendar invite yet'
+};
+
+// Interviews are scheduled in UConsulting's local time regardless of where the admin's browser is,
+// so the edit inputs read and write America/Los_Angeles wall-clock time.
+const INTERVIEW_TIME_ZONE = 'America/Los_Angeles';
+
+const zoneOffsetMs = (instant) =>
+  new Date(instant.toLocaleString('en-US', { timeZone: 'UTC' })).getTime()
+  - new Date(instant.toLocaleString('en-US', { timeZone: INTERVIEW_TIME_ZONE })).getTime();
+
+// ISO instant -> "YYYY-MM-DDTHH:mm" in interview time
+export const formatForDateTimeLocal = (value) => {
+  if (!value) return '';
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return '';
+  return new Date(instant.getTime() - zoneOffsetMs(instant)).toISOString().slice(0, 16);
+};
+
+// "YYYY-MM-DDTHH:mm" in interview time -> ISO instant
+export const dateTimeLocalToISO = (value) => {
+  if (!value) return null;
+  const asUtc = new Date(`${value}:00Z`);
+  if (Number.isNaN(asUtc.getTime())) return null;
+  return new Date(asUtc.getTime() + zoneOffsetMs(asUtc)).toISOString();
+};
+
 // Application Group Card Component for Admin
 const AdminApplicationGroupCard = ({ group, interviewId }) => {
   const [applications, setApplications] = useState([]);
@@ -226,6 +257,7 @@ export default function AdminAssignedInterviews() {
   const [currentUser, setCurrentUser] = useState(null);
   
   // Search/filter states for groups management
+  const [calendarSyncingId, setCalendarSyncingId] = useState(null);
   const [memberGroupsSearch, setMemberGroupsSearch] = useState('');
   const [applicationGroupsSearch, setApplicationGroupsSearch] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState(new Set()); // Track collapsed group IDs
@@ -467,18 +499,60 @@ export default function AdminAssignedInterviews() {
     setShowBehavioralQuestionsConfig(false);
   };
 
+  // Applies the calendar fields the server returns after a create/roster save/retry
+  const applyCalendarSync = (interviewId, calendarSync) => {
+    if (!calendarSync) return;
+    setInterviews(prev => prev.map(iv => iv.id === interviewId ? {
+      ...iv,
+      calendarEventId: calendarSync.calendarEventId ?? iv.calendarEventId,
+      calendarSyncStatus: calendarSync.status,
+      calendarSyncError: calendarSync.error ?? null
+    } : iv));
+  };
+
+  const retryCalendarSync = async (interviewId) => {
+    setCalendarSyncingId(interviewId);
+    try {
+      const result = await apiClient.post(`/admin/interviews/${interviewId}/calendar-sync`, {});
+      applyCalendarSync(interviewId, result);
+      if (result.status !== 'SYNCED' || result.error) {
+        alert(result.error || 'Calendar invite could not be sent.');
+      }
+    } catch (e) {
+      console.error('Failed to sync calendar invite', e);
+      alert(e.message || 'Failed to sync calendar invite');
+    } finally {
+      setCalendarSyncingId(null);
+    }
+  };
+
   const handleEditInterview = (interviewId) => {
     const interview = interviews.find(i => i.id === interviewId);
     setEditedInterview({...interview});
     setIsEditMode(true);
   };
 
-  const handleSaveInterview = () => {
-    setInterviews(prev => prev.map(interview => 
-      interview.id === editedInterview.id ? editedInterview : interview
-    ));
-    setIsEditMode(false);
-    setEditedInterview(null);
+  const handleSaveInterview = async () => {
+    const { id, title, startDate, endDate, location, dresscode } = editedInterview;
+    try {
+      const updated = await apiClient.patch(`/admin/interviews/${id}`, {
+        title,
+        startDate,
+        endDate,
+        location: location ?? '',
+        dresscode: dresscode ?? ''
+      });
+      setInterviews(prev => prev.map(interview => interview.id === id ? { ...interview, ...updated } : interview));
+      applyCalendarSync(id, updated.calendarSync);
+      if (updated.calendarSync?.error) {
+        alert(`Interview saved, but the calendar invite was not updated: ${updated.calendarSync.error}`);
+      }
+      setIsEditMode(false);
+      setEditedInterview(null);
+    } catch (e) {
+      console.error('Failed to save interview', e);
+      alert(e.message || 'Failed to save interview');
+    }
   };
 
   const handleCancelEdit = () => {
@@ -518,12 +592,31 @@ export default function AdminAssignedInterviews() {
     try {
       const payload = {
         ...newInterview,
+        // The pickers are interview-time wall clocks; send instants so the invite is not shifted by
+        // the admin's (or the server's) timezone.
+        startDate: dateTimeLocalToISO(newInterview.startDate),
+        endDate: dateTimeLocalToISO(newInterview.endDate),
         cycleId: activeCycle.id
       };
       console.log('Creating interview with payload:', payload);
       const created = await apiClient.post('/admin/interviews', payload);
-      const next = [created, ...interviews];
-      setInterviews(next);
+      const calendarSync = created.calendarSync;
+      setInterviews([
+        {
+          ...created,
+          calendarEventId: calendarSync?.calendarEventId ?? created.calendarEventId ?? null,
+          calendarSyncStatus: calendarSync?.status ?? created.calendarSyncStatus ?? 'NOT_SYNCED',
+          calendarSyncError: calendarSync?.error ?? null
+        },
+        ...interviews
+      ]);
+      // A SYNCED result can still carry an error (the invite went out but its state could not be
+      // saved), so surface any error rather than only the non-synced ones.
+      if (calendarSync?.error) {
+        alert(calendarSync.status === 'SYNCED'
+          ? `Interview created and invites sent, but: ${calendarSync.error}`
+          : `Interview created, but the calendar invite was not sent: ${calendarSync.error}`);
+      }
       setSelectedInterviewId(created.id);
       setEditedInterview(null);
       setCreateOpen(false);
@@ -668,7 +761,7 @@ export default function AdminAssignedInterviews() {
     const data = interviewData[interviewId];
     if (!data) return;
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
+      const response = await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
         type: 'full',
         config: data
       });
@@ -678,6 +771,7 @@ export default function AdminAssignedInterviews() {
           ? { ...iv, description: JSON.stringify(data) } 
           : iv
       ));
+      applyCalendarSync(interviewId, response?.calendarSync);
       alert('Interview data saved');
     } catch (e) {
       console.error('Failed to save interview data', e);
@@ -687,7 +781,7 @@ export default function AdminAssignedInterviews() {
 
   const persistInterviewConfig = async (interviewId, data, { silent = true } = {}) => {
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
+      const response = await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
         type: 'full',
         config: data
       });
@@ -696,6 +790,7 @@ export default function AdminAssignedInterviews() {
           ? { ...iv, description: JSON.stringify(data) } 
           : iv
       ));
+      applyCalendarSync(interviewId, response?.calendarSync);
       if (!silent) alert('Interview data saved');
     } catch (e) {
       console.error('Failed to persist interview config', e);
@@ -1081,10 +1176,32 @@ export default function AdminAssignedInterviews() {
                       <div className="interview-details">
                         <div className="detail-item">
                           <ClockIcon className="detail-icon" />
-                          <span>
-                            {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - 
-                            {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
+                          {isBeingEdited ? (
+                            <>
+                              <input
+                                type="datetime-local"
+                                aria-label="Start"
+                                value={formatForDateTimeLocal(editedInterview.startDate)}
+                                onChange={(e) => handleFieldChange('startDate', dateTimeLocalToISO(e.target.value))}
+                                className="edit-input datetime-input"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <input
+                                type="datetime-local"
+                                aria-label="End"
+                                value={formatForDateTimeLocal(editedInterview.endDate)}
+                                onChange={(e) => handleFieldChange('endDate', dateTimeLocalToISO(e.target.value))}
+                                className="edit-input datetime-input"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </>
+                          ) : (
+                            <span>
+                              {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })}
+                              {' - '}
+                              {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: INTERVIEW_TIME_ZONE })}
+                            </span>
+                          )}
                         </div>
                         
                         <div className="detail-item">
@@ -1118,6 +1235,30 @@ export default function AdminAssignedInterviews() {
                             <span>{interview.dresscode || 'No dress code specified'}</span>
                           )}
                         </div>
+
+                        <div className="detail-item">
+                          <CalendarIcon className="detail-icon" />
+                          <span>
+                            {CALENDAR_STATUS_LABELS[interview.calendarSyncStatus] || CALENDAR_STATUS_LABELS.NOT_SYNCED}
+                          </span>
+                          <button
+                            className="btn-secondary small"
+                            disabled={calendarSyncingId === interview.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              retryCalendarSync(interview.id);
+                            }}
+                            title="Create or refresh the Google Calendar invite for the assigned interviewers"
+                          >
+                            {calendarSyncingId === interview.id ? 'Sending…' : 'Send invites'}
+                          </button>
+                        </div>
+
+                        {interview.calendarSyncError && (
+                          <div className="detail-item calendar-sync-error">
+                            <span>{interview.calendarSyncError}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
