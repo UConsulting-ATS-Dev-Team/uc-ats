@@ -29,6 +29,43 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 
+const parseInterviewConfig = (interview) => {
+  try {
+    return typeof interview.description === 'string'
+      ? JSON.parse(interview.description || '{}')
+      : interview.description || {};
+  } catch {
+    return {};
+  }
+};
+
+const interviewPhase = (interview, now = Date.now()) => {
+  const startsAt = new Date(interview.startDate).getTime();
+  const opensAt = startsAt - (5 * 60 * 1000);
+  const endsAt = new Date(interview.endDate).getTime();
+  if (now < opensAt) return 'upcoming';
+  if (now < startsAt) return 'open';
+  if (now <= endsAt) return 'live';
+  return 'ended';
+};
+
+const memberInterviewPath = (interview, memberId) => {
+  const config = parseInterviewConfig(interview);
+  const groupIds = (config.slots || [])
+    .filter((slot) => slot.interviewerIds?.includes(memberId))
+    .map((slot) => slot.applicationGroupId)
+    .filter(Boolean)
+    .join(',') || 'direct';
+
+  if (interview.interviewType === 'ROUND_ONE') {
+    return `/member/first-round-interview?interviewId=${interview.id}&groupIds=${groupIds}`;
+  }
+  if (interview.interviewType === 'FINAL_ROUND' || interview.interviewType === 'ROUND_TWO') {
+    return `/member/final-round-interview?interviewId=${interview.id}&groupIds=${groupIds}`;
+  }
+  return `/member/interview-interface?interviewId=${interview.id}&groupIds=${groupIds}`;
+};
+
 export default function MemberDashboard() {
   const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
@@ -131,6 +168,12 @@ export default function MemberDashboard() {
       
       // Fetch events with RSVP information
       const events = await apiClient.get('/member/events');
+      let interviews = [];
+      try {
+        interviews = await apiClient.get('/member/interviews');
+      } catch (interviewError) {
+        console.error('Error fetching member interviews for dashboard tasks:', interviewError);
+      }
       
       const tasksList = [];
       
@@ -179,6 +222,29 @@ export default function MemberDashboard() {
           });
         }
       }
+
+      // Put interviews that are opening soon or live at the top of the task list.
+      (Array.isArray(interviews) ? interviews : [])
+        .filter((interview) => ['open', 'live'].includes(interviewPhase(interview)))
+        .forEach((interview) => {
+          const phase = interviewPhase(interview);
+          const config = parseInterviewConfig(interview);
+          tasksList.unshift({
+            id: `interview-${interview.id}`,
+            title: `Join ${interview.title}`,
+            type: 'interview',
+            href: memberInterviewPath(interview, user.id),
+            phaseLabel: phase === 'live' ? 'Live Now' : 'Starting Soon',
+            interviewDate: new Date(interview.startDate).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit'
+            }),
+            items: `${config.applicationIds?.length || 0} candidates`,
+            status: 'pending'
+          });
+        });
       
       // Add RSVP tasks for events that have member RSVP URLs and the member hasn't RSVP'd yet
       const eventsNeedingRsvp = events.filter(event => 
@@ -267,6 +333,8 @@ export default function MemberDashboard() {
     } else if (task.type === 'rsvp') {
       // Open RSVP form in new tab
       window.open(task.rsvpUrl, '_blank');
+    } else if (task.type === 'interview') {
+      window.location.href = task.href;
     }
   };
 
@@ -497,7 +565,11 @@ export default function MemberDashboard() {
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <ClockIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
                           <Typography variant="body2" color="text.secondary">
-                            {task.type === 'rsvp' ? `Event: ${task.eventDate}` : `Due: ${task.dueDate}`}
+                            {task.type === 'rsvp'
+                              ? `Event: ${task.eventDate}`
+                              : task.type === 'interview'
+                                ? `${task.phaseLabel} · ${task.interviewDate}`
+                                : `Due: ${task.dueDate}`}
                           </Typography>
                         </Box>
                         <Typography variant="body2" color="text.secondary">
@@ -511,7 +583,7 @@ export default function MemberDashboard() {
                       onClick={() => handleStartTask(task)}
                       sx={{ ml: 2 }}
                     >
-                      {task.type === 'rsvp' ? 'RSVP' : 'Start'}
+                      {task.type === 'rsvp' ? 'RSVP' : task.type === 'interview' ? 'Join' : 'Start'}
                     </Button>
                   </Box>
                 ))

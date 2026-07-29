@@ -564,32 +564,40 @@ router.get('/my-team', requireAuth, async (req, res) => {
 router.get('/interviews', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
+    const includeHistory = req.query.includeHistory === 'true';
     
-    // Get the active cycle first
+    // Keep the dashboard scoped to the active cycle by default. The interviews
+    // page can opt into the member's own completed assignments for history.
     const activeCycle = await prisma.recruitingCycle.findFirst({ 
       where: { isActive: true } 
     });
     
-    if (!activeCycle) {
+    if (!activeCycle && !includeHistory) {
       return res.json([]);
     }
 
-    // Get all interviews for the active cycle
-    const interviews = await prisma.interview.findMany({
-      where: {
-        cycleId: activeCycle.id
+    const where = {
+      assignments: {
+        some: { userId }
       },
-      include: {
-        cycle: true
-      },
-      orderBy: { startDate: 'desc' }
-    });
+      ...(!includeHistory && { cycleId: activeCycle.id })
+    };
 
-    // Filter interviews to only show those where the current user is assigned
-    // This would need to be based on the interview configuration and member groups
-    // For now, we'll return all interviews and let the frontend handle filtering
-    // In a real implementation, you'd parse the interview description to check
-    // if the current user is in any of the member groups
+    const interviews = await prisma.interview.findMany({
+      where,
+      include: {
+        cycle: true,
+        assignments: {
+          where: { userId },
+          include: {
+            user: {
+              select: { id: true, fullName: true, email: true, role: true }
+            }
+          }
+        }
+      },
+      orderBy: { startDate: 'asc' }
+    });
     
     res.json(interviews);
   } catch (error) {
@@ -640,8 +648,8 @@ router.get('/interviews/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     
-    const interview = await prisma.interview.findUnique({
-      where: { id },
+    const interview = await prisma.interview.findFirst({
+      where: { id, assignments: { some: { userId: req.user.id } } },
       include: {
         cycle: true
       }
@@ -665,8 +673,8 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
     const { groupIds } = req.query;
     const userId = req.user.id;
     
-    const interview = await prisma.interview.findUnique({
-      where: { id }
+    const interview = await prisma.interview.findFirst({
+      where: { id, assignments: { some: { userId } } }
     });
 
     if (!interview) {
@@ -750,8 +758,8 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
     const { type, config } = req.body;
     const userId = req.user.id;
     
-    const interview = await prisma.interview.findUnique({
-      where: { id }
+    const interview = await prisma.interview.findFirst({
+      where: { id, assignments: { some: { userId } } }
     });
 
     if (!interview) {
@@ -1164,11 +1172,14 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Group IDs are required' });
     }
     
-    const groupIdArray = groupIds.split(',');
+    let groupIdArray = groupIds.split(',');
     
     // Get interview configuration
-    const interview = await prisma.interview.findUnique({
-      where: { id: interviewId }
+    const interview = await prisma.interview.findFirst({
+      where: {
+        id: interviewId,
+        assignments: { some: { userId: req.user.id } }
+      }
     });
     
     if (!interview) {
@@ -1184,9 +1195,23 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
     } catch (e) {
       console.warn('Failed to parse interview description:', e);
     }
+
+    // Slot-based interviews only expose the candidate groups assigned to this member.
+    if (Array.isArray(config.slots) && config.slots.length) {
+      const allowedGroupIds = new Set(
+        config.slots
+          .filter((slot) => slot.interviewerIds?.includes(req.user.id))
+          .map((slot) => slot.applicationGroupId)
+          .filter(Boolean)
+      );
+      groupIdArray = groupIdArray.filter((groupId) => allowedGroupIds.has(groupId));
+    }
     
-    // Get applications from selected groups
+    // Get applications from selected legacy groups or the new direct assignment list.
     const applicationIds = new Set();
+    if (groupIdArray.includes('direct')) {
+      config.applicationIds?.forEach(appId => applicationIds.add(appId));
+    }
     config.applicationGroups?.forEach(group => {
       if (groupIdArray.includes(group.id)) {
         group.applicationIds?.forEach(appId => applicationIds.add(appId));

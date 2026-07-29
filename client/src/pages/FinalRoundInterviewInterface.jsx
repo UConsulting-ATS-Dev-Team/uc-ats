@@ -408,7 +408,7 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      alert('All evaluations saved successfully!');
+      navigate(isAdmin ? '/admin/assigned-interviews' : '/assigned-interviews');
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert('Failed to save evaluations');
@@ -492,7 +492,7 @@ export default function FinalRoundInterviewInterface() {
               disabled={saving}
             >
               <CheckIcon className="btn-icon" />
-              {saving ? 'Saving...' : 'Save All'}
+              {saving ? 'Saving...' : 'Save All & Exit'}
             </button>
           </div>
         </div>

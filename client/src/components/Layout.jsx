@@ -34,11 +34,11 @@ const Layout = ({ children }) => {
   };
 
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: HomeIcon },
+    { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
     ...(user?.role === 'MEMBER' ? [
       { name: 'Document Grading', href: '/document-grading', icon: DocumentTextIcon },
       { name: 'Events', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Assigned Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Recruitment Resources and Timeline', href: '/recruitment-resources', icon: ClipboardDocumentListIcon },
@@ -49,7 +49,7 @@ const Layout = ({ children }) => {
       { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
-      { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
@@ -182,4 +182,4 @@ const Layout = ({ children }) => {
   );
 };
 
-export default Layout; 
+export default Layout;
