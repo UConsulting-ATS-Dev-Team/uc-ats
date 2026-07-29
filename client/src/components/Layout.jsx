@@ -17,7 +17,8 @@ import {
   ChatBubbleLeftRightIcon,
   ChatBubbleOvalLeftEllipsisIcon,
   LightBulbIcon,
-  PresentationChartBarIcon
+  PresentationChartBarIcon,
+  NewspaperIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -70,6 +71,7 @@ const Layout = ({ children }) => {
       { name: 'Decision Sends', href: '/admin/decision-sends', icon: ChatBubbleOvalLeftEllipsisIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
+      { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
       FEATURE_REQUEST_NAV,
     ] : [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },

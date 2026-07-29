@@ -21,6 +21,7 @@ import conversationsRoutes from './routes/conversations.js';
 import feedbackRoutes from './routes/feedback.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
+import releaseNotesRoutes from './routes/releaseNotes.js';
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.use('/api/uploads', express.static('uploads', {
 app.use('/api/auth', authRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
+app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);

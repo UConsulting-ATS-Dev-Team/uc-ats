@@ -42,6 +42,7 @@ import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
+import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import FeedbackForm from './pages/FeedbackForm';
@@ -412,6 +413,15 @@ const AppRoutes = () => {
         }
       />
 
+      {/* Admin release notes */}
+      <Route
+        path="/admin/release-notes"
+        element={
+          <ProtectedRoute>
+            <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
       {/* 404 - Page Not Found */}
       <Route path="*" element={<NotFound />} />
     </Routes>
