@@ -78,6 +78,7 @@ import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
+import InterviewSlotCoverage from '../components/InterviewSlotCoverage';
 import { useAuth } from '../context/AuthContext';
 import { useCelebration } from '../context/CelebrationContext';
 import ApplicationDetail from './ApplicationDetail';
@@ -2595,6 +2596,8 @@ export default function Staging() {
               </Button>
             </DialogActions>
           </Dialog>
+
+          <InterviewSlotCoverage />
 
           <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={() => setSnackbar({ ...snackbar, open: false })}>
             <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.severity}>

@@ -47,6 +47,7 @@ model User {
   sentMessages               Message[]                       @relation("MessageSender")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+  interviewSlotSignups       InterviewSlotSignup[]
 
   @@map("users")
 }
@@ -457,6 +458,7 @@ model Interview {
   creator               User                            @relation("InterviewCreator", fields: [createdBy], references: [id])
   cycle                 RecruitingCycle                 @relation(fields: [cycleId], references: [id])
   caseAssignments       CaseAssignment[]
+  slots                 InterviewSlot[]
 
   @@map("interviews")
 }
@@ -473,6 +475,41 @@ model InterviewAssignment {
 
   @@unique([interviewId, userId])
   @@map("interview_assignments")
+}
+
+model InterviewSlot {
+  id        String   @id @default(uuid())
+  interviewId String
+  startTime DateTime
+  endTime   DateTime
+  capacity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  signups   InterviewSlotSignup[]
+
+  @@index([interviewId, startTime])
+  @@index([endTime])
+  @@map("interview_slots")
+}
+
+model InterviewSlotSignup {
+  id                  String        @id @default(uuid())
+  slotId              String
+  userId              String
+  signedUpAt          DateTime      @default(now())
+  confirmationStatus  String        @default("PENDING")
+  confirmationError   String?
+  confirmationSentAt    DateTime?
+  removedBy           String?
+  removedAt           DateTime?
+  slot                InterviewSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([slotId, userId])
+  @@index([userId])
+  @@index([removedAt])
+  @@map("interview_slot_signups")
 }
 
 model InterviewActionItem {

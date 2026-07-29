@@ -191,6 +191,78 @@ export const formatEventDate = (date) => {
   return formatEmailDateTime(date);
 };
 
+const createInterviewSlotSignupConfirmationEmail = (memberName, interviewTitle, interviewTypeLabel, startTime, endTime) => {
+  const safeMemberName = escapeHtml(memberName);
+  const safeTitle = escapeHtml(interviewTitle);
+  const safeType = escapeHtml(interviewTypeLabel);
+  const safeStart = escapeHtml(formatEmailDateTime(startTime));
+  const safeEnd = escapeHtml(formatEmailTime(endTime));
+
+  return {
+    subject: `Interview slot confirmation - ${safeTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">Interview Slot Confirmation</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Hi ${safeMemberName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            You are signed up to interview for the following slot:
+          </p>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 10px 0;">${safeType} - ${safeTitle}</h4>
+            <p style="color: #666; margin: 5px 0;"><strong>Start:</strong> ${safeStart}</p>
+            <p style="color: #666; margin: 5px 0;"><strong>End:</strong> ${safeEnd}</p>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Thanks for volunteering your time. If your plans change, please cancel or contact an admin as soon as possible.
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting ATS Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+export const sendInterviewSlotSignupConfirmation = async (memberEmail, memberName, interviewTitle, interviewType, startTime, endTime) => {
+  try {
+    const interviewTypeLabel = interviewType
+      ? String(interviewType).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      : 'Interview';
+
+    const emailContent = createInterviewSlotSignupConfirmationEmail(memberName, interviewTitle, interviewTypeLabel, startTime, endTime);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Interview slot confirmation email sent to ${memberEmail} for ${interviewTitle}`);
+    } else {
+      console.error(`Failed to send interview slot confirmation email to ${memberEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendInterviewSlotSignupConfirmation:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Create acceptance email template
 const createAcceptanceEmail = (candidateName, currentCycleName) => {
   const subjectCycle = currentCycleName;

@@ -10,6 +10,7 @@ import {
   getGroupMemberIds,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
+import interviewSlotMemberRoutes from './interviewSlotMember.js';
 
 const router = express.Router();
 
@@ -638,6 +639,9 @@ router.get('/profile', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch user profile' });
   }
 });
+
+// Interview slot routes (must be registered before /:id to avoid shadowing /slots)
+router.use('/interviews', interviewSlotMemberRoutes);
 
 // Get specific interview details for member
 router.get('/interviews/:id', requireAuth, async (req, res) => {

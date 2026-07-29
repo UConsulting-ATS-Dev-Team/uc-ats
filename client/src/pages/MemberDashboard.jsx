@@ -22,6 +22,7 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
+import InterviewSignup from '../components/InterviewSignup';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -566,6 +567,9 @@ export default function MemberDashboard() {
           )}
         </Paper>
       )}
+
+      {/* Interview Signup Section */}
+      <InterviewSignup />
     </Box>
     </AccessControl>
   );
