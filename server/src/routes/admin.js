@@ -63,6 +63,57 @@ const safeParseJsonField = (field) => {
   return field;
 };
 
+const INTERVIEW_BULK_SECTIONS = new Set([
+  'VIRTUAL_COFFEE_CHAT',
+  'COFFEE_CHAT_PART_ONE',
+  'COFFEE_CHAT_PART_TWO',
+  'ROUND_ONE',
+  'FINAL_ROUND'
+]);
+
+const parseInterviewConfig = (description) => {
+  if (!description) return {};
+  if (typeof description === 'object') return description;
+  try {
+    const parsed = JSON.parse(description);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const sectionForInterview = (interview, config = parseInterviewConfig(interview.description)) => {
+  if (INTERVIEW_BULK_SECTIONS.has(config.section)) return config.section;
+  if (interview.interviewType === 'ROUND_ONE') return 'ROUND_ONE';
+  if (interview.interviewType === 'FINAL_ROUND' || interview.interviewType === 'ROUND_TWO') return 'FINAL_ROUND';
+  return 'VIRTUAL_COFFEE_CHAT';
+};
+
+const interviewTypeForSection = (section) => {
+  if (section === 'ROUND_ONE') return 'ROUND_ONE';
+  if (section === 'FINAL_ROUND') return 'FINAL_ROUND';
+  return 'COFFEE_CHAT';
+};
+
+const reviewTeamMemberIds = (team) => [...new Set([
+  team.memberOne,
+  team.memberTwo,
+  team.memberThree
+].filter(Boolean))];
+
+const stableBulkFingerprint = ({ cycleId, sourceInterviewId, title, section, startDate, durationMinutes, slotIntervalMinutes, location, teamIds }) =>
+  JSON.stringify({
+    cycleId,
+    sourceInterviewId: sourceInterviewId || null,
+    title: title.trim(),
+    section,
+    startDate: new Date(startDate).toISOString(),
+    durationMinutes,
+    slotIntervalMinutes,
+    location: location.trim(),
+    teamIds: [...teamIds].sort()
+  });
+
 // Protect all admin routes
 router.use(requireAuth, requireAdmin);
 
@@ -1852,24 +1903,32 @@ router.post('/events/copy-commit', async (req, res) => {
 // Get all interviews
 router.get('/interviews', async (req, res) => {
   try {
-    // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const requestedCycleId = typeof req.query.cycleId === 'string' ? req.query.cycleId : null;
+    const activeCycle = requestedCycleId
+      ? await prisma.recruitingCycle.findUnique({ where: { id: requestedCycleId } })
+      : await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
     
     if (!activeCycle) {
+      if (requestedCycleId) return res.status(404).json({ error: 'Recruiting cycle not found' });
       return res.json([]);
     }
 
-    // Get all interviews for the active cycle
+    // Admins can inspect an archived cycle, while the default remains the active cycle.
     const interviews = await prisma.interview.findMany({
       where: {
         cycleId: activeCycle.id
       },
       include: {
-        cycle: true
+        cycle: true,
+        assignments: {
+          include: {
+            user: {
+              select: { id: true, fullName: true, email: true, role: true }
+            }
+          }
+        }
       },
-      orderBy: { startDate: 'desc' }
+      orderBy: { startDate: 'asc' }
     });
     res.json(interviews);
   } catch (error) {
@@ -1882,6 +1941,380 @@ router.get('/interviews', async (req, res) => {
       return res.json([]);
     }
     res.status(500).json({ error: 'Failed to fetch interviews' });
+  }
+});
+
+// Get review teams that can be used to create interview slots in bulk.
+router.get('/interviews/bulk-teams', async (req, res) => {
+  try {
+    const { cycleId } = req.query;
+    if (!cycleId) return res.status(400).json({ error: 'cycleId is required' });
+
+    const cycle = await prisma.recruitingCycle.findUnique({
+      where: { id: cycleId },
+      select: { id: true, name: true, isActive: true }
+    });
+    if (!cycle) return res.status(404).json({ error: 'Recruiting cycle not found' });
+
+    const teams = await prisma.groups.findMany({
+      where: { cycleId },
+      select: {
+        id: true,
+        name: true,
+        memberOne: true,
+        memberTwo: true,
+        memberThree: true,
+        memberOneUser: { select: { id: true, fullName: true, email: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true } }
+      },
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }]
+    });
+
+    res.json({
+      cycle,
+      teams: teams.map((team) => ({
+        id: team.id,
+        name: team.name || 'Unnamed review team',
+        members: [team.memberOneUser, team.memberTwoUser, team.memberThreeUser].filter(Boolean)
+      }))
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/interviews/bulk-teams]', error);
+    res.status(500).json({ error: 'Failed to fetch review teams for bulk interview creation' });
+  }
+});
+
+// Read a previous cycle's interview sessions as reusable templates. The caller still supplies
+// the new cycle's date, location, and teams before anything is created.
+router.get('/interviews/templates', async (req, res) => {
+  try {
+    const { sourceCycleId } = req.query;
+    if (!sourceCycleId) return res.status(400).json({ error: 'sourceCycleId is required' });
+
+    const sourceCycle = await prisma.recruitingCycle.findUnique({
+      where: { id: sourceCycleId },
+      select: { id: true, name: true, startDate: true, endDate: true }
+    });
+    if (!sourceCycle) return res.status(404).json({ error: 'Source recruiting cycle not found' });
+
+    const interviews = await prisma.interview.findMany({
+      where: { cycleId: sourceCycleId },
+      orderBy: { startDate: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        interviewType: true,
+        startDate: true,
+        endDate: true,
+        location: true,
+        dresscode: true,
+        maxCandidates: true
+      }
+    });
+
+    const seenTemplatePatterns = new Set();
+    const templates = interviews.flatMap((interview) => {
+      const config = parseInterviewConfig(interview.description);
+      const bulk = config.bulk || {};
+      const teamSuffix = bulk.reviewTeamName ? ` — ${bulk.reviewTeamName}` : '';
+      const title = teamSuffix && interview.title.endsWith(teamSuffix)
+        ? interview.title.slice(0, -teamSuffix.length)
+        : interview.title;
+      const template = {
+        id: interview.id,
+        title,
+        section: sectionForInterview(interview, config),
+        interviewType: interview.interviewType,
+        durationMinutes: Math.max(1, Math.round((interview.endDate.getTime() - interview.startDate.getTime()) / 60000)),
+        location: interview.location,
+        dresscode: interview.dresscode,
+        maxCandidates: interview.maxCandidates,
+        startDate: interview.startDate,
+        endDate: interview.endDate
+      };
+      const patternKey = JSON.stringify({
+        title: template.title,
+        section: template.section,
+        durationMinutes: template.durationMinutes,
+        location: template.location,
+        dresscode: template.dresscode,
+        maxCandidates: template.maxCandidates
+      });
+      if (seenTemplatePatterns.has(patternKey)) return [];
+      seenTemplatePatterns.add(patternKey);
+      return [template];
+    });
+
+    res.json({ sourceCycle, templates });
+  } catch (error) {
+    console.error('[GET /api/admin/interviews/templates]', error);
+    res.status(500).json({ error: 'Failed to load interview templates' });
+  }
+});
+
+// Create one time-windowed interview slot per selected review team. A request key and a
+// deterministic fingerprint make retries safe without requiring a new database model.
+router.post('/interviews/bulk-create', async (req, res) => {
+  try {
+    const {
+      cycleId,
+      sourceCycleId = null,
+      sourceInterviewId = null,
+      requestKey,
+      title,
+      section,
+      startDate,
+      durationMinutes,
+      slotIntervalMinutes,
+      location,
+      dresscode,
+      maxCandidates,
+      teamIds = []
+    } = req.body;
+
+    const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+    const normalizedLocation = typeof location === 'string' ? location.trim() : '';
+    const uniqueTeamIds = [...new Set(Array.isArray(teamIds) ? teamIds.filter(Boolean) : [])];
+    const parsedDuration = Number(durationMinutes);
+    const parsedInterval = Number(slotIntervalMinutes);
+    const parsedCapacity = Number(maxCandidates);
+    const start = new Date(startDate);
+
+    if (!cycleId || !requestKey || !normalizedTitle || !INTERVIEW_BULK_SECTIONS.has(section)) {
+      return res.status(400).json({ error: 'Cycle, request key, title, and a valid round are required' });
+    }
+    if (!uniqueTeamIds.length) {
+      return res.status(400).json({ error: 'Select at least one review team' });
+    }
+    if (!Number.isFinite(start.getTime())) {
+      return res.status(400).json({ error: 'Provide a valid slot start date and time' });
+    }
+    if (!Number.isInteger(parsedDuration) || parsedDuration <= 0 || !Number.isInteger(parsedInterval) || parsedInterval <= 0) {
+      return res.status(400).json({ error: 'Duration and time between slots must be whole positive minutes' });
+    }
+    if (!normalizedLocation) {
+      return res.status(400).json({ error: 'Location is required' });
+    }
+    if (!Number.isInteger(parsedCapacity) || parsedCapacity <= 0) {
+      return res.status(400).json({ error: 'Capacity per team must be a whole number greater than zero' });
+    }
+
+    const cycle = await prisma.recruitingCycle.findUnique({
+      where: { id: cycleId },
+      select: { id: true, name: true, isActive: true }
+    });
+    if (!cycle) return res.status(404).json({ error: 'Recruiting cycle not found' });
+    if (!cycle.isActive) {
+      return res.status(400).json({ error: 'Bulk interview slots can only be created in the active recruiting cycle' });
+    }
+
+    if (sourceCycleId) {
+      const sourceCycle = await prisma.recruitingCycle.findUnique({
+        where: { id: sourceCycleId },
+        select: { id: true }
+      });
+      if (!sourceCycle) return res.status(400).json({ error: 'Source recruiting cycle not found' });
+    }
+
+    if (sourceInterviewId) {
+      const sourceInterview = await prisma.interview.findUnique({
+        where: { id: sourceInterviewId },
+        select: { id: true, cycleId: true }
+      });
+      if (!sourceInterview || (sourceCycleId && sourceInterview.cycleId !== sourceCycleId)) {
+        return res.status(400).json({ error: 'Selected interview template does not belong to the source cycle' });
+      }
+    }
+
+    const teams = await prisma.groups.findMany({
+      where: { cycleId, id: { in: uniqueTeamIds } },
+      select: {
+        id: true,
+        name: true,
+        memberOne: true,
+        memberTwo: true,
+        memberThree: true
+      }
+    });
+    if (teams.length !== uniqueTeamIds.length) {
+      return res.status(400).json({ error: 'One or more selected review teams do not belong to the active cycle' });
+    }
+
+    const teamsById = new Map(teams.map((team) => [team.id, team]));
+    const selectedTeams = uniqueTeamIds.map((teamId) => teamsById.get(teamId));
+    const incompleteTeams = selectedTeams.filter((team) => reviewTeamMemberIds(team).length === 0);
+    if (incompleteTeams.length) {
+      return res.status(400).json({
+        error: 'Every selected review team needs at least one member before slots can be created',
+        teams: incompleteTeams.map((team) => ({ id: team.id, name: team.name || 'Unnamed review team' }))
+      });
+    }
+
+    const batchEnd = new Date(start.getTime() + ((selectedTeams.length - 1) * parsedInterval + parsedDuration) * 60000);
+    const fingerprint = stableBulkFingerprint({
+      cycleId,
+      sourceInterviewId,
+      title: normalizedTitle,
+      section,
+      startDate: start,
+      durationMinutes: parsedDuration,
+      slotIntervalMinutes: parsedInterval,
+      location: normalizedLocation,
+      teamIds: uniqueTeamIds
+    });
+    const createdBy = req.user?.id;
+    if (!createdBy) return res.status(401).json({ error: 'Authenticated user required' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existingInCycle = await tx.interview.findMany({
+        where: { cycleId },
+        select: { id: true, title: true, description: true, startDate: true, endDate: true }
+      });
+      const existingBatch = existingInCycle.filter((interview) => {
+        const bulk = parseInterviewConfig(interview.description).bulk;
+        return bulk?.requestKey === requestKey || bulk?.fingerprint === fingerprint;
+      });
+      if (existingBatch.length) {
+        return { created: [], existing: existingBatch, duplicate: true };
+      }
+
+      const plannedSlots = selectedTeams.map((team, index) => {
+        const slotStart = new Date(start.getTime() + index * parsedInterval * 60000);
+        return {
+          team,
+          memberIds: reviewTeamMemberIds(team),
+          startDate: slotStart,
+          endDate: new Date(slotStart.getTime() + parsedDuration * 60000)
+        };
+      });
+
+      const overlappingInterviews = await tx.interview.findMany({
+        where: {
+          cycleId,
+          startDate: { lt: batchEnd },
+          endDate: { gt: start }
+        },
+        select: {
+          id: true,
+          title: true,
+          startDate: true,
+          endDate: true,
+          assignments: { select: { userId: true } }
+        }
+      });
+      const conflicts = [];
+      const overlaps = (left, right) => left.startDate < right.endDate && left.endDate > right.startDate;
+      const sharedMemberIds = (left, right) => left.filter((memberId) => right.includes(memberId));
+
+      plannedSlots.forEach((slot, slotIndex) => {
+        overlappingInterviews.forEach((interview) => {
+          const sharedMembers = sharedMemberIds(slot.memberIds, interview.assignments.map((assignment) => assignment.userId));
+          if (sharedMembers.length && overlaps(slot, interview)) {
+            conflicts.push({
+              team: slot.team.name || `Review team ${slotIndex + 1}`,
+              conflictingInterview: interview.title,
+              startDate: slot.startDate,
+              endDate: slot.endDate,
+              memberIds: sharedMembers
+            });
+          }
+        });
+        plannedSlots.slice(0, slotIndex).forEach((previousSlot) => {
+          const sharedMembers = sharedMemberIds(slot.memberIds, previousSlot.memberIds);
+          if (sharedMembers.length && overlaps(slot, previousSlot)) {
+            conflicts.push({
+              team: slot.team.name || `Review team ${slotIndex + 1}`,
+              conflictingInterview: previousSlot.team.name || 'Another new team slot',
+              startDate: slot.startDate,
+              endDate: slot.endDate,
+              memberIds: sharedMembers
+            });
+          }
+        });
+      });
+
+      if (conflicts.length) {
+        const conflictError = new Error('One or more interviewers are already assigned during the requested time window');
+        conflictError.statusCode = 409;
+        conflictError.conflicts = conflicts;
+        throw conflictError;
+      }
+
+      const created = [];
+      for (const [index, slot] of plannedSlots.entries()) {
+        const teamName = slot.team.name || `Review Team ${index + 1}`;
+        const slotId = `bulk-${requestKey}-${slot.team.id}`;
+        const slotConfig = {
+          section,
+          teamSize: slot.memberIds.length,
+          slots: [{
+            id: slotId,
+            name: teamName,
+            interviewerIds: slot.memberIds,
+            applicationIds: [],
+            memberGroupId: `review-team-${slot.team.id}`,
+            applicationGroupId: `${slotId}-applicants`
+          }],
+          applicationIds: [],
+          applicationGroups: [],
+          memberGroups: [{
+            id: `review-team-${slot.team.id}`,
+            name: teamName,
+            memberIds: slot.memberIds
+          }],
+          groupAssignments: {},
+          bulk: {
+            requestKey,
+            fingerprint,
+            sourceCycleId,
+            sourceInterviewId,
+            reviewTeamId: slot.team.id,
+            reviewTeamName: teamName
+          }
+        };
+        const interview = await tx.interview.create({
+          data: {
+            title: `${normalizedTitle} — ${teamName}`,
+            interviewType: interviewTypeForSection(section),
+            startDate: slot.startDate,
+            endDate: slot.endDate,
+            location: normalizedLocation,
+            dresscode: dresscode || null,
+            maxCandidates: parsedCapacity,
+            description: JSON.stringify(slotConfig),
+            cycleId,
+            createdBy,
+            assignments: {
+              create: slot.memberIds.map((userId) => ({ userId, role: 'INTERVIEWER' }))
+            }
+          },
+          include: {
+            assignments: { include: { user: { select: { id: true, fullName: true, email: true } } } }
+          }
+        });
+        created.push(interview);
+      }
+
+      return { created, existing: [], duplicate: false };
+    });
+
+    res.status(result.duplicate ? 200 : 201).json({
+      ...result,
+      cycleId,
+      requestKey,
+      fingerprint,
+      message: result.duplicate
+        ? 'This bulk request was already created. Existing slots were returned instead.'
+        : `${result.created.length} interview slots created.`
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/interviews/bulk-create]', error);
+    if (error.statusCode === 409) {
+      return res.status(409).json({ error: error.message, conflicts: error.conflicts });
+    }
+    res.status(500).json({ error: 'Failed to create interview slots in bulk' });
   }
 });
 
@@ -1899,7 +2332,9 @@ router.post('/interviews', async (req, res) => {
       cycleId,
       dresscode,
       deliberationsStart,
-      deliberationsEnd
+      deliberationsEnd,
+      memberIds = [],
+      applicationIds = []
     } = req.body;
 
     // Validate required fields
@@ -1934,15 +2369,25 @@ router.post('/interviews', async (req, res) => {
         endDate: new Date(endDate),
         location,
         maxCandidates: maxCandidates ?? null,
-        description: typeof description === 'object' ? JSON.stringify(description) : (description ?? null),
+        description: JSON.stringify({
+          ...(typeof description === 'object' && description ? description : {}),
+          applicationIds
+        }),
         cycleId,
         createdBy,
         dresscode: dresscode ?? null,
         deliberationsStart: deliberationsStart ? new Date(deliberationsStart) : null,
-        deliberationsEnd: deliberationsEnd ? new Date(deliberationsEnd) : null
+        deliberationsEnd: deliberationsEnd ? new Date(deliberationsEnd) : null,
+        assignments: {
+          create: [...new Set(memberIds)].map((userId) => ({
+            userId,
+            role: 'INTERVIEWER'
+          }))
+        }
       },
       include: {
-        cycle: true
+        cycle: true,
+        assignments: { include: { user: true } }
       }
     });
 
@@ -1959,6 +2404,70 @@ router.post('/interviews', async (req, res) => {
       return res.status(400).json({ error: 'Interview schema not found. Run migrations to create interview tables.' });
     }
     res.status(500).json({ error: 'Failed to create interview' });
+  }
+});
+
+// Update an interview and its direct participant assignments.
+router.patch('/interviews/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      title, interviewType, startDate, endDate, location, dresscode,
+      memberIds, applicationIds, description
+    } = req.body;
+
+    const existing = await prisma.interview.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Interview not found' });
+
+    let existingConfig = {};
+    try {
+      existingConfig = existing.description ? JSON.parse(existing.description) : {};
+    } catch {
+      existingConfig = {};
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (Array.isArray(memberIds)) {
+        await tx.interviewAssignment.deleteMany({ where: { interviewId: id } });
+        if (memberIds.length) {
+          await tx.interviewAssignment.createMany({
+            data: [...new Set(memberIds)].map((userId) => ({
+              interviewId: id,
+              userId,
+              role: 'INTERVIEWER'
+            }))
+          });
+        }
+      }
+
+      return tx.interview.update({
+        where: { id },
+        data: {
+          ...(title !== undefined && { title }),
+          ...(interviewType !== undefined && { interviewType }),
+          ...(startDate !== undefined && { startDate: new Date(startDate) }),
+          ...(endDate !== undefined && { endDate: new Date(endDate) }),
+          ...(location !== undefined && { location }),
+          ...(dresscode !== undefined && { dresscode: dresscode || null }),
+          ...(Array.isArray(applicationIds) && {
+            description: JSON.stringify({
+              ...existingConfig,
+              ...(description && typeof description === 'object' ? description : {}),
+              applicationIds
+            })
+          })
+        },
+        include: {
+          cycle: true,
+          assignments: { include: { user: true } }
+        }
+      });
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/interviews/:id]', error);
+    res.status(500).json({ error: 'Failed to update interview' });
   }
 });
 
@@ -2114,6 +2623,68 @@ router.patch('/interviews/:id/config', async (req, res) => {
 
     if (!interview) {
       return res.status(404).json({ error: 'Interview not found' });
+    }
+
+    // Update schedule details and direct assignments together.
+    if (type === 'schedule') {
+      const {
+        title,
+        interviewType,
+        startDate,
+        endDate,
+        location,
+        dresscode,
+        memberIds = [],
+        applicationIds = [],
+        description
+      } = config || {};
+
+      if (!title || !interviewType || !startDate || !endDate || !location) {
+        return res.status(400).json({ error: 'Title, type, start, end, and location are required' });
+      }
+
+      let existingConfig = {};
+      try {
+        existingConfig = interview.description ? JSON.parse(interview.description) : {};
+      } catch {
+        existingConfig = {};
+      }
+
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.interviewAssignment.deleteMany({ where: { interviewId: id } });
+        if (memberIds.length) {
+          await tx.interviewAssignment.createMany({
+            data: [...new Set(memberIds)].map((userId) => ({
+              interviewId: id,
+              userId,
+              role: 'INTERVIEWER'
+            }))
+          });
+        }
+
+        return tx.interview.update({
+          where: { id },
+          data: {
+            title,
+            interviewType,
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
+            location,
+            dresscode: dresscode || null,
+            description: JSON.stringify({
+              ...existingConfig,
+              ...(description && typeof description === 'object' ? description : {}),
+              applicationIds: [...new Set(applicationIds)]
+            })
+          },
+          include: {
+            cycle: true,
+            assignments: { include: { user: true } }
+          }
+        });
+      });
+
+      return res.json(updated);
     }
     
     // Handle behavioral questions update
@@ -2497,17 +3068,20 @@ router.get('/applications', async (req, res) => {
     const usePagination = page && limit;
     const skip = usePagination ? (page - 1) * limit : 0;
 
-    // Get the active cycle first
+    // Default to the active cycle, but permit the interview dashboard to read an
+    // archived cycle without leaking data from another cycle into assignments.
+    const requestedCycleId = typeof req.query.cycleId === 'string' ? req.query.cycleId : null;
     let activeCycle = null;
     try {
-      activeCycle = await prisma.recruitingCycle.findFirst({ 
-        where: { isActive: true } 
-      });
+      activeCycle = requestedCycleId
+        ? await prisma.recruitingCycle.findUnique({ where: { id: requestedCycleId } })
+        : await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
     } catch (error) {
-      console.error('Error fetching active cycle:', error);
+      console.error('Error fetching requested application cycle:', error);
     }
     
     if (!activeCycle) {
+      if (requestedCycleId) return res.status(404).json({ error: 'Recruiting cycle not found' });
       return usePagination ? res.json({ applications: [], total: 0, page, totalPages: 0 }) : res.json([]);
     }
 
@@ -3617,8 +4191,11 @@ router.get('/interviews/:id/applications', async (req, res) => {
       console.warn('Failed to parse interview description:', e);
     }
     
-    // Get applications from selected groups
+    // Get applications from selected legacy groups or the new direct assignment list.
     const applicationIds = new Set();
+    if (groupIdArray.includes('direct')) {
+      config.applicationIds?.forEach(appId => applicationIds.add(appId));
+    }
     config.applicationGroups?.forEach(group => {
       if (groupIdArray.includes(group.id)) {
         group.applicationIds?.forEach(appId => applicationIds.add(appId));

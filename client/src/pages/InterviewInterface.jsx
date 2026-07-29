@@ -248,7 +248,7 @@ export default function InterviewInterface() {
       
       await Promise.all(promises);
       setAllEvaluationsSaved(true);
-      setShowNextActionModal(true);
+      navigate('/admin/assigned-interviews');
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert('Failed to save evaluations');
@@ -370,21 +370,13 @@ export default function InterviewInterface() {
         </div>
         
         <div className="header-actions">
-          {!allEvaluationsSaved && (
-            <button 
-              className="btn-secondary"
-              onClick={handleInterviewNextGroup}
-            >
-              Select Groups
-            </button>
-          )}
           <button 
             className="btn-primary"
             onClick={saveAllEvaluations}
             disabled={saving}
           >
             <CheckIcon className="btn-icon" />
-            {saving ? 'Saving...' : 'Save All'}
+            {saving ? 'Saving...' : 'Save All & Exit'}
           </button>
         </div>
       </div>
@@ -611,7 +603,7 @@ export default function InterviewInterface() {
       )}
 
       {/* Next Action Modal */}
-      {showNextActionModal && (
+      {false && (
         <div className="modal-overlay">
           <div className="modal-content next-action-modal">
             <div className="modal-header">
@@ -619,9 +611,6 @@ export default function InterviewInterface() {
               <button className="icon-btn" onClick={handleCloseNextActionModal}>
                 ×
               </button>
-            </div>
-            <div className="modal-body">
-              <p>What would you like to do next?</p>
             </div>
             <div className="modal-footer">
               <button 

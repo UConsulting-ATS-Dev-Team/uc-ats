@@ -1,1561 +1,1192 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowLeftIcon,
-  CalendarIcon,
-  ClockIcon,
-  MapPinIcon,
-  UserGroupIcon,
-  CheckIcon,
-  PlayIcon,
-  EyeIcon,
-  PlusIcon,
-  PencilIcon,
-  TrashIcon,
-  XMarkIcon,
-  UsersIcon,
-  DocumentDuplicateIcon,
-  MagnifyingGlassIcon,
-  ChevronDownIcon,
-  ChevronUpIcon
+  CalendarDaysIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon,
+  DocumentDuplicateIcon, MagnifyingGlassIcon, MapPinIcon, PencilSquareIcon, PlusIcon,
+  TrashIcon, UserGroupIcon, XMarkIcon
 } from '@heroicons/react/24/outline';
+import {
+  Box, Button, Chip, FormControl, InputLabel, MenuItem, Select, Stack, Tab, Tabs, Typography
+} from '@mui/material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
-import DocumentPreviewModal from '../components/DocumentPreviewModal';
-import AuthenticatedImage from '../components/AuthenticatedImage';
-import MemberAvatar from '../components/MemberAvatar';
 import '../styles/AdminAssignedInterviews.css';
 
-// Application Group Card Component for Admin
-const AdminApplicationGroupCard = ({ group, interviewId }) => {
-  const [applications, setApplications] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+const SECTIONS = [
+  ['COFFEE_CHATS', 'Coffee Chats'],
+  ['ROUND_ONE', 'First Round Interviews'],
+  ['FINAL_ROUND', 'Final Round Interviews']
+];
 
-  const loadApplications = async () => {
-    if (applications.length > 0) return; // Already loaded
-    
-    setLoading(true);
-    try {
-      const apps = await apiClient.get(`/admin/interviews/${interviewId}/applications?groupIds=${group.id}`);
-      setApplications(apps);
-    } catch (error) {
-      console.error('Failed to load applications for group:', error);
-      setApplications([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+const FORM_SECTIONS = [
+  ['VIRTUAL_COFFEE_CHAT', 'Virtual Coffee Chats'],
+  ['COFFEE_CHAT_PART_ONE', 'Coffee Chat - Round 1'],
+  ['COFFEE_CHAT_PART_TWO', 'Coffee Chat - Round 2'],
+  ['ROUND_ONE', 'First Round Interviews'],
+  ['FINAL_ROUND', 'Final Round Interviews']
+];
 
-  const handleToggleExpanded = () => {
-    if (!expanded) {
-      loadApplications();
-    }
-    setExpanded(!expanded);
-  };
+const COFFEE_CHAT_SECTIONS = new Set([
+  'VIRTUAL_COFFEE_CHAT',
+  'COFFEE_CHAT_PART_ONE',
+  'COFFEE_CHAT_PART_TWO'
+]);
 
-  return (
-    <div className="application-group-card">
-      <div className="group-card-header" onClick={handleToggleExpanded}>
-        <div className="group-info">
-          <UserGroupIcon className="group-icon" />
-          <div className="group-details">
-            <h4 className="group-name">{group.name}</h4>
-            <p className="group-meta">
-              {group.applicationIds?.length || 0} candidates
-            </p>
-          </div>
-        </div>
-        <div className="group-actions">
-          <span className="expand-indicator">
-            {expanded ? '−' : '+'}
-          </span>
-        </div>
-      </div>
-      
-      {expanded && (
-        <div className="group-applications">
-          {loading ? (
-            <div className="loading-applications">
-              <div className="loading-spinner"></div>
-              <p>Loading candidates...</p>
-            </div>
-          ) : applications.length === 0 ? (
-            <div className="no-applications">
-              <p>No candidates found in this group</p>
-            </div>
-          ) : (
-            <div className="applications-grid">
-              {applications.map((application) => (
-                <AdminCandidateCard key={application.id} application={application} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+const emptyForm = {
+  title: '',
+  section: 'VIRTUAL_COFFEE_CHAT',
+  startDate: '',
+  endDate: '',
+  location: '',
+  dresscode: '',
+  slots: []
 };
 
-// Candidate Card Component for Admin
-const AdminCandidateCard = ({ application }) => {
-  const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
+const emptyBulkForm = {
+  sourceCycleId: '',
+  sourceInterviewId: '',
+  title: '',
+  section: 'ROUND_ONE',
+  startDate: '',
+  durationMinutes: '30',
+  slotIntervalMinutes: '30',
+  location: '',
+  dresscode: '',
+  maxCandidates: '1',
+  teamIds: [],
+  requestKey: ''
+};
 
-  return (
-    <>
-      <div className="candidate-card">
-        <div className="candidate-header">
-          <div className="candidate-avatar">
-            {application.headshotUrl ? (
-              <AuthenticatedImage
-                src={application.headshotUrl}
-                alt={application.name}
-                style={{
-                  width: '60px',
-                  height: '60px',
-                  borderRadius: '50%',
-                  objectFit: 'cover'
-                }}
-              />
-            ) : (
-              <div className="avatar-fallback">
-                {(application.name || '?').split(' ').map(n => n.charAt(0)).join('').slice(0,2).toUpperCase()}
-              </div>
-            )}
-          </div>
-          <div className="candidate-info">
-            <h4 className="candidate-name">{application.name}</h4>
-            <p className="candidate-meta">
-              {application.major} • Class of {application.year}
-            </p>
-          </div>
-        </div>
-        
-        <div className="candidate-documents">
-          <h5>Documents</h5>
-          <div className="document-links">
-            {application.resumeUrl && (
-              <button 
-                className="document-btn"
-                onClick={() => setPreview({ 
-                  open: true, 
-                  src: application.resumeUrl, 
-                  kind: 'pdf', 
-                  title: `${application.name} – Resume` 
-                })}
-              >
-                <DocumentDuplicateIcon className="btn-icon" />
-                Resume
-              </button>
-            )}
-            {application.coverLetterUrl && (
-              <button 
-                className="document-btn"
-                onClick={() => setPreview({ 
-                  open: true, 
-                  src: application.coverLetterUrl, 
-                  kind: 'pdf', 
-                  title: `${application.name} – Cover Letter` 
-                })}
-              >
-                <DocumentDuplicateIcon className="btn-icon" />
-                Cover Letter
-              </button>
-            )}
-            {application.videoUrl && (
-              <button 
-                className="document-btn"
-                onClick={() => setPreview({ 
-                  open: true, 
-                  src: application.videoUrl, 
-                  kind: 'video', 
-                  title: `${application.name} – Video` 
-                })}
-              >
-                <EyeIcon className="btn-icon" />
-                Video
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+const parseConfig = (interview) => {
+  try {
+    return typeof interview.description === 'string'
+      ? JSON.parse(interview.description || '{}')
+      : interview.description || {};
+  } catch {
+    return {};
+  }
+};
 
-      {/* Document Preview Modal */}
-      {preview.open && (
-        <DocumentPreviewModal
-          onClose={() => setPreview({ open: false, src: '', kind: '', title: '' })}
-          src={preview.src}
-          kind={preview.kind}
-          title={preview.title}
-        />
-      )}
-    </>
-  );
+const sectionFor = (interview) => {
+  const configured = parseConfig(interview).section;
+  if (configured && configured !== 'COFFEE_CHATS') {
+    if (configured === 'ROUND_TWO') return 'FINAL_ROUND';
+    if (configured === 'COFFEE_CHAT') return 'VIRTUAL_COFFEE_CHAT';
+    return configured;
+  }
+  if (interview.interviewType === 'ROUND_ONE') return 'ROUND_ONE';
+  if (interview.interviewType === 'FINAL_ROUND' || interview.interviewType === 'ROUND_TWO') return 'FINAL_ROUND';
+  return 'VIRTUAL_COFFEE_CHAT';
+};
+
+const displaySectionFor = (interview) => {
+  const section = sectionFor(interview);
+  return COFFEE_CHAT_SECTIONS.has(section) ? 'COFFEE_CHATS' : section;
+};
+
+const interviewTypeFor = (section) => {
+  if (section === 'ROUND_ONE') return 'ROUND_ONE';
+  if (section === 'FINAL_ROUND') return 'FINAL_ROUND';
+  return 'COFFEE_CHAT';
+};
+
+const toLocalInput = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
+const getPhase = (interview) => {
+  const now = Date.now();
+  const startsAt = new Date(interview.startDate).getTime();
+  const opensAt = new Date(interview.startDate).getTime() - (5 * 60 * 1000);
+  if (now < opensAt) return 'upcoming';
+  if (now < startsAt) return 'open';
+  if (now <= new Date(interview.endDate).getTime()) return 'live';
+  return 'ended';
+};
+
+const formatDate = (value) => new Intl.DateTimeFormat(undefined, {
+  weekday: 'short', month: 'short', day: 'numeric'
+}).format(new Date(value));
+
+const formatTime = (start, end) => `${new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric', minute: '2-digit'
+}).format(new Date(start))}–${new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric', minute: '2-digit'
+}).format(new Date(end))}`;
+
+const candidateName = (application) =>
+  application.name ||
+  `${application.firstName || ''} ${application.lastName || ''}`.trim() ||
+  application.candidate?.fullName ||
+  application.email;
+
+const matchesApplicantSearch = (application, term) => {
+  const normalizedTerm = term.trim().toLowerCase();
+  return !normalizedTerm || candidateName(application).toLowerCase().includes(normalizedTerm);
+};
+
+const newId = () => globalThis.crypto?.randomUUID?.() ||
+  `slot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const makeSlot = (applicationIds = [], interviewerIds = []) => ({
+  id: newId(),
+  applicationIds: Array.isArray(applicationIds) ? applicationIds : applicationIds ? [applicationIds] : [],
+  interviewerIds
+});
+
+const slotsFromLegacyConfig = (config) => {
+  if (Array.isArray(config.slots)) {
+    return config.slots.map((slot) => ({
+      ...slot,
+      applicationIds: slot.applicationIds || (slot.applicationId ? [slot.applicationId] : []),
+      interviewerIds: slot.interviewerIds || []
+    }));
+  }
+
+  const memberGroups = config.memberGroups || [];
+  const groupAssignments = config.groupAssignments || {};
+  const slots = [];
+  memberGroups.forEach((memberGroup) => {
+    const assignedApplicationIds = (groupAssignments[memberGroup.id] || [])
+      .flatMap((applicationGroupId) => {
+        const applicationGroup = (config.applicationGroups || []).find((group) => group.id === applicationGroupId);
+        return applicationGroup?.applicationIds || [];
+      });
+    if (assignedApplicationIds.length) slots.push(makeSlot(assignedApplicationIds, memberGroup.memberIds || []));
+  });
+  const assignedApplicationGroupIds = new Set(Object.values(groupAssignments).flat());
+  (config.applicationGroups || []).forEach((applicationGroup) => {
+    if (!assignedApplicationGroupIds.has(applicationGroup.id)) {
+      slots.push(makeSlot(applicationGroup.applicationIds || []));
+    }
+  });
+
+  if (!slots.length) {
+    slots.push(...(config.applicationIds || []).map((applicationId) => makeSlot([applicationId])));
+  }
+  return slots;
+};
+
+const buildCompatibleSlotConfig = (form) => {
+  const slots = form.slots.map((slot, index) => {
+    const id = slot.id || newId();
+    return {
+      ...slot,
+      id,
+      name: `Slot ${index + 1}`,
+      interviewerIds: slot.interviewerIds.filter(Boolean),
+      applicationIds: slot.applicationIds.filter(Boolean),
+      applicationGroupId: `slot-${id}-candidate`,
+      memberGroupId: `slot-${id}-team`
+    };
+  });
+  const applicationGroups = slots.map((slot) => ({
+    id: slot.applicationGroupId,
+    name: slot.name,
+    applicationIds: slot.applicationIds
+  }));
+  const memberGroups = slots.map((slot) => ({
+    id: slot.memberGroupId,
+    name: `${slot.name} Interviewers`,
+    memberIds: slot.interviewerIds
+  }));
+
+  return {
+    section: form.section,
+    teamSize: Math.max(1, ...slots.map((slot) => slot.interviewerIds.length)),
+    slots,
+    applicationIds: [...new Set(slots.flatMap((slot) => slot.applicationIds))],
+    applicationGroups,
+    memberGroups,
+    groupAssignments: Object.fromEntries(
+      slots.map((slot) => [slot.memberGroupId, [slot.applicationGroupId]])
+    )
+  };
 };
 
 export default function AdminAssignedInterviews() {
   const navigate = useNavigate();
-  const [allMembers, setAllMembers] = useState([]); // Combined list of admins and interviewers
+  const [interviews, setInterviews] = useState([]);
+  const [members, setMembers] = useState([]);
   const [applications, setApplications] = useState([]);
   const [activeCycle, setActiveCycle] = useState(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [newInterview, setNewInterview] = useState({
-    title: '',
-    interviewType: 'COFFEE_CHAT',
-    startDate: '',
-    endDate: '',
-    location: '',
-    dresscode: ''
-  });
-  const [interviews, setInterviews] = useState([]);
-  const [selectedInterviewId, setSelectedInterviewId] = useState(null);
-  const [expandedInterviewId, setExpandedInterviewId] = useState(null);
-  const [interviewData, setInterviewData] = useState({});
-  const [coffeeChatApplications, setCoffeeChatApplications] = useState([]);
-  const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
+  const [cycles, setCycles] = useState([]);
+  const [selectedCycleId, setSelectedCycleId] = useState('');
+  const [scheduleView, setScheduleView] = useState('upcoming');
+  const [expanded, setExpanded] = useState(new Set(SECTIONS.map(([key]) => key)));
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkForm, setBulkForm] = useState(emptyBulkForm);
+  const [bulkTeams, setBulkTeams] = useState([]);
+  const [bulkTemplates, setBulkTemplates] = useState([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState(null);
+  const [availableApplicantSearch, setAvailableApplicantSearch] = useState('');
+  const [selectedApplicantSearch, setSelectedApplicantSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [, setClockTick] = useState(0);
 
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [editedInterview, setEditedInterview] = useState(null);
-  const [groupSelectionOpen, setGroupSelectionOpen] = useState(false);
-  const [selectedInterviewForStart, setSelectedInterviewForStart] = useState(null);
-  const [groupSearchTerm, setGroupSearchTerm] = useState('');
-  const [selectedGroups, setSelectedGroups] = useState([]);
-  const [behavioralQuestionsConfig, setBehavioralQuestionsConfig] = useState([]);
-  const [showBehavioralQuestionsConfig, setShowBehavioralQuestionsConfig] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
-  
-  // Search/filter states for groups management
-  const [memberGroupsSearch, setMemberGroupsSearch] = useState('');
-  const [applicationGroupsSearch, setApplicationGroupsSearch] = useState('');
-  const [collapsedGroups, setCollapsedGroups] = useState(new Set()); // Track collapsed group IDs
-  const [memberSearchByGroup, setMemberSearchByGroup] = useState({}); // Search terms for members within each group
-  const [appGroupSearchByGroup, setAppGroupSearchByGroup] = useState({}); // Search terms for app groups when assigning
-  const [applicationSearchByGroup, setApplicationSearchByGroup] = useState({}); // Search terms for applications within app groups
+  const load = async (requestedCycleId = selectedCycleId) => {
+    const [cycleResult, cyclesResult] = await Promise.allSettled([
+      apiClient.get('/admin/cycles/active'),
+      apiClient.get('/admin/cycles')
+    ]);
+    const active = cycleResult.status === 'fulfilled' ? cycleResult.value : null;
+    const cycleRows = cyclesResult.status === 'fulfilled' && Array.isArray(cyclesResult.value) ? cyclesResult.value : [];
+    const targetCycleId = requestedCycleId || active?.id || '';
+    const cycleQuery = targetCycleId ? `?cycleId=${encodeURIComponent(targetCycleId)}` : '';
+    const [interviewResult, memberResult, adminResult, applicationResult] =
+      await Promise.allSettled([
+        apiClient.get(`/admin/interviews${cycleQuery}`),
+        apiClient.get('/admin/users?role=INTERVIEWER'),
+        apiClient.get('/admin/users?role=ADMIN'),
+        apiClient.get(`/admin/applications${cycleQuery}`)
+      ]);
 
-  // Fetch initial data
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [ivsRes, mems, adminUsers, apps, cycle, currentUserRes] = await Promise.allSettled([
-          apiClient.get('/admin/interviews'),
-          apiClient.get('/admin/users?role=INTERVIEWER'),
-          apiClient.get('/admin/users?role=ADMIN'),
-          apiClient.get('/admin/applications'),
-          apiClient.get('/admin/cycles/active'),
-          apiClient.get('/admin/profile')
-        ]);
-
-        const ivs = ivsRes.status === 'fulfilled' ? ivsRes.value : [];
-        if (ivsRes.status === 'rejected') {
-          console.warn('Interviews fetch failed, continuing without them');
-        }
-
-        setInterviews(ivs);
-        const interviewers = mems.status === 'fulfilled' ? mems.value : [];
-        const adminsList = adminUsers.status === 'fulfilled' ? adminUsers.value : [];
-        setCurrentUser(currentUserRes.status === 'fulfilled' ? currentUserRes.value : null);
-        
-        // Combine admins and interviewers, adding a role property for identification
-        const combined = [
-          ...adminsList.map(admin => ({ ...admin, role: 'ADMIN', displayName: `${admin.fullName} (Admin)` })),
-          ...interviewers.map(interviewer => ({ ...interviewer, role: 'INTERVIEWER', displayName: `${interviewer.fullName}` }))
-        ];
-        setAllMembers(combined);
-        
-        const allApps = apps.status === 'fulfilled' ? apps.value : [];
-        setApplications(allApps);
-        // Filter applications for Coffee Chat round
-        // Use status to identify Coffee Chat candidates (UNDER_REVIEW)
-        const coffeeChatApps = allApps.filter(app => app.status === 'UNDER_REVIEW');
-        setCoffeeChatApplications(coffeeChatApps);
-        setActiveCycle(cycle.status === 'fulfilled' ? cycle.value : null);
-
-        // Initialize interview-specific data for each interview
-        const initialData = {};
-        ivs.forEach(interview => {
-          const desc = interview.description;
-          let parsed;
-          try {
-            parsed = typeof desc === 'string' ? JSON.parse(desc) : desc;
-          } catch {
-            parsed = {};
-          }
-          initialData[interview.id] = {
-            memberGroups: parsed?.memberGroups || [],
-            applicationGroups: parsed?.applicationGroups || [],
-            groupAssignments: parsed?.groupAssignments || {} // Maps memberGroupId to array of applicationGroupIds
-          };
-        });
-        setInterviewData(initialData);
-      } catch (e) {
-        console.error('Failed to load interview data', e);
-      }
-    };
-    load();
-  }, []);
-
-
-  const handleStartInterview = async (interviewId) => {
-    setSelectedInterviewForStart(interviewId);
-    setGroupSelectionOpen(true);
-    setGroupSearchTerm('');
-    setSelectedGroups([]);
-    setShowBehavioralQuestionsConfig(false);
-    
-    // Don't load questions here - we'll load them when groups are selected
-    setBehavioralQuestionsConfig([]);
-  };
-
-  const addBehavioralQuestion = () => {
-    setBehavioralQuestionsConfig(prev => [...prev, '']);
-  };
-
-  const updateBehavioralQuestion = (index, value) => {
-    setBehavioralQuestionsConfig(prev => prev.map((q, i) => i === index ? value : q));
-  };
-
-  const removeBehavioralQuestion = (index) => {
-    setBehavioralQuestionsConfig(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleGroupToggle = (groupId) => {
-    setSelectedGroups(prev => {
-      // Check if this is a final round interview
-      const interview = interviews.find(i => i.id === selectedInterviewForStart);
-      const isFinalRound = interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_TWO';
-      const maxGroups = isFinalRound ? 1 : 3;
-      
-      let newGroups;
-      if (prev.includes(groupId)) {
-        // Remove group if already selected
-        newGroups = prev.filter(id => id !== groupId);
-      } else if (isFinalRound) {
-        // For final round, replace the current selection
-        newGroups = [groupId];
-      } else if (prev.length < maxGroups) {
-        // Add group if less than max selected
-        newGroups = [...prev, groupId];
-      } else {
-        // Don't add if already at max
-        return prev;
-      }
-      
-      // Load behavioral questions for the selected groups
-      loadBehavioralQuestionsForGroups(newGroups);
-      
-      return newGroups;
-    });
-  };
-
-  const loadBehavioralQuestionsForGroups = async (groupIds) => {
-    if (groupIds.length === 0) {
-      setBehavioralQuestionsConfig([]);
-      return;
-    }
-
-    try {
-      const configRes = await apiClient.get(`/admin/interviews/${selectedInterviewForStart}/config?groupIds=${groupIds.join(',')}`);
-      const questionsByGroup = configRes.behavioralQuestions || {};
-      
-      // Flatten questions from all groups
-      const allQuestions = [];
-      Object.values(questionsByGroup).forEach(groupQuestions => {
-        allQuestions.push(...groupQuestions.map(q => q.text || q));
-      });
-      
-      setBehavioralQuestionsConfig(allQuestions);
-    } catch (error) {
-      console.warn('Failed to load behavioral questions for groups:', error);
-      setBehavioralQuestionsConfig([]);
-    }
-  };
-
-  const handleStartWithSelectedGroups = async () => {
-    if (selectedGroups.length === 0) return;
-    
-    const interview = interviews.find(i => i.id === selectedInterviewForStart);
-    
-    // Check if this is a round that needs behavioral questions configuration
-    if ((interview?.interviewType === 'ROUND_TWO' || interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_ONE') && !showBehavioralQuestionsConfig) {
-      setShowBehavioralQuestionsConfig(true);
-      return;
-    }
-    
-    const groupIdsParam = selectedGroups.join(',');
-    
-    console.log('Admin - Interview found:', interview);
-    console.log('Admin - Interview type:', interview?.interviewType);
-    console.log('Admin - Is ROUND_ONE?', interview?.interviewType === 'ROUND_ONE');
-    
-    // Save behavioral questions configuration if provided
-    if (showBehavioralQuestionsConfig && behavioralQuestionsConfig.length > 0) {
-      try {
-        await saveBehavioralQuestionsConfiguration();
-        console.log('Admin - Behavioral questions saved successfully');
-      } catch (error) {
-        console.error('Admin - Failed to save behavioral questions:', error);
-        alert('Failed to save behavioral questions. Please try again.');
-        return; // Don't navigate if save failed
-      }
-    }
-    
-    // Route to appropriate interface based on interview type
-    if (interview?.interviewType === 'ROUND_ONE') {
-      console.log('Admin - Routing to first round interview interface');
-      const url = `/member/first-round-interview?interviewId=${selectedInterviewForStart}&groupIds=${groupIdsParam}`;
-      console.log('Admin - Navigating to:', url);
-      navigate(url);
-    } else if (interview?.interviewType === 'ROUND_TWO' || interview?.interviewType === 'FINAL_ROUND') {
-      console.log('Admin - Routing to final round interview interface');
-      const url = `/admin/final-round-interview?interviewId=${selectedInterviewForStart}&groupIds=${groupIdsParam}`;
-      console.log('Admin - Navigating to:', url);
-      navigate(url);
-    } else {
-      console.log('Admin - Routing to regular interview interface');
-      const url = `/admin/interview-interface?interviewId=${selectedInterviewForStart}&groupIds=${groupIdsParam}`;
-      console.log('Admin - Navigating to:', url);
-      navigate(url);
-    }
-    
-    setGroupSelectionOpen(false);
-    setSelectedInterviewForStart(null);
-    setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
-    setShowBehavioralQuestionsConfig(false);
-  };
-
-  const saveBehavioralQuestionsConfiguration = async () => {
-    try {
-      // Save questions to each selected group individually
-      const questionsToSave = behavioralQuestionsConfig.filter(q => q.trim() !== '');
-      
-      console.log('Admin - Saving behavioral questions:', {
-        selectedGroups,
-        questionsToSave,
-        interviewId: selectedInterviewForStart
-      });
-      
-      for (const groupId of selectedGroups) {
-        console.log(`Admin - Saving questions for group ${groupId}:`, questionsToSave);
-        const response = await apiClient.patch(`/admin/interviews/${selectedInterviewForStart}/config`, {
-          type: 'behavioral_questions',
-          config: {
-            behavioralQuestions: true,
-            groupId: groupId,
-            questions: questionsToSave
-          }
-        });
-        console.log(`Admin - Save response for group ${groupId}:`, response);
-      }
-      
-      console.log('Admin - Behavioral questions saved successfully for groups:', selectedGroups);
-      
-    } catch (error) {
-      console.error('Failed to save behavioral questions configuration:', error);
-      alert('Failed to save behavioral questions configuration');
-      throw error; // Re-throw so the calling function can handle it
-    }
-  };
-
-  const handleCloseGroupSelection = () => {
-    setGroupSelectionOpen(false);
-    setSelectedInterviewForStart(null);
-    setGroupSearchTerm('');
-    setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
-    setShowBehavioralQuestionsConfig(false);
-  };
-
-  const handleEditInterview = (interviewId) => {
-    const interview = interviews.find(i => i.id === interviewId);
-    setEditedInterview({...interview});
-    setIsEditMode(true);
-  };
-
-  const handleSaveInterview = () => {
-    setInterviews(prev => prev.map(interview => 
-      interview.id === editedInterview.id ? editedInterview : interview
+    setInterviews(interviewResult.status === 'fulfilled' ? interviewResult.value : []);
+    const memberRows = memberResult.status === 'fulfilled' ? memberResult.value : [];
+    const adminRows = adminResult.status === 'fulfilled' ? adminResult.value : [];
+    setMembers([...adminRows, ...memberRows].filter(
+      (person, index, all) => all.findIndex((candidate) => candidate.id === person.id) === index
     ));
-    setIsEditMode(false);
-    setEditedInterview(null);
+    const apps = applicationResult.status === 'fulfilled' ? applicationResult.value : [];
+    setApplications(Array.isArray(apps) ? apps : apps.applications || []);
+    setActiveCycle(active);
+    setCycles(cycleRows);
+    setSelectedCycleId(targetCycleId);
   };
 
-  const handleCancelEdit = () => {
-    setIsEditMode(false);
-    setEditedInterview(null);
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((tick) => tick + 1), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!selectedMemberId && members.length) setSelectedMemberId(members[0].id);
+  }, [members, selectedMemberId]);
+
+  const grouped = useMemo(() => Object.fromEntries(
+    SECTIONS.map(([key]) => [
+      key,
+      interviews.filter((interview) => displaySectionFor(interview) === key)
+    ])
+  ), [interviews]);
+
+  const displayedCycle = cycles.find((cycle) => cycle.id === selectedCycleId) || activeCycle;
+  const isViewingActiveCycle = Boolean(activeCycle?.id && selectedCycleId === activeCycle.id);
+  const matchesScheduleView = (interview) => {
+    const phase = getPhase(interview);
+    if (scheduleView === 'history') return phase === 'ended';
+    if (scheduleView === 'live') return phase === 'open' || phase === 'live';
+    if (scheduleView === 'all') return true;
+    return phase !== 'ended';
   };
 
-  const handleFieldChange = (field, value) => {
-    setEditedInterview(prev => ({
-      ...prev,
-      [field]: value
-    }));
+  const changeCycle = async (cycleId) => {
+    setScheduleView('upcoming');
+    await load(cycleId);
   };
 
+  const filteredAvailableApplicants = useMemo(
+    () => applications.filter((application) => matchesApplicantSearch(application, availableApplicantSearch)),
+    [applications, availableApplicantSearch]
+  );
 
+  const assignmentsByMember = useMemo(() => Object.fromEntries(
+    members.map((member) => [
+      member.id,
+      interviews.filter((interview) => {
+        const phase = getPhase(interview);
+        if (scheduleView === 'history') return phase === 'ended';
+        if (scheduleView === 'live') return phase === 'open' || phase === 'live';
+        if (scheduleView === 'all') return true;
+        return phase !== 'ended';
+      }).flatMap((interview) => {
+        const slots = slotsFromLegacyConfig(parseConfig(interview));
+        const grouped = new Map();
+        slots.filter((slot) => slot.interviewerIds?.includes(member.id)).forEach((slot) => {
+          const partners = slot.interviewerIds
+            .filter((id) => id && id !== member.id)
+            .map((id) => members.find((person) => person.id === id))
+            .filter(Boolean);
+          const key = `${interview.id}:${partners.map(({ id }) => id).sort().join(',')}`;
+          const existing = grouped.get(key) || { interview, partners, applicants: [] };
+          existing.applicants.push(...slot.applicationIds.map((applicationId) =>
+            applications.find((application) => application.id === applicationId)
+          ).filter(Boolean));
+          grouped.set(key, existing);
+        });
+        return [...grouped.values()];
+      })
+    ])
+  ), [members, interviews, applications, scheduleView]);
 
-  const handleDeleteInterview = async (interviewId) => {
-    if (!window.confirm('Are you sure you want to delete this interview?')) return;
-    try {
-      await apiClient.delete(`/admin/interviews/${interviewId}`);
-      setInterviews(prev => prev.filter(interview => interview.id !== interviewId));
-      if (selectedInterviewId === interviewId) setSelectedInterviewId(null);
-      if (expandedInterviewId === interviewId) setExpandedInterviewId(null);
-    } catch (e) {
-      console.error('Failed to delete interview', e);
-      alert(e.message || 'Failed to delete interview');
+  const openCreate = (section = 'VIRTUAL_COFFEE_CHAT') => {
+    if (!isViewingActiveCycle) {
+      window.alert('Archived cycles are read-only. Switch to the active recruiting cycle to create a session.');
+      return;
     }
+    setEditingId(null);
+    setForm({ ...emptyForm, section: section === 'COFFEE_CHATS' ? 'VIRTUAL_COFFEE_CHAT' : section });
+    setAvailableApplicantSearch('');
+    setSelectedApplicantSearch('');
+    setError('');
+    setModalOpen(true);
   };
 
-  const handleCreateInterview = () => {
-    setCreateOpen(true);
-  };
-
-  const submitCreateInterview = async () => {
-    if (!activeCycle) return;
-    setCreating(true);
-    try {
-      const payload = {
-        ...newInterview,
-        cycleId: activeCycle.id
-      };
-      console.log('Creating interview with payload:', payload);
-      const created = await apiClient.post('/admin/interviews', payload);
-      const next = [created, ...interviews];
-      setInterviews(next);
-      setSelectedInterviewId(created.id);
-      setEditedInterview(null);
-      setCreateOpen(false);
-      setNewInterview({ 
-        title: '', 
-        interviewType: 'COFFEE_CHAT', 
-        startDate: '', 
-        endDate: '', 
-        location: '', 
-        dresscode: ''
-      });
-    } catch (e) {
-      console.error('Failed to create interview', e);
-      alert(e.message || 'Failed to create interview');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleSelectInterview = (id) => {
-    setSelectedInterviewId(id);
-    setIsEditMode(false);
-    setEditedInterview(null);
-  };
-
-  const toggleExpandInterview = (id) => {
-    if (expandedInterviewId === id) {
-      setExpandedInterviewId(null);
-    } else {
-      setExpandedInterviewId(id);
-    }
-  };
-
-  const addMemberGroup = (interviewId) => {
-    const currentGroups = interviewData[interviewId]?.memberGroups || [];
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: {
-        ...prev[interviewId],
-        memberGroups: [
-          ...currentGroups,
-          { 
-            id: crypto.randomUUID(), 
-            name: `Member Group ${currentGroups.length + 1}`, 
-            memberIds: [],
-            notes: '' 
-          }
-        ]
-      }
-    }));
-  };
-
-  const addApplicationGroup = (interviewId) => {
-    const currentGroups = interviewData[interviewId]?.applicationGroups || [];
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: {
-        ...prev[interviewId],
-        applicationGroups: [
-          ...currentGroups,
-          { 
-            id: crypto.randomUUID(), 
-            name: `Application Group ${currentGroups.length + 1}`, 
-            applicationIds: [],
-            notes: '' 
-          }
-        ]
-      }
-    }));
-  };
-
-  const removeMemberGroup = (interviewId, groupId) => {
-    const current = interviewData[interviewId] || { memberGroups: [], applicationGroups: [], groupAssignments: {} };
-    const newAssignments = { ...current.groupAssignments };
-    delete newAssignments[groupId];
-    const updated = {
-      ...current,
-      memberGroups: (current.memberGroups || []).filter(g => g.id !== groupId),
-      groupAssignments: newAssignments
-    };
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: updated
-    }));
-    // Persist immediately so deletion is saved
-    persistInterviewConfig(interviewId, updated, { silent: true });
-  };
-
-  const removeApplicationGroup = (interviewId, groupId) => {
-    const current = interviewData[interviewId] || { memberGroups: [], applicationGroups: [], groupAssignments: {} };
-    const newAssignments = {};
-    Object.entries(current.groupAssignments || {}).forEach(([memberGroupId, appGroupIds]) => {
-      newAssignments[memberGroupId] = (appGroupIds || []).filter(id => id !== groupId);
+  const openEdit = (interview) => {
+    const config = parseConfig(interview);
+    setEditingId(interview.id);
+    setForm({
+      title: interview.title,
+      section: sectionFor(interview),
+      startDate: toLocalInput(interview.startDate),
+      endDate: toLocalInput(interview.endDate),
+      location: interview.location || '',
+      dresscode: interview.dresscode || '',
+      slots: slotsFromLegacyConfig(config)
     });
-    const updated = {
+    setAvailableApplicantSearch('');
+    setSelectedApplicantSearch('');
+    setError('');
+    setModalOpen(true);
+  };
+
+  const addTeams = (count = 1) => {
+    setForm((current) => ({
       ...current,
-      applicationGroups: (current.applicationGroups || []).filter(g => g.id !== groupId),
-      groupAssignments: newAssignments
+      slots: [
+        ...current.slots,
+        ...Array.from({ length: count }, () => makeSlot([], ['', '']))
+      ]
+    }));
+  };
+
+  const updateSlot = (slotId, changes) => {
+    setForm((current) => ({
+      ...current,
+      slots: current.slots.map((slot) =>
+        slot.id === slotId ? { ...slot, ...changes } : slot
+      )
+    }));
+  };
+
+  const removeSlot = (slotId) => {
+    setForm((current) => ({
+      ...current,
+      slots: current.slots.filter((slot) => slot.id !== slotId)
+    }));
+  };
+
+  const copyTeam = (slotId) => {
+    setForm((current) => {
+      const index = current.slots.findIndex((slot) => slot.id === slotId);
+      if (index < 0) return current;
+      const source = current.slots[index];
+      const slots = [...current.slots];
+      slots.splice(index + 1, 0, makeSlot([], [...source.interviewerIds]));
+      return { ...current, slots };
+    });
+  };
+
+  const loadBulkTeams = async (cycleId) => {
+    const result = await apiClient.get(`/admin/interviews/bulk-teams?cycleId=${encodeURIComponent(cycleId)}`);
+    const teams = Array.isArray(result.teams) ? result.teams : [];
+    setBulkTeams(teams);
+    return teams;
+  };
+
+  const loadBulkTemplates = async (sourceCycleId) => {
+    if (!sourceCycleId) {
+      setBulkTemplates([]);
+      return [];
+    }
+    const result = await apiClient.get(`/admin/interviews/templates?sourceCycleId=${encodeURIComponent(sourceCycleId)}`);
+    const templates = Array.isArray(result.templates) ? result.templates : [];
+    setBulkTemplates(templates);
+    return templates;
+  };
+
+  const openBulkCreate = async () => {
+    if (!activeCycle || !isViewingActiveCycle) {
+      window.alert('Create and activate a recruiting cycle before creating interview slots.');
+      return;
+    }
+
+    setBulkModalOpen(true);
+    setBulkForm({ ...emptyBulkForm, requestKey: `bulk-${newId()}` });
+    setBulkTeams([]);
+    setBulkTemplates([]);
+    setBulkError('');
+    setBulkLoading(true);
+    try {
+      const teams = await loadBulkTeams(activeCycle.id);
+      setBulkForm((current) => ({
+        ...current,
+        teamIds: teams.filter((team) => team.members?.length).map((team) => team.id)
+      }));
+    } catch (loadError) {
+      setBulkError(loadError.message || 'Unable to load review teams for this cycle.');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const chooseTemplateCycle = async (sourceCycleId) => {
+    setBulkForm((current) => ({ ...current, sourceCycleId, sourceInterviewId: '' }));
+    setBulkTemplates([]);
+    if (!sourceCycleId) return;
+
+    setBulkLoading(true);
+    try {
+      await loadBulkTemplates(sourceCycleId);
+    } catch (loadError) {
+      setBulkError(loadError.message || 'Unable to load templates from that recruiting cycle.');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const chooseTemplate = (sourceInterviewId) => {
+    const template = bulkTemplates.find((item) => item.id === sourceInterviewId);
+    setBulkForm((current) => {
+      if (!template) return { ...current, sourceInterviewId: '' };
+      return {
+        ...current,
+        sourceInterviewId,
+        title: template.title || current.title,
+        section: template.section || current.section,
+        durationMinutes: String(template.durationMinutes || current.durationMinutes),
+        location: template.location || current.location,
+        dresscode: template.dresscode || current.dresscode,
+        maxCandidates: String(template.maxCandidates || current.maxCandidates)
+      };
+    });
+  };
+
+  const toggleBulkTeam = (teamId) => {
+    setBulkForm((current) => ({
+      ...current,
+      teamIds: current.teamIds.includes(teamId)
+        ? current.teamIds.filter((id) => id !== teamId)
+        : [...current.teamIds, teamId]
+    }));
+  };
+
+  const bulkPreview = useMemo(() => {
+    const start = new Date(bulkForm.startDate);
+    const duration = Number(bulkForm.durationMinutes);
+    const interval = Number(bulkForm.slotIntervalMinutes);
+    if (!Number.isFinite(start.getTime()) || !Number.isInteger(duration) || duration <= 0 || !Number.isInteger(interval) || interval <= 0) {
+      return [];
+    }
+    return bulkTeams
+      .filter((team) => bulkForm.teamIds.includes(team.id))
+      .map((team, index) => {
+        const slotStart = new Date(start.getTime() + index * interval * 60000);
+        return {
+          team,
+          startDate: slotStart,
+          endDate: new Date(slotStart.getTime() + duration * 60000)
+        };
+      });
+  }, [bulkForm.durationMinutes, bulkForm.slotIntervalMinutes, bulkForm.startDate, bulkForm.teamIds, bulkTeams]);
+
+  const saveBulk = async (event) => {
+    event.preventDefault();
+    if (!activeCycle) return setBulkError('Create and activate a recruiting cycle first.');
+    if (!bulkForm.teamIds.length) return setBulkError('Select at least one review team.');
+    if (!bulkForm.requestKey) return setBulkError('Unable to prepare a retry-safe bulk request. Close and reopen this window.');
+
+    setBulkSaving(true);
+    setBulkError('');
+    try {
+      await apiClient.post('/admin/interviews/bulk-create', {
+        cycleId: activeCycle.id,
+        sourceCycleId: bulkForm.sourceCycleId || null,
+        sourceInterviewId: bulkForm.sourceInterviewId || null,
+        requestKey: bulkForm.requestKey,
+        title: bulkForm.title,
+        section: bulkForm.section,
+        startDate: new Date(bulkForm.startDate).toISOString(),
+        durationMinutes: Number(bulkForm.durationMinutes),
+        slotIntervalMinutes: Number(bulkForm.slotIntervalMinutes),
+        location: bulkForm.location,
+        dresscode: bulkForm.dresscode,
+        maxCandidates: Number(bulkForm.maxCandidates),
+        teamIds: bulkForm.teamIds
+      });
+      await load();
+      setBulkModalOpen(false);
+    } catch (saveError) {
+      setBulkError(saveError.message || 'Unable to create interview slots.');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const save = async (event) => {
+    event.preventDefault();
+    if (!activeCycle && !editingId) return setError('Create an active recruiting cycle first.');
+    if (new Date(form.endDate) <= new Date(form.startDate)) {
+      return setError('End time must be after the start time.');
+    }
+    if (!form.dresscode) return setError('Choose a dress code.');
+    if (!form.slots.length) return setError('Create at least one interviewer team.');
+    const invalidSlot = form.slots.find((slot) =>
+      !slot.applicationIds.length ||
+      !slot.interviewerIds.filter(Boolean).length ||
+      new Set(slot.interviewerIds.filter(Boolean)).size !== slot.interviewerIds.filter(Boolean).length
+    );
+    if (invalidSlot) {
+      return setError('Every interviewer team needs at least one club member and one applicant.');
+    }
+
+    setSaving(true);
+    setError('');
+    const slotConfig = buildCompatibleSlotConfig(form);
+    const payload = {
+      title: form.title,
+      interviewType: interviewTypeFor(form.section),
+      startDate: new Date(form.startDate).toISOString(),
+      endDate: new Date(form.endDate).toISOString(),
+      location: form.location,
+      dresscode: form.dresscode,
+      memberIds: [...new Set(slotConfig.slots.flatMap((slot) => slot.interviewerIds))],
+      applicationIds: slotConfig.applicationIds,
+      description: slotConfig,
+      ...(!editingId && { cycleId: activeCycle.id })
     };
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: updated
-    }));
-    // Persist immediately so deletion is saved
-    persistInterviewConfig(interviewId, updated, { silent: true });
-  };
 
-  const updateMemberGroup = (interviewId, groupId, changes) => {
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: {
-        ...prev[interviewId],
-        memberGroups: prev[interviewId]?.memberGroups?.map(g => g.id === groupId ? { ...g, ...changes } : g) || []
-      }
-    }));
-  };
-
-  const updateApplicationGroup = (interviewId, groupId, changes) => {
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: {
-        ...prev[interviewId],
-        applicationGroups: prev[interviewId]?.applicationGroups?.map(g => g.id === groupId ? { ...g, ...changes } : g) || []
-      }
-    }));
-  };
-
-  const assignGroupsToMemberGroup = (interviewId, memberGroupId, applicationGroupIds) => {
-    setInterviewData(prev => ({
-      ...prev,
-      [interviewId]: {
-        ...prev[interviewId],
-        groupAssignments: {
-          ...prev[interviewId]?.groupAssignments,
-          [memberGroupId]: applicationGroupIds
-        }
-      }
-    }));
-  };
-
-  const saveInterviewData = async (interviewId) => {
-    const data = interviewData[interviewId];
-    if (!data) return;
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
-        type: 'full',
-        config: data
-      });
-      // Update the interview's description with the new data
-      setInterviews(prev => prev.map(iv => 
-        iv.id === interviewId 
-          ? { ...iv, description: JSON.stringify(data) } 
-          : iv
-      ));
-      alert('Interview data saved');
-    } catch (e) {
-      console.error('Failed to save interview data', e);
-      alert(e.message || 'Failed to save interview data');
+      const saved = editingId
+        ? await apiClient.patch(`/admin/interviews/${editingId}/config`, {
+            type: 'schedule',
+            config: payload
+          })
+        : await apiClient.post('/admin/interviews', payload);
+
+      // Read back from the server so the modal only closes after persistence is confirmed.
+      const refreshed = await apiClient.get(`/admin/interviews?cycleId=${encodeURIComponent(selectedCycleId || activeCycle.id)}`);
+      const persisted = refreshed.find((interview) => interview.id === saved.id);
+      const persistedConfig = persisted ? parseConfig(persisted) : {};
+      if (
+        !persisted ||
+        persisted.title !== payload.title ||
+        persisted.location !== payload.location ||
+        (persisted.dresscode || '') !== payload.dresscode ||
+        (persistedConfig.slots || []).length !== slotConfig.slots.length
+      ) {
+        throw new Error('The server did not persist all interview changes. Restart the API server and try again.');
+      }
+      setInterviews(refreshed);
+      setModalOpen(false);
+    } catch (saveError) {
+      setError(saveError.message || 'Unable to save interview.');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const persistInterviewConfig = async (interviewId, data, { silent = true } = {}) => {
+  const remove = async (interview) => {
+    if (!window.confirm(`Delete “${interview.title}”? Evaluations tied to it will also be deleted.`)) return;
     try {
-      await apiClient.patch(`/admin/interviews/${interviewId}/config`, {
-        type: 'full',
-        config: data
-      });
-      setInterviews(prev => prev.map(iv => 
-        iv.id === interviewId 
-          ? { ...iv, description: JSON.stringify(data) } 
-          : iv
-      ));
-      if (!silent) alert('Interview data saved');
-    } catch (e) {
-      console.error('Failed to persist interview config', e);
-      if (!silent) alert(e.message || 'Failed to save interview data');
+      await apiClient.delete(`/admin/interviews/${interview.id}`);
+      setInterviews((current) => current.filter(({ id }) => id !== interview.id));
+    } catch (deleteError) {
+      window.alert(deleteError.message || 'Unable to delete interview.');
     }
   };
 
-
-
-
+  const join = (interview) => {
+    const type = interview.interviewType;
+    const config = parseConfig(interview);
+    const groupIds = config.slots?.map((slot) => slot.applicationGroupId).filter(Boolean).join(',') || 'direct';
+    if (type === 'ROUND_ONE') {
+      navigate(`/member/first-round-interview?interviewId=${interview.id}&groupIds=${groupIds}`);
+    } else if (type === 'FINAL_ROUND' || type === 'ROUND_TWO') {
+      navigate(`/admin/final-round-interview?interviewId=${interview.id}&groupIds=${groupIds}`);
+    } else {
+      navigate(`/admin/interview-interface?interviewId=${interview.id}&groupIds=${groupIds}`);
+    }
+  };
 
   return (
     <AccessControl allowedRoles={['ADMIN']}>
-      <div className="admin-assigned-interviews-container">
-      {createOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>Create Interview</h3>
-              <button className="icon-btn" onClick={() => setCreateOpen(false)}>
-                <XMarkIcon className="btn-icon" />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="form-row">
-                <label>Title</label>
-                <input type="text" value={newInterview.title} onChange={e => setNewInterview({ ...newInterview, title: e.target.value })} />
-              </div>
-              <div className="form-row">
-                <label>Type</label>
-                <select value={newInterview.interviewType} onChange={e => setNewInterview({ ...newInterview, interviewType: e.target.value })}>
-                  <option value="COFFEE_CHAT">Coffee Chat</option>
-                  <option value="ROUND_ONE">Round 1</option>
-                  <option value="ROUND_TWO">Round 2</option>
-                  <option value="FINAL_ROUND">Final Round</option>
-                </select>
-              </div>
-              <div className="form-row two-col">
-                <div>
-                  <label>Start</label>
-                  <input type="datetime-local" value={newInterview.startDate} onChange={e => setNewInterview({ ...newInterview, startDate: e.target.value })} />
-                </div>
-                <div>
-                  <label>End</label>
-                  <input type="datetime-local" value={newInterview.endDate} onChange={e => setNewInterview({ ...newInterview, endDate: e.target.value })} />
-                </div>
-              </div>
-              <div className="form-row two-col">
-                <div>
-                  <label>Location</label>
-                  <input type="text" value={newInterview.location} onChange={e => setNewInterview({ ...newInterview, location: e.target.value })} />
-                </div>
-                <div>
-                  <label>Dresscode</label>
-                  <input type="text" value={newInterview.dresscode} onChange={e => setNewInterview({ ...newInterview, dresscode: e.target.value })} />
-                </div>
-              </div>
-              
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button className="btn-primary" onClick={submitCreateInterview} disabled={creating}>{creating ? 'Creating...' : 'Create'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <main className="interview-schedule">
+        <Box component="header" className="schedule-header">
+          <Box>
+            <Typography component="p" className="eyebrow">Recruiting cycle</Typography>
+            <Typography component="h1">Manage Interviews</Typography>
+            <Typography component="p">{displayedCycle?.name || 'Select a recruiting cycle'}{isViewingActiveCycle ? ' · Active' : ' · Read-only history'}</Typography>
+          </Box>
+          <Stack className="schedule-actions" direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <FormControl size="small" className="cycle-selector">
+              <InputLabel id="interview-cycle-label">Recruiting Cycle</InputLabel>
+              <Select
+                labelId="interview-cycle-label"
+                label="Recruiting Cycle"
+                value={selectedCycleId}
+                onChange={(event) => changeCycle(event.target.value)}
+              >
+                {cycles.map((cycle) => <MenuItem key={cycle.id} value={cycle.id}>{cycle.name}{cycle.isActive ? ' (Active)' : ''}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <Button variant="outlined" startIcon={<DocumentDuplicateIcon />} onClick={openBulkCreate} disabled={!isViewingActiveCycle}>
+              Create team slots
+            </Button>
+            <Button variant="contained" startIcon={<PlusIcon />} onClick={() => openCreate()} disabled={!isViewingActiveCycle}>
+              New interview
+            </Button>
+          </Stack>
+        </Box>
 
-      {/* Group Selection Modal */}
-      {groupSelectionOpen && selectedInterviewForStart && (
-        <div className="modal-overlay">
-          <div className="modal-content group-selection-modal">
-            <div className="modal-header">
-              <h3>
-                {showBehavioralQuestionsConfig 
-                  ? 'Configure Behavioral Questions' 
-                  : 'Select Application Groups to Evaluate'
-                }
-              </h3>
-              {!showBehavioralQuestionsConfig && (() => {
-                const interview = interviews.find(i => i.id === selectedInterviewForStart);
-                const isFinalRound = interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_TWO';
-                const maxGroups = isFinalRound ? 1 : 3;
-                return (
-                  <div className="selection-info">
-                    {selectedGroups.length}/{maxGroups} group{maxGroups === 1 ? '' : 's'} selected
+        <Box component="section" className="schedule-summary">
+          <span><strong>{interviews.length}</strong> sessions</span>
+          <span><strong>{interviews.filter((item) => getPhase(item) === 'live').length}</strong> live now</span>
+          <span><strong>{interviews.filter((item) => getPhase(item) === 'upcoming').length}</strong> upcoming</span>
+          <Chip size="small" color={isViewingActiveCycle ? 'success' : 'default'} label={isViewingActiveCycle ? 'Active cycle' : 'Archived cycle'} />
+        </Box>
+
+        <Box className="interview-dashboard-tabs">
+          <Tabs value={scheduleView} onChange={(_, value) => setScheduleView(value)} variant="scrollable" allowScrollButtonsMobile>
+            <Tab value="upcoming" label={`Upcoming (${interviews.filter((item) => getPhase(item) !== 'ended').length})`} />
+            <Tab value="live" label={`Starting Soon & Live (${interviews.filter((item) => ['open', 'live'].includes(getPhase(item))).length})`} />
+            <Tab value="history" label={`History (${interviews.filter((item) => getPhase(item) === 'ended').length})`} />
+            <Tab value="all" label={`All (${interviews.length})`} />
+          </Tabs>
+        </Box>
+
+        <div className="schedule-sections">
+          {SECTIONS.map(([key, label]) => {
+            const rows = (grouped[key] || []).filter(matchesScheduleView);
+            const isExpanded = expanded.has(key);
+            return (
+              <section className="schedule-section" key={key}>
+                <div className="section-heading">
+                  <button
+                    className="section-toggle"
+                    onClick={() => setExpanded((current) => {
+                      const next = new Set(current);
+                      next.has(key) ? next.delete(key) : next.add(key);
+                      return next;
+                    })}
+                  >
+                    <span>{isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}</span>
+                    <strong>{label}</strong>
+                    <span className="section-count">{rows.length}</span>
+                  </button>
+                  {isViewingActiveCycle && scheduleView !== 'history' && (
+                    <button className="section-add" onClick={() => openCreate(key)}>
+                      <PlusIcon /> Add Session
+                    </button>
+                  )}
+                </div>
+                {isExpanded && (
+                  <div className="session-list">
+                    {!rows.length && (
+                      isViewingActiveCycle && scheduleView !== 'history' ? (
+                        <button className="empty-session" onClick={() => openCreate(key)}>
+                          <PlusIcon /> Add the first session
+                        </button>
+                      ) : <p className="empty-session">No {scheduleView === 'history' ? 'completed' : 'matching'} sessions.</p>
+                    )}
+                    {rows.map((interview) => {
+                      const phase = getPhase(interview);
+                      const config = parseConfig(interview);
+                      return (
+                        <article className="session-row" key={interview.id}>
+                          <div className="session-when">
+                            <strong>{formatDate(interview.startDate)}</strong>
+                            <span>{formatTime(interview.startDate, interview.endDate)}</span>
+                          </div>
+                          <div className="session-main">
+                            <div className="session-title-line">
+                              <h2>{interview.title}</h2>
+                              <Chip
+                                className="phase-chip"
+                                size="small"
+                                color={phase === 'live' ? 'success' : phase === 'open' ? 'warning' : phase === 'upcoming' ? 'primary' : 'default'}
+                                label={phase === 'live' ? 'Live Now' : phase === 'open' ? 'Starting Soon' : phase === 'upcoming' ? 'Upcoming' : 'Completed'}
+                              />
+                            </div>
+                            <div className="session-meta">
+                              <span><MapPinIcon /> {interview.location || 'Location TBD'}</span>
+                              {interview.dresscode && <span>{interview.dresscode}</span>}
+                            </div>
+                          </div>
+                          <div className="participant-counts">
+                            <span><UserGroupIcon /> {interview.assignments?.length || 0} members</span>
+                            <span>{config.applicationIds?.length || 0} candidates</span>
+                          </div>
+                          <div className="session-actions">
+                            {(phase === 'open' || phase === 'live') && (
+                              <button className="join-button" onClick={() => join(interview)}>Join</button>
+                            )}
+                            {isViewingActiveCycle && (
+                              <>
+                                <button className="icon-button" aria-label={`Edit ${interview.title}`} onClick={() => openEdit(interview)}>
+                                  <PencilSquareIcon />
+                                </button>
+                                <button className="icon-button danger" aria-label={`Delete ${interview.title}`} onClick={() => remove(interview)}>
+                                  <TrashIcon />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
                   </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+
+        <section className="member-assignment-browser">
+          <header>
+            <div>
+              <p className="eyebrow">Member Assignment View</p>
+              <h2>Assignments by Club Member</h2>
+              <p>Choose a member to see their rounds, interviewer partners, and applicants.</p>
+            </div>
+          </header>
+          <div className="member-browser-layout">
+            <div className="member-browser-list">
+              {members.map((member) => {
+                const count = assignmentsByMember[member.id]?.length || 0;
+                return (
+                  <button
+                    key={member.id}
+                    className={selectedMemberId === member.id ? 'selected' : ''}
+                    onClick={() => setSelectedMemberId(member.id)}
+                  >
+                    <span>{member.fullName}</span>
+                    <small>{count} assignment{count === 1 ? '' : 's'}</small>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="member-browser-detail">
+              {(() => {
+                const member = members.find(({ id }) => id === selectedMemberId);
+                const assignments = assignmentsByMember[selectedMemberId] || [];
+                if (!member) return <p className="member-browser-empty">Select a club member.</p>;
+                return (
+                  <>
+                    <div className="member-detail-heading">
+                      <h3>{member.fullName}</h3>
+                      <span>{assignments.length} total</span>
+                    </div>
+                    {!assignments.length ? (
+                      <p className="member-browser-empty">No interview assignments yet.</p>
+                    ) : assignments.map(({ interview, applicants, partners }, index) => (
+                      <article className="member-assignment-row" key={`${interview.id}-${partners.map(({ id }) => id).join('-')}-${index}`}>
+                        <div>
+                          <span className="assignment-round">{SECTIONS.find(([key]) => key === displaySectionFor(interview))?.[1]}</span>
+                          <strong>{interview.title}</strong>
+                          <small>{formatDate(interview.startDate)} · {formatTime(interview.startDate, interview.endDate)}</small>
+                        </div>
+                        <div>
+                          <small>Paired with</small>
+                          <strong>{partners.length ? partners.map(({ fullName }) => fullName).join(', ') : 'No partner assigned'}</strong>
+                        </div>
+                        <div>
+                          <small>Applicants ({applicants.length})</small>
+                          {applicants.length ? (
+                            <ul className="assignment-applicant-list">
+                              {applicants.map((application, applicantIndex) => (
+                                <li key={`${interview.id}-${application.id}-${applicantIndex}`}>{candidateName(application)}</li>
+                              ))}
+                            </ul>
+                          ) : <strong>No applicants assigned</strong>}
+                        </div>
+                      </article>
+                    ))}
+                  </>
                 );
               })()}
-              <button className="icon-btn" onClick={handleCloseGroupSelection}>
-                <XMarkIcon className="btn-icon" />
-              </button>
             </div>
-            <div className="modal-body">
-              {showBehavioralQuestionsConfig ? (
-                <div className="behavioral-questions-config">
-                  <p className="config-instruction">
-                    Configure the behavioral questions for this interview. All interviewers will see these same questions.
-                  </p>
-                  {behavioralQuestionsConfig.map((question, index) => (
-                    <div key={index} className="question-config-row">
-                      <input
-                        type="text"
-                        value={question}
-                        onChange={(e) => updateBehavioralQuestion(index, e.target.value)}
-                        placeholder={`Question ${index + 1}`}
-                        className="question-input"
-                      />
-                      <button
-                        type="button"
-                        className="remove-question-btn"
-                        onClick={() => removeBehavioralQuestion(index)}
-                      >
-                        <XMarkIcon className="btn-icon" />
-                      </button>
+          </div>
+        </section>
+      </main>
+
+      {modalOpen && (
+        <div className="interview-modal-backdrop" role="presentation" onMouseDown={() => setModalOpen(false)}>
+          <div className="interview-modal" role="dialog" aria-modal="true" aria-labelledby="interview-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">{editingId ? 'Update session' : 'Schedule a session'}</p>
+                <h2 id="interview-modal-title">{editingId ? 'Edit interview' : 'New interview'}</h2>
+              </div>
+              <button className="icon-button" onClick={() => setModalOpen(false)} aria-label="Close">
+                <XMarkIcon />
+              </button>
+            </header>
+            <form onSubmit={save}>
+              <div className="form-grid">
+                <label className="title-field">Title
+                  <input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="e.g. F27 Coffee Chat - Round 1" />
+                </label>
+                <label className="section-field">Round
+                  <select value={form.section} onChange={(event) => setForm({ ...form, section: event.target.value })}>
+                    {FORM_SECTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                </label>
+                <label>Dress Code
+                  <select required value={form.dresscode} onChange={(event) => setForm({ ...form, dresscode: event.target.value })}>
+                    <option value="">Select a dress code</option>
+                    <option value="Business Professional">Business Professional</option>
+                    <option value="Business Casual">Business Casual</option>
+                    <option value="Smart Casual">Smart Casual</option>
+                    <option value="Casual">Casual</option>
+                  </select>
+                </label>
+                <label><CalendarDaysIcon /> Starts
+                  <input required type="datetime-local" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} />
+                </label>
+                <label><ClockIcon /> Ends
+                  <input required type="datetime-local" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} />
+                </label>
+                <label><MapPinIcon /> Location
+                  <input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Room or meeting link" />
+                </label>
+              </div>
+              <section className="slot-builder">
+                <div className="slot-builder-header">
+                  <div>
+                    <p className="eyebrow">Interviewer Teams</p>
+                    <h3>Build the teams first, then assign applicants</h3>
+                    <p>Each row is one interviewer team and the applicants they will interview together.</p>
+                  </div>
+                  <div className="team-tools">
+                    <div className="team-add-actions">
+                    <button type="button" className="secondary-button" onClick={() => addTeams(5)}>
+                      <PlusIcon /> Add 5 Teams
+                    </button>
+                    <button type="button" className="primary-button" onClick={() => addTeams(1)}>
+                      <PlusIcon /> Add Team
+                    </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="slot-list">
+                  <div className="slot-list-heading">
+                    <strong>{form.slots.length} Interviewer Team{form.slots.length === 1 ? '' : 's'}</strong>
+                    <span>Choose the pair, then use Add to assign one or more applicants.</span>
+                  </div>
+                  {!form.slots.length && (
+                    <div className="slot-empty">Add an interviewer team to begin.</div>
+                  )}
+                  {form.slots.map((slot, index) => (
+                    <div className="slot-row" key={slot.id}>
+                      <span className="slot-number">{index + 1}</span>
+                      <div className="interviewer-stack">
+                        {Array.from({ length: Math.max(2, slot.interviewerIds.length) }, (_, interviewerIndex) => (
+                          <label key={interviewerIndex}>Interviewer {interviewerIndex + 1}
+                            <select
+                              value={slot.interviewerIds[interviewerIndex] || ''}
+                              onChange={(event) => {
+                                const interviewerIds = [...slot.interviewerIds];
+                                interviewerIds[interviewerIndex] = event.target.value;
+                                updateSlot(slot.id, { interviewerIds });
+                              }}
+                            >
+                              <option value="">Select member</option>
+                              {members.map((member) => (
+                                <option
+                                  key={member.id}
+                                  value={member.id}
+                                  disabled={slot.interviewerIds.some((id, selectedIndex) =>
+                                    selectedIndex !== interviewerIndex && id === member.id
+                                  )}
+                                >
+                                  {member.fullName}{member.role === 'ADMIN' ? ' (Admin)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ))}
+                      </div>
+                      <span className="team-arrow" aria-hidden="true">→</span>
+                      <div className="assigned-applicants-field">
+                        <div className="assigned-applicants-label">
+                          <span>Assigned Applicants</span>
+                          <small>Add names from the available list</small>
+                        </div>
+                        <div className="applicant-picker">
+                          <div className="applicant-picker-column">
+                            <div className="applicant-picker-heading">
+                              <strong>Available</strong>
+                              <span>{filteredAvailableApplicants.filter((application) => !slot.applicationIds.includes(application.id)).length}</span>
+                            </div>
+                            <label className="applicant-picker-search">
+                              <MagnifyingGlassIcon />
+                              <input
+                                type="search"
+                                value={availableApplicantSearch}
+                                onChange={(event) => setAvailableApplicantSearch(event.target.value)}
+                                placeholder="Search available applicants…"
+                              />
+                            </label>
+                            <div className="applicant-name-list" role="list" aria-label="Available applicants">
+                              {filteredAvailableApplicants.filter((application) => !slot.applicationIds.includes(application.id)).map((application) => (
+                                <button
+                                  type="button"
+                                  className="applicant-name-option"
+                                  key={application.id}
+                                  onClick={() => updateSlot(slot.id, {
+                                    applicationIds: [...slot.applicationIds, application.id]
+                                  })}
+                                >
+                                  <span>{candidateName(application)}</span>
+                                  <span className="applicant-option-action"><PlusIcon /> Add</span>
+                                </button>
+                              ))}
+                              {!filteredAvailableApplicants.some((application) => !slot.applicationIds.includes(application.id)) && (
+                                <p className="applicant-list-empty">No available applicants match your search.</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="applicant-picker-column selected">
+                            <div className="applicant-picker-heading">
+                              <strong>Selected</strong>
+                              <span>{slot.applicationIds.length}</span>
+                            </div>
+                            <label className="applicant-picker-search">
+                              <MagnifyingGlassIcon />
+                              <input
+                                type="search"
+                                value={selectedApplicantSearch}
+                                onChange={(event) => setSelectedApplicantSearch(event.target.value)}
+                                placeholder="Search selected applicants…"
+                              />
+                            </label>
+                            <div className="applicant-name-list" role="list" aria-label="Selected applicants">
+                              {slot.applicationIds.map((applicationId) => {
+                                const application = applications.find((candidate) => candidate.id === applicationId);
+                                if (!application || !matchesApplicantSearch(application, selectedApplicantSearch)) return null;
+                                return (
+                                  <button
+                                    type="button"
+                                    className="applicant-name-option selected"
+                                    key={application.id}
+                                    onClick={() => updateSlot(slot.id, {
+                                      applicationIds: slot.applicationIds.filter((id) => id !== application.id)
+                                    })}
+                                  >
+                                    <span>{candidateName(application)}</span>
+                                    <span className="applicant-option-action"><XMarkIcon /> Remove</span>
+                                  </button>
+                                );
+                              })}
+                              {!slot.applicationIds.some((applicationId) => {
+                                const application = applications.find((candidate) => candidate.id === applicationId);
+                                return application && matchesApplicantSearch(application, selectedApplicantSearch);
+                              }) && (
+                                <p className="applicant-list-empty">
+                                  {slot.applicationIds.length ? 'No selected applicants match your search.' : 'No applicants selected yet.'}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="team-row-actions">
+                        <button type="button" className="icon-button" onClick={() => copyTeam(slot.id)} aria-label={`Copy interviewer team ${index + 1}`} title="Copy team">
+                          <DocumentDuplicateIcon />
+                        </button>
+                        <button type="button" className="icon-button danger" onClick={() => removeSlot(slot.id)} aria-label={`Remove interviewer team ${index + 1}`} title="Remove team">
+                          <TrashIcon />
+                        </button>
+                      </div>
                     </div>
                   ))}
-                  <button
-                    type="button"
-                    className="add-question-btn"
-                    onClick={addBehavioralQuestion}
-                  >
-                    <PlusIcon className="btn-icon" />
-                    Add Question
-                  </button>
                 </div>
-              ) : (
-                (() => {
-                  const interview = interviews.find(i => i.id === selectedInterviewForStart);
-                  const data = interviewData[selectedInterviewForStart] || { applicationGroups: [], groupAssignments: {} };
-                  
-                  // Filter to only show groups assigned to the current admin user
-                  const adminAssignedGroups = data.applicationGroups.filter(group => {
-                    if (!currentUser) return false;
-                    
-                    // Find member groups that include the current admin user
-                    const memberGroupsWithCurrentAdmin = data.memberGroups?.filter(memberGroup => 
-                      memberGroup.memberIds?.includes(currentUser.id)
-                    ) || [];
-                    
-                    // Check if this application group is assigned to any of the current admin's member groups
-                    return memberGroupsWithCurrentAdmin.some(memberGroup => 
-                      data.groupAssignments?.[memberGroup.id]?.includes(group.id)
-                    );
-                  });
-                  
-                  const filteredGroups = adminAssignedGroups.filter(group =>
-                    group.name.toLowerCase().includes(groupSearchTerm.toLowerCase())
-                  );
-                  
-                  return (
-                    <>
-                      <div className="search-section">
-                        <input
-                          type="text"
-                          placeholder="Search application groups..."
-                          value={groupSearchTerm}
-                          onChange={(e) => setGroupSearchTerm(e.target.value)}
-                          className="group-search-input"
-                        />
-                      </div>
-                      
-                      <div className="groups-selection-list">
-                        {filteredGroups.length === 0 ? (
-                          <div className="no-groups-message">
-                            {groupSearchTerm ? 'No groups match your search' : 'No application groups available'}
-                          </div>
-                        ) : (
-                          filteredGroups.map(group => {
-                            const isSelected = selectedGroups.includes(group.id);
-                            const interview = interviews.find(i => i.id === selectedInterviewForStart);
-                            const isFinalRound = interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_TWO';
-                            const maxGroups = isFinalRound ? 1 : 3;
-                            const isDisabled = !isSelected && selectedGroups.length >= maxGroups;
-                            
-                            return (
-                              <div 
-                                key={group.id} 
-                                className={`group-selection-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}`}
-                                onClick={() => !isDisabled && handleGroupToggle(group.id)}
-                              >
-                                <div className="group-checkbox">
-                                  <input
-                                    type={isFinalRound ? "radio" : "checkbox"}
-                                    checked={isSelected}
-                                    onChange={() => !isDisabled && handleGroupToggle(group.id)}
-                                    disabled={isDisabled}
-                                  />
-                                  <span className="checkmark"></span>
-                                </div>
-                                <div className="group-info">
-                                  <h4 className="group-name">{group.name}</h4>
-                                  <p className="group-count">
-                                    {group.applicationIds?.length || 0} applications
-                                  </p>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </>
-                  );
-                })()
-              )}
-            </div>
-            <div className="modal-footer">
-              {showBehavioralQuestionsConfig ? (
-                <>
-                  <button 
-                    className="btn-secondary" 
-                    onClick={() => setShowBehavioralQuestionsConfig(false)}
-                  >
-                    Back to Groups
-                  </button>
-                  <button 
-                    className="btn-primary" 
-                    onClick={handleStartWithSelectedGroups}
-                    disabled={behavioralQuestionsConfig.filter(q => q.trim() !== '').length === 0}
-                  >
-                    Start Interview
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button className="btn-secondary" onClick={handleCloseGroupSelection}>
-                    Cancel
-                  </button>
-                  <button 
-                    className="btn-primary" 
-                    onClick={handleStartWithSelectedGroups}
-                    disabled={selectedGroups.length === 0}
-                  >
-                    {(() => {
-                      const interview = interviews.find(i => i.id === selectedInterviewForStart);
-                      if (interview?.interviewType === 'ROUND_TWO' || interview?.interviewType === 'FINAL_ROUND') {
-                        return 'Configure Questions';
-                      }
-                      return `Start Interview (${selectedGroups.length} group${selectedGroups.length !== 1 ? 's' : ''})`;
-                    })()}
-                  </button>
-                </>
-              )}
-            </div>
+              </section>
+              {error && <p className="form-error">{error}</p>}
+              <footer>
+                <button type="button" className="secondary-button" onClick={() => setModalOpen(false)}>Cancel</button>
+                <button type="submit" className="primary-button" disabled={saving}>
+                  {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create interview'}
+                </button>
+              </footer>
+            </form>
           </div>
         </div>
       )}
 
-      {/* Header Section */}
-      <div className="interview-header">
-       
-        <div className="header-actions">
-          <button 
-            className="btn-primary create-interview-btn"
-            onClick={handleCreateInterview}
-          >
-            <PlusIcon className="btn-icon" />
-            Create Interview
-          </button>
-        </div>
-      </div>
+      {bulkModalOpen && (
+        <div className="interview-modal-backdrop" role="presentation" onMouseDown={() => !bulkSaving && setBulkModalOpen(false)}>
+          <div className="interview-modal bulk-interview-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-interview-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Repeatable schedule setup</p>
+                <h2 id="bulk-interview-modal-title">Create slots for review teams</h2>
+              </div>
+              <button className="icon-button" onClick={() => setBulkModalOpen(false)} aria-label="Close" disabled={bulkSaving}>
+                <XMarkIcon />
+              </button>
+            </header>
+            <form onSubmit={saveBulk}>
+              <p className="bulk-intro">
+                Pick a prior-cycle session or define a new pattern, then create one scheduled slot for every selected team in {activeCycle?.name || 'the active cycle'}.
+              </p>
 
-      {/* Main Content - Interview Cards Grid */}
-      <div className="interviews-grid">
-        {interviews.length === 0 ? (
-          <div className="no-interviews-card">
-            <div className="no-interviews-icon">
-              <CalendarIcon className="empty-icon" />
-            </div>
-            <h2>No Interviews Scheduled</h2>
-            <p>Create your first interview to get started</p>
-            <button className="btn-primary" onClick={handleCreateInterview}>
-              <PlusIcon className="btn-icon" />
-              Create First Interview
-            </button>
-          </div>
-        ) : (
-          interviews.map((interview) => {
-            const startDate = new Date(interview.startDate);
-            const endDate = new Date(interview.endDate);
-            const isSelected = interview.id === selectedInterviewId;
-            const isBeingEdited = isEditMode && editedInterview?.id === interview.id;
-            const isExpanded = expandedInterviewId === interview.id;
-            const data = interviewData[interview.id] || { 
-              memberGroups: [], 
-              applicationGroups: [], 
-              groupAssignments: {}
-            };
-            
-            return (
-              <div 
-                key={interview.id} 
-                className={`interview-card ${isSelected ? 'selected' : ''} ${isBeingEdited ? 'editing' : ''} ${isExpanded ? 'expanded' : ''}`}
-              >
-                {/* Card Header */}
-                <div className="interview-card-header" onClick={() => !isExpanded && handleSelectInterview(interview.id)}>
-                  <div className="interview-type-badge">
-                    {interview.interviewType?.replace(/_/g, ' ')}
-                  </div>
-                  <div className="interview-card-actions">
-                    <button 
-                      className={`icon-btn expand ${isExpanded ? 'expanded' : ''}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleExpandInterview(interview.id);
-                      }}
-                      title={isExpanded ? "Collapse" : "Expand"}
-                    >
-                      {isExpanded ? <XMarkIcon className="btn-icon" /> : <PlusIcon className="btn-icon" />}
-                    </button>
-                    {isBeingEdited ? (
-                      <>
-                        <button 
-                          className="icon-btn save"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSaveInterview();
-                          }}
-                          title="Save Changes"
-                        >
-                          <CheckIcon className="btn-icon" />
-                        </button>
-                        <button 
-                          className="icon-btn cancel"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelEdit();
-                          }}
-                          title="Cancel"
-                        >
-                          <XMarkIcon className="btn-icon" />
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button 
-                          className="icon-btn edit"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEditInterview(interview.id);
-                          }}
-                          title="Edit Interview"
-                        >
-                          <PencilIcon className="btn-icon" />
-                        </button>
-                        <button 
-                          className="icon-btn delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteInterview(interview.id);
-                          }}
-                          title="Delete Interview"
-                        >
-                          <TrashIcon className="btn-icon" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Card Body */}
-                <div className="interview-card-body">
-                  {/* Date Section */}
-                  <div className="interview-date-section">
-                    <div className="interview-date-badge">
-                      <div className="date-day">{startDate.toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                      <div className="date-number">{startDate.getDate()}</div>
-                      <div className="date-month">{startDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</div>
-                    </div>
-                    
-                    <div className="interview-info">
-                      {isBeingEdited ? (
-                        <input
-                          type="text"
-                          value={editedInterview.title}
-                          onChange={(e) => handleFieldChange('title', e.target.value)}
-                          className="edit-input interview-title-input"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <h3 className="interview-card-title">{interview.title}</h3>
-                      )}
-                      
-                      <div className="interview-details">
-                        <div className="detail-item">
-                          <ClockIcon className="detail-icon" />
-                          <span>
-                            {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - 
-                            {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        
-                        <div className="detail-item">
-                          <MapPinIcon className="detail-icon" />
-                          {isBeingEdited ? (
-                            <input
-                              type="text"
-                              value={editedInterview.location}
-                              onChange={(e) => handleFieldChange('location', e.target.value)}
-                              className="edit-input location-input"
-                              placeholder="Location"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span>{interview.location || 'No location set'}</span>
-                          )}
-                        </div>
-                        
-                        <div className="detail-item">
-                          <UserGroupIcon className="detail-icon" />
-                          {isBeingEdited ? (
-                            <input
-                              type="text"
-                              value={editedInterview.dresscode}
-                              onChange={(e) => handleFieldChange('dresscode', e.target.value)}
-                              className="edit-input dresscode-input"
-                              placeholder="Dress code"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <span>{interview.dresscode || 'No dress code specified'}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Groups Summary - Show when not expanded */}
-                  {!isExpanded && isSelected && (data.memberGroups.length > 0 || data.applicationGroups.length > 0) && (
-                    <div className="interview-groups-summary">
-                      <div className="groups-header">
-                        <span className="groups-label">Groups:</span>
-                        <span className="groups-count">
-                          {data.memberGroups.length} member, {data.applicationGroups.length} application
-                        </span>
-                      </div>
-                      <div className="groups-preview">
-                        <div className="preview-section">
-                          <UsersIcon className="group-type-icon" />
-                          <span className="preview-label">Member Groups: </span>
-                          <span className="preview-value">
-                            {data.memberGroups.length > 0 
-                              ? data.memberGroups.slice(0, 2).map(g => g.name).join(', ')
-                              : 'None'}
-                            {data.memberGroups.length > 2 && ` +${data.memberGroups.length - 2} more`}
-                          </span>
-                        </div>
-                        <div className="preview-section">
-                          <DocumentDuplicateIcon className="group-type-icon" />
-                          <span className="preview-label">Application Groups: </span>
-                          <span className="preview-value">
-                            {data.applicationGroups.length > 0 
-                              ? data.applicationGroups.slice(0, 2).map(g => g.name).join(', ')
-                              : 'None'}
-                            {data.applicationGroups.length > 2 && ` +${data.applicationGroups.length - 2} more`}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Expanded Content */}
-                  {isExpanded && (
-                    <div className="interview-expanded-content">
-
-                      {/* Groups Section */}
-                      <div className="expanded-section">
-                        <div className="expanded-section-header">
-                          <h3 className="expanded-section-title">Group Assignments</h3>
-                          <div className="section-actions">
-                            <button className="btn-primary small" onClick={() => saveInterviewData(interview.id)}>
-                              <CheckIcon className="btn-icon" /> Save All
-                            </button>
-                          </div>
-                        </div>
-                        
-                        <div className="groups-split-container">
-                          {/* Member Groups Column */}
-                          <div className="groups-column">
-                            <div className="column-header">
-                              <h4><UsersIcon className="section-icon" /> Member Groups</h4>
-                              <button className="btn-secondary small" onClick={() => addMemberGroup(interview.id)}>
-                                <PlusIcon className="btn-icon" /> Add
-                              </button>
-                            </div>
-                            {/* Search for member groups */}
-                            {data.memberGroups?.length > 0 && (
-                              <div className="groups-search-container">
-                                <div className="search-input-wrapper">
-                                  <MagnifyingGlassIcon className="search-icon" />
-                                  <input
-                                    type="text"
-                                    placeholder="Search member groups..."
-                                    value={memberGroupsSearch}
-                                    onChange={e => setMemberGroupsSearch(e.target.value)}
-                                    className="groups-search-input"
-                                  />
-                                </div>
-                              </div>
-                            )}
-                            <div className="groups-list">
-                              {data.memberGroups?.length === 0 && (
-                                <div className="empty-state">No member groups yet</div>
-                              )}
-                              {data.memberGroups
-                                ?.filter(group => 
-                                  !memberGroupsSearch || 
-                                  group.name?.toLowerCase().includes(memberGroupsSearch.toLowerCase())
-                                )
-                                .map(group => {
-                                  const isCollapsed = collapsedGroups.has(`member-${group.id}`);
-                                  const memberSearchTerm = memberSearchByGroup[group.id] || '';
-                                  const appGroupSearchTerm = appGroupSearchByGroup[group.id] || '';
-                                  
-                                  // Filter members
-                                  const filteredAdmins = allMembers
-                                    .filter(m => m.role === 'ADMIN')
-                                    .filter(m => !memberSearchTerm || m.displayName?.toLowerCase().includes(memberSearchTerm.toLowerCase()));
-                                  const filteredInterviewers = allMembers
-                                    .filter(m => m.role === 'INTERVIEWER')
-                                    .filter(m => !memberSearchTerm || m.displayName?.toLowerCase().includes(memberSearchTerm.toLowerCase()));
-                                  
-                                  // Filter application groups for assignment
-                                  const filteredAppGroups = data.applicationGroups?.filter(appGroup =>
-                                    !appGroupSearchTerm || appGroup.name?.toLowerCase().includes(appGroupSearchTerm.toLowerCase())
-                                  ) || [];
-                                  
-                                  return (
-                                    <div key={group.id} className="group-card-compact">
-                                      <div className="group-header-compact">
-                                        <input
-                                          className="group-name-input-compact"
-                                          value={group.name || ''}
-                                          onChange={e => updateMemberGroup(interview.id, group.id, { name: e.target.value })}
-                                          placeholder="Group name"
-                                        />
-                                        <div className="group-header-actions">
-                                          <button 
-                                            className="icon-btn small collapse-btn" 
-                                            onClick={() => {
-                                              const newCollapsed = new Set(collapsedGroups);
-                                              if (isCollapsed) {
-                                                newCollapsed.delete(`member-${group.id}`);
-                                              } else {
-                                                newCollapsed.add(`member-${group.id}`);
-                                              }
-                                              setCollapsedGroups(newCollapsed);
-                                            }}
-                                            title={isCollapsed ? "Expand" : "Collapse"}
-                                          >
-                                            {isCollapsed ? <ChevronDownIcon className="btn-icon" /> : <ChevronUpIcon className="btn-icon" />}
-                                          </button>
-                                          <button className="icon-btn small" onClick={() => removeMemberGroup(interview.id, group.id)}>
-                                            <TrashIcon className="btn-icon" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                      
-                                      {!isCollapsed && (
-                                        <>
-                                          {/* Members Section with Search */}
-                                          <div className="group-members-list">
-                                            <div className="members-search-wrapper">
-                                              <MagnifyingGlassIcon className="search-icon small" />
-                                              <input
-                                                type="text"
-                                                placeholder="Search members..."
-                                                value={memberSearchTerm}
-                                                onChange={e => setMemberSearchByGroup(prev => ({ ...prev, [group.id]: e.target.value }))}
-                                                className="members-search-input"
-                                              />
-                                            </div>
-                                            
-                                            {/* Admins Section */}
-                                            {filteredAdmins.length > 0 && (
-                                              <>
-                                                <div className="members-section-header">Admins</div>
-                                                {filteredAdmins.map(m => (
-                                                  <label key={m.id} className="member-checkbox admin-member">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={group.memberIds?.includes(m.id) || false}
-                                                      onChange={e => {
-                                                        const next = new Set(group.memberIds || []);
-                                                        if (e.target.checked) next.add(m.id); else next.delete(m.id);
-                                                        updateMemberGroup(interview.id, group.id, { memberIds: Array.from(next) });
-                                                      }}
-                                                    />
-                                                    <MemberAvatar member={m} size={24} style={{ marginRight: '8px' }} />
-                                                    <span className="member-name">{m.displayName}</span>
-                                                  </label>
-                                                ))}
-                                              </>
-                                            )}
-                                            
-                                            {/* Interviewers Section */}
-                                            {filteredInterviewers.length > 0 && (
-                                              <>
-                                                <div className="members-section-header">Interviewers</div>
-                                                {filteredInterviewers.map(m => (
-                                                  <label key={m.id} className="member-checkbox interviewer-member">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={group.memberIds?.includes(m.id) || false}
-                                                      onChange={e => {
-                                                        const next = new Set(group.memberIds || []);
-                                                        if (e.target.checked) next.add(m.id); else next.delete(m.id);
-                                                        updateMemberGroup(interview.id, group.id, { memberIds: Array.from(next) });
-                                                      }}
-                                                    />
-                                                    <MemberAvatar member={m} size={24} style={{ marginRight: '8px' }} />
-                                                    <span className="member-name">{m.displayName}</span>
-                                                  </label>
-                                                ))}
-                                              </>
-                                            )}
-                                            
-                                            {filteredAdmins.length === 0 && filteredInterviewers.length === 0 && memberSearchTerm && (
-                                              <div className="no-results">No members found</div>
-                                            )}
-                                          </div>
-                                          
-                                          {/* Application Groups Assignment with Search */}
-                                          <div className="group-assignments">
-                                            <div className="assignments-header">
-                                              <label className="assignments-label">Assigned Application Groups:</label>
-                                              {data.applicationGroups?.length > 0 && (
-                                                <div className="assignments-search-wrapper">
-                                                  <MagnifyingGlassIcon className="search-icon small" />
-                                                  <input
-                                                    type="text"
-                                                    placeholder="Search app groups..."
-                                                    value={appGroupSearchTerm}
-                                                    onChange={e => setAppGroupSearchByGroup(prev => ({ ...prev, [group.id]: e.target.value }))}
-                                                    className="assignments-search-input"
-                                                  />
-                                                </div>
-                                              )}
-                                            </div>
-                                            <div className="assignments-list">
-                                              {filteredAppGroups.length > 0 ? (
-                                                filteredAppGroups.map(appGroup => (
-                                                  <label key={appGroup.id} className="assignment-checkbox">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={data.groupAssignments?.[group.id]?.includes(appGroup.id) || false}
-                                                      onChange={e => {
-                                                        const currentAssignments = data.groupAssignments?.[group.id] || [];
-                                                        const newAssignments = e.target.checked
-                                                          ? [...currentAssignments, appGroup.id]
-                                                          : currentAssignments.filter(id => id !== appGroup.id);
-                                                        assignGroupsToMemberGroup(interview.id, group.id, newAssignments);
-                                                      }}
-                                                    />
-                                                    <span>{appGroup.name} ({appGroup.applicationIds?.length || 0} apps)</span>
-                                                  </label>
-                                                ))
-                                              ) : (
-                                                <span className="no-assignments">
-                                                  {data.applicationGroups?.length === 0 
-                                                    ? "No application groups available" 
-                                                    : "No groups match your search"}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                            </div>
-                          </div>
-
-                          {/* Application Groups Column */}
-                          <div className="groups-column">
-                            <div className="column-header">
-                              <h4><DocumentDuplicateIcon className="section-icon" /> Application Groups</h4>
-                              <button className="btn-secondary small" onClick={() => addApplicationGroup(interview.id)}>
-                                <PlusIcon className="btn-icon" /> Add
-                              </button>
-                            </div>
-                            {/* Search for application groups */}
-                            {data.applicationGroups?.length > 0 && (
-                              <div className="groups-search-container">
-                                <div className="search-input-wrapper">
-                                  <MagnifyingGlassIcon className="search-icon" />
-                                  <input
-                                    type="text"
-                                    placeholder="Search application groups..."
-                                    value={applicationGroupsSearch}
-                                    onChange={e => setApplicationGroupsSearch(e.target.value)}
-                                    className="groups-search-input"
-                                  />
-                                </div>
-                              </div>
-                            )}
-                            <div className="groups-list">
-                              {data.applicationGroups?.length === 0 && (
-                                <div className="empty-state">No application groups yet</div>
-                              )}
-                              {data.applicationGroups
-                                ?.filter(group => 
-                                  !applicationGroupsSearch || 
-                                  group.name?.toLowerCase().includes(applicationGroupsSearch.toLowerCase())
-                                )
-                                .map(group => {
-                                  const isCollapsed = collapsedGroups.has(`app-${group.id}`);
-                                  const applicationSearchTerm = applicationSearchByGroup[group.id] || '';
-                                  
-                                  // Filter applications
-                                  const filteredApplications = coffeeChatApplications.filter(app =>
-                                    !applicationSearchTerm || app.name?.toLowerCase().includes(applicationSearchTerm.toLowerCase())
-                                  );
-                                  
-                                  return (
-                                    <div key={group.id} className="group-card-compact">
-                                      <div className="group-header-compact">
-                                        <input
-                                          className="group-name-input-compact"
-                                          value={group.name || ''}
-                                          onChange={e => updateApplicationGroup(interview.id, group.id, { name: e.target.value })}
-                                          placeholder="Group name"
-                                        />
-                                        <div className="group-header-actions">
-                                          <button 
-                                            className="icon-btn small collapse-btn" 
-                                            onClick={() => {
-                                              const newCollapsed = new Set(collapsedGroups);
-                                              if (isCollapsed) {
-                                                newCollapsed.delete(`app-${group.id}`);
-                                              } else {
-                                                newCollapsed.add(`app-${group.id}`);
-                                              }
-                                              setCollapsedGroups(newCollapsed);
-                                            }}
-                                            title={isCollapsed ? "Expand" : "Collapse"}
-                                          >
-                                            {isCollapsed ? <ChevronDownIcon className="btn-icon" /> : <ChevronUpIcon className="btn-icon" />}
-                                          </button>
-                                          <button className="icon-btn small" onClick={() => removeApplicationGroup(interview.id, group.id)}>
-                                            <TrashIcon className="btn-icon" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                      
-                                      {!isCollapsed && (
-                                        <div className="group-applications-list">
-                                          <div className="applications-header">
-                                            <div className="applications-label">Coffee Chat Round Applications:</div>
-                                            {coffeeChatApplications.length > 0 && (
-                                              <div className="applications-search-wrapper">
-                                                <MagnifyingGlassIcon className="search-icon small" />
-                                                <input
-                                                  type="text"
-                                                  placeholder="Search applications..."
-                                                  value={applicationSearchTerm}
-                                                  onChange={e => setApplicationSearchByGroup(prev => ({ ...prev, [group.id]: e.target.value }))}
-                                                  className="applications-search-input"
-                                                />
-                                              </div>
-                                            )}
-                                          </div>
-                                          {coffeeChatApplications.length === 0 ? (
-                                            <div className="no-applications">No applications in coffee chat round</div>
-                                          ) : filteredApplications.length === 0 ? (
-                                            <div className="no-applications">No applications match your search</div>
-                                          ) : (
-                                            filteredApplications.map(app => (
-                                              <label key={app.id} className="application-checkbox">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={group.applicationIds?.includes(app.id) || false}
-                                                  onChange={e => {
-                                                    const next = new Set(group.applicationIds || []);
-                                                    if (e.target.checked) next.add(app.id); else next.delete(app.id);
-                                                    updateApplicationGroup(interview.id, group.id, { applicationIds: Array.from(next) });
-                                                  }}
-                                                />
-                                                <span>{app.name}</span>
-                                              </label>
-                                            ))
-                                          )}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Assigned Application Groups Section */}
-                      <div className="expanded-section">
-                        <div className="expanded-section-header">
-                          <h3 className="expanded-section-title">Assigned Application Groups</h3>
-                        </div>
-                        {(() => {
-                          const currentInterviewData = interviewData[interview.id];
-                          const allApplicationGroups = currentInterviewData?.applicationGroups || [];
-                          
-                          // For admin, show only groups assigned to member groups that include the current admin
-                          const assignedApplicationGroups = allApplicationGroups.filter(group => {
-                            if (!currentUser) return false;
-                            
-                            const groupAssignments = currentInterviewData?.groupAssignments || {};
-                            
-                            // Find member groups that include the current admin user
-                            const memberGroupsWithCurrentAdmin = currentInterviewData?.memberGroups?.filter(memberGroup => 
-                              memberGroup.memberIds?.includes(currentUser.id)
-                            ) || [];
-                            
-                            // Check if this application group is assigned to any of the current admin's member groups
-                            return memberGroupsWithCurrentAdmin.some(memberGroup => 
-                              groupAssignments[memberGroup.id]?.includes(group.id)
-                            );
-                          });
-                          
-                          return assignedApplicationGroups.length === 0 ? (
-                            <div className="no-groups">
-                              <UserGroupIcon className="no-groups-icon" />
-                              <p>No application groups assigned to this interview</p>
-                            </div>
-                          ) : (
-                            <div className="application-groups-list">
-                              {assignedApplicationGroups.map((group) => (
-                                <AdminApplicationGroupCard 
-                                  key={group.id} 
-                                  group={group} 
-                                  interviewId={interview.id}
-                                />
-                              ))}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Card Footer */}
-                <div className="interview-card-footer">
-                  <button 
-                    className="btn-primary interview-action-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedInterviewId(interview.id);
-                      handleStartInterview(interview.id);
+              <div className="bulk-template-grid">
+                <label>Copy a previous cycle <span>(optional)</span>
+                  <select
+                    value={bulkForm.sourceCycleId}
+                    onChange={(event) => {
+                      setBulkError('');
+                      chooseTemplateCycle(event.target.value);
                     }}
+                    disabled={bulkLoading}
                   >
-                    <PlayIcon className="btn-icon" />
-                    Start Interview
+                    <option value="">Define a new pattern</option>
+                    {cycles.filter((cycle) => cycle.id !== activeCycle?.id).map((cycle) => (
+                      <option key={cycle.id} value={cycle.id}>{cycle.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>Interview template
+                  <select
+                    value={bulkForm.sourceInterviewId}
+                    onChange={(event) => chooseTemplate(event.target.value)}
+                    disabled={!bulkForm.sourceCycleId || bulkLoading}
+                  >
+                    <option value="">{bulkForm.sourceCycleId ? 'Choose a previous session' : 'Choose a previous cycle first'}</option>
+                    {bulkTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.title} · {template.durationMinutes} min
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="form-grid bulk-form-grid">
+                <label className="title-field">Title prefix
+                  <input required value={bulkForm.title} onChange={(event) => setBulkForm({ ...bulkForm, title: event.target.value })} placeholder="e.g. W27 First Round Interview" />
+                </label>
+                <label className="section-field">Round
+                  <select value={bulkForm.section} onChange={(event) => setBulkForm({ ...bulkForm, section: event.target.value })}>
+                    {FORM_SECTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                </label>
+                <label>Dress Code
+                  <select required value={bulkForm.dresscode} onChange={(event) => setBulkForm({ ...bulkForm, dresscode: event.target.value })}>
+                    <option value="">Select a dress code</option>
+                    <option value="Business Professional">Business Professional</option>
+                    <option value="Business Casual">Business Casual</option>
+                    <option value="Smart Casual">Smart Casual</option>
+                    <option value="Casual">Casual</option>
+                  </select>
+                </label>
+                <label><CalendarDaysIcon /> First Slot Starts
+                  <input required type="datetime-local" value={bulkForm.startDate} onChange={(event) => setBulkForm({ ...bulkForm, startDate: event.target.value })} />
+                </label>
+                <label><ClockIcon /> Slot Duration
+                  <div className="number-with-unit">
+                    <input required min="1" step="1" type="number" value={bulkForm.durationMinutes} onChange={(event) => setBulkForm({ ...bulkForm, durationMinutes: event.target.value })} />
+                    <span>minutes</span>
+                  </div>
+                </label>
+                <label><ClockIcon /> Start Next Slot Every
+                  <div className="number-with-unit">
+                    <input required min="1" step="1" type="number" value={bulkForm.slotIntervalMinutes} onChange={(event) => setBulkForm({ ...bulkForm, slotIntervalMinutes: event.target.value })} />
+                    <span>minutes</span>
+                  </div>
+                </label>
+                <label><MapPinIcon /> Location
+                  <input required value={bulkForm.location} onChange={(event) => setBulkForm({ ...bulkForm, location: event.target.value })} placeholder="Room or meeting link" />
+                </label>
+                <label>Candidates per team
+                  <input required min="1" step="1" type="number" value={bulkForm.maxCandidates} onChange={(event) => setBulkForm({ ...bulkForm, maxCandidates: event.target.value })} />
+                </label>
+              </div>
+
+              <section className="bulk-team-picker">
+                <div className="bulk-team-picker-header">
+                  <div>
+                    <p className="eyebrow">Review Teams</p>
+                    <h3>Choose the teams to schedule</h3>
+                    <p>Each selected team gets its own time window and its current members are assigned as interviewers.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setBulkForm((current) => ({
+                      ...current,
+                      teamIds: bulkTeams.filter((team) => team.members?.length).map((team) => team.id)
+                    }))}
+                  >
+                    Select all ready teams
                   </button>
                 </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
+
+                {bulkLoading ? <p className="bulk-state">Loading review teams…</p> : (
+                  <div className="bulk-team-list" role="group" aria-label="Review teams to schedule">
+                    {!bulkTeams.length && <p className="bulk-state">No review teams exist in this recruiting cycle yet.</p>}
+                    {bulkTeams.map((team) => {
+                      const ready = team.members?.length > 0;
+                      return (
+                        <label className={`bulk-team-option${ready ? '' : ' unavailable'}`} key={team.id}>
+                          <input
+                            type="checkbox"
+                            checked={bulkForm.teamIds.includes(team.id)}
+                            onChange={() => toggleBulkTeam(team.id)}
+                            disabled={!ready}
+                          />
+                          <span className="bulk-team-copy">
+                            <strong>{team.name}</strong>
+                            <small>{ready ? team.members.map((member) => member.fullName).join(', ') : 'Add a member before scheduling this team'}</small>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              {!!bulkPreview.length && (
+                <section className="bulk-preview">
+                  <div>
+                    <p className="eyebrow">Schedule Preview</p>
+                    <h3>{bulkPreview.length} team slot{bulkPreview.length === 1 ? '' : 's'} will be created</h3>
+                  </div>
+                  <ul>
+                    {bulkPreview.slice(0, 4).map((slot) => (
+                      <li key={slot.team.id}>
+                        <strong>{slot.team.name}</strong>
+                        <span>{formatDate(slot.startDate)} · {formatTime(slot.startDate, slot.endDate)}</span>
+                      </li>
+                    ))}
+                    {bulkPreview.length > 4 && <li className="bulk-preview-more">+ {bulkPreview.length - 4} more team slots</li>}
+                  </ul>
+                </section>
+              )}
+
+              {bulkError && <p className="form-error">{bulkError}</p>}
+              <footer>
+                <button type="button" className="secondary-button" onClick={() => setBulkModalOpen(false)} disabled={bulkSaving}>Cancel</button>
+                <button type="submit" className="primary-button" disabled={bulkSaving || bulkLoading || !bulkTeams.length}>
+                  <DocumentDuplicateIcon /> {bulkSaving ? 'Creating slots…' : `Create ${bulkForm.teamIds.length} team slot${bulkForm.teamIds.length === 1 ? '' : 's'}`}
+                </button>
+              </footer>
+            </form>
+          </div>
+        </div>
+      )}
     </AccessControl>
   );
 }

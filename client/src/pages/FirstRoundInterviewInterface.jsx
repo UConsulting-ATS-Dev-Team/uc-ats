@@ -513,7 +513,7 @@ export default function FirstRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      alert(`All ${applications.length} evaluation(s) saved successfully`);
+      navigate(isAdmin ? '/admin/assigned-interviews' : '/assigned-interviews');
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert(`Failed to save evaluations: ${error.response?.data?.error || error.message}`);
@@ -716,7 +716,7 @@ export default function FirstRoundInterviewInterface() {
               disabled={saving}
             >
               <CheckIcon className="btn-icon" />
-              {saving ? 'Saving...' : 'Save All'}
+              {saving ? 'Saving...' : 'Save All & Exit'}
             </button>
           </div>
         </div>
@@ -960,7 +960,7 @@ export default function FirstRoundInterviewInterface() {
                               updateBehavioralNotes(application.id, idToUse, e.target.value);
                             }}
                             placeholder="Comments"
-                            rows={8}
+                            rows={4}
                           />
                         </div>
                       </div>
@@ -1027,7 +1027,7 @@ export default function FirstRoundInterviewInterface() {
                             value={evaluation.marketSizingNotes || ''}
                             onChange={(e) => updateEvaluation(application.id, { marketSizingNotes: e.target.value })}
                             placeholder="Market Sizing Notes"
-                            rows={8}
+                            rows={4}
                           />
                         </div>
                       </div>
@@ -1108,7 +1108,7 @@ export default function FirstRoundInterviewInterface() {
                             value={evaluation.notes || ''}
                             onChange={(e) => updateEvaluation(application.id, { notes: e.target.value })}
                             placeholder="Post Grading Notes"
-                            rows={8}
+                            rows={4}
                           />
                         </div>
                       </div>

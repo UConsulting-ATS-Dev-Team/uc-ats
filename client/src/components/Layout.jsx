@@ -15,22 +15,11 @@ import {
   CalendarDaysIcon,
   UserGroupIcon as UserGroupIcon2,
   ChatBubbleLeftRightIcon,
-  ChatBubbleOvalLeftEllipsisIcon,
-  LightBulbIcon,
-  PresentationChartBarIcon
+  ChatBubbleOvalLeftEllipsisIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
-import FeatureRequestModal from './FeatureRequestModal';
-import MemberAvatar from './MemberAvatar';
-import ThemeToggle from './ThemeToggle';
 import '../styles/Layout.css';
-
-const FEATURE_REQUEST_NAV = {
-  name: 'Request a feature',
-  icon: LightBulbIcon,
-  isFeatureRequest: true,
-};
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -38,7 +27,6 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [messageModalOpen, setMessageModalOpen] = useState(false);
-  const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -46,13 +34,14 @@ const Layout = ({ children }) => {
   };
 
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: HomeIcon },
+    { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
     ...(user?.role === 'MEMBER' ? [
       { name: 'Document Grading', href: '/document-grading', icon: DocumentTextIcon },
       { name: 'Events', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Assigned Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
+      { name: 'Recruitment Resources and Timeline', href: '/recruitment-resources', icon: ClipboardDocumentListIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
@@ -60,18 +49,16 @@ const Layout = ({ children }) => {
       { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
-      { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
+      { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
-      FEATURE_REQUEST_NAV,
     ] : [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
-      FEATURE_REQUEST_NAV,
     ])
   ];
 
@@ -108,16 +95,12 @@ const Layout = ({ children }) => {
 
             {/* Right side - User info and logout */}
             <div className="nav-right">
-              <Link to="/profile" className="profile-link" aria-label="Edit profile">
-                <MemberAvatar member={user} size={32} />
-                <div className="user-info">
-                  <p className="user-name">{user?.fullName}</p>
-                  <p className="user-role">
-                    {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
-                  </p>
-                </div>
-              </Link>
-              <ThemeToggle />
+              <div className="user-info">
+                <p className="user-name">{user?.fullName}</p>
+                <p className="user-role">
+                  {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
+                </p>
+              </div>
               <button
                 onClick={handleLogout}
                 className="logout-btn"
@@ -141,28 +124,10 @@ const Layout = ({ children }) => {
                 const Icon = item.icon;
                 const current = isCurrentPath(item.href);
                 
-                if (item.isFeatureRequest) {
-                  return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      onClick={() => {
-                        setFeatureRequestOpen(true);
-                        setSidebarOpen(false);
-                      }}
-                      className="nav-item"
-                    >
-                      <Icon className="nav-icon" />
-                      {item.name}
-                    </button>
-                  );
-                }
-
                 if (item.isAction) {
                   return (
                     <button
                       key={item.name}
-                      type="button"
                       onClick={() => {
                         setMessageModalOpen(true);
                         setSidebarOpen(false);
@@ -214,12 +179,8 @@ const Layout = ({ children }) => {
         open={messageModalOpen} 
         onClose={() => setMessageModalOpen(false)} 
       />
-      <FeatureRequestModal
-        open={featureRequestOpen}
-        onClose={() => setFeatureRequestOpen(false)}
-      />
     </div>
   );
 };
 
-export default Layout; 
+export default Layout;
