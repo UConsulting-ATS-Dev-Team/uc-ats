@@ -10,8 +10,10 @@ export default function useConversation({ resolve, currentUser }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [connected, setConnected] = useState(true);
   const channelRef = useRef(null);
   const conversationIdRef = useRef(null);
+  const sendingRef = useRef(false);
 
   const upsertMessage = useCallback((incoming) => {
     setMessages((prev) => {
@@ -28,6 +30,7 @@ export default function useConversation({ resolve, currentUser }) {
     async function load() {
       setLoading(true);
       setError(null);
+      setConnected(true);
       try {
         const conv = await resolve();
         if (cancelled || !conv) return;
@@ -67,20 +70,48 @@ export default function useConversation({ resolve, currentUser }) {
       }
     });
 
-    channel.subscribe();
+    channel.subscribe((status) => {
+      setConnected(status === 'SUBSCRIBED');
+    });
     channelRef.current = channel;
 
     return () => {
+      setConnected(true);
       try { channel.unsubscribe(); } catch (_) {}
       try { supabase.removeChannel(channel); } catch (_) {}
       channelRef.current = null;
     };
   }, [conversation, currentUserId, upsertMessage]);
 
+  const submitMessage = useCallback(async (body, tempId, optimistic) => {
+    if (!conversation || !currentUser) return;
+    try {
+      const created = await apiClient.post(`/conversations/${conversation.id}/messages`, { body: body.trim() });
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== tempId);
+        if (filtered.some((m) => m.id === created.id)) return filtered;
+        const next = [...filtered, created];
+        next.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        return next;
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to send');
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, _pending: false, _failed: true } : m)));
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }, [conversation, currentUser]);
+
   const send = useCallback(async (body) => {
     if (!conversation || !currentUser) return;
     const trimmed = body?.trim();
     if (!trimmed) return;
+    if (sendingRef.current) return;
+
+    sendingRef.current = true;
+    setSending(true);
+    setError(null);
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const optimistic = {
@@ -100,25 +131,31 @@ export default function useConversation({ resolve, currentUser }) {
       _pending: true
     };
     setMessages((prev) => [...prev, optimistic]);
+
+    await submitMessage(body, tempId, optimistic);
+  }, [conversation, currentUser, submitMessage]);
+
+  const retry = useCallback(async (messageId) => {
+    const message = messages.find((m) => m.id === messageId && m._failed);
+    if (!message || !conversation || !currentUser) return;
+    if (sendingRef.current) return;
+
+    sendingRef.current = true;
     setSending(true);
     setError(null);
 
-    try {
-      const created = await apiClient.post(`/conversations/${conversation.id}/messages`, { body: trimmed });
-      setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== tempId);
-        if (filtered.some((m) => m.id === created.id)) return filtered;
-        const next = [...filtered, created];
-        next.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-        return next;
-      });
-    } catch (err) {
-      setError(err.message || 'Failed to send');
-      setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, _pending: false, _failed: true } : m)));
-    } finally {
-      setSending(false);
-    }
-  }, [conversation, currentUser]);
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimistic = {
+      ...message,
+      id: tempId,
+      _pending: true,
+      _failed: false
+    };
+
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? optimistic : m)));
+
+    await submitMessage(message.body, tempId, optimistic);
+  }, [conversation, currentUser, messages, submitMessage]);
 
   const markRead = useCallback(async () => {
     if (!conversation) return;
@@ -135,7 +172,9 @@ export default function useConversation({ resolve, currentUser }) {
     sending,
     error,
     unreadCount,
+    connected,
     send,
+    retry,
     markRead
-  }), [conversation, messages, loading, sending, error, unreadCount, send, markRead]);
+  }), [conversation, messages, loading, sending, error, unreadCount, connected, send, retry, markRead]);
 }
