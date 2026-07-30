@@ -28,8 +28,16 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
-import { createCalendarEvent, updateCalendarEvent, cancelCalendarEvent } from '../services/google/calendar.js';
-import { setEventInvitees, syncEventCalendarInvite } from '../services/google/eventCalendarSync.js';
+import {
+  createCalendarEvent,
+  updateCalendarEvent,
+  cancelCalendarEvent,
+  buildCalendarAudienceEmails,
+  createCalendarSyncState,
+  markCalendarSyncOutcome,
+  applyCalendarSyncStateToEvent,
+  classifyCalendarError
+} from '../services/google/calendar.js';
 
 const router = express.Router();
 
@@ -1475,8 +1483,10 @@ async function getEventAttendeeEmails(eventId) {
     prisma.user.findMany({ where: { role: 'ADMIN' }, select: { email: true } }),
     prisma.eventInvitee.findMany({ where: { eventId }, select: { user: { select: { email: true } } } })
   ]);
-  const emails = new Set([...admins.map((a) => a.email), ...invitees.map((i) => i.user.email)]);
-  return [...emails];
+  return buildCalendarAudienceEmails(
+    admins.map((a) => a.email),
+    invitees.map((i) => i.user.email)
+  );
 }
 
 // Filters a list of candidate invitee IDs down to real MEMBER-role users, so candidates/admins
@@ -1502,8 +1512,11 @@ async function setEventInvitees(eventId, memberInviteeIds) {
 }
 
 // Creates or updates the Google Calendar invite for an event. Never throws — a calendar/API
-// failure shouldn't block event create/update; callers get back { googleCalendarEventId, calendarError }.
+// failure shouldn't block event create/update; callers get back durable sync state and a retryable error.
 async function syncEventCalendarInvite(event) {
+  const syncState = createCalendarSyncState(event.id);
+  const eventPayload = { ...event };
+
   try {
     const [attendeeEmails, cycle] = await Promise.all([
       getEventAttendeeEmails(event.id),
@@ -1515,21 +1528,52 @@ async function syncEventCalendarInvite(event) {
       eventLocation: event.eventLocation,
       eventStartDate: event.eventStartDate,
       eventEndDate: event.eventEndDate,
-      cycleName: cycle?.name
+      cycleName: cycle?.name,
+      id: event.id,
     };
 
-    const googleCalendarEventId = event.googleCalendarEventId
+    const providerEventId = event.googleCalendarEventId
       ? await updateCalendarEvent(event.googleCalendarEventId, eventDetails, attendeeEmails)
-      : await createCalendarEvent(eventDetails, attendeeEmails);
+      : await createCalendarEvent(eventDetails, attendeeEmails, { eventId: event.id });
 
-    if (googleCalendarEventId && googleCalendarEventId !== event.googleCalendarEventId) {
-      await prisma.events.update({ where: { id: event.id }, data: { googleCalendarEventId } });
-    }
+    const nextState = markCalendarSyncOutcome(syncState, { providerEventId, status: 'SYNCED' });
+    await prisma.events.update({
+      where: { id: event.id },
+      data: {
+        googleCalendarEventId: providerEventId || event.googleCalendarEventId || null,
+        calendarSyncStatus: nextState.status,
+        calendarSyncError: null,
+      }
+    });
 
-    return { googleCalendarEventId, attendeeCount: attendeeEmails.length };
+    return {
+      ...applyCalendarSyncStateToEvent(eventPayload, nextState),
+      attendeeCount: attendeeEmails.length,
+    };
   } catch (error) {
+    const classified = classifyCalendarError(error);
+    const failedState = markCalendarSyncOutcome(syncState, {
+      status: 'FAILED',
+      error: classified,
+    });
+    await prisma.events.update({
+      where: { id: event.id },
+      data: {
+        googleCalendarEventId: event.googleCalendarEventId || null,
+        calendarSyncStatus: failedState.status,
+        calendarSyncError: failedState.lastError?.message || null,
+      }
+    }).catch((dbError) => {
+      console.error(`[Calendar] Failed to persist calendar sync failure for event ${event.id}:`, dbError);
+    });
+
     console.error(`[Calendar] Failed to sync invite for event ${event.id}:`, error);
-    return { googleCalendarEventId: event.googleCalendarEventId || null, calendarError: error.message };
+    return {
+      ...applyCalendarSyncStateToEvent(eventPayload, failedState),
+      attendeeCount: event.attendeeCount || 0,
+      calendarError: failedState.lastError?.message || error.message,
+      calendarErrorKind: failedState.lastError?.kind || 'provider',
+    };
   }
 }
 
@@ -1635,9 +1679,12 @@ router.delete('/events/:id', async (req, res) => {
     }
 
     // Cancel the Google Calendar invite (notifies attendees it's off) before deleting the event.
-    // Best-effort — a calendar failure shouldn't block deleting the event record.
+    // Best-effort — a calendar failure shouldn't block deleting the event record, but if the
+    // provider call succeeds we still clear the stored provider id for safety.
     try {
-      await cancelCalendarEvent(event.googleCalendarEventId);
+      if (event.googleCalendarEventId) {
+        await cancelCalendarEvent(event.googleCalendarEventId);
+      }
     } catch (calendarError) {
       console.error(`[Calendar] Failed to cancel invite for event ${id}:`, calendarError);
     }
@@ -1734,7 +1781,7 @@ router.post('/events/:id/sync-calendar-invite', async (req, res) => {
     }
 
     const calendarResult = await syncEventCalendarInvite(event);
-    if (calendarResult.calendarError) {
+    if (calendarResult.calendarErrorKind && calendarResult.calendarErrorKind !== 'malformed-email') {
       return res.status(502).json(calendarResult);
     }
     res.json(calendarResult);

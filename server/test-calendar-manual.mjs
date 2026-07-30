@@ -19,8 +19,8 @@ const authClient = await withTimeout(getGoogleAuthClient(), 15000, 'getGoogleAut
 console.log('OK — got auth client. Type:', authClient.constructor?.name);
 
 console.log('\n--- Step 2: fetch an access token directly (isolates auth vs API call) ---');
-const tokenResponse = await withTimeout(authClient.getAccessToken(), 15000, 'authClient.getAccessToken()');
-console.log('OK — got access token (truncated):', String(tokenResponse.token || tokenResponse).slice(0, 20) + '...');
+await withTimeout(authClient.getAccessToken(), 15000, 'authClient.getAccessToken()');
+console.log('OK — got a Google Calendar access token for the service account.');
 
 console.log('\n--- Step 3: build calendar client ---');
 const calendar = google.calendar({ version: 'v3', auth: authClient });
