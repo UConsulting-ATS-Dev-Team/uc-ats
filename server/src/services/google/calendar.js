@@ -91,10 +91,13 @@ function validateAttendeeEmails(attendeeEmails = []) {
 }
 
 // Redirects real invites to a single test address when CALENDAR_INVITE_TEST_EMAIL is set,
-// so this can be exercised safely before it emails the whole team.
+// or falls back to a safe default address when running local/test flows.
 function resolveAttendees(attendeeEmails) {
   if (config.calendarInviteTestEmail) {
     return [config.calendarInviteTestEmail];
+  }
+  if (process.env.NODE_ENV !== 'production') {
+    return ['test@example.com'];
   }
   return attendeeEmails;
 }
@@ -127,7 +130,7 @@ export function classifyCalendarError(error) {
 // (store this on the Events row so future updates patch it instead of duplicating it), or null
 // if GOOGLE_CALENDAR_ID isn't configured yet.
 export async function createCalendarEvent(eventDetails, attendeeEmails, options = {}) {
-  if (!isCalendarConfigured()) {
+  if (!isCalendarConfigured() && !options.calendarClient) {
     console.warn('[Calendar] GOOGLE_CALENDAR_ID not set — skipping calendar invite creation.');
     return null;
   }
@@ -162,7 +165,7 @@ export async function createCalendarEvent(eventDetails, attendeeEmails, options 
 // rather than a duplicate invite. Falls back to creating a new event if the stored ID no longer
 // exists on the calendar (e.g. someone deleted it directly in Google Calendar).
 export async function updateCalendarEvent(calendarEventId, eventDetails, attendeeEmails, options = {}) {
-  if (!isCalendarConfigured()) {
+  if (!isCalendarConfigured() && !options.calendarClient) {
     console.warn('[Calendar] GOOGLE_CALENDAR_ID not set — skipping calendar invite update.');
     return null;
   }
