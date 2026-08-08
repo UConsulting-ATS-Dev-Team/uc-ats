@@ -24,12 +24,14 @@ import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
+import CycleTimelineBootstrapDialog from '../components/CycleTimelineBootstrapDialog';
 
 export default function CycleManagement() {
   const [cycles, setCycles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [bootstrapOpen, setBootstrapOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
   const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
@@ -152,7 +154,10 @@ export default function CycleManagement() {
       <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
         <Typography variant="h4">Cycle Management</Typography>
-        <Button variant="contained" onClick={() => setCreateOpen(true)}>New Cycle</Button>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" onClick={() => setCreateOpen(true)}>New Cycle (dates only)</Button>
+          <Button variant="contained" onClick={() => setBootstrapOpen(true)}>New Cycle from Timeline</Button>
+        </Stack>
       </Stack>
 
       {error && (
@@ -314,6 +319,19 @@ export default function CycleManagement() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <CycleTimelineBootstrapDialog
+        open={bootstrapOpen}
+        cycles={cycles}
+        onClose={() => setBootstrapOpen(false)}
+        onCommitted={async (result) => {
+          setBootstrapOpen(false);
+          await fetchCycles();
+          if (result?.cycle?.isActive) {
+            window.dispatchEvent(new CustomEvent('cycleActivated', { detail: { cycleId: result.cycle.id } }));
+          }
+        }}
+      />
 
       <CycleOfferLetterDialog
         cycleId={offerLetterCycleId}

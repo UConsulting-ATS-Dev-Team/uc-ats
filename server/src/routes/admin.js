@@ -27,6 +27,12 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
+import {
+  previewCycleBootstrap,
+  commitCycleBootstrap,
+  timelineFromPriorCycle
+} from '../services/cycleBootstrap.js';
+import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
 
 const router = express.Router();
 
@@ -1286,6 +1292,66 @@ router.post('/cycles', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/cycles]', error);
     res.status(500).json({ error: 'Failed to create cycle' });
+  }
+});
+
+// Cycle bootstrap: full recruitment timeline -> cycle + generated event shells
+
+// Timeline field template that drives the cycle-create form.
+router.get('/cycles/timeline-template', (req, res) => {
+  res.json({ stages: CYCLE_TIMELINE_STAGES });
+});
+
+// Seed the timeline form from a prior cycle's stored snapshot (dates only).
+router.get('/cycles/:id/timeline-clone', async (req, res) => {
+  try {
+    const shiftDays = req.query.shiftDays ? parseInt(req.query.shiftDays, 10) : undefined;
+    const clone = await timelineFromPriorCycle({
+      prisma,
+      sourceCycleId: req.params.id,
+      ...(Number.isFinite(shiftDays) ? { shiftDays } : {})
+    });
+    res.json(clone);
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:id/timeline-clone]', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Preview the events a timeline would generate, before anything is written.
+router.post('/cycles/bootstrap-preview', async (req, res) => {
+  try {
+    const { name, timeline } = req.body || {};
+    const preview = await previewCycleBootstrap({ prisma, name, timeline });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the timeline: one transaction creating the cycle and its event shells.
+router.post('/cycles/bootstrap-commit', async (req, res) => {
+  try {
+    const { name, timeline, events, activate } = req.body || {};
+    const result = await commitCycleBootstrap({
+      prisma,
+      name,
+      timeline,
+      events,
+      actorId: req.user?.id,
+      activate: Boolean(activate)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-commit]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
   }
 });
 

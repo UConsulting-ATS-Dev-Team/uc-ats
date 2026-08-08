@@ -682,7 +682,16 @@ export default function EventManagement() {
               
                 return (
                   <TableRow key={event.id}>
-                  <TableCell data-label="Event Name">{event.eventName}</TableCell>
+                  <TableCell data-label="Event Name">
+                    <Stack spacing={0.5} alignItems="flex-start">
+                      <span>{event.eventName}</span>
+                      {event.formStatus === 'PENDING_FORM' && !event.rsvpForm && !event.attendanceForm && (
+                        <Tooltip title="Generated from the cycle timeline. Paste the Google Form URLs to finish setup.">
+                          <Chip label="Needs form link" size="small" color="warning" variant="outlined" />
+                        </Tooltip>
+                      )}
+                    </Stack>
+                  </TableCell>
                   <TableCell data-label="Start Date">{formatDateTime(event.eventStartDate)}</TableCell>
                   <TableCell data-label="End Date">{formatDateTime(event.eventEndDate)}</TableCell>
                   <TableCell data-label="Location">{event.eventLocation || '-'}</TableCell>
