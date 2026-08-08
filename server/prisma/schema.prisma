@@ -123,7 +123,9 @@ model Application {
 
 model RecruitingCycle {
   id                  String             @id @default(uuid())
-  name                String
+  // Unique so an exact retry of a bootstrap commit recovers the cycle it
+  // already created instead of making a second one.
+  name                String             @unique
   isActive            Boolean            @default(false)
   startDate           DateTime?
   endDate             DateTime?

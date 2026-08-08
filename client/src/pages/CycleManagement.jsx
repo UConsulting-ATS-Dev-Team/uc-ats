@@ -23,10 +23,13 @@ import {
 import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import { useAuth } from '../context/AuthContext';
 import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
 import CycleTimelineBootstrapDialog from '../components/CycleTimelineBootstrapDialog';
 
 export default function CycleManagement() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const [cycles, setCycles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -146,11 +149,13 @@ export default function CycleManagement() {
   };
 
   useEffect(() => {
-    fetchCycles();
-  }, []);
+    // Non-admins get the access-denied panel, so don't fire admin requests.
+    if (isAdmin) fetchCycles();
+  }, [isAdmin]);
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    // Every endpoint this page calls is requireAdmin, so the surface is ADMIN-only.
+    <AccessControl allowedRoles={['ADMIN']}>
       <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
         <Typography variant="h4">Cycle Management</Typography>

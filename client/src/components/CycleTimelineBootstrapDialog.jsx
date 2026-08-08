@@ -95,12 +95,13 @@ export default function CycleTimelineBootstrapDialog({ open, cycles = [], onClos
       setBusy(true);
       setError('');
       const clone = await apiClient.get(`/admin/cycles/${sourceCycleId}/timeline-clone`);
+      // Clone values arrive as LA-local `YYYY-MM-DDTHH:mm`; milestone inputs are
+      // date-only, event windows keep the time of day.
       const seeded = {};
       Object.entries(clone.stages || {}).forEach(([key, value]) => {
-        seeded[key] = {
-          start: value.start ? value.start.slice(0, 10) : '',
-          end: value.end ? value.end.slice(0, 10) : '',
-        };
+        const isWindow = stages.find((stage) => stage.key === key)?.type === 'window';
+        const trim = (v) => (v ? (isWindow ? v.slice(0, 16) : v.slice(0, 10)) : '');
+        seeded[key] = { start: trim(value.start), end: trim(value.end) };
       });
       setTimeline(seeded);
     } catch (e) {
@@ -218,23 +219,30 @@ export default function CycleTimelineBootstrapDialog({ open, cycles = [], onClos
                     {stage.publicFacing && <Chip size="small" label="public" variant="outlined" />}
                   </Stack>
                 </Box>
+                {/* Windows generate events, so they carry a time of day — a same-day
+                    session needs distinct start/end times, not just dates. */}
                 <TextField
-                  label={stage.type === 'window' ? 'Start' : 'Date'}
-                  type="date"
+                  label={stage.type === 'window' ? 'Starts' : 'Date'}
+                  type={stage.type === 'window' ? 'datetime-local' : 'date'}
                   value={timeline[stage.key]?.start || ''}
                   onChange={(e) => setStageValue(stage.key, 'start', e.target.value)}
                   InputLabelProps={{ shrink: true }}
+                  inputProps={{ 'aria-label': `${stage.label} ${stage.type === 'window' ? 'start' : 'date'}` }}
                   error={Boolean(fieldErrors[`${stage.key}:start`])}
-                  helperText={fieldErrors[`${stage.key}:start`] || ''}
+                  helperText={
+                    fieldErrors[`${stage.key}:start`] ||
+                    (stage.type === 'window' ? '' : 'Anchored at 9:00 AM Los Angeles time')
+                  }
                   sx={{ flex: 1 }}
                 />
                 {stage.type === 'window' && (
                   <TextField
-                    label="End"
-                    type="date"
+                    label="Ends"
+                    type="datetime-local"
                     value={timeline[stage.key]?.end || ''}
                     onChange={(e) => setStageValue(stage.key, 'end', e.target.value)}
                     InputLabelProps={{ shrink: true }}
+                    inputProps={{ 'aria-label': `${stage.label} end` }}
                     error={Boolean(fieldErrors[`${stage.key}:end`])}
                     helperText={fieldErrors[`${stage.key}:end`] || ''}
                     sx={{ flex: 1 }}

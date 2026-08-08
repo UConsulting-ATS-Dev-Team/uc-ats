@@ -685,8 +685,10 @@ export default function EventManagement() {
                   <TableCell data-label="Event Name">
                     <Stack spacing={0.5} alignItems="flex-start">
                       <span>{event.eventName}</span>
-                      {event.formStatus === 'PENDING_FORM' && !event.rsvpForm && !event.attendanceForm && (
-                        <Tooltip title="Generated from the cycle timeline. Paste the Google Form URLs to finish setup.">
+                      {/* Durable shim state from the server, not inferred from the
+                          URL fields: an event needs both forms to be connected. */}
+                      {event.formStatus === 'PENDING_FORM' && (
+                        <Tooltip title="Generated from the cycle timeline. Paste both the RSVP and attendance Google Form URLs to finish setup.">
                           <Chip label="Needs form link" size="small" color="warning" variant="outlined" />
                         </Tooltip>
                       )}

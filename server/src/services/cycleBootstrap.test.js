@@ -16,14 +16,18 @@ const validTimeline = () => ({
   offers_released: { start: '2026-10-15' }
 });
 
-const makePrisma = ({ existingCycle = null, cycles = {} } = {}) => {
+const makePrisma = ({ existingCycle = null, cycles = {}, existingEvents = [], failOnEvent = null } = {}) => {
   const createdEvents = [];
   const tx = {
     recruitingCycle: {
-      create: vi.fn(async ({ data }) => ({ id: 'cycle-1', isActive: false, ...data }))
+      create: vi.fn(async ({ data }) => ({ id: 'cycle-1', ...data })),
+      updateMany: vi.fn(async () => ({ count: 1 }))
     },
     events: {
       create: vi.fn(async ({ data }) => {
+        if (failOnEvent && data.generatedFromStage === failOnEvent) {
+          throw new Error('event insert failed');
+        }
         createdEvents.push(data);
         return { id: `event-${createdEvents.length}`, ...data };
       })
@@ -39,6 +43,11 @@ const makePrisma = ({ existingCycle = null, cycles = {} } = {}) => {
       updateMany: vi.fn(async () => ({ count: 0 })),
       update: vi.fn(async ({ data }) => ({ id: 'cycle-1', ...data }))
     },
+    events: {
+      findMany: vi.fn(async () => existingEvents)
+    },
+    // Real transactions roll back on throw; the mock just propagates the error
+    // and the assertions check nothing was returned as committed.
     $transaction: vi.fn(async (fn) => fn(tx))
   };
 };
@@ -144,18 +153,137 @@ describe('commitCycleBootstrap', () => {
     const result = await commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline() });
 
     expect(result.cycle.isActive).toBe(false);
+    expect(prisma.tx.recruitingCycle.updateMany).not.toHaveBeenCalled();
     expect(prisma.recruitingCycle.updateMany).not.toHaveBeenCalled();
   });
 
-  it('deactivates other cycles when activation is requested', async () => {
+  it('activates inside the same transaction, never after it', async () => {
     const prisma = makePrisma();
 
-    await commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline(), activate: true });
+    const result = await commitCycleBootstrap({
+      prisma,
+      name: 'Fall 2026',
+      timeline: validTimeline(),
+      activate: true
+    });
 
-    expect(prisma.recruitingCycle.updateMany).toHaveBeenCalledWith({
+    expect(result.cycle.isActive).toBe(true);
+    expect(prisma.tx.recruitingCycle.updateMany).toHaveBeenCalledWith({
       where: { id: { not: 'cycle-1' }, isActive: true },
       data: { isActive: false }
     });
+    // No post-commit writes: a failure after commit can't leave two active cycles.
+    expect(prisma.recruitingCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.recruitingCycle.update).not.toHaveBeenCalled();
+  });
+
+  it('does not activate anything when a later event insert fails', async () => {
+    const prisma = makePrisma({ failOnEvent: 'round_one' });
+
+    await expect(
+      commitCycleBootstrap({
+        prisma,
+        name: 'Fall 2026',
+        timeline: validTimeline(),
+        activate: true
+      })
+    ).rejects.toThrow(/event insert failed/);
+
+    // Activation lives after the event inserts in the same transaction, so the
+    // failure aborts it along with the cycle row.
+    expect(prisma.tx.recruitingCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.recruitingCycle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('recovers the original bootstrap when an identical commit is retried', async () => {
+    const first = makePrisma();
+    const original = await commitCycleBootstrap({
+      prisma: first,
+      name: 'Fall 2026',
+      timeline: validTimeline(),
+      actorId: 'admin-1'
+    });
+
+    // The retry sees the cycle the first attempt committed.
+    const retry = makePrisma({
+      existingCycle: {
+        id: 'cycle-1',
+        name: 'Fall 2026',
+        timelineSnapshot: JSON.parse(JSON.stringify(original.cycle.timelineSnapshot)),
+        timelineCommittedAt: new Date()
+      },
+      existingEvents: original.events
+    });
+
+    const result = await commitCycleBootstrap({
+      prisma: retry,
+      name: 'Fall 2026',
+      timeline: validTimeline(),
+      actorId: 'admin-1'
+    });
+
+    expect(retry.$transaction).not.toHaveBeenCalled();
+    expect(result.cycle.id).toBe('cycle-1');
+    expect(result.events).toHaveLength(4);
+    expect(result.pendingFormCount).toBe(3);
+  });
+
+  it('rejects the same cycle name with a different timeline', async () => {
+    const timeline = validTimeline();
+    const prisma = makePrisma({
+      existingCycle: {
+        id: 'cycle-1',
+        name: 'Fall 2026',
+        timelineCommittedAt: new Date(),
+        timelineSnapshot: { version: 1, stages: { applications_open: { start: '2025-09-01T16:00:00.000Z', end: null } } }
+      }
+    });
+
+    await expect(commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline })).rejects.toMatchObject({
+      name: 'ValidationError'
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('recovers instead of duplicating when it loses a unique-name race', async () => {
+    const timeline = validTimeline();
+    const reference = await commitCycleBootstrap({ prisma: makePrisma(), name: 'Fall 2026', timeline });
+
+    const prisma = makePrisma({ existingEvents: reference.events });
+    let seen = 0;
+    prisma.recruitingCycle.findFirst.mockImplementation(async () => {
+      // Absent on the pre-flight check, present once the race is lost.
+      seen += 1;
+      return seen === 1
+        ? null
+        : {
+            id: 'cycle-1',
+            name: 'Fall 2026',
+            timelineSnapshot: JSON.parse(JSON.stringify(reference.cycle.timelineSnapshot)),
+            timelineCommittedAt: new Date()
+          };
+    });
+    prisma.$transaction.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+    );
+
+    const result = await commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline });
+
+    expect(result.cycle.id).toBe('cycle-1');
+    expect(result.events).toHaveLength(4);
+  });
+
+  it('keeps same-day event windows with distinct times', async () => {
+    const prisma = makePrisma();
+    const timeline = validTimeline();
+    timeline.info_session = { start: '2026-09-05T18:00', end: '2026-09-05T20:00' };
+
+    const result = await commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline });
+
+    const infoSession = prisma.createdEvents.find((e) => e.generatedFromStage === 'info_session');
+    expect(infoSession.eventStartDate.toISOString()).toBe('2026-09-06T01:00:00.000Z');
+    expect(infoSession.eventEndDate.toISOString()).toBe('2026-09-06T03:00:00.000Z');
+    expect(result.events).toHaveLength(4);
   });
 
   it('throws a validation error and writes nothing when the timeline is invalid', async () => {
@@ -200,6 +328,65 @@ describe('commitCycleBootstrap', () => {
 });
 
 describe('timelineFromPriorCycle', () => {
+  const cycleWith = (start) => ({
+    cycles: {
+      'old-cycle': {
+        id: 'old-cycle',
+        name: 'Prior',
+        timelineSnapshot: { version: 1, stages: { applications_open: { start, end: null } } }
+      }
+    }
+  });
+
+  it('shifts by calendar year, not 365 days, across a leap year', async () => {
+    // 2027-09-01 09:00 LA. A fixed 365-day shift lands on 2028-08-31.
+    const prisma = makePrisma(cycleWith('2027-09-01T16:00:00.000Z'));
+
+    const clone = await timelineFromPriorCycle({ prisma, sourceCycleId: 'old-cycle' });
+
+    expect(clone.stages.applications_open.start).toBe('2028-09-01T09:00');
+  });
+
+  it('shifts out of a leap year without drifting', async () => {
+    // 2028-09-01 09:00 LA -> 2029-09-01, where +365d would give 2029-09-02.
+    const prisma = makePrisma(cycleWith('2028-09-01T16:00:00.000Z'));
+
+    const clone = await timelineFromPriorCycle({ prisma, sourceCycleId: 'old-cycle' });
+
+    expect(clone.stages.applications_open.start).toBe('2029-09-01T09:00');
+  });
+
+  it('clamps Feb 29 to Feb 28 in a common year', async () => {
+    // 2028-02-29 09:00 LA; 2029 has no Feb 29.
+    const prisma = makePrisma(cycleWith('2028-02-29T17:00:00.000Z'));
+
+    const clone = await timelineFromPriorCycle({ prisma, sourceCycleId: 'old-cycle' });
+
+    expect(clone.stages.applications_open.start).toBe('2029-02-28T09:00');
+  });
+
+  it('preserves the time of day of an event window', async () => {
+    const prisma = makePrisma({
+      cycles: {
+        'old-cycle': {
+          id: 'old-cycle',
+          name: 'Prior',
+          timelineSnapshot: {
+            version: 1,
+            stages: { info_session: { start: '2027-09-06T01:00:00.000Z', end: '2027-09-06T03:00:00.000Z' } }
+          }
+        }
+      }
+    });
+
+    const clone = await timelineFromPriorCycle({ prisma, sourceCycleId: 'old-cycle' });
+
+    expect(clone.stages.info_session).toEqual({
+      start: '2028-09-05T18:00',
+      end: '2028-09-05T20:00'
+    });
+  });
+
   it('shifts a stored snapshot forward and never carries form links', async () => {
     const prisma = makePrisma({
       cycles: {
@@ -217,7 +404,7 @@ describe('timelineFromPriorCycle', () => {
 
     const clone = await timelineFromPriorCycle({ prisma, sourceCycleId: 'old-cycle' });
 
-    expect(clone.stages.applications_open.start.startsWith('2026-09-01')).toBe(true);
+    expect(clone.stages.applications_open.start).toBe('2026-09-01T09:00');
     expect(JSON.stringify(clone)).not.toContain('forms.gle');
   });
 

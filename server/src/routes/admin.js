@@ -33,6 +33,7 @@ import {
   timelineFromPriorCycle
 } from '../services/cycleBootstrap.js';
 import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
+import { resolveFormStatus } from '../services/eventFormStatus.js';
 
 const router = express.Router();
 
@@ -1305,11 +1306,11 @@ router.get('/cycles/timeline-template', (req, res) => {
 // Seed the timeline form from a prior cycle's stored snapshot (dates only).
 router.get('/cycles/:id/timeline-clone', async (req, res) => {
   try {
-    const shiftDays = req.query.shiftDays ? parseInt(req.query.shiftDays, 10) : undefined;
+    const shiftYears = req.query.shiftYears ? parseInt(req.query.shiftYears, 10) : undefined;
     const clone = await timelineFromPriorCycle({
       prisma,
       sourceCycleId: req.params.id,
-      ...(Number.isFinite(shiftDays) ? { shiftDays } : {})
+      ...(Number.isFinite(shiftYears) ? { shiftYears } : {})
     });
     res.json(clone);
   } catch (error) {
@@ -1670,10 +1671,18 @@ router.patch('/events/:id', async (req, res) => {
       }
     }
 
+    // Keep the generated-event form shim state in step with the links.
+    const nextFormStatus = resolveFormStatus({
+      currentStatus: existingEvent.formStatus,
+      rsvpForm: rsvpForm !== undefined ? rsvpForm : existingEvent.rsvpForm,
+      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm
+    });
+
     // Update the event
     const updatedEvent = await prisma.events.update({
       where: { id },
       data: {
+        ...(nextFormStatus !== undefined && { formStatus: nextFormStatus }),
         ...(eventName !== undefined && { eventName }),
         ...(eventStartDate !== undefined && { eventStartDate: new Date(eventStartDate) }),
         ...(eventEndDate !== undefined && { eventEndDate: new Date(eventEndDate) }),

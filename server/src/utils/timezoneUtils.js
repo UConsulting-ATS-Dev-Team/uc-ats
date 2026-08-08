@@ -25,7 +25,9 @@ export function localInputToUTC(dateTimeString) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false
+    // h23 rather than hour12:false, which renders midnight as 24:00 of the
+    // previous day and made the guess loop settle a day early.
+    hourCycle: 'h23'
   });
 
   // Start with assuming the local time IS the LA time (initial guess)
@@ -52,6 +54,31 @@ export function localInputToUTC(dateTimeString) {
   }
 
   return new Date(utcGuess);
+}
+
+/**
+ * Inverse of localInputToUTC: render a UTC date as the LA-local
+ * datetime-local string (YYYY-MM-DDTHH:mm) that produced it.
+ */
+export function utcToLocalInput(date) {
+  if (!date) return null;
+  const utcDate = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(utcDate.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    // h23 rather than hour12:false: the latter renders midnight as 24:00 on the
+    // previous day, which would shift the date by one.
+    hourCycle: 'h23'
+  }).formatToParts(utcDate);
+
+  const part = (type) => parts.find(p => p.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
 }
 
 /**

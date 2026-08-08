@@ -11,7 +11,7 @@
 // have forms are committed with `formStatus = 'PENDING_FORM'` and surfaced as
 // "needs form link" in Event Management — an explicit gap, never a silent one.
 
-import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   CYCLE_TIMELINE_STAGES,
   STAGE_BY_KEY,
@@ -147,30 +147,103 @@ const validationError = (errors) => {
   return error;
 };
 
+// Shift a stored UTC instant by whole calendar years, keeping the LA wall
+// date/time it was entered as. A fixed 365-day offset would slide the date by a
+// day across every leap year, so the shift is done on the LA-local fields.
+// Feb 29 has no counterpart in a common year and clamps to Feb 28.
+// Returned as an LA-local `YYYY-MM-DDTHH:mm` string so the admin form can use it
+// verbatim; slicing a UTC ISO string client-side is what drops a day.
+const shiftLocalYears = (value, years) => {
+  if (!value) return null;
+  const local = utcToLocalInput(value);
+  if (!local) return null;
+
+  const [date, time] = local.split('T');
+  const [year, month, day] = date.split('-').map(Number);
+  const targetYear = year + years;
+  const daysInMonth = new Date(Date.UTC(targetYear, month, 0)).getUTCDate();
+  const targetDay = Math.min(day, daysInMonth);
+
+  return `${targetYear}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}T${time}`;
+};
+
 // Seed the timeline form from a prior cycle by shifting its stored snapshot
-// forward a whole number of days. Form URLs are never carried over — stale form
+// forward whole calendar years. Form URLs are never carried over — stale form
 // IDs are exactly the failure mode this avoids.
-export async function timelineFromPriorCycle({ prisma, sourceCycleId, shiftDays = 365 }) {
+export async function timelineFromPriorCycle({ prisma, sourceCycleId, shiftYears = 1 }) {
   const source = await prisma.recruitingCycle.findUnique({ where: { id: sourceCycleId } });
   if (!source) throw new Error('Source recruiting cycle not found');
   if (!source.timelineSnapshot?.stages) {
     throw new Error('Source cycle has no stored timeline to clone');
   }
 
-  const shiftMs = shiftDays * 24 * 60 * 60 * 1000;
-  const shift = (value) => (value ? new Date(new Date(value).getTime() + shiftMs).toISOString() : null);
-
   return {
     sourceCycle: { id: source.id, name: source.name },
-    shiftDays,
+    shiftYears,
     stages: Object.fromEntries(
       Object.entries(source.timelineSnapshot.stages).map(([key, value]) => [
         key,
-        { start: shift(value.start), end: shift(value.end) }
+        {
+          start: shiftLocalYears(value.start, shiftYears),
+          end: shiftLocalYears(value.end, shiftYears)
+        }
       ])
     )
   };
 }
+
+const GENERATED_EVENT_SELECT = {
+  id: true,
+  eventName: true,
+  eventStartDate: true,
+  eventEndDate: true,
+  showToCandidates: true,
+  generatedFromStage: true,
+  formStatus: true
+};
+
+// Key order in stored JSON follows insertion order, so compare canonically.
+const canonicalJson = (value) => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(',')}}`;
+};
+
+const bootstrapResult = ({ cycle, created }, publishChangeSet) => ({
+  cycle,
+  events: created,
+  pendingFormCount: created.filter((event) => event.formStatus === 'PENDING_FORM').length,
+  publishChangeSet
+});
+
+// Cycle names are unique, so an exact retry of a commit whose response was lost
+// finds the cycle it already created. Same name + same timeline means "this
+// request already succeeded" and the original bootstrap is returned; same name
+// with a different timeline is a genuine naming conflict.
+const recoverExistingBootstrap = async (prisma, name, snapshot) => {
+  const existing = await prisma.recruitingCycle.findFirst({ where: { name } });
+  if (!existing) return null;
+
+  const sameTimeline =
+    Boolean(existing.timelineCommittedAt) &&
+    canonicalJson(existing.timelineSnapshot) === canonicalJson(snapshot);
+
+  if (!sameTimeline) {
+    throw validationError([
+      { stage: null, field: 'name', message: 'A cycle with this name already exists' }
+    ]);
+  }
+
+  const events = await prisma.events.findMany({
+    where: { cycleId: existing.id, generatedFromStage: { not: null } },
+    select: GENERATED_EVENT_SELECT
+  });
+
+  return { cycle: existing, created: events };
+};
 
 export async function previewCycleBootstrap({ prisma, name, timeline }) {
   const { stages, errors: parseErrors } = normalizeTimeline(timeline);
@@ -244,11 +317,14 @@ export async function commitCycleBootstrap({
   const snapshot = timelineSnapshot(stages);
   const publishChangeSet = derivePublishChangeSet(name.trim(), stages);
 
-  const result = await prisma.$transaction(async (tx) => {
+  const recovered = await recoverExistingBootstrap(prisma, name.trim(), snapshot);
+  if (recovered) return bootstrapResult(recovered, publishChangeSet);
+
+  const runCommit = () => prisma.$transaction(async (tx) => {
     const cycle = await tx.recruitingCycle.create({
       data: {
         name: name.trim(),
-        isActive: false,
+        isActive: activate,
         startDate: stages.applications_open ? stages.applications_open.start : null,
         endDate: stages.offers_released
           ? stages.offers_released.start
@@ -282,39 +358,35 @@ export async function commitCycleBootstrap({
             // No Forms write scope today, so the gap is recorded explicitly.
             formStatus: event.needsForms ? 'PENDING_FORM' : null
           },
-          select: {
-            id: true,
-            eventName: true,
-            eventStartDate: true,
-            eventEndDate: true,
-            showToCandidates: true,
-            generatedFromStage: true,
-            formStatus: true
-          }
+          select: GENERATED_EVENT_SELECT
         })
       );
+    }
+
+    // Activation is never implicit, but when it is asked for it belongs in this
+    // transaction: a failure here must not leave a committed cycle behind, and
+    // must never leave two cycles active.
+    if (activate) {
+      await tx.recruitingCycle.updateMany({
+        where: { id: { not: cycle.id }, isActive: true },
+        data: { isActive: false }
+      });
     }
 
     return { cycle, created };
   });
 
-  // Activation is never implicit: it deactivates every other cycle and resets
-  // cycle-scoped screens, so it only happens when the admin asks for it.
-  if (activate) {
-    await prisma.recruitingCycle.updateMany({
-      where: { id: { not: result.cycle.id }, isActive: true },
-      data: { isActive: false }
-    });
-    result.cycle = await prisma.recruitingCycle.update({
-      where: { id: result.cycle.id },
-      data: { isActive: true }
-    });
+  let result;
+  try {
+    result = await runCommit();
+  } catch (error) {
+    // Lost the race with a concurrent identical commit (unique cycle name).
+    if (error.code === 'P2002') {
+      const raced = await recoverExistingBootstrap(prisma, name.trim(), snapshot);
+      if (raced) return bootstrapResult(raced, publishChangeSet);
+    }
+    throw error;
   }
 
-  return {
-    cycle: result.cycle,
-    events: result.created,
-    pendingFormCount: result.created.filter((event) => event.formStatus === 'PENDING_FORM').length,
-    publishChangeSet
-  };
+  return bootstrapResult(result, publishChangeSet);
 }
