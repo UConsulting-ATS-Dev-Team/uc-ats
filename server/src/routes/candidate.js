@@ -7,6 +7,7 @@ import {
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
+import { toCandidateCard } from '../utils/gtkucProfile.js';
 
 const router = express.Router();
 
@@ -27,7 +28,14 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
       include: {
         slot: {
           include: {
-            member: { select: { fullName: true } },
+            member: {
+              select: {
+                fullName: true,
+                profileImage: true,
+                graduationClass: true,
+                gtkucProfile: true,
+              },
+            },
           },
         },
       },
@@ -40,6 +48,7 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
       .map((signup) => ({
         id: signup.id,
         memberName: signup.slot.member?.fullName || 'UC Consulting Member',
+        memberProfile: toCandidateCard(signup.slot.member),
         location: signup.slot.location,
         startTime: signup.slot.startTime,
         endTime: signup.slot.endTime,

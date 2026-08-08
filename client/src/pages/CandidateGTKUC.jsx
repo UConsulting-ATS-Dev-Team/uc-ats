@@ -15,6 +15,8 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Avatar,
+  Divider,
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
@@ -53,6 +55,46 @@ const filterSlotsByCycle = (slotsToFilter, cycle) => {
     });
   }
   return [];
+};
+
+// Curated background for the hosting member. Industries are taxonomy tags, so
+// this never surfaces employer names.
+const MemberProfile = ({ profile, compact = false }) => {
+  if (!profile) return null;
+  return (
+    <Box sx={{ mt: compact ? 1.5 : 2 }}>
+      {!compact && <Divider sx={{ mb: 2 }} />}
+      {profile.industries?.length > 0 && (
+        <Box sx={{ mb: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            Industry experience
+          </Typography>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+            {profile.industries.map((industry) => (
+              <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
+            ))}
+          </Stack>
+        </Box>
+      )}
+      {profile.interests?.length > 0 && (
+        <Box sx={{ mb: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            Interests
+          </Typography>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+            {profile.interests.map((interest) => (
+              <Chip key={interest} label={interest} size="small" variant="outlined" />
+            ))}
+          </Stack>
+        </Box>
+      )}
+      {profile.relevance && (
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {profile.relevance}
+        </Typography>
+      )}
+    </Box>
+  );
 };
 
 export default function CandidateGTKUC() {
@@ -158,8 +200,12 @@ export default function CandidateGTKUC() {
     <Card variant="outlined" sx={{ borderColor: 'primary.main', borderWidth: 2 }}>
       <CardContent sx={{ p: { xs: 2, md: 3 } }}>
         <Chip label="Upcoming Meeting" color="primary" size="small" sx={{ mb: 2 }} />
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-          <PersonIcon sx={{ color: 'primary.main' }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+          {mySignup.memberProfile?.photo ? (
+            <Avatar src={mySignup.memberProfile.photo} sx={{ width: 48, height: 48 }} />
+          ) : (
+            <PersonIcon sx={{ color: 'primary.main' }} />
+          )}
           <Typography variant="h6" sx={{ fontWeight: 600 }}>
             {mySignup.memberName}
           </Typography>
@@ -176,6 +222,8 @@ export default function CandidateGTKUC() {
             {mySignup.location}
           </Typography>
         </Box>
+
+        <MemberProfile profile={mySignup.memberProfile} />
 
         {!mySignup.canModify && (
           <Alert
@@ -240,9 +288,16 @@ export default function CandidateGTKUC() {
                       {formatDateTime(slot.startTime)}
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <PersonIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                      {slot.memberProfile?.photo ? (
+                        <Avatar src={slot.memberProfile.photo} sx={{ width: 28, height: 28 }} />
+                      ) : (
+                        <PersonIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                      )}
                       <Typography variant="body2" color="text.secondary">
                         {slot.memberName}
+                        {slot.memberProfile?.graduationClass
+                          ? ` · Class of ${slot.memberProfile.graduationClass}`
+                          : ''}
                       </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -251,6 +306,7 @@ export default function CandidateGTKUC() {
                         {slot.location}
                       </Typography>
                     </Box>
+                    <MemberProfile profile={slot.memberProfile} compact />
                   </Box>
                   <Box sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
                     <Chip label={`${slot.remaining} spots left`} color="primary" size="small" />

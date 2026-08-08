@@ -47,6 +47,7 @@ model User {
   sentMessages               Message[]                       @relation("MessageSender")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+  gtkucProfile               MemberGtkucProfile?
 
   @@map("users")
 }
@@ -121,27 +122,60 @@ model Application {
 }
 
 model RecruitingCycle {
-  id                  String             @id @default(uuid())
-  name                String
-  isActive            Boolean            @default(false)
-  startDate           DateTime?
-  endDate             DateTime?
-  createdAt           DateTime           @default(now())
-  formUrl             String?
-  resumeDeadline      String?
-  coverLetterDeadline String?
-  videoDeadline       String?
-  applications        Application[]
-  coverLetterScores   CoverLetterScore[]
-  events              Events[]
-  groups              Groups[]
-  interviews          Interview[]
-  referrals           Referral[]
-  resumeScores        ResumeScore[]
-  videoScores         VideoScore[]
-  cases               Case[]
+  id                        String                           @id @default(uuid())
+  name                      String
+  isActive                  Boolean                          @default(false)
+  startDate                 DateTime?
+  endDate                   DateTime?
+  createdAt                 DateTime                         @default(now())
+  formUrl                   String?
+  resumeDeadline            String?
+  coverLetterDeadline       String?
+  videoDeadline             String?
+  applications              Application[]
+  coverLetterScores         CoverLetterScore[]
+  events                    Events[]
+  groups                    Groups[]
+  interviews                Interview[]
+  referrals                 Referral[]
+  resumeScores              ResumeScore[]
+  videoScores               VideoScore[]
+  cases                     Case[]
+  gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
 
   @@map("recruiting_cycles")
+}
+
+// Candidate-facing background for a member hosting Get to Know UC slots.
+// Industries come from a fixed taxonomy so candidates never see employer names.
+model MemberGtkucProfile {
+  id               String                           @id @default(uuid())
+  memberId         String                           @unique
+  industries       String[]
+  interests        String[]
+  relevance        String?
+  candidateVisible Boolean                          @default(true)
+  hiddenFromGtkuc  Boolean                          @default(false)
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+  member           User                             @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  confirmations    MemberGtkucProfileConfirmation[]
+
+  @@map("member_gtkuc_profiles")
+}
+
+// One row per member per cycle: the member confirmed their profile is current.
+// Confirmation resets every cycle because there is no row for the new cycle.
+model MemberGtkucProfileConfirmation {
+  id          String             @id @default(uuid())
+  profileId   String
+  cycleId     String
+  confirmedAt DateTime           @default(now())
+  profile     MemberGtkucProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  cycle       RecruitingCycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, cycleId])
+  @@map("member_gtkuc_profile_confirmations")
 }
 
 model Comment {
@@ -214,7 +248,7 @@ model GroupMember {
   createdAt DateTime @default(now())
 
   group Groups @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -297,25 +331,25 @@ model VideoScore {
 }
 
 model Events {
-  id                  String            @id @default(uuid())
-  eventName           String
-  eventStartDate      DateTime
-  eventEndDate        DateTime
-  eventLocation       String?
-  rsvpForm            String?
-  attendanceForm      String?
-  cycleId             String
-  createdAt           DateTime          @default(now())
-  memberRsvpUrl       String?
-  showToCandidates    Boolean           @default(false)
-  copiedFromCycleId   String?
-  copiedFromEventId   String?
-  copiedByUserId      String?
-  copiedAt            DateTime?
-  eventAttendance     EventAttendance[]
-  eventRsvp           EventRsvp[]
-  cycle               RecruitingCycle   @relation(fields: [cycleId], references: [id])
-  memberEventRsvp     MemberEventRsvp[]
+  id                String            @id @default(uuid())
+  eventName         String
+  eventStartDate    DateTime
+  eventEndDate      DateTime
+  eventLocation     String?
+  rsvpForm          String?
+  attendanceForm    String?
+  cycleId           String
+  createdAt         DateTime          @default(now())
+  memberRsvpUrl     String?
+  showToCandidates  Boolean           @default(false)
+  copiedFromCycleId String?
+  copiedFromEventId String?
+  copiedByUserId    String?
+  copiedAt          DateTime?
+  eventAttendance   EventAttendance[]
+  eventRsvp         EventRsvp[]
+  cycle             RecruitingCycle   @relation(fields: [cycleId], references: [id])
+  memberEventRsvp   MemberEventRsvp[]
 
   @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@map("events")
@@ -574,11 +608,11 @@ model FlaggedDocument {
 }
 
 model MeetingSlot {
-  id        String          @id @default(uuid())
-  memberId  String
-  location  String
-  startTime DateTime
-  endTime   DateTime?
+  id             String                 @id @default(uuid())
+  memberId       String
+  location       String
+  startTime      DateTime
+  endTime        DateTime?
   capacity       Int                    @default(2)
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt

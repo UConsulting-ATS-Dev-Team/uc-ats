@@ -37,7 +37,8 @@ import {
   Select,
   FormControl,
   InputLabel,
-  InputAdornment
+  InputAdornment,
+  Switch
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -109,6 +110,7 @@ export default function AdminMeetingSlots() {
 
   const [slots, setSlots] = useState([]);
   const [members, setMembers] = useState([]);
+  const [gtkucProfiles, setGtkucProfiles] = useState([]);
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -140,14 +142,16 @@ export default function AdminMeetingSlots() {
     try {
       setLoading(true);
       setError('');
-      const [data, cycle, users] = await Promise.all([
+      const [data, cycle, users, profiles] = await Promise.all([
         api.get('/admin/meeting-slots'),
         api.get('/active-cycle').catch(() => null),
-        api.get('/admin/users').catch(() => [])
+        api.get('/admin/users').catch(() => []),
+        api.get('/admin/gtkuc-profiles').catch(() => [])
       ]);
       setSlots(data?.slots || []);
       setActiveCycle(cycle || null);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
+      setGtkucProfiles(profiles || []);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
     } finally {
@@ -256,6 +260,17 @@ export default function AdminMeetingSlots() {
       await load();
     } catch (e) {
       setError(e.message || 'Failed to remove signup');
+    }
+  };
+
+  // Hide a member from candidate-facing GTKUC (their slots stop being offered).
+  const setGtkucHidden = async (memberId, hiddenFromGtkuc) => {
+    try {
+      await api.patch(`/admin/gtkuc-profiles/${memberId}/visibility`, { hiddenFromGtkuc });
+      flash(hiddenFromGtkuc ? 'Member hidden from Get to Know UC.' : 'Member visible in Get to Know UC.');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to update GTKUC visibility');
     }
   };
 
@@ -406,6 +421,7 @@ export default function AdminMeetingSlots() {
           <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
             <Tab label={`Time Slots (${stats.totalSlots})`} />
             <Tab label={`Attendance (${stats.totalSignups})`} />
+            <Tab label={`Member Profiles (${gtkucProfiles.length})`} />
           </Tabs>
 
           {loading ? (
@@ -426,7 +442,7 @@ export default function AdminMeetingSlots() {
               onEdit={openEdit}
               onDelete={deleteSlot}
             />
-          ) : (
+          ) : tab === 1 ? (
             <AttendanceTab
               rows={attendanceRows}
               search={attSearch}
@@ -436,6 +452,8 @@ export default function AdminMeetingSlots() {
               onToggle={setAttendance}
               onView={setDetailSlot}
             />
+          ) : (
+            <MemberProfilesTab profiles={gtkucProfiles} onToggleHidden={setGtkucHidden} />
           )}
         </Paper>
       </Box>
@@ -620,6 +638,76 @@ function TimeSlotsTab({
         </TableContainer>
       )}
     </Box>
+  );
+}
+
+// ---- Member profiles tab -------------------------------------------------
+
+// Candidate-facing GTKUC profiles: completeness at a glance plus the per-member
+// hide switch. Hidden members' slots are not offered to candidates at all.
+function MemberProfilesTab({ profiles, onToggleHidden }) {
+  if (profiles.length === 0) {
+    return <Box sx={{ p: 6, textAlign: 'center', color: 'text.secondary' }}>No member profiles yet.</Box>;
+  }
+
+  return (
+    <TableContainer sx={{ overflowX: 'auto' }}>
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableCell>Member</TableCell>
+            <TableCell>Industries</TableCell>
+            <TableCell>Interests</TableCell>
+            <TableCell align="center">Profile</TableCell>
+            <TableCell align="center">Hidden from GTKUC</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {profiles.map((profile) => (
+            <TableRow key={profile.id} hover>
+              <TableCell>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <MemberAvatar member={profile} size={28} />
+                  <Box>
+                    <Typography variant="body2">{profile.fullName}</Typography>
+                    <Typography variant="caption" color="text.secondary">{profile.email}</Typography>
+                  </Box>
+                </Stack>
+              </TableCell>
+              <TableCell>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                  {profile.industries.map((industry) => (
+                    <Chip key={industry} size="small" label={industry} variant="outlined" />
+                  ))}
+                </Stack>
+              </TableCell>
+              <TableCell>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                  {profile.interests.map((interest) => (
+                    <Chip key={interest} size="small" label={interest} variant="outlined" />
+                  ))}
+                </Stack>
+              </TableCell>
+              <TableCell align="center">
+                {profile.complete ? (
+                  <Chip size="small" color="success" label="Complete" />
+                ) : (
+                  <Tooltip title={`Missing: ${profile.missingFields.join(', ')}`}>
+                    <Chip size="small" color="warning" label="Incomplete" />
+                  </Tooltip>
+                )}
+              </TableCell>
+              <TableCell align="center">
+                <Switch
+                  checked={profile.hiddenFromGtkuc}
+                  onChange={(e) => onToggleHidden(profile.id, e.target.checked)}
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
 
