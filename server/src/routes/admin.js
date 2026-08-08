@@ -27,6 +27,13 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
+import {
+  previewCycleBootstrap,
+  commitCycleBootstrap,
+  timelineFromPriorCycle
+} from '../services/cycleBootstrap.js';
+import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
+import { resolveFormStatus } from '../services/eventFormStatus.js';
 
 const router = express.Router();
 
@@ -1289,6 +1296,66 @@ router.post('/cycles', async (req, res) => {
   }
 });
 
+// Cycle bootstrap: full recruitment timeline -> cycle + generated event shells
+
+// Timeline field template that drives the cycle-create form.
+router.get('/cycles/timeline-template', (req, res) => {
+  res.json({ stages: CYCLE_TIMELINE_STAGES });
+});
+
+// Seed the timeline form from a prior cycle's stored snapshot (dates only).
+router.get('/cycles/:id/timeline-clone', async (req, res) => {
+  try {
+    const shiftYears = req.query.shiftYears ? parseInt(req.query.shiftYears, 10) : undefined;
+    const clone = await timelineFromPriorCycle({
+      prisma,
+      sourceCycleId: req.params.id,
+      ...(Number.isFinite(shiftYears) ? { shiftYears } : {})
+    });
+    res.json(clone);
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:id/timeline-clone]', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Preview the events a timeline would generate, before anything is written.
+router.post('/cycles/bootstrap-preview', async (req, res) => {
+  try {
+    const { name, timeline } = req.body || {};
+    const preview = await previewCycleBootstrap({ prisma, name, timeline });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the timeline: one transaction creating the cycle and its event shells.
+router.post('/cycles/bootstrap-commit', async (req, res) => {
+  try {
+    const { name, timeline, events, activate } = req.body || {};
+    const result = await commitCycleBootstrap({
+      prisma,
+      name,
+      timeline,
+      events,
+      actorId: req.user?.id,
+      activate: Boolean(activate)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-commit]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Set a cycle as active
 router.post('/cycles/:id/activate', async (req, res) => {
   const { id } = req.params;
@@ -1604,10 +1671,18 @@ router.patch('/events/:id', async (req, res) => {
       }
     }
 
+    // Keep the generated-event form shim state in step with the links.
+    const nextFormStatus = resolveFormStatus({
+      currentStatus: existingEvent.formStatus,
+      rsvpForm: rsvpForm !== undefined ? rsvpForm : existingEvent.rsvpForm,
+      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm
+    });
+
     // Update the event
     const updatedEvent = await prisma.events.update({
       where: { id },
       data: {
+        ...(nextFormStatus !== undefined && { formStatus: nextFormStatus }),
         ...(eventName !== undefined && { eventName }),
         ...(eventStartDate !== undefined && { eventStartDate: new Date(eventStartDate) }),
         ...(eventEndDate !== undefined && { eventEndDate: new Date(eventEndDate) }),
