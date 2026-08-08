@@ -16,7 +16,8 @@ import {
   Stack,
   Chip,
   Divider,
-  Container
+  Container,
+  Avatar
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
@@ -423,9 +424,14 @@ export default function CoffeeChatsPublic() {
                             {formatDateTime(slot.startTime)}
                           </Typography>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <PersonIcon sx={{ fontSize: { xs: 18, md: 16 }, color: 'text.secondary' }} />
+                            {slot.memberProfile?.photo ? (
+                              <Avatar src={slot.memberProfile.photo} sx={{ width: 28, height: 28 }} />
+                            ) : (
+                              <PersonIcon sx={{ fontSize: { xs: 18, md: 16 }, color: 'text.secondary' }} />
+                            )}
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.875rem' } }}>
                               {slot.memberName}
+                              {slot.memberProfile?.graduationClass ? ` · Class of ${slot.memberProfile.graduationClass}` : ''}
                             </Typography>
                           </Box>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -434,6 +440,16 @@ export default function CoffeeChatsPublic() {
                               {slot.location}
                             </Typography>
                           </Box>
+                          {slot.memberProfile && (
+                            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                              {slot.memberProfile.industries?.map((industry) => (
+                                <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
+                              ))}
+                              {slot.memberProfile.interests?.map((interest) => (
+                                <Chip key={interest} label={interest} size="small" variant="outlined" />
+                              ))}
+                            </Stack>
+                          )}
                         </Box>
                         <Box sx={{ 
                           textAlign: { xs: 'left', sm: 'right' },
