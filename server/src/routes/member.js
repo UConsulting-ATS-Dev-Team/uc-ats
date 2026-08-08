@@ -1,5 +1,5 @@
 import express from 'express';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
@@ -931,7 +931,7 @@ const serializeGtkucProfileState = ({ user, activeCycle, profile, confirmationRe
 });
 
 // Member: read own GTKUC profile plus whether this cycle still needs a confirm
-router.get('/gtkuc-profile', requireAuth, async (req, res) => {
+router.get('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const state = await loadGtkucProfileState(req.user.id);
     res.json(serializeGtkucProfileState(state));
@@ -943,7 +943,7 @@ router.get('/gtkuc-profile', requireAuth, async (req, res) => {
 
 // Member: create/update own GTKUC profile. Submitting also counts as the
 // confirmation for the active cycle, which is what unblocks slot creation.
-router.put('/gtkuc-profile', requireAuth, async (req, res) => {
+router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { industries, interests, relevance, candidateVisible, rejected } = sanitizeProfileInput(
       req.body || {}
@@ -984,7 +984,7 @@ router.put('/gtkuc-profile', requireAuth, async (req, res) => {
 });
 
 // Member: create a meeting slot
-router.post('/meeting-slots', requireAuth, async (req, res) => {
+router.post('/meeting-slots', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { location, startTime, endTime, capacity } = req.body || {};
     if (!location || !startTime) {
@@ -998,7 +998,7 @@ router.post('/meeting-slots', requireAuth, async (req, res) => {
       return res.status(409).json({
         error: 'Confirm your Get to Know UC profile before opening a timeslot',
         code: 'GTKUC_PROFILE_CONFIRMATION_REQUIRED',
-        missingFields: profileState.missingFields
+        missingFields: missingProfileFields(profileState.profile, profileState.user)
       });
     }
     
