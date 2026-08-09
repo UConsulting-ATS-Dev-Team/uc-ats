@@ -22,6 +22,8 @@ function isDocumentVisible() {
  *
  * Guarantees:
  * - one request in flight at a time (single-flight); overlapping triggers are dropped
+ * - request ownership is per-run: a superseded run can neither release the single-flight
+ *   slot nor arm the interval timer on behalf of its replacement
  * - every request is cancellable and is aborted on unmount, disable, or manual refresh
  * - polling pauses while the document is hidden and resumes with an immediate fetch
  * - failures back off exponentially up to `maxInterval` and surface as visible state
@@ -65,8 +67,9 @@ export default function usePolling({
   const onDataRef = useRef(onData);
   const onErrorRef = useRef(onError);
   const getVersionRef = useRef(getVersion);
-  const inFlightRef = useRef(false);
-  const controllerRef = useRef(null);
+  // Holds the controller of the run that currently owns the single-flight slot.
+  // Identity comparison against it is what makes ownership per-run.
+  const activeRunRef = useRef(null);
   const timerRef = useRef(null);
   const mountedRef = useRef(true);
   const sequenceRef = useRef(0);
@@ -111,15 +114,14 @@ export default function usePolling({
       setStatus(POLL_STATUS.PAUSED);
       return;
     }
-    if (inFlightRef.current) {
+    if (activeRunRef.current) {
       if (!manual) schedule();
       return;
     }
 
     clearTimer();
-    inFlightRef.current = true;
     const controller = new AbortController();
-    controllerRef.current = controller;
+    activeRunRef.current = controller;
     const sequence = ++sequenceRef.current;
     const startedAt = Date.now();
 
@@ -176,9 +178,13 @@ export default function usePolling({
       setStatus(POLL_STATUS.ERROR);
       onErrorRef.current?.(err);
     } finally {
-      inFlightRef.current = false;
-      if (controllerRef.current === controller) controllerRef.current = null;
-      if (mountedRef.current && enabledRef.current) schedule();
+      // Only the owning run may release the slot or arm the next timer: an aborted
+      // run settling late must not schedule over a replacement that is still pending.
+      if (activeRunRef.current === controller) {
+        activeRunRef.current = null;
+        const hidden = pauseWhenHidden && !isDocumentVisible();
+        if (mountedRef.current && enabledRef.current && !hidden) schedule();
+      }
     }
   }, [clearTimer, enabled, pauseWhenHidden, schedule]);
 
@@ -189,16 +195,16 @@ export default function usePolling({
     return () => {
       mountedRef.current = false;
       clearTimer();
-      controllerRef.current?.abort();
-      controllerRef.current = null;
-      inFlightRef.current = false;
+      activeRunRef.current?.abort();
+      activeRunRef.current = null;
     };
   }, [clearTimer]);
 
   useEffect(() => {
     if (!enabled) {
       clearTimer();
-      controllerRef.current?.abort();
+      activeRunRef.current?.abort();
+      activeRunRef.current = null;
       setStatus(POLL_STATUS.PAUSED);
       return undefined;
     }
@@ -221,7 +227,8 @@ export default function usePolling({
         run();
       } else {
         clearTimer();
-        controllerRef.current?.abort();
+        activeRunRef.current?.abort();
+        activeRunRef.current = null;
         setStatus(POLL_STATUS.PAUSED);
       }
     };
@@ -231,8 +238,10 @@ export default function usePolling({
   }, [pauseWhenHidden, enabled, run, clearTimer]);
 
   const refresh = useCallback(() => {
-    controllerRef.current?.abort();
-    inFlightRef.current = false;
+    // Abandon ownership as well as aborting: the abandoned run's `finally` now
+    // no-ops, so the replacement started below owns the slot and the timer.
+    activeRunRef.current?.abort();
+    activeRunRef.current = null;
     failuresRef.current = 0;
     return run({ manual: true });
   }, [run]);

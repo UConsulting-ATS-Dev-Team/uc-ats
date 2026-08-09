@@ -27,6 +27,7 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
+import { nextSnapshotVersion } from '../utils/snapshotVersion.js';
 
 const router = express.Router();
 
@@ -2929,7 +2930,10 @@ router.get('/staging/candidates', async (req, res) => {
     });
     console.log('Active cycle:', active ? active.id : 'No active cycle found');
     if (!active) {
-      return usePagination ? res.json({ candidates: [], total: 0, page, totalPages: 0, hasNextPage: false, hasPrevPage: false }) : res.json([]);
+      const snapshotVersion = nextSnapshotVersion();
+      return usePagination
+        ? res.json({ candidates: [], snapshotVersion, total: 0, page, totalPages: 0, hasNextPage: false, hasPrevPage: false })
+        : res.json({ candidates: [], snapshotVersion });
     }
 
     // Get total count for pagination (only if using pagination)
@@ -2973,10 +2977,7 @@ router.get('/staging/candidates', async (req, res) => {
       queryOptions.take = limit;
     }
 
-    const applications = await prisma.application.findMany(queryOptions).catch((error) => {
-      console.error('Error fetching staging candidates:', error);
-      return []; // Return empty array if query fails
-    });
+    const applications = await prisma.application.findMany(queryOptions);
 
     console.log(`Found ${applications.length} applications for staging candidates`);
 
@@ -3244,6 +3245,7 @@ router.get('/staging/candidates', async (req, res) => {
       const totalPages = Math.ceil(totalCount / limit);
       res.json({
         candidates: stagingCandidates,
+        snapshotVersion: nextSnapshotVersion(),
         total: totalCount,
         page: page,
         totalPages: totalPages,
@@ -3251,20 +3253,13 @@ router.get('/staging/candidates', async (req, res) => {
         hasPrevPage: page > 1
       });
     } else {
-      res.json(stagingCandidates);
+      res.json({ candidates: stagingCandidates, snapshotVersion: nextSnapshotVersion() });
     }
   } catch (error) {
     console.error('[GET /api/admin/staging/candidates]', error);
-    // Check if pagination was requested from query params
-    const page = parseInt(req.query.page);
-    const limit = parseInt(req.query.limit);
-    const usePagination = page && limit;
-    
-    if (usePagination) {
-      res.json({ candidates: [], total: 0, page: 1, totalPages: 0, hasNextPage: false, hasPrevPage: false });
-    } else {
-      res.json([]);
-    }
+    // A read failure must stay a failure: returning an empty 200 makes pollers cache
+    // and render "no candidates" as if the cycle were empty.
+    res.status(500).json({ error: 'Failed to load staging candidates' });
   }
 });
 

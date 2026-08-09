@@ -12,6 +12,13 @@ vi.mock('../prismaClient.js', () => ({
       updateMany: vi.fn(),
     },
     recruitingCycle: { findFirst: vi.fn(), findMany: vi.fn() },
+    application: { findMany: vi.fn(), count: vi.fn() },
+    resumeScore: { findMany: vi.fn() },
+    coverLetterScore: { findMany: vi.fn() },
+    videoScore: { findMany: vi.fn() },
+    eventAttendance: { findMany: vi.fn() },
+    meetingSignup: { findMany: vi.fn() },
+    groups: { findMany: vi.fn() },
     $transaction: vi.fn((ops) => Promise.all(ops)),
   }
 }));
@@ -399,6 +406,77 @@ describe('GET /api/admin/users', () => {
           data: expect.objectContaining({ isActive: false })
         })
       );
+    });
+  });
+
+  describe('GET /api/admin/staging/candidates', () => {
+    const application = {
+      id: 'app-1',
+      candidateId: 'cand-1',
+      studentId: 'S1',
+      status: 'SUBMITTED',
+      submittedAt: new Date('2026-07-20T00:00:00Z'),
+      candidate: {
+        id: 'cand-1',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        email: 'alice@example.com',
+        studentId: 'S1',
+        assignedGroupId: null,
+        referrals: []
+      }
+    };
+
+    beforeEach(() => {
+      prisma.recruitingCycle.findFirst.mockResolvedValue({ id: 'cycle-1', startDate: null, endDate: null });
+      prisma.application.findMany.mockResolvedValue([application]);
+      prisma.resumeScore.findMany.mockResolvedValue([]);
+      prisma.coverLetterScore.findMany.mockResolvedValue([]);
+      prisma.videoScore.findMany.mockResolvedValue([]);
+      prisma.eventAttendance.findMany.mockResolvedValue([]);
+      prisma.meetingSignup.findMany.mockResolvedValue([]);
+      prisma.groups.findMany.mockResolvedValue([]);
+    });
+
+    async function getStaging(query = {}) {
+      const qs = new URLSearchParams(query).toString();
+      return fetch(`http://localhost:${port}/api/admin/staging/candidates${qs ? '?' + qs : ''}`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+    }
+
+    it('returns candidates with a snapshot version that advances between reads', async () => {
+      const first = await getStaging();
+      expect(first.status).toBe(200);
+      const firstBody = await first.json();
+      expect(firstBody.candidates).toHaveLength(1);
+      expect(typeof firstBody.snapshotVersion).toBe('number');
+
+      const second = await getStaging();
+      const secondBody = await second.json();
+      expect(secondBody.snapshotVersion).toBeGreaterThan(firstBody.snapshotVersion);
+    });
+
+    it('fails the request when the candidate query fails instead of returning an empty snapshot', async () => {
+      prisma.application.findMany.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await getStaging();
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.candidates).toBeUndefined();
+    });
+
+    it('fails the paginated request too instead of reporting zero candidates', async () => {
+      prisma.application.count.mockResolvedValue(1);
+      prisma.application.findMany.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await getStaging({ page: '1', limit: '25' });
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.candidates).toBeUndefined();
+      expect(body.total).toBeUndefined();
     });
   });
 });

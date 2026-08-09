@@ -836,7 +836,9 @@ export default function Staging() {
     }));
 
     setLoading(false);
-  }, [calculateDemographics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- calculateDemographics is a
+    // hoisted declaration in this component and only writes state.
+  }, []);
 
   const fetchStagingData = useCallback(async (signal) => {
     const options = { signal };
@@ -854,6 +856,8 @@ export default function Staging() {
 
     return {
       candidatesData,
+      // Server stamp for the candidate read; orders this whole snapshot against others.
+      snapshotVersion: candidatesResponse.snapshotVersion ?? null,
       activeCycle,
       adminApplicationsData,
       eventsData,
@@ -889,6 +893,8 @@ export default function Staging() {
     interval: STAGING_POLL_INTERVAL_MS,
     maxInterval: STAGING_MAX_POLL_INTERVAL_MS,
     immediate: pollImmediately,
+    // Never apply a snapshot the server read before the one already on screen.
+    getVersion: (data) => data.snapshotVersion,
     // Editing dialogs hold pending user input, so do not overwrite state underneath them.
     enabled: !appModalOpen && !decisionDialogOpen && !finalDecisionDialogOpen && !editScoreModalOpen,
     onData: (data) => {
@@ -1426,7 +1432,10 @@ export default function Staging() {
     }
   };
 
-  const calculateDemographics = (data, isApplicationData = false) => {
+  // Function declaration, not a const: applyStagingData above calls it during the
+  // first render's data apply, which a const in this position would not have
+  // initialised yet.
+  function calculateDemographics(data, isApplicationData = false) {
     const graduationYearBreakdown = {
       '2026': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
       '2027': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
@@ -1501,7 +1510,7 @@ export default function Staging() {
     });
     
     setDemographics({ graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown });
-  };
+  }
 
   const handleInlineDecisionChange = async (item, value, tabIndex = currentTab) => {
     const phase = tabToPhase(tabIndex);

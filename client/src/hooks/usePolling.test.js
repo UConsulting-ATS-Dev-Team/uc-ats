@@ -179,6 +179,31 @@ describe('usePolling', () => {
     expect(onData).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let an aborted request schedule over its still-pending replacement', async () => {
+    const aborted = deferred();
+    const replacement = deferred();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(aborted.promise)
+      .mockReturnValueOnce(replacement.promise)
+      .mockResolvedValue({});
+
+    const { result } = renderHook(() => usePolling({ fetcher, interval: 1000 }));
+    await flush();
+
+    await act(async () => { result.current.refresh(); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    // The aborted first request settles late while the replacement is still pending.
+    await act(async () => { aborted.resolve({}); });
+    await advance(3000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    // The replacement, which owns the slot, arms the next interval itself.
+    await act(async () => { replacement.resolve({}); });
+    await advance(1000);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it('aborts the in-flight request on manual refresh and on unmount', async () => {
     const signals = [];
     const fetcher = vi.fn((signal) => {
