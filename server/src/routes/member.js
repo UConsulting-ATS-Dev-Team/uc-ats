@@ -4,6 +4,7 @@ import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { getCandidateCampaignLogs } from '../services/campaigns.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getGroupMemberUsers,
@@ -393,6 +394,19 @@ router.get('/candidate/:id', requireAuth, async (req, res) => {
     console.error('Error fetching candidate details:', error);
     console.error('Error details:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to fetch candidate details', details: error.message });
+  }
+});
+
+// GET /api/member/candidate/:id/campaign-logs
+// Returns campaign send logs for the candidate timeline.
+router.get('/candidate/:id/campaign-logs', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await getCandidateCampaignLogs({ candidateId: id });
+    res.json(logs);
+  } catch (error) {
+    console.error('Error fetching candidate campaign logs:', error);
+    res.status(500).json({ error: 'Failed to fetch campaign logs' });
   }
 });
 

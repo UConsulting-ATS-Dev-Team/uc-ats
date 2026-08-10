@@ -43,6 +43,7 @@ import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
+import CampaignManagement from './pages/CampaignManagement';
 import CandidateDetail from './pages/CandidateDetail';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
@@ -113,6 +114,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <CycleManagement />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns"
+        element={
+          <ProtectedRoute>
+            <CampaignManagement />
           </ProtectedRoute>
         }
       />

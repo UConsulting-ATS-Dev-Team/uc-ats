@@ -123,7 +123,7 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html, attachments = []) => {
+export const sendEmail = async (to, subject, html, attachments = []) => {
   try {
     const transporter = createTransporter();
     

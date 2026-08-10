@@ -17,6 +17,7 @@ export default function CandidateDetail() {
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [deletingCandidate, setDeletingCandidate] = useState(false);
+  const [campaignLogs, setCampaignLogs] = useState([]);
 
   const isAdmin = user?.role === 'ADMIN';
 
@@ -34,6 +35,20 @@ export default function CandidateDetail() {
     };
 
     fetchCandidate();
+  }, [id]);
+
+  useEffect(() => {
+    const fetchCampaignLogs = async () => {
+      if (!id) return;
+      try {
+        const logs = await apiClient.get(`/member/candidate/${id}/campaign-logs`);
+        setCampaignLogs(logs || []);
+      } catch (err) {
+        console.error('Error loading campaign logs:', err);
+      }
+    };
+
+    fetchCampaignLogs();
   }, [id]);
 
   const getInitials = (name) => {
@@ -310,6 +325,28 @@ export default function CandidateDetail() {
             </div>
           ) : (
             <p className="no-data">No event RSVPs recorded</p>
+          )}
+        </div>
+
+        {/* Campaign Communications Section */}
+        <div className="detail-section" style={{ gridColumn: '1 / -1' }}>
+          <h3 className="section-title">Campaign Communications ({campaignLogs.length || 0})</h3>
+          {campaignLogs && campaignLogs.length > 0 ? (
+            <div className="campaign-logs-list">
+              {campaignLogs.map((log) => (
+                <div key={log.id} className="campaign-log-item" style={{ marginBottom: '12px', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <strong>{log.campaignSend?.template?.name || log.templateName || 'Campaign'}</strong>
+                    <span className={`status-badge ${log.status.toLowerCase()}`}>{log.status}</span>
+                  </div>
+                  <p style={{ margin: '4px 0' }}><strong>Subject:</strong> {log.subject || log.campaignSend?.template?.subject || 'N/A'}</p>
+                  <p style={{ margin: '4px 0' }}><strong>Sent:</strong> {formatDate(log.sentAt || log.createdAt)}</p>
+                  <p style={{ margin: '4px 0' }}><strong>Sender:</strong> {log.campaignSend?.sender?.fullName || log.actor?.fullName || 'Unknown'}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="no-data">No campaign communications recorded</p>
           )}
         </div>
 

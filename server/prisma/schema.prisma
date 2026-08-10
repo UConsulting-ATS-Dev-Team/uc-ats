@@ -47,6 +47,10 @@ model User {
   sentMessages               Message[]                       @relation("MessageSender")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+  createdTemplates           CampaignTemplate[]
+  createdAudiences           CampaignAudience[]
+  sentCampaigns              CampaignSend[]
+  campaignLogs               CampaignSendLog[]
 
   @@map("users")
 }
@@ -71,6 +75,7 @@ model Candidate {
   roundOne          RoundOne[]
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
+  campaignLogs      CampaignSendLog[]  @relation("CandidateCampaignLog")
 
   @@map("candidates")
 }
@@ -140,6 +145,9 @@ model RecruitingCycle {
   resumeScores        ResumeScore[]
   videoScores         VideoScore[]
   cases               Case[]
+  campaignTemplates   CampaignTemplate[]
+  campaignAudiences   CampaignAudience[]
+  campaignSends       CampaignSend[]
 
   @@map("recruiting_cycles")
 }
@@ -214,7 +222,7 @@ model GroupMember {
   createdAt DateTime @default(now())
 
   group Groups @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -297,25 +305,25 @@ model VideoScore {
 }
 
 model Events {
-  id                  String            @id @default(uuid())
-  eventName           String
-  eventStartDate      DateTime
-  eventEndDate        DateTime
-  eventLocation       String?
-  rsvpForm            String?
-  attendanceForm      String?
-  cycleId             String
-  createdAt           DateTime          @default(now())
-  memberRsvpUrl       String?
-  showToCandidates    Boolean           @default(false)
-  copiedFromCycleId   String?
-  copiedFromEventId   String?
-  copiedByUserId      String?
-  copiedAt            DateTime?
-  eventAttendance     EventAttendance[]
-  eventRsvp           EventRsvp[]
-  cycle               RecruitingCycle   @relation(fields: [cycleId], references: [id])
-  memberEventRsvp     MemberEventRsvp[]
+  id                String            @id @default(uuid())
+  eventName         String
+  eventStartDate    DateTime
+  eventEndDate      DateTime
+  eventLocation     String?
+  rsvpForm          String?
+  attendanceForm    String?
+  cycleId           String
+  createdAt         DateTime          @default(now())
+  memberRsvpUrl     String?
+  showToCandidates  Boolean           @default(false)
+  copiedFromCycleId String?
+  copiedFromEventId String?
+  copiedByUserId    String?
+  copiedAt          DateTime?
+  eventAttendance   EventAttendance[]
+  eventRsvp         EventRsvp[]
+  cycle             RecruitingCycle   @relation(fields: [cycleId], references: [id])
+  memberEventRsvp   MemberEventRsvp[]
 
   @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@map("events")
@@ -408,6 +416,114 @@ model Referral {
   cycle        RecruitingCycle? @relation(fields: [cycleId], references: [id])
 
   @@map("referrals")
+}
+
+model CampaignTemplate {
+  id               String           @id @default(uuid())
+  cycleId          String?
+  name             String
+  category         String?
+  subject          String
+  body             String
+  mergeFields      String[]         @default([])
+  firstOfCycleGate Boolean          @default(false)
+  version          Int              @default(1)
+  createdBy        String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  cycle            RecruitingCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  creator          User             @relation(fields: [createdBy], references: [id])
+  sends            CampaignSend[]
+
+  @@index([cycleId])
+  @@map("campaign_templates")
+}
+
+model CampaignAudience {
+  id        String           @id @default(uuid())
+  cycleId   String?
+  name      String
+  filters   Json
+  createdBy String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  cycle     RecruitingCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  creator   User             @relation(fields: [createdBy], references: [id])
+  sends     CampaignSend[]
+
+  @@index([cycleId])
+  @@map("campaign_audiences")
+}
+
+model CampaignSend {
+  id             String             @id @default(uuid())
+  cycleId        String?
+  templateId     String
+  audienceId     String?
+  name           String
+  status         CampaignSendStatus @default(DRAFT)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  sentBy         String
+  recipientCount Int?
+  previewCount   Int?
+  errorLog       String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  template       CampaignTemplate   @relation(fields: [templateId], references: [id])
+  audience       CampaignAudience?  @relation(fields: [audienceId], references: [id])
+  cycle          RecruitingCycle?   @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  sender         User               @relation(fields: [sentBy], references: [id])
+  logs           CampaignSendLog[]
+
+  @@index([templateId])
+  @@index([audienceId])
+  @@index([cycleId])
+  @@index([status])
+  @@map("campaign_sends")
+}
+
+model CampaignSendLog {
+  id                String        @id @default(uuid())
+  sendId            String
+  campaignSendId    String?
+  candidateId       String?
+  email             String
+  status            String
+  providerMessageId String?
+  error             String?
+  sentAt            DateTime?
+  actorId           String
+  templateName      String
+  subject           String
+  campaignSend      CampaignSend? @relation(fields: [campaignSendId], references: [id], onDelete: SetNull)
+  candidate         Candidate?    @relation("CandidateCampaignLog", fields: [candidateId], references: [id], onDelete: SetNull)
+  actor             User          @relation(fields: [actorId], references: [id])
+
+  @@index([sendId])
+  @@index([candidateId])
+  @@index([email])
+  @@index([campaignSendId])
+  @@map("campaign_send_logs")
+}
+
+model SuppressedEmail {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  reason    String?
+  source    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("suppressed_emails")
+}
+
+enum CampaignSendStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
 }
 
 model InterviewResource {
@@ -574,11 +690,11 @@ model FlaggedDocument {
 }
 
 model MeetingSlot {
-  id        String          @id @default(uuid())
-  memberId  String
-  location  String
-  startTime DateTime
-  endTime   DateTime?
+  id             String                 @id @default(uuid())
+  memberId       String
+  location       String
+  startTime      DateTime
+  endTime        DateTime?
   capacity       Int                    @default(2)
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt

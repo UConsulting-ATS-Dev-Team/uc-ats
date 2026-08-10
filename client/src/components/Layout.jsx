@@ -18,7 +18,8 @@ import {
   ChatBubbleOvalLeftEllipsisIcon,
   LightBulbIcon,
   PresentationChartBarIcon,
-  NewspaperIcon
+  NewspaperIcon,
+  EnvelopeIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -61,6 +62,7 @@ const Layout = ({ children }) => {
       { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
+      { name: 'Campaigns', href: '/campaigns', icon: EnvelopeIcon },
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },

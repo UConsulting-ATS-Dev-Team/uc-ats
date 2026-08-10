@@ -20,6 +20,8 @@ import conversationsRoutes from './routes/conversations.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
+import campaignRoutes from './routes/campaigns.js';
+import { sendScheduledCampaigns } from './services/campaigns.js';
 
 const app = express();
 
@@ -54,6 +56,7 @@ app.use('/api/member', memberRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
+app.use('/api/admin/campaigns', campaignRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
@@ -113,6 +116,14 @@ await syncFormResponses();
 cron.schedule('*/5 * * * *', () => {
   console.log('Running scheduled response sync...');
   syncFormResponses();
+});
+
+// Send scheduled campaigns every minute
+cron.schedule('* * * * *', () => {
+  console.log('Checking for scheduled campaigns...');
+  sendScheduledCampaigns().catch((error) => {
+    console.error('Error sending scheduled campaigns:', error);
+  });
 });
 
 app.listen(config.port, () => {

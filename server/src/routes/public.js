@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { verifyUnsubscribeToken, addSuppressedEmail } from '../services/campaigns.js';
 
 const router = express.Router();
 
@@ -375,6 +376,27 @@ router.get('/active-cycle', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/active-cycle]', error);
     res.json(null);
+  }
+});
+
+// Public: unsubscribe from recruitment emails using a signed token.
+router.get('/unsubscribe', async (req, res) => {
+  try {
+    const { email, token } = req.query;
+    if (!email || !token) {
+      return res.status(400).json({ error: 'email and token are required' });
+    }
+
+    const decodedEmail = verifyUnsubscribeToken(token);
+    if (decodedEmail !== email) {
+      return res.status(400).json({ error: 'Invalid or expired unsubscribe link' });
+    }
+
+    await addSuppressedEmail({ email, reason: 'unsubscribe', source: 'campaign_unsubscribe_link' });
+    res.json({ ok: true, message: 'You have been unsubscribed from recruitment emails.' });
+  } catch (error) {
+    console.error('[GET /api/unsubscribe]', error);
+    res.status(500).json({ error: 'Failed to process unsubscribe request' });
   }
 });
 
