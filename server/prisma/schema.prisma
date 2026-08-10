@@ -49,8 +49,10 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   createdTemplates           CampaignTemplate[]
   createdAudiences           CampaignAudience[]
-  sentCampaigns              CampaignSend[]
+  sentCampaigns              CampaignSend[]          @relation("CampaignSendSender")
+  approvedCampaigns          CampaignSend[]          @relation("CampaignSendApprover")
   campaignLogs               CampaignSendLog[]
+  consentEvents              ConsentEvent[]
 
   @@map("users")
 }
@@ -76,6 +78,7 @@ model Candidate {
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
   campaignLogs      CampaignSendLog[]  @relation("CandidateCampaignLog")
+  subscribers       Subscriber[]
 
   @@map("candidates")
 }
@@ -456,30 +459,43 @@ model CampaignAudience {
 }
 
 model CampaignSend {
-  id             String             @id @default(uuid())
-  cycleId        String?
-  templateId     String
-  audienceId     String?
-  name           String
-  status         CampaignSendStatus @default(DRAFT)
-  scheduledAt    DateTime?
-  sentAt         DateTime?
-  sentBy         String
-  recipientCount Int?
-  previewCount   Int?
-  errorLog       String?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  template       CampaignTemplate   @relation(fields: [templateId], references: [id])
-  audience       CampaignAudience?  @relation(fields: [audienceId], references: [id])
-  cycle          RecruitingCycle?   @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  sender         User               @relation(fields: [sentBy], references: [id])
-  logs           CampaignSendLog[]
+  id                  String             @id @default(uuid())
+  cycleId             String?
+  templateId          String
+  audienceId          String?
+  name                String
+  status              CampaignSendStatus @default(DRAFT)
+  scheduledAt         DateTime?
+  sentAt              DateTime?
+  sentBy              String
+  recipientCount      Int?
+  previewCount        Int?
+  errorLog            String?
+  approvedBy          String?
+  approvedAt          DateTime?
+  approvalFingerprint String?
+  templateVersion     Int?
+  templateName        String?
+  templateSubject     String?
+  templateBody        String?
+  audienceFilters     Json?
+  recipientSnapshot   Json?
+  renderedPreview     String?
+  eligibilityBasis    String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  template            CampaignTemplate   @relation(fields: [templateId], references: [id])
+  audience            CampaignAudience?  @relation(fields: [audienceId], references: [id])
+  cycle               RecruitingCycle?   @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  sender              User               @relation("CampaignSendSender", fields: [sentBy], references: [id])
+  approver            User?              @relation("CampaignSendApprover", fields: [approvedBy], references: [id])
+  logs                CampaignSendLog[]
 
   @@index([templateId])
   @@index([audienceId])
   @@index([cycleId])
   @@index([status])
+  @@index([approvedBy])
   @@map("campaign_sends")
 }
 
@@ -489,21 +505,26 @@ model CampaignSendLog {
   campaignSendId    String?
   candidateId       String?
   email             String
+  attemptNumber     Int           @default(1)
   status            String
   providerMessageId String?
   error             String?
   sentAt            DateTime?
   actorId           String
   templateName      String
+  templateVersion   Int?
   subject           String
+  renderedBody      String?
   campaignSend      CampaignSend? @relation(fields: [campaignSendId], references: [id], onDelete: SetNull)
   candidate         Candidate?    @relation("CandidateCampaignLog", fields: [candidateId], references: [id], onDelete: SetNull)
   actor             User          @relation(fields: [actorId], references: [id])
 
+  @@unique([campaignSendId, email, attemptNumber])
   @@index([sendId])
   @@index([candidateId])
   @@index([email])
   @@index([campaignSendId])
+  @@index([status])
   @@map("campaign_send_logs")
 }
 
@@ -518,12 +539,52 @@ model SuppressedEmail {
   @@map("suppressed_emails")
 }
 
+model Subscriber {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  candidateId   String?
+  firstName     String?
+  lastName      String?
+  consented     Boolean        @default(false)
+  source        String?        // e.g., newsletter_signup, admin_import, legacy_import
+  noticeVersion String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  candidate     Candidate?     @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  consentEvents ConsentEvent[]
+
+  @@index([candidateId])
+  @@map("subscribers")
+}
+
+model ConsentEvent {
+  id            String     @id @default(uuid())
+  subscriberId  String
+  email         String
+  consented     Boolean
+  source        String
+  noticeVersion String?
+  ipAddress     String?
+  createdAt     DateTime   @default(now())
+  actorId       String?
+  subscriber    Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  actor         User?      @relation(fields: [actorId], references: [id])
+
+  @@index([subscriberId])
+  @@index([email])
+  @@index([actorId])
+  @@map("consent_events")
+}
+
 enum CampaignSendStatus {
   DRAFT
+  PENDING_APPROVAL
+  APPROVED
   SCHEDULED
   SENDING
   SENT
   FAILED
+  CANCELLED
 }
 
 model InterviewResource {

@@ -50,6 +50,10 @@ const config = {
   /** owner/repo for GitHub Issues API (defaults to primary product repo) */
   githubFeatureRequestRepo:
     process.env.GITHUB_FEATURE_REQUEST_REPO || 'uconsulting/uc-ats',
+
+  // Bulk marketing campaign sends remain disabled until Ryan's policy decisions
+  // on consent, retention, approvers, and legacy imports are recorded (see #70).
+  bulkCampaignSendsEnabled: process.env.BULK_CAMPAIGN_SENDS_ENABLED === 'true',
 };
 
 export default config;

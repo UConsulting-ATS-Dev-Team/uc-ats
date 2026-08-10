@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import jwt from 'jsonwebtoken';
@@ -64,8 +65,8 @@ export function verifyUnsubscribeToken(token) {
   }
 }
 
-function buildAudienceWhere(filters) {
-  const where = {};
+function buildSubscriberWhere(filters) {
+  const where = { consented: true };
   const applicationWhere = {};
 
   if (filters.cycleId) {
@@ -81,39 +82,101 @@ function buildAudienceWhere(filters) {
   }
 
   if (Object.keys(applicationWhere).length > 0) {
-    where.applications = { some: applicationWhere };
+    where.candidate = { applications: { some: applicationWhere } };
   }
 
-  return { candidateWhere: where, applicationWhere };
+  return { where, applicationWhere };
+}
+
+function getLatestApplication(applications) {
+  if (!applications || applications.length === 0) return null;
+  return applications[0];
+}
+
+function buildRecipientContext(recipient, send, baseUrl) {
+  const candidate = recipient.candidate;
+  const application = getLatestApplication(candidate?.applications || []);
+  const cycleName = send.cycle?.name || application?.cycle?.name || '';
+  const stage = application?.currentRound || '';
+  const status = application?.status || '';
+  const firstName = recipient.firstName || candidate?.firstName || '';
+  const lastName = recipient.lastName || candidate?.lastName || '';
+  const token = generateUnsubscribeToken(recipient.email);
+  const unsubscribeUrl = `${baseUrl}/api/unsubscribe?email=${encodeURIComponent(recipient.email)}&token=${encodeURIComponent(token)}`;
+
+  return {
+    firstName,
+    lastName,
+    name: `${firstName} ${lastName}`.trim(),
+    cycle: cycleName,
+    stage,
+    status,
+    unsubscribeUrl,
+  };
+}
+
+function serializeSnapshot(recipient) {
+  const candidate = recipient.candidate;
+  const application = getLatestApplication(candidate?.applications || []);
+  return {
+    subscriberId: recipient.id,
+    candidateId: candidate?.id || null,
+    email: recipient.email,
+    firstName: recipient.firstName || candidate?.firstName || '',
+    lastName: recipient.lastName || candidate?.lastName || '',
+    cycle: application?.cycle?.name || '',
+    stage: application?.currentRound || '',
+    status: application?.status || '',
+  };
+}
+
+function fingerprintApproval({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot, actorId, approvedAt }) {
+  const canonical = JSON.stringify({
+    templateName,
+    templateVersion,
+    templateSubject,
+    templateBody,
+    audienceFilters,
+    recipientSnapshot: [...recipientSnapshot]
+      .sort((a, b) => a.email.localeCompare(b.email))
+      .map((r) => ({ email: r.email, candidateId: r.candidateId })),
+    actorId,
+    approvedAt: approvedAt.toISOString(),
+  });
+  return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
 export async function resolveAudience(filters, options = {}) {
-  const { candidateWhere, applicationWhere } = buildAudienceWhere(filters);
+  const { where } = buildSubscriberWhere(filters);
   const includeApplications = options.includeApplications !== false;
 
-  const candidates = await prisma.candidate.findMany({
-    where: candidateWhere,
-    include: includeApplications
-      ? {
-          applications: {
-            where: applicationWhere,
-            include: { cycle: true },
-            orderBy: { submittedAt: 'desc' },
-            take: 1,
-          },
-        }
-      : undefined,
+  const subscribers = await prisma.subscriber.findMany({
+    where,
+    include: {
+      candidate: includeApplications
+        ? {
+            include: {
+              applications: {
+                where: buildSubscriberWhere(filters).applicationWhere,
+                include: { cycle: true },
+                orderBy: { submittedAt: 'desc' },
+                take: 1,
+              },
+            },
+          }
+        : true,
+    },
   });
 
-  let result = candidates;
+  let result = subscribers;
 
   if (filters.excludeSuppressed !== false) {
-    const emails = candidates.map((c) => c.email);
+    const emails = subscribers.map((s) => s.email);
     const suppressed = await prisma.suppressedEmail.findMany({
       where: { email: { in: emails } },
     });
     const suppressedSet = new Set(suppressed.map((s) => s.email));
-    result = candidates.filter((c) => !suppressedSet.has(c.email));
+    result = subscribers.filter((s) => !suppressedSet.has(s.email));
   }
 
   return result;
@@ -123,7 +186,15 @@ export async function previewAudience(filters) {
   const recipients = await resolveAudience(filters, { includeApplications: false });
   return {
     count: recipients.length,
-    sample: recipients.slice(0, 5).map((c) => ({ id: c.id, email: c.email, name: `${c.firstName} ${c.lastName}` })),
+    sample: recipients.slice(0, 5).map((s) => {
+      const candidate = s.candidate;
+      return {
+        id: s.id,
+        email: s.email,
+        firstName: s.firstName || candidate?.firstName || '',
+        lastName: s.lastName || candidate?.lastName || '',
+      };
+    }),
   };
 }
 
@@ -141,6 +212,44 @@ export async function addSuppressedEmail({ email, reason, source }) {
 
 export async function removeSuppressedEmail(email) {
   return prisma.suppressedEmail.deleteMany({ where: { email } });
+}
+
+export async function upsertSubscriber({ email, candidateId, firstName, lastName, consented, source, noticeVersion, actorId }) {
+  const subscriber = await prisma.subscriber.upsert({
+    where: { email },
+    update: {
+      candidateId: candidateId || undefined,
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      consented: consented !== undefined ? consented : undefined,
+      noticeVersion: noticeVersion || undefined,
+      updatedAt: new Date(),
+    },
+    create: {
+      email,
+      candidateId: candidateId || null,
+      firstName: firstName || null,
+      lastName: lastName || null,
+      consented: consented !== undefined ? consented : false,
+      source: source || null,
+      noticeVersion: noticeVersion || null,
+    },
+  });
+
+  if (consented !== undefined) {
+    await prisma.consentEvent.create({
+      data: {
+        subscriberId: subscriber.id,
+        email: subscriber.email,
+        consented,
+        source: source || 'admin_update',
+        noticeVersion: noticeVersion || null,
+        actorId: actorId || null,
+      },
+    });
+  }
+
+  return subscriber;
 }
 
 export async function createCampaignTemplate(data) {
@@ -207,22 +316,55 @@ export async function deleteCampaignAudience(id) {
 }
 
 export async function createCampaignSend({ name, cycleId, templateId, audienceId, scheduledAt, sentBy }) {
-  const status = scheduledAt && new Date(scheduledAt) > new Date() ? 'SCHEDULED' : 'DRAFT';
   return prisma.campaignSend.create({
     data: {
       name,
-      cycleId,
+      cycleId: cycleId || null,
       templateId,
       audienceId,
       scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       sentBy,
-      status,
+      status: 'PENDING_APPROVAL',
     },
   });
 }
 
+const IMMUTABLE_SEND_STATUSES = new Set(['SENDING', 'SENT', 'FAILED', 'CANCELLED']);
+
 export async function updateCampaignSend(id, data) {
-  return prisma.campaignSend.update({ where: { id }, data });
+  const existing = await prisma.campaignSend.findUnique({ where: { id } });
+  if (!existing) throw new Error('Send not found');
+  if (IMMUTABLE_SEND_STATUSES.has(existing.status)) {
+    throw new Error(`Cannot modify a send that is ${existing.status}`);
+  }
+
+  const updateData = {};
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.cycleId !== undefined) updateData.cycleId = data.cycleId || null;
+  if (data.templateId !== undefined) updateData.templateId = data.templateId;
+  if (data.audienceId !== undefined) updateData.audienceId = data.audienceId;
+  if (data.scheduledAt !== undefined) {
+    updateData.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    return existing;
+  }
+
+  // Changing the schedule or audience after approval invalidates the approval.
+  if (existing.status === 'APPROVED' || existing.status === 'SCHEDULED') {
+    updateData.status = 'PENDING_APPROVAL';
+    updateData.approvedBy = null;
+    updateData.approvedAt = null;
+    updateData.approvalFingerprint = null;
+  } else if (updateData.scheduledAt && updateData.scheduledAt > new Date()) {
+    updateData.status = 'PENDING_APPROVAL';
+  }
+
+  return prisma.campaignSend.update({
+    where: { id },
+    data: updateData,
+  });
 }
 
 export async function getCampaignSends(options = {}) {
@@ -233,6 +375,7 @@ export async function getCampaignSends(options = {}) {
       audience: true,
       cycle: true,
       sender: { select: { id: true, fullName: true } },
+      approver: { select: { id: true, fullName: true } },
       _count: { select: { logs: true } },
     },
     orderBy: { createdAt: 'desc' },
@@ -247,199 +390,339 @@ export async function getCampaignSendById(id) {
       audience: true,
       cycle: true,
       sender: { select: { id: true, fullName: true } },
+      approver: { select: { id: true, fullName: true } },
       logs: { orderBy: { sentAt: 'desc' } },
     },
   });
 }
 
-export async function getCandidateCampaignLogs({ candidateId, email }) {
-  const where = {};
-  if (candidateId) where.candidateId = candidateId;
-  if (email) where.email = email;
-
-  return prisma.campaignSendLog.findMany({
-    where,
-    include: {
-      actor: { select: { id: true, fullName: true } },
-      campaignSend: {
-        include: {
-          template: { select: { name: true, subject: true } },
-          sender: { select: { id: true, fullName: true } },
-          cycle: { select: { id: true, name: true } },
-        },
-      },
-    },
-    orderBy: { sentAt: 'desc' },
-  });
-}
-
-export async function sendCampaign(sendId, actorId, { force = false } = {}) {
-  const campaignSend = await prisma.campaignSend.findUnique({
+export async function approveCampaignSend({ sendId, actorId }) {
+  const send = await prisma.campaignSend.findUnique({
     where: { id: sendId },
     include: { template: true, audience: true, cycle: true },
   });
 
-  if (!campaignSend) throw new Error('Campaign send not found');
-  if (!force && campaignSend.status === 'SENT') {
-    throw new Error('Campaign already sent. Use force=true to resend.');
+  if (!send) throw new Error('Campaign send not found');
+  if (!['DRAFT', 'PENDING_APPROVAL'].includes(send.status)) {
+    throw new Error(`Send cannot be approved from status ${send.status}`);
   }
 
-  if (!campaignSend.audience && !campaignSend.template) {
-    throw new Error('Campaign send must have a template and audience');
+  if (!send.template || !send.audience) {
+    throw new Error('Send must have a template and an audience');
   }
 
-  await prisma.campaignSend.update({
-    where: { id: sendId },
-    data: { status: 'SENDING', errorLog: null },
+  const filters = send.audience.filters || {};
+  const recipients = await resolveAudience(filters, { includeApplications: true });
+
+  const snapshot = recipients.map(serializeSnapshot);
+  const eligibilityBasis = 'subscriber_consent' + (Object.keys(filters).length > 0 ? ' + audience_filters' : '');
+
+  const firstContext = snapshot.length > 0
+    ? buildRecipientContext({ ...recipients[0], ...snapshot[0] }, send, config.baseUrl)
+    : { unsubscribeUrl: '#' };
+  const renderedPreview = renderCampaignBody(send.template, firstContext);
+
+  const approvedAt = new Date();
+  const approvalFingerprint = fingerprintApproval({
+    templateName: send.template.name,
+    templateVersion: send.template.version,
+    templateSubject: send.template.subject,
+    templateBody: send.template.body,
+    audienceFilters: filters,
+    recipientSnapshot: snapshot,
+    actorId,
+    approvedAt,
   });
 
-  const filters = campaignSend.audience?.filters || {};
-  const recipients = await resolveAudience(filters);
-  const previewCount = recipients.length;
+  const status = send.scheduledAt && send.scheduledAt > approvedAt ? 'SCHEDULED' : 'APPROVED';
 
-  await prisma.campaignSend.update({
+  return prisma.campaignSend.update({
     where: { id: sendId },
-    data: { previewCount },
+    data: {
+      status,
+      approvedBy: actorId,
+      approvedAt,
+      approvalFingerprint,
+      templateVersion: send.template.version,
+      templateName: send.template.name,
+      templateSubject: send.template.subject,
+      templateBody: send.template.body,
+      audienceFilters: filters,
+      recipientSnapshot: snapshot,
+      renderedPreview,
+      eligibilityBasis,
+      previewCount: snapshot.length,
+    },
+  });
+}
+
+function isPrismaUniqueViolation(error) {
+  return error?.code === 'P2002';
+}
+
+async function getNextAttemptNumber(campaignSendId, email) {
+  const [agg] = await prisma.$queryRaw`
+    SELECT MAX("attemptNumber") as max
+    FROM "campaign_send_logs"
+    WHERE "campaignSendId" = ${campaignSendId} AND "email" = ${email}
+  `;
+  return (Number(agg?.max) || 0) + 1;
+}
+
+async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) {
+  const context = buildRecipientContext(recipient, send, config.baseUrl);
+  const subject = renderCampaignSubject({ subject: send.templateSubject }, context);
+  const html = renderCampaignBody({ body: send.templateBody }, context);
+
+  const log = await prisma.campaignSendLog.create({
+    data: {
+      sendId: send.id,
+      campaignSendId: send.id,
+      candidateId: recipient.candidateId || null,
+      email: recipient.email,
+      attemptNumber,
+      status: 'PENDING',
+      actorId,
+      templateName: send.templateName,
+      templateVersion: send.templateVersion,
+      subject,
+      renderedBody: html,
+    },
   });
 
-  if (previewCount === 0) {
-    await prisma.campaignSend.update({
-      where: { id: sendId },
-      data: { status: 'SENT', sentAt: new Date(), recipientCount: 0 },
-    });
-    return { sendId, sent: 0, failed: 0 };
+  let result;
+  try {
+    result = await sendEmail(recipient.email, subject, html);
+  } catch (error) {
+    result = { success: false, error: error?.message || String(error) };
   }
+
+  await prisma.campaignSendLog.update({
+    where: { id: log.id },
+    data: {
+      status: result.success ? 'SENT' : 'FAILED',
+      providerMessageId: result.messageId || null,
+      error: result.error ? String(result.error).slice(0, 1000) : null,
+      sentAt: new Date(),
+    },
+  });
+
+  return { success: result.success, error: result.error };
+}
+
+async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
+  const suppressed = await prisma.suppressedEmail.findMany({
+    where: { email: { in: recipients.map((r) => r.email) } },
+  });
+  const suppressedSet = new Set(suppressed.map((s) => s.email));
 
   let sent = 0;
   let failed = 0;
   const errors = [];
 
-  const fromName = 'UConsulting ATS';
+  for (const recipient of recipients) {
+    if (suppressedSet.has(recipient.email)) {
+      continue;
+    }
 
-  for (const candidate of recipients) {
-    const application = candidate.applications?.[0];
-    const cycleName = campaignSend.cycle?.name || application?.cycle?.name || '';
-    const stage = application?.currentRound || '';
-    const status = application?.status || '';
-    const token = generateUnsubscribeToken(candidate.email);
-    const unsubscribeUrl = `${config.baseUrl}/api/unsubscribe?email=${encodeURIComponent(candidate.email)}&token=${encodeURIComponent(token)}`;
+    // Re-verify the subscriber still consents at execution time.
+    const subscriber = await prisma.subscriber.findUnique({ where: { email: recipient.email } });
+    if (!subscriber || !subscriber.consented) {
+      continue;
+    }
 
-    const context = {
-      firstName: candidate.firstName,
-      lastName: candidate.lastName,
-      name: `${candidate.firstName} ${candidate.lastName}`.trim(),
-      cycle: cycleName,
-      stage,
-      status,
-      unsubscribeUrl,
-    };
+    const attemptNumber = attemptBase === 'auto'
+      ? await getNextAttemptNumber(send.id, recipient.email)
+      : attemptBase;
 
-    const subject = renderCampaignSubject(campaignSend.template, context);
-    const html = renderCampaignBody(campaignSend.template, context);
-
-    const result = await sendEmail(candidate.email, subject, html);
-
-    await prisma.campaignSendLog.create({
-      data: {
-        sendId,
-        campaignSendId: sendId,
-        candidateId: candidate.id,
-        email: candidate.email,
-        status: result.success ? 'SENT' : 'FAILED',
-        providerMessageId: result.messageId || null,
-        error: result.error ? String(result.error).slice(0, 1000) : null,
-        sentAt: new Date(),
-        actorId,
-        templateName: campaignSend.template.name,
-        subject,
-      },
-    });
-
-    if (result.success) {
-      sent++;
-    } else {
+    try {
+      const outcome = await deliverOneRecipient({ send, recipient, actorId, attemptNumber });
+      if (outcome.success) {
+        sent++;
+      } else {
+        failed++;
+        if (outcome.error) errors.push(`${recipient.email}: ${outcome.error}`);
+      }
+    } catch (error) {
+      // A unique constraint means another worker already claimed this attempt.
+      if (isPrismaUniqueViolation(error)) {
+        continue;
+      }
       failed++;
-      errors.push(`${candidate.email}: ${result.error}`);
+      errors.push(`${recipient.email}: ${error.message || String(error)}`);
     }
   }
 
-  const finalStatus = failed === previewCount ? 'FAILED' : 'SENT';
-  await prisma.campaignSend.update({
-    where: { id: sendId },
-    data: {
-      status: finalStatus,
-      sentAt: new Date(),
-      recipientCount: sent,
-      errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
-    },
-  });
-
-  return { sendId, sent, failed, total: previewCount };
+  return { sent, failed, errors };
 }
 
-export async function retryFailedCampaignSend(sendId, actorId) {
-  const campaignSend = await prisma.campaignSend.findUnique({
+export async function sendCampaign(sendId, actorId, { force = false } = {}) {
+  if (!config.bulkCampaignSendsEnabled) {
+    throw new Error('Bulk campaign sends are disabled until policy decisions are recorded.');
+  }
+
+  const send = await prisma.campaignSend.findUnique({
     where: { id: sendId },
-    include: { template: true, cycle: true },
+    include: { template: true, audience: true, cycle: true },
   });
 
-  if (!campaignSend) throw new Error('Campaign send not found');
+  if (!send) throw new Error('Campaign send not found');
 
-  const failedLogs = await prisma.campaignSendLog.findMany({
-    where: { campaignSendId: sendId, status: 'FAILED' },
-    include: { candidate: { include: { applications: { include: { cycle: true }, orderBy: { submittedAt: 'desc' }, take: 1 } } } },
+  if (!force && send.status === 'SENT') {
+    throw new Error('Campaign already sent. Use force=true to resend.');
+  }
+
+  if (!['APPROVED', 'SCHEDULED'].includes(send.status) && !(force && send.status === 'SENT')) {
+    throw new Error(`Send must be approved before sending (status: ${send.status})`);
+  }
+
+  if (send.status === 'SCHEDULED' && send.scheduledAt && send.scheduledAt > new Date()) {
+    throw new Error(`Scheduled send is not due until ${send.scheduledAt.toISOString()}`);
+  }
+
+  // Atomic claim on the send so concurrent route and scheduler calls do not
+  // both dispatch the same campaign.
+  const claim = await prisma.campaignSend.updateMany({
+    where: {
+      id: sendId,
+      status: { in: force && send.status === 'SENT' ? ['SENT'] : ['APPROVED', 'SCHEDULED'] },
+    },
+    data: { status: 'SENDING' },
   });
 
-  let sent = 0;
-  let stillFailed = 0;
+  if (claim.count === 0) {
+    throw new Error('Campaign is already being sent or was already sent');
+  }
 
-  for (const log of failedLogs) {
-    const candidate = log.candidate;
-    if (!candidate) continue;
+  try {
+    let recipients = send.recipientSnapshot || [];
+    if (recipients.length === 0 && send.audience) {
+      recipients = (await resolveAudience(send.audience.filters || {}, { includeApplications: true }))
+        .map(serializeSnapshot);
+    }
 
-    const application = candidate.applications?.[0];
-    const cycleName = campaignSend.cycle?.name || application?.cycle?.name || '';
-    const context = {
-      firstName: candidate.firstName,
-      lastName: candidate.lastName,
-      name: `${candidate.firstName} ${candidate.lastName}`.trim(),
-      cycle: cycleName,
-      stage: application?.currentRound || '',
-      status: application?.status || '',
-      unsubscribeUrl: `${config.baseUrl}/api/unsubscribe?email=${encodeURIComponent(candidate.email)}&token=${encodeURIComponent(generateUnsubscribeToken(candidate.email))}`,
-    };
+    if (recipients.length === 0) {
+      await prisma.campaignSend.update({
+        where: { id: sendId },
+        data: { status: 'SENT', sentAt: new Date(), recipientCount: 0 },
+      });
+      return { sendId, sent: 0, failed: 0, total: 0 };
+    }
 
-    const subject = renderCampaignSubject(campaignSend.template, context);
-    const html = renderCampaignBody(campaignSend.template, context);
-    const result = await sendEmail(candidate.email, subject, html);
+    const { sent, failed, errors } = await executeSend({ send, actorId, recipients });
 
-    await prisma.campaignSendLog.update({
-      where: { id: log.id },
+    const finalStatus = failed === recipients.length ? 'FAILED' : 'SENT';
+    await prisma.campaignSend.update({
+      where: { id: sendId },
       data: {
-        status: result.success ? 'SENT' : 'FAILED',
-        providerMessageId: result.messageId || null,
-        error: result.error ? String(result.error).slice(0, 1000) : null,
+        status: finalStatus,
         sentAt: new Date(),
-        actorId,
-        subject,
+        recipientCount: sent,
+        errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
       },
     });
 
-    if (result.success) sent++;
-    else stillFailed++;
+    return { sendId, sent, failed, total: recipients.length };
+  } catch (error) {
+    // Revert SENDING so a retry can be attempted.
+    await prisma.campaignSend.update({
+      where: { id: sendId },
+      data: { status: send.status === 'SCHEDULED' ? 'SCHEDULED' : 'APPROVED' },
+    });
+    throw error;
+  }
+}
+
+export async function retryFailedCampaignSend(sendId, actorId) {
+  if (!config.bulkCampaignSendsEnabled) {
+    throw new Error('Bulk campaign sends are disabled until policy decisions are recorded.');
   }
 
-  return { sendId, retried: failedLogs.length, sent, stillFailed };
+  const send = await prisma.campaignSend.findUnique({
+    where: { id: sendId },
+    include: { template: true, audience: true, cycle: true },
+  });
+
+  if (!send) throw new Error('Campaign send not found');
+  if (!['SENT', 'FAILED'].includes(send.status)) {
+    throw new Error(`Retry is not allowed from status ${send.status}`);
+  }
+
+  const claim = await prisma.campaignSend.updateMany({
+    where: { id: sendId, status: { in: ['SENT', 'FAILED'] } },
+    data: { status: 'SENDING' },
+  });
+  if (claim.count === 0) {
+    throw new Error('Campaign is already being retried');
+  }
+
+  try {
+    const failedLogs = await prisma.campaignSendLog.findMany({
+      where: { campaignSendId: sendId, status: 'FAILED' },
+    });
+
+    if (failedLogs.length === 0) {
+      await prisma.campaignSend.update({
+        where: { id: sendId },
+        data: { status: 'SENT' },
+      });
+      return { sendId, retried: 0, sent: 0, stillFailed: 0 };
+    }
+
+    const snapshot = send.recipientSnapshot || [];
+    const recipients = failedLogs
+      .map((log) => snapshot.find((s) => s.email === log.email) || { email: log.email, candidateId: log.candidateId })
+      .filter(Boolean);
+
+    const { sent, failed: stillFailed, errors } = await executeSend({
+      send,
+      actorId,
+      recipients,
+      attemptBase: 'auto',
+    });
+
+    const remainingFailed = await prisma.campaignSendLog.count({
+      where: { campaignSendId: sendId, status: 'FAILED' },
+    });
+
+    const finalStatus = remainingFailed === 0 ? 'SENT' : 'FAILED';
+    await prisma.campaignSend.update({
+      where: { id: sendId },
+      data: {
+        status: finalStatus,
+        sentAt: new Date(),
+        recipientCount: sent,
+        errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
+      },
+    });
+
+    return { sendId, retried: failedLogs.length, sent, stillFailed, remainingFailed };
+  } catch (error) {
+    await prisma.campaignSend.update({
+      where: { id: sendId },
+      data: { status: send.status },
+    });
+    throw error;
+  }
 }
 
 export async function sendScheduledCampaigns() {
+  const results = [];
+
+  if (!config.bulkCampaignSendsEnabled) {
+    return results;
+  }
+
   const now = new Date();
   const scheduled = await prisma.campaignSend.findMany({
-    where: { status: 'SCHEDULED', scheduledAt: { lte: now } },
+    where: {
+      status: 'SCHEDULED',
+      scheduledAt: { lte: now },
+      approvedBy: { not: null },
+    },
     select: { id: true, sentBy: true },
   });
 
-  const results = [];
   for (const item of scheduled) {
     try {
       const result = await sendCampaign(item.id, item.sentBy);
@@ -451,4 +734,42 @@ export async function sendScheduledCampaigns() {
   }
 
   return results;
+}
+
+export async function getCandidateCampaignLogs({ candidateId, email, limit = 100 }) {
+  const where = {};
+  if (candidateId) where.candidateId = candidateId;
+  if (email) where.email = email;
+
+  return prisma.campaignSendLog.findMany({
+    where,
+    take: limit,
+    include: {
+      actor: { select: { id: true, fullName: true } },
+      campaignSend: {
+        include: {
+          template: { select: { name: true, subject: true } },
+          sender: { select: { id: true, fullName: true } },
+          approver: { select: { id: true, fullName: true } },
+          cycle: { select: { id: true, name: true } },
+        },
+      },
+    },
+    orderBy: { sentAt: 'desc' },
+  });
+}
+
+export async function recordSuppression({ email, reason, source }) {
+  if (!email) throw new Error('email is required');
+  await addSuppressedEmail({ email, reason, source });
+  const subscriber = await prisma.subscriber.findUnique({ where: { email } });
+  if (subscriber) {
+    await upsertSubscriber({
+      email,
+      consented: false,
+      source: source || 'suppression',
+      actorId: null,
+    });
+  }
+  return { ok: true };
 }

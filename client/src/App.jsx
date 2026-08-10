@@ -122,7 +122,7 @@ const AppRoutes = () => {
         path="/campaigns"
         element={
           <ProtectedRoute>
-            <CampaignManagement />
+            {user?.role === 'ADMIN' ? <CampaignManagement /> : <Navigate to="/" />}
           </ProtectedRoute>
         }
       />

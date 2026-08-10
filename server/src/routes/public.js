@@ -3,7 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
-import { verifyUnsubscribeToken, addSuppressedEmail } from '../services/campaigns.js';
+import { verifyUnsubscribeToken, recordSuppression } from '../services/campaigns.js';
 
 const router = express.Router();
 
@@ -392,11 +392,58 @@ router.get('/unsubscribe', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired unsubscribe link' });
     }
 
-    await addSuppressedEmail({ email, reason: 'unsubscribe', source: 'campaign_unsubscribe_link' });
+    await recordSuppression({
+      email,
+      reason: 'unsubscribe',
+      source: 'campaign_unsubscribe_link',
+    });
     res.json({ ok: true, message: 'You have been unsubscribed from recruitment emails.' });
   } catch (error) {
     console.error('[GET /api/unsubscribe]', error);
     res.status(500).json({ error: 'Failed to process unsubscribe request' });
+  }
+});
+
+// Public: SES bounce/complaint notifications. SES may deliver these directly
+// or through an SNS Message field.
+router.post('/ses-events', express.json({ type: '*/*' }), async (req, res) => {
+  try {
+    let payload = req.body;
+    if (payload.Message && typeof payload.Message === 'string') {
+      try {
+        payload = JSON.parse(payload.Message);
+      } catch {
+        // fall through with original payload
+      }
+    }
+
+    const type = payload.notificationType || payload.eventType;
+    const emails = [];
+
+    if (type === 'Bounce' && payload.bounce?.bouncedRecipients) {
+      for (const r of payload.bounce.bouncedRecipients) {
+        if (r.emailAddress) emails.push(r.emailAddress);
+      }
+    } else if (type === 'Complaint' && payload.complaint?.complainedRecipients) {
+      for (const r of payload.complaint.complainedRecipients) {
+        if (r.emailAddress) emails.push(r.emailAddress);
+      }
+    }
+
+    const results = [];
+    for (const email of emails) {
+      try {
+        await recordSuppression({ email, reason: type.toLowerCase(), source: 'ses' });
+        results.push({ email, ok: true });
+      } catch (error) {
+        results.push({ email, ok: false, error: error.message });
+      }
+    }
+
+    res.json({ ok: true, processed: results.length, results });
+  } catch (error) {
+    console.error('[POST /api/ses-events]', error);
+    res.status(500).json({ error: 'Failed to process SES event' });
   }
 });
 

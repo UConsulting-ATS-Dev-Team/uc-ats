@@ -17,6 +17,7 @@ import {
   updateCampaignSend,
   getCampaignSends,
   getCampaignSendById,
+  approveCampaignSend,
   sendCampaign,
   retryFailedCampaignSend,
   getSuppressedEmails,
@@ -209,6 +210,16 @@ router.post('/sends', async (req, res) => {
     res.json(send);
   } catch (error) {
     res.status(500).json({ error: error.message || 'Failed to create send' });
+  }
+});
+
+router.post('/sends/:id/approve', async (req, res) => {
+  try {
+    const send = await approveCampaignSend({ sendId: req.params.id, actorId: req.user.id });
+    res.json(send);
+  } catch (error) {
+    console.error('[POST /api/admin/campaigns/sends/:id/approve]', error);
+    res.status(400).json({ error: error.message || 'Failed to approve send' });
   }
 });
 

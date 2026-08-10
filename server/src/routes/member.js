@@ -1,5 +1,5 @@
 import express from 'express';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
@@ -9,7 +9,8 @@ import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
-  groupMemberUserInclude
+  groupMemberUserInclude,
+  isGroupMember,
 } from '../utils/groupMembers.js';
 
 const router = express.Router();
@@ -399,9 +400,22 @@ router.get('/candidate/:id', requireAuth, async (req, res) => {
 
 // GET /api/member/candidate/:id/campaign-logs
 // Returns campaign send logs for the candidate timeline.
-router.get('/candidate/:id/campaign-logs', requireAuth, async (req, res) => {
+// USER candidates are denied; MEMBERs may only view candidates assigned to a
+// group they belong to; ADMINs may view all.
+router.get('/candidate/:id/campaign-logs', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (req.user.role === 'MEMBER') {
+      const candidate = await prisma.candidate.findUnique({
+        where: { id },
+        include: { assignedGroup: { include: groupMemberUserInclude } },
+      });
+      if (!candidate || !isGroupMember(candidate.assignedGroup, req.user.id)) {
+        return res.status(403).json({ error: 'Not authorized to view this candidate' });
+      }
+    }
+
     const logs = await getCandidateCampaignLogs({ candidateId: id });
     res.json(logs);
   } catch (error) {

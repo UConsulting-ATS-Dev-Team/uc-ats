@@ -39,7 +39,7 @@ export default function CandidateDetail() {
 
   useEffect(() => {
     const fetchCampaignLogs = async () => {
-      if (!id) return;
+      if (!id || user?.role === 'USER') return;
       try {
         const logs = await apiClient.get(`/member/candidate/${id}/campaign-logs`);
         setCampaignLogs(logs || []);
@@ -49,7 +49,7 @@ export default function CandidateDetail() {
     };
 
     fetchCampaignLogs();
-  }, [id]);
+  }, [id, user?.role]);
 
   const getInitials = (name) => {
     if (!name) return '?';

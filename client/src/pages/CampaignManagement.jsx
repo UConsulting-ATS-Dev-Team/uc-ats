@@ -29,7 +29,7 @@ import {
   Checkbox,
   Alert,
 } from '@mui/material';
-import { Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, Refresh as RefreshIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 
 function TabPanel({ children, value, index }) {
@@ -226,16 +226,23 @@ export default function CampaignManagement() {
         audienceId: sendForm.audienceId,
         scheduledAt: sendForm.scheduledAt || null,
       };
-      const created = await apiClient.post('/admin/campaigns/sends', payload);
+      await apiClient.post('/admin/campaigns/sends', payload);
       setSendOpen(false);
       setSendForm({ name: '', templateId: '', audienceId: '', scheduledAt: '' });
       await fetchSends();
-      if (!sendForm.scheduledAt) {
-        const result = await apiClient.post(`/admin/campaigns/sends/${created.id}/send`, {});
-        setSendResult(result);
-      }
     } catch (e) {
-      setError(e.message || 'Failed to create/send campaign');
+      setError(e.message || 'Failed to create campaign send');
+    }
+  };
+
+  const handleApprove = async (id) => {
+    try {
+      setError('');
+      const result = await apiClient.post(`/admin/campaigns/sends/${id}/approve`, {});
+      setSendResult({ approved: true, fingerprint: result.approvalFingerprint });
+      await fetchSends();
+    } catch (e) {
+      setError(e.message || 'Failed to approve send');
     }
   };
 
@@ -445,10 +452,15 @@ export default function CampaignManagement() {
                   <TableCell>{s.scheduledAt ? new Date(s.scheduledAt).toLocaleString() : '—'}</TableCell>
                   <TableCell>{s.recipientCount ?? '—'}</TableCell>
                   <TableCell>
-                    {s.status !== 'SENT' && (
+                    {s.status === 'PENDING_APPROVAL' && (
+                      <Tooltip title="Approve rendered content and audience"><IconButton onClick={() => handleApprove(s.id)}><CheckCircleIcon /></IconButton></Tooltip>
+                    )}
+                    {(s.status === 'APPROVED' || s.status === 'SCHEDULED') && s.status !== 'SENDING' && (
                       <Tooltip title="Send now"><IconButton onClick={() => handleSendNow(s.id)}><SendIcon /></IconButton></Tooltip>
                     )}
-                    <Tooltip title="Retry failed"><IconButton onClick={() => handleRetry(s.id)}><RefreshIcon /></IconButton></Tooltip>
+                    {(s.status === 'SENT' || s.status === 'FAILED') && (
+                      <Tooltip title="Retry failed"><IconButton onClick={() => handleRetry(s.id)}><RefreshIcon /></IconButton></Tooltip>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
