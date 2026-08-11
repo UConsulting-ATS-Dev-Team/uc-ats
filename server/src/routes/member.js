@@ -19,7 +19,9 @@ import {
   sanitizeProfileInput,
   isProfileComplete,
   missingProfileFields,
-  needsCycleConfirmation
+  needsCycleConfirmation,
+  relevanceDraftUpdate,
+  visibleRelevance
 } from '../utils/gtkucProfile.js';
 
 const router = express.Router();
@@ -908,6 +910,12 @@ const serializeGtkucProfileState = ({ user, activeCycle, profile, confirmationRe
         industries: profile.industries,
         interests: profile.interests,
         relevance: profile.relevance || '',
+        // The member sees their own draft plus where it stands in review; only
+        // the approved snapshot ever reaches candidates.
+        approvedRelevance: profile.approvedRelevance || '',
+        relevanceReviewStatus: profile.relevanceReviewStatus || 'PENDING_REVIEW',
+        relevanceReviewNote: profile.relevanceReviewNote || '',
+        relevanceVisibleToCandidates: Boolean(visibleRelevance(profile)),
         candidateVisible: profile.candidateVisible,
         hiddenFromGtkuc: profile.hiddenFromGtkuc,
         updatedAt: profile.updatedAt,
@@ -959,12 +967,18 @@ router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res)
       return res.status(400).json({ error: 'Add a short blurb about why candidates should chat with you' });
     }
 
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const [activeCycle, existing] = await Promise.all([
+      prisma.recruitingCycle.findFirst({ where: { isActive: true } }),
+      prisma.memberGtkucProfile.findUnique({ where: { memberId: req.user.id } })
+    ]);
+
+    // Saving a changed blurb sends it back for review rather than publishing it.
+    const relevanceFields = relevanceDraftUpdate(existing, relevance);
 
     const profile = await prisma.memberGtkucProfile.upsert({
       where: { memberId: req.user.id },
-      create: { memberId: req.user.id, industries, interests, relevance, candidateVisible },
-      update: { industries, interests, relevance, candidateVisible }
+      create: { memberId: req.user.id, industries, interests, candidateVisible, ...relevanceFields },
+      update: { industries, interests, candidateVisible, ...relevanceFields }
     });
 
     if (activeCycle) {

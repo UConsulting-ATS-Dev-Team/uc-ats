@@ -48,6 +48,7 @@ model User {
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
+  gtkucRelevanceReviews      MemberGtkucProfile[]            @relation("GtkucRelevanceReviewer")
 
   @@map("users")
 }
@@ -153,7 +154,16 @@ model MemberGtkucProfile {
   memberId         String                           @unique
   industries       String[]
   interests        String[]
-  relevance        String?
+  // Member-authored draft blurb. Never projected to candidates: only
+  // `approvedRelevance`, the exact text an admin cleared, is candidate-visible,
+  // so free text cannot bypass the fixed industry taxonomy.
+  relevance             String?
+  approvedRelevance     String?
+  relevanceReviewStatus GtkucRelevanceReviewStatus @default(PENDING_REVIEW)
+  relevanceReviewNote   String?
+  relevanceReviewedAt   DateTime?
+  relevanceReviewedById String?
+  relevanceReviewedBy   User?     @relation("GtkucRelevanceReviewer", fields: [relevanceReviewedById], references: [id])
   candidateVisible Boolean                          @default(true)
   hiddenFromGtkuc  Boolean                          @default(false)
   createdAt        DateTime                         @default(now())
@@ -162,6 +172,12 @@ model MemberGtkucProfile {
   confirmations    MemberGtkucProfileConfirmation[]
 
   @@map("member_gtkuc_profiles")
+}
+
+enum GtkucRelevanceReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
 }
 
 // One row per member per cycle: the member confirmed their profile is current.

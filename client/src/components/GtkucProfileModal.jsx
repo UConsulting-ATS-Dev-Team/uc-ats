@@ -41,6 +41,27 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
 
   const taxonomy = state?.taxonomy;
   const relevanceMaxLength = taxonomy?.relevanceMaxLength || 500;
+  const reviewStatus = state?.profile?.relevanceReviewStatus;
+  const reviewNote = state?.profile?.relevanceReviewNote;
+  const blurbLive = Boolean(state?.profile?.relevanceVisibleToCandidates);
+  // The blurb is free text, so candidates only see it after an admin approves it.
+  const blurbStatus = !state?.profile?.relevance
+    ? null
+    : reviewStatus === 'APPROVED' && blurbLive
+      ? { severity: 'success', text: 'Your blurb is approved and visible to candidates.' }
+      : reviewStatus === 'REJECTED'
+        ? {
+            severity: 'warning',
+            text: `An admin asked for changes to your blurb, so candidates do not see it${
+              reviewNote ? `: ${reviewNote}` : '.'
+            }`
+          }
+        : {
+            severity: 'info',
+            text: blurbLive
+              ? 'Candidates still see your previously approved blurb while an admin reviews this edit.'
+              : 'Your blurb is waiting on admin review. Candidates see your industries and interests until it is approved.'
+          };
   const canSubmit = industries.length > 0 && interests.length > 0 && relevance.trim().length > 0;
 
   const handleSave = async () => {
@@ -83,6 +104,12 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
+          </Alert>
+        )}
+
+        {blurbStatus && (
+          <Alert severity={blurbStatus.severity} sx={{ mb: 2 }}>
+            {blurbStatus.text}
           </Alert>
         )}
 
@@ -150,7 +177,7 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
             multiline
             minRows={3}
             fullWidth
-            helperText={`${relevance.length}/${relevanceMaxLength}`}
+            helperText={`${relevance.length}/${relevanceMaxLength} — reviewed by an admin before candidates see it. No company names.`}
           />
 
           <FormControlLabel

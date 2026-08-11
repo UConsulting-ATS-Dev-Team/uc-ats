@@ -14,6 +14,9 @@ const state = {
     industries: ['Consulting'],
     interests: ['Case prep'],
     relevance: 'Happy to talk recruiting timelines.',
+    approvedRelevance: 'Happy to talk recruiting timelines.',
+    relevanceReviewStatus: 'APPROVED',
+    relevanceVisibleToCandidates: true,
     candidateVisible: true,
   },
   profileImage: 'https://example.com/photo.jpg',
@@ -75,6 +78,24 @@ describe('GtkucProfileModal', () => {
       })
     );
     expect(onSaved).toHaveBeenCalledWith({ confirmationRequired: false });
+  });
+
+  it('tells the member whether candidates can see their blurb yet', async () => {
+    const { unmount } = render(<GtkucProfileModal open state={state} />);
+    expect(screen.getByText(/approved and visible to candidates/)).toBeInTheDocument();
+    unmount();
+
+    const pending = {
+      ...state,
+      profile: {
+        ...state.profile,
+        relevanceReviewStatus: 'PENDING_REVIEW',
+        relevanceVisibleToCandidates: false,
+      },
+    };
+    render(<GtkucProfileModal open state={pending} />);
+
+    expect(screen.getByText(/waiting on admin review/)).toBeInTheDocument();
   });
 
   it('surfaces a save failure and keeps the dialog open', async () => {

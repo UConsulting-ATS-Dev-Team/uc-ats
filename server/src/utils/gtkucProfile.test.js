@@ -8,12 +8,17 @@ import {
   missingProfileFields,
   toCandidateCard,
   needsCycleConfirmation,
+  visibleRelevance,
+  relevanceDraftUpdate,
+  relevanceReviewUpdate,
 } from './gtkucProfile.js';
 
 const completeProfile = {
   industries: [GTKUC_INDUSTRIES[0]],
   interests: [GTKUC_INTERESTS[0]],
   relevance: 'Happy to talk about recruiting timelines.',
+  approvedRelevance: 'Happy to talk about recruiting timelines.',
+  relevanceReviewStatus: 'APPROVED',
   candidateVisible: true,
   hiddenFromGtkuc: false,
   confirmations: [],
@@ -83,11 +88,93 @@ describe('toCandidateCard', () => {
     });
   });
 
+  it('omits a blurb an admin has not approved', () => {
+    const pending = {
+      ...member,
+      gtkucProfile: {
+        ...completeProfile,
+        relevance: 'I work at Goldman Sachs and can talk about banking.',
+        approvedRelevance: null,
+        relevanceReviewStatus: 'PENDING_REVIEW',
+      },
+    };
+
+    const card = toCandidateCard(pending);
+
+    expect(card.relevance).toBeNull();
+    expect(JSON.stringify(card)).not.toContain('Goldman Sachs');
+  });
+
+  it('shows the approved snapshot, not a newer unreviewed edit', () => {
+    const edited = {
+      ...member,
+      gtkucProfile: {
+        ...completeProfile,
+        relevance: 'Now at Goldman Sachs.',
+        approvedRelevance: 'Happy to talk about recruiting timelines.',
+        relevanceReviewStatus: 'PENDING_REVIEW',
+      },
+    };
+
+    expect(toCandidateCard(edited).relevance).toBeNull();
+
+    const approvedAgain = {
+      ...edited,
+      gtkucProfile: { ...edited.gtkucProfile, relevanceReviewStatus: 'APPROVED' },
+    };
+
+    expect(toCandidateCard(approvedAgain).relevance).toBe('Happy to talk about recruiting timelines.');
+  });
+
   it('returns null when hidden, opted out, or incomplete', () => {
     expect(toCandidateCard({ ...member, gtkucProfile: { ...completeProfile, hiddenFromGtkuc: true } })).toBeNull();
     expect(toCandidateCard({ ...member, gtkucProfile: { ...completeProfile, candidateVisible: false } })).toBeNull();
     expect(toCandidateCard({ ...member, gtkucProfile: { ...completeProfile, relevance: '' } })).toBeNull();
     expect(toCandidateCard({ profileImage: 'photo.jpg' })).toBeNull();
+  });
+});
+
+describe('relevance review gate', () => {
+  it('only treats an approved snapshot as visible', () => {
+    expect(visibleRelevance({ approvedRelevance: 'ok', relevanceReviewStatus: 'APPROVED' })).toBe('ok');
+    expect(visibleRelevance({ approvedRelevance: 'ok', relevanceReviewStatus: 'PENDING_REVIEW' })).toBeNull();
+    expect(visibleRelevance({ approvedRelevance: 'ok', relevanceReviewStatus: 'REJECTED' })).toBeNull();
+    expect(visibleRelevance({ relevance: 'draft only', relevanceReviewStatus: 'APPROVED' })).toBeNull();
+    expect(visibleRelevance(null)).toBeNull();
+  });
+
+  it('sends a changed draft back for review and keeps an unchanged one approved', () => {
+    const approved = { relevance: 'blurb', approvedRelevance: 'blurb', relevanceReviewStatus: 'APPROVED' };
+
+    expect(relevanceDraftUpdate(approved, 'blurb')).toEqual({ relevance: 'blurb' });
+    expect(relevanceDraftUpdate(approved, 'blurb at Goldman Sachs')).toMatchObject({
+      relevance: 'blurb at Goldman Sachs',
+      relevanceReviewStatus: 'PENDING_REVIEW',
+      relevanceReviewedAt: null,
+      relevanceReviewedById: null,
+    });
+    expect(relevanceDraftUpdate(null, 'first blurb').relevanceReviewStatus).toBe('PENDING_REVIEW');
+  });
+
+  it('snapshots the reviewed text on approval and withdraws it on rejection', () => {
+    const profile = { relevance: '  reviewed text  ', approvedRelevance: null };
+
+    const approved = relevanceReviewUpdate({ profile, decision: 'APPROVE', reviewerId: 'admin-1' });
+    expect(approved).toMatchObject({
+      relevanceReviewStatus: 'APPROVED',
+      approvedRelevance: 'reviewed text',
+      relevanceReviewedById: 'admin-1',
+    });
+
+    const rejected = relevanceReviewUpdate({ profile, decision: 'REJECT', note: 'No employer names' });
+    expect(rejected).toMatchObject({
+      relevanceReviewStatus: 'REJECTED',
+      approvedRelevance: null,
+      relevanceReviewNote: 'No employer names',
+    });
+
+    expect(relevanceReviewUpdate({ profile: { relevance: '' }, decision: 'APPROVE' })).toBeNull();
+    expect(relevanceReviewUpdate({ profile, decision: 'SOMETHING_ELSE' })).toBeNull();
   });
 });
 

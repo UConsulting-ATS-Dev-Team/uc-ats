@@ -16,7 +16,12 @@ import {
   getGroupMemberIds,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
-import { isProfileComplete, missingProfileFields } from '../utils/gtkucProfile.js';
+import {
+  isProfileComplete,
+  missingProfileFields,
+  relevanceReviewUpdate,
+  visibleRelevance
+} from '../utils/gtkucProfile.js';
 import {
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
@@ -5888,7 +5893,14 @@ router.get('/gtkuc-profiles', async (req, res) => {
         graduationClass: member.graduationClass,
         industries: member.gtkucProfile?.industries || [],
         interests: member.gtkucProfile?.interests || [],
+        // `relevance` is the member's draft, shown here for review only;
+        // `approvedRelevance` is what candidates actually see.
         relevance: member.gtkucProfile?.relevance || '',
+        approvedRelevance: member.gtkucProfile?.approvedRelevance || '',
+        relevanceReviewStatus: member.gtkucProfile?.relevanceReviewStatus || 'PENDING_REVIEW',
+        relevanceReviewNote: member.gtkucProfile?.relevanceReviewNote || '',
+        relevanceReviewedAt: member.gtkucProfile?.relevanceReviewedAt || null,
+        relevanceVisibleToCandidates: Boolean(visibleRelevance(member.gtkucProfile)),
         candidateVisible: member.gtkucProfile?.candidateVisible ?? true,
         hiddenFromGtkuc: member.gtkucProfile?.hiddenFromGtkuc ?? false,
         complete: isProfileComplete(member.gtkucProfile, member),
@@ -5926,6 +5938,43 @@ router.patch('/gtkuc-profiles/:memberId/visibility', async (req, res) => {
   } catch (error) {
     console.error('[PATCH /api/admin/gtkuc-profiles/:memberId/visibility]', error);
     res.status(500).json({ error: 'Failed to update GTKUC visibility' });
+  }
+});
+
+// Admin: approve or reject a member's relevance blurb. Approving snapshots the
+// exact text reviewed, which is the only blurb candidates can see.
+router.patch('/gtkuc-profiles/:memberId/relevance-review', async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { decision, note } = req.body || {};
+
+    if (decision !== 'APPROVE' && decision !== 'REJECT') {
+      return res.status(400).json({ error: 'decision must be APPROVE or REJECT' });
+    }
+
+    const profile = await prisma.memberGtkucProfile.findUnique({ where: { memberId } });
+    if (!profile) {
+      return res.status(404).json({ error: 'This member has no Get to Know UC profile yet' });
+    }
+
+    const data = relevanceReviewUpdate({ profile, decision, note, reviewerId: req.user?.id });
+    if (!data) {
+      return res.status(400).json({ error: 'There is no blurb to approve for this member' });
+    }
+
+    const updated = await prisma.memberGtkucProfile.update({ where: { memberId }, data });
+
+    res.json({
+      memberId,
+      relevanceReviewStatus: updated.relevanceReviewStatus,
+      approvedRelevance: updated.approvedRelevance || '',
+      relevanceReviewNote: updated.relevanceReviewNote || '',
+      relevanceReviewedAt: updated.relevanceReviewedAt,
+      relevanceVisibleToCandidates: Boolean(visibleRelevance(updated))
+    });
+  } catch (error) {
+    console.error('[PATCH /api/admin/gtkuc-profiles/:memberId/relevance-review]', error);
+    res.status(500).json({ error: 'Failed to record the blurb review' });
   }
 });
 

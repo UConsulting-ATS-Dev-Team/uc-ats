@@ -274,6 +274,18 @@ export default function AdminMeetingSlots() {
     }
   };
 
+  // Free-text blurbs stay hidden from candidates until an admin approves the
+  // exact text, so this is the only path that publishes one.
+  const reviewGtkucRelevance = async (memberId, decision) => {
+    try {
+      await api.patch(`/admin/gtkuc-profiles/${memberId}/relevance-review`, { decision });
+      flash(decision === 'APPROVE' ? 'Blurb approved and now visible to candidates.' : 'Blurb rejected and hidden from candidates.');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to record the blurb review');
+    }
+  };
+
   const openCreate = () => {
     setEditingId(null);
     setForm({ ...emptyForm, memberId: user?.id || '' });
@@ -453,7 +465,11 @@ export default function AdminMeetingSlots() {
               onView={setDetailSlot}
             />
           ) : (
-            <MemberProfilesTab profiles={gtkucProfiles} onToggleHidden={setGtkucHidden} />
+            <MemberProfilesTab
+              profiles={gtkucProfiles}
+              onToggleHidden={setGtkucHidden}
+              onReviewRelevance={reviewGtkucRelevance}
+            />
           )}
         </Paper>
       </Box>
@@ -645,7 +661,7 @@ function TimeSlotsTab({
 
 // Candidate-facing GTKUC profiles: completeness at a glance plus the per-member
 // hide switch. Hidden members' slots are not offered to candidates at all.
-function MemberProfilesTab({ profiles, onToggleHidden }) {
+function MemberProfilesTab({ profiles, onToggleHidden, onReviewRelevance }) {
   if (profiles.length === 0) {
     return <Box sx={{ p: 6, textAlign: 'center', color: 'text.secondary' }}>No member profiles yet.</Box>;
   }
@@ -658,6 +674,7 @@ function MemberProfilesTab({ profiles, onToggleHidden }) {
             <TableCell>Member</TableCell>
             <TableCell>Industries</TableCell>
             <TableCell>Interests</TableCell>
+            <TableCell>Blurb (free text — needs review)</TableCell>
             <TableCell align="center">Profile</TableCell>
             <TableCell align="center">Hidden from GTKUC</TableCell>
           </TableRow>
@@ -687,6 +704,41 @@ function MemberProfilesTab({ profiles, onToggleHidden }) {
                     <Chip key={interest} size="small" label={interest} variant="outlined" />
                   ))}
                 </Stack>
+              </TableCell>
+              <TableCell sx={{ maxWidth: 320 }}>
+                {profile.relevance ? (
+                  <Stack spacing={0.5}>
+                    <Typography variant="body2">{profile.relevance}</Typography>
+                    {profile.relevanceVisibleToCandidates ? (
+                      <Chip size="small" color="success" label="Approved — visible" sx={{ alignSelf: 'flex-start' }} />
+                    ) : (
+                      <Chip
+                        size="small"
+                        color={profile.relevanceReviewStatus === 'REJECTED' ? 'error' : 'warning'}
+                        label={
+                          profile.relevanceReviewStatus === 'REJECTED'
+                            ? 'Rejected — hidden'
+                            : 'Awaiting review — hidden'
+                        }
+                        sx={{ alignSelf: 'flex-start' }}
+                      />
+                    )}
+                    {profile.relevanceReviewStatus !== 'APPROVED' && (
+                      <Stack direction="row" spacing={1}>
+                        <Button size="small" onClick={() => onReviewRelevance(profile.id, 'APPROVE')}>
+                          Approve
+                        </Button>
+                        <Button size="small" color="error" onClick={() => onReviewRelevance(profile.id, 'REJECT')}>
+                          Reject
+                        </Button>
+                      </Stack>
+                    )}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    No blurb submitted
+                  </Typography>
+                )}
               </TableCell>
               <TableCell align="center">
                 {profile.complete ? (
