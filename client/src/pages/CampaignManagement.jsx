@@ -29,8 +29,38 @@ import {
   Checkbox,
   Alert,
 } from '@mui/material';
-import { Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, Refresh as RefreshIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, Refresh as RefreshIcon, CheckCircle as CheckCircleIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
+
+function statusChip(status) {
+  const labels = {
+    DRAFT: 'Draft',
+    PENDING_APPROVAL: 'Pending approval',
+    APPROVED: 'Approved',
+    SCHEDULED: 'Scheduled',
+    SENDING: 'Sending',
+    SENT: 'Sent',
+    FAILED: 'Failed',
+    PARTIAL: 'Partial failure',
+    CANCELLED: 'Cancelled',
+    PENDING: 'Pending',
+    AMBIGUOUS: 'Ambiguous',
+  };
+  const colors = {
+    DRAFT: 'default',
+    PENDING_APPROVAL: 'info',
+    APPROVED: 'info',
+    SCHEDULED: 'warning',
+    SENDING: 'warning',
+    SENT: 'success',
+    FAILED: 'error',
+    PARTIAL: 'warning',
+    CANCELLED: 'default',
+    PENDING: 'warning',
+    AMBIGUOUS: 'warning',
+  };
+  return <Chip label={labels[status] || status} color={colors[status] || 'default'} size="small" />;
+}
 
 function TabPanel({ children, value, index }) {
   if (value !== index) return null;
@@ -74,6 +104,8 @@ export default function CampaignManagement() {
   });
   const [sendResult, setSendResult] = useState(null);
   const [approvalDialog, setApprovalDialog] = useState({ open: false, sendId: null, preview: null });
+  const [sendDetail, setSendDetail] = useState({ open: false, send: null, loading: false });
+  const [resolveReasons, setResolveReasons] = useState({});
 
   // Suppressions
   const [suppressions, setSuppressions] = useState([]);
@@ -286,6 +318,40 @@ export default function CampaignManagement() {
     }
   };
 
+  const openSendDetail = async (id) => {
+    setSendDetail({ open: true, send: null, loading: true });
+    setResolveReasons({});
+    try {
+      const send = await apiClient.get(`/admin/campaigns/sends/${id}`);
+      setSendDetail({ open: true, send, loading: false });
+    } catch (e) {
+      setError(e.message || 'Failed to load send details');
+      setSendDetail({ open: false, send: null, loading: false });
+    }
+  };
+
+  const closeSendDetail = () => {
+    setSendDetail({ open: false, send: null, loading: false });
+    setResolveReasons({});
+  };
+
+  const setResolveReason = (logId, value) => {
+    setResolveReasons((prev) => ({ ...prev, [logId]: value }));
+  };
+
+  const handleResolveLog = async (logId, status) => {
+    try {
+      setError('');
+      const reason = resolveReasons[logId] || '';
+      await apiClient.post(`/admin/campaigns/logs/${logId}/resolve`, { status, reason });
+      setResolveReasons((prev) => ({ ...prev, [logId]: '' }));
+      await openSendDetail(sendDetail.send.id);
+      await fetchSends();
+    } catch (e) {
+      setError(e.message || 'Failed to resolve log');
+    }
+  };
+
   const handleAddSuppression = async () => {
     try {
       setError('');
@@ -454,6 +520,7 @@ export default function CampaignManagement() {
                 <TableCell>Status</TableCell>
                 <TableCell>Scheduled</TableCell>
                 <TableCell>Sent</TableCell>
+                <TableCell>Failed</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -463,17 +530,19 @@ export default function CampaignManagement() {
                   <TableCell>{s.name}</TableCell>
                   <TableCell>{s.template?.name}</TableCell>
                   <TableCell>{s.audience?.name}</TableCell>
-                  <TableCell>{s.status}</TableCell>
+                  <TableCell>{statusChip(s.status)}</TableCell>
                   <TableCell>{s.scheduledAt ? new Date(s.scheduledAt).toLocaleString() : '—'}</TableCell>
                   <TableCell>{s.recipientCount ?? '—'}</TableCell>
+                  <TableCell>{s.failedRecipientCount ?? '—'}</TableCell>
                   <TableCell>
+                    <Tooltip title="View details"><IconButton onClick={() => openSendDetail(s.id)}><VisibilityIcon /></IconButton></Tooltip>
                     {s.status === 'PENDING_APPROVAL' && (
                       <Tooltip title="Approve rendered content and audience"><IconButton onClick={() => openApprovalDialog(s.id)}><CheckCircleIcon /></IconButton></Tooltip>
                     )}
                     {(s.status === 'APPROVED' || s.status === 'SCHEDULED') && s.status !== 'SENDING' && (
                       <Tooltip title="Send now"><IconButton onClick={() => handleSendNow(s.id)}><SendIcon /></IconButton></Tooltip>
                     )}
-                    {(s.status === 'SENT' || s.status === 'FAILED') && (
+                    {(s.status === 'SENT' || s.status === 'FAILED' || s.status === 'PARTIAL') && (
                       <Tooltip title="Retry failed"><IconButton onClick={() => handleRetry(s.id)}><RefreshIcon /></IconButton></Tooltip>
                     )}
                   </TableCell>
@@ -627,6 +696,79 @@ export default function CampaignManagement() {
           <Button variant="contained" onClick={handleCreateSend}>
             {sendForm.scheduledAt ? 'Schedule' : 'Send'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={sendDetail.open} onClose={closeSendDetail} maxWidth="md" fullWidth>
+        <DialogTitle>Send details</DialogTitle>
+        <DialogContent>
+          {sendDetail.loading || !sendDetail.send ? (
+            <Typography>Loading…</Typography>
+          ) : (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+                <Typography variant="subtitle1">Status: {statusChip(sendDetail.send.status)}</Typography>
+                <Typography variant="body2">Sent: {sendDetail.send.recipientCount ?? 0}</Typography>
+                <Typography variant="body2">Failed: {sendDetail.send.failedRecipientCount ?? 0}</Typography>
+                <Typography variant="body2">Total: {sendDetail.send.previewCount ?? '—'}</Typography>
+              </Stack>
+              {sendDetail.send.logs?.length > 0 ? (
+                <TableContainer component={Paper}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Email</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Attempt</TableCell>
+                        <TableCell>Provider ID</TableCell>
+                        <TableCell>Error / Evidence</TableCell>
+                        <TableCell>Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {sendDetail.send.logs.map((log) => (
+                        <TableRow key={log.id}>
+                          <TableCell>{log.email}</TableCell>
+                          <TableCell>{statusChip(log.status)}</TableCell>
+                          <TableCell>{log.attemptNumber}</TableCell>
+                          <TableCell>{log.providerMessageId ?? '—'}</TableCell>
+                          <TableCell>{log.error ?? (log.renderedBody ? 'Rendered body stored' : '—')}</TableCell>
+                          <TableCell>
+                            {['PENDING', 'AMBIGUOUS'].includes(log.status) ? (
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <TextField
+                                  size="small"
+                                  placeholder="Reason"
+                                  value={resolveReasons[log.id] || ''}
+                                  onChange={(e) => setResolveReason(log.id, e.target.value)}
+                                  sx={{ minWidth: 120 }}
+                                  data-testid={`resolve-reason-${log.id}`}
+                                />
+                                <Button size="small" variant="outlined" data-testid={`resolve-delivered-${log.id}`} onClick={() => handleResolveLog(log.id, 'SENT')}>Delivered</Button>
+                                <Button size="small" variant="outlined" color="error" data-testid={`resolve-failed-${log.id}`} onClick={() => handleResolveLog(log.id, 'FAILED')}>Not sent</Button>
+                              </Stack>
+                            ) : (
+                              log.resolutions?.length > 0 ? (
+                                <Typography variant="caption" display="block">
+                                  Resolved by {log.resolutions[0].actor?.fullName || 'unknown'} as {log.resolutions[0].status}
+                                  {log.resolutions[0].reason ? `: ${log.resolutions[0].reason}` : ''}
+                                </Typography>
+                              ) : null
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <Typography color="text.secondary">No logs yet.</Typography>
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeSendDetail}>Close</Button>
         </DialogActions>
       </Dialog>
 

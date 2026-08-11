@@ -21,7 +21,7 @@ import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
 import campaignRoutes from './routes/campaigns.js';
-import { sendScheduledCampaigns, reconcileCampaignLogs } from './services/campaigns.js';
+import { sendScheduledCampaigns, reconcileCampaignSendAggregates } from './services/campaigns.js';
 
 const app = express();
 
@@ -126,11 +126,11 @@ cron.schedule('* * * * *', () => {
   });
 });
 
-// Reconcile stale PENDING campaign logs every 5 minutes.
+// Reconcile stale PENDING campaign logs and repair campaign aggregates every 5 minutes.
 cron.schedule('*/5 * * * *', () => {
-  console.log('Reconciling campaign send logs...');
-  reconcileCampaignLogs().catch((error) => {
-    console.error('Error reconciling campaign send logs:', error);
+  console.log('Reconciling campaign sends and logs...');
+  reconcileCampaignSendAggregates().catch((error) => {
+    console.error('Error reconciling campaign sends and logs:', error);
   });
 });
 

@@ -83,6 +83,7 @@ import {
   retryFailedCampaignSend,
   sendScheduledCampaigns,
   reconcileCampaignLogs,
+  reconcileCampaignSendAggregates,
   resolveCampaignLog,
   updateCampaignSend,
   recordSuppression,
@@ -477,7 +478,7 @@ describe('campaigns service', () => {
       expect(result.sent).toBe(0);
     });
 
-    it('records partial success and keeps the send as SENT when any email succeeds', async () => {
+    it('records partial success and marks the send as PARTIAL when some emails fail', async () => {
       mockConfig.bulkCampaignSendsEnabled = true;
       const send = buildApprovedSend({
         recipientSnapshot: [
@@ -502,7 +503,7 @@ describe('campaigns service', () => {
       expect(result.failed).toBe(1);
       expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: 'SENT', recipientCount: 1 }),
+          data: expect.objectContaining({ status: 'PARTIAL', recipientCount: 1, failedRecipientCount: 1 }),
         })
       );
     });
@@ -840,6 +841,93 @@ describe('campaigns service', () => {
       await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'already resolved' })).rejects.toThrow(/already resolved/i);
 
       expect(mockPrisma.campaignSendLogResolution.create).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent and returns the existing audit record when retried', async () => {
+      const log = { id: 'log-1', status: 'SENT', providerMessageId: 'ses-123', sentAt: new Date(), campaignSendId: 'send-1', resolutions: [{ id: 'res-1', status: 'SENT' }] };
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
+
+      const result = await resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'retry' });
+
+      expect(result.alreadyResolved).toBe(true);
+      expect(result.resolution.id).toBe('res-1');
+      expect(mockPrisma.campaignSendLogResolution.create).not.toHaveBeenCalled();
+    });
+
+    it('creates one audit record and recomputes the campaign aggregate', async () => {
+      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null, campaignSendId: 'send-1' };
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
+      mockPrisma.campaignSendLog.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSendLogResolution.create.mockResolvedValue({ id: 'res-1' });
+      mockPrisma.campaignSend.findUnique.mockResolvedValue({
+        id: 'send-1',
+        status: 'SENDING',
+        sentAt: null,
+        recipientCount: 0,
+        failedRecipientCount: 0,
+        logs: [{ id: 'log-1', email: 'a@example.com', attemptNumber: 1, status: 'SENT' }],
+      });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+
+      const result = await resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'provider confirmed delivery' });
+
+      expect(result.resolution.id).toBe('res-1');
+      expect(mockPrisma.campaignSendLogResolution.create).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'send-1' },
+          data: expect.objectContaining({ status: 'SENT', recipientCount: 1, failedRecipientCount: 0 }),
+        })
+      );
+    });
+  });
+
+  describe('reconcileCampaignSendAggregates', () => {
+    it('repairs a stale aggregate and marks mixed SENT/FAILED outcomes as PARTIAL', async () => {
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([]);
+      mockPrisma.campaignSend.findMany.mockResolvedValue([{ id: 'send-1' }]);
+      mockPrisma.campaignSend.findUnique.mockResolvedValue({
+        id: 'send-1',
+        status: 'SENDING',
+        sentAt: null,
+        recipientCount: 0,
+        failedRecipientCount: 0,
+        logs: [
+          { id: 'l1', email: 'a@example.com', attemptNumber: 1, status: 'SENT' },
+          { id: 'l2', email: 'b@example.com', attemptNumber: 1, status: 'FAILED' },
+        ],
+      });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+
+      await reconcileCampaignSendAggregates();
+
+      expect(mockPrisma.campaignSend.findMany).toHaveBeenCalled();
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'send-1' },
+          data: expect.objectContaining({ status: 'PARTIAL', recipientCount: 1, failedRecipientCount: 1 }),
+        })
+      );
+    });
+
+    it('does not update an aggregate that is already consistent', async () => {
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([]);
+      mockPrisma.campaignSend.findMany.mockResolvedValue([{ id: 'send-1' }]);
+      mockPrisma.campaignSend.findUnique.mockResolvedValue({
+        id: 'send-1',
+        status: 'PARTIAL',
+        sentAt: new Date(),
+        recipientCount: 1,
+        failedRecipientCount: 1,
+        logs: [
+          { id: 'l1', email: 'a@example.com', attemptNumber: 1, status: 'SENT' },
+          { id: 'l2', email: 'b@example.com', attemptNumber: 1, status: 'FAILED' },
+        ],
+      });
+
+      await reconcileCampaignSendAggregates();
+
+      expect(mockPrisma.campaignSend.update).not.toHaveBeenCalled();
     });
   });
 

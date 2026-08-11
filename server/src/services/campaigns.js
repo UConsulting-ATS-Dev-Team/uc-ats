@@ -345,7 +345,7 @@ export async function createCampaignSend({ name, cycleId, templateId, audienceId
   });
 }
 
-const IMMUTABLE_SEND_STATUSES = new Set(['SENDING', 'SENT', 'FAILED', 'CANCELLED']);
+const IMMUTABLE_SEND_STATUSES = new Set(['SENDING', 'SENT', 'FAILED', 'PARTIAL', 'CANCELLED']);
 
 export async function updateCampaignSend(id, data) {
   const existing = await prisma.campaignSend.findUnique({ where: { id } });
@@ -407,7 +407,16 @@ export async function getCampaignSendById(id) {
       cycle: true,
       sender: { select: { id: true, fullName: true } },
       approver: { select: { id: true, fullName: true } },
-      logs: { orderBy: { sentAt: 'desc' } },
+      logs: {
+        orderBy: { sentAt: 'desc' },
+        include: {
+          candidate: { select: { firstName: true, lastName: true } },
+          resolutions: {
+            orderBy: { createdAt: 'desc' },
+            include: { actor: { select: { id: true, fullName: true } } },
+          },
+        },
+      },
     },
   });
 }
@@ -627,11 +636,12 @@ function computeCampaignSendStatus(outcomes) {
   const hasFailed = outcomes.some((s) => s === 'FAILED');
   const hasSent = outcomes.some((s) => s === 'SENT');
   if (hasPendingOrAmbiguous) return 'SENDING';
-  if (hasFailed) return hasSent ? 'SENT' : 'FAILED';
+  if (hasFailed && hasSent) return 'PARTIAL';
+  if (hasFailed) return 'FAILED';
   return 'SENT';
 }
 
-async function recomputeCampaignSendStatus(sendId) {
+async function recomputeCampaignSendStatus(sendId, { errorLog } = {}) {
   if (!sendId) return;
   const send = await prisma.campaignSend.findUnique({
     where: { id: sendId },
@@ -642,15 +652,25 @@ async function recomputeCampaignSendStatus(sendId) {
   const latestByEmail = getLatestLogByEmail(send.logs || []);
   const latest = Array.from(latestByEmail.values());
   const status = computeCampaignSendStatus(latest.map((l) => l.status));
+  const sentCount = latest.filter((l) => l.status === 'SENT').length;
+  const failedCount = latest.filter((l) => l.status === 'FAILED').length;
 
-  if (status !== send.status) {
+  const updateData = {
+    status,
+    recipientCount: sentCount,
+    failedRecipientCount: failedCount,
+  };
+  if (status !== 'SENDING' && !send.sentAt) {
+    updateData.sentAt = new Date();
+  }
+  if (errorLog !== undefined) {
+    updateData.errorLog = errorLog;
+  }
+
+  if (status !== send.status || send.recipientCount !== sentCount || send.failedRecipientCount !== failedCount || errorLog !== undefined) {
     await prisma.campaignSend.update({
       where: { id: sendId },
-      data: {
-        status,
-        sentAt: status === 'SENT' ? new Date() : send.sentAt,
-        recipientCount: latest.filter((l) => l.status === 'SENT').length,
-      },
+      data: updateData,
     });
   }
 }
@@ -724,11 +744,11 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
 
   if (!send) throw new Error('Campaign send not found');
 
-  if (!force && send.status === 'SENT') {
+  if (!force && (send.status === 'SENT' || send.status === 'PARTIAL')) {
     throw new Error('Campaign already sent. Use force=true to resend.');
   }
 
-  if (!['APPROVED', 'SCHEDULED'].includes(send.status) && !(force && send.status === 'SENT')) {
+  if (!['APPROVED', 'SCHEDULED'].includes(send.status) && !(force && ['SENT', 'PARTIAL'].includes(send.status))) {
     throw new Error(`Send must be approved before sending (status: ${send.status})`);
   }
 
@@ -741,7 +761,7 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
   const claim = await prisma.campaignSend.updateMany({
     where: {
       id: sendId,
-      status: { in: force && send.status === 'SENT' ? ['SENT'] : ['APPROVED', 'SCHEDULED'] },
+      status: { in: force && ['SENT', 'PARTIAL'].includes(send.status) ? [send.status] : ['APPROVED', 'SCHEDULED'] },
     },
     data: { status: 'SENDING' },
   });
@@ -763,13 +783,14 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
     if (recipients.length === 0) {
       await prisma.campaignSend.update({
         where: { id: sendId },
-        data: { status: 'SENT', sentAt: new Date(), recipientCount: 0 },
+        data: { status: 'SENT', sentAt: new Date(), recipientCount: 0, failedRecipientCount: 0 },
       });
       return { sendId, sent: 0, failed: 0, total: 0 };
     }
 
     const { sent, failed, ambiguous, errors, outcomes } = await executeSend({ send, actorId, recipients });
     const resolvedSent = outcomes.filter((o) => o.status === 'SENT').length;
+    const resolvedFailed = outcomes.filter((o) => o.status === 'FAILED').length;
     const finalStatus = computeCampaignSendStatus(outcomes.map((o) => o.status));
 
     await prisma.campaignSend.update({
@@ -778,6 +799,7 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
         status: finalStatus,
         sentAt: finalStatus === 'SENDING' ? undefined : new Date(),
         recipientCount: resolvedSent,
+        failedRecipientCount: resolvedFailed,
         errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
       },
     });
@@ -804,12 +826,12 @@ export async function retryFailedCampaignSend(sendId, actorId) {
   });
 
   if (!send) throw new Error('Campaign send not found');
-  if (!['SENT', 'FAILED'].includes(send.status)) {
+  if (!['SENT', 'FAILED', 'PARTIAL'].includes(send.status)) {
     throw new Error(`Retry is not allowed from status ${send.status}`);
   }
 
   const claim = await prisma.campaignSend.updateMany({
-    where: { id: sendId, status: { in: ['SENT', 'FAILED'] } },
+    where: { id: sendId, status: { in: ['SENT', 'FAILED', 'PARTIAL'] } },
     data: { status: 'SENDING' },
   });
   if (claim.count === 0) {
@@ -828,9 +850,10 @@ export async function retryFailedCampaignSend(sendId, actorId) {
     const failedLogs = Array.from(latestByEmail.values()).filter((log) => log.status === 'FAILED');
 
     if (failedLogs.length === 0) {
+      const successful = Array.from(latestByEmail.values());
       await prisma.campaignSend.update({
         where: { id: sendId },
-        data: { status: 'SENT' },
+        data: { status: 'SENT', recipientCount: successful.length, failedRecipientCount: 0 },
       });
       return { sendId, retried: 0, sent: 0, stillFailed: 0 };
     }
@@ -855,14 +878,15 @@ export async function retryFailedCampaignSend(sendId, actorId) {
     const latest = Array.from(latestByEmail.values());
     const resolvedSent = latest.filter((log) => log.status === 'SENT').length;
     const remainingFailed = latest.filter((log) => log.status === 'FAILED').length;
-
     const finalStatus = computeCampaignSendStatus(latest.map((log) => log.status));
+
     await prisma.campaignSend.update({
       where: { id: sendId },
       data: {
         status: finalStatus,
         sentAt: finalStatus === 'SENDING' ? send.sentAt : new Date(),
         recipientCount: resolvedSent,
+        failedRecipientCount: remainingFailed,
         errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
       },
     });
@@ -943,6 +967,30 @@ export async function reconcileCampaignLogs({ olderThanMs = 5 * 60 * 1000, now =
   return results;
 }
 
+export async function reconcileCampaignSendAggregates() {
+  // First repair stale PENDING logs and reconcile affected sends.
+  await reconcileCampaignLogs();
+
+  // Then recompute all non-draft sends to repair any aggregate that drifted
+  // after a log resolution or send failure. This is the durable reconcile job.
+  const sends = await prisma.campaignSend.findMany({
+    where: { status: { in: ['SENDING', 'SENT', 'FAILED', 'PARTIAL'] } },
+    select: { id: true },
+  });
+
+  const results = [];
+  for (const send of sends) {
+    try {
+      await recomputeCampaignSendStatus(send.id);
+      results.push({ id: send.id, ok: true });
+    } catch (error) {
+      console.error(`[reconcileCampaignSendAggregates] recompute failed for ${send.id}:`, error);
+      results.push({ id: send.id, error: error.message });
+    }
+  }
+  return results;
+}
+
 export async function resolveCampaignLog({ logId, actorId, status, reason }) {
   if (!['SENT', 'FAILED'].includes(status)) {
     throw new Error('Resolution status must be SENT or FAILED');
@@ -951,10 +999,16 @@ export async function resolveCampaignLog({ logId, actorId, status, reason }) {
   const result = await prisma.$transaction(async (tx) => {
     const log = await tx.campaignSendLog.findUnique({
       where: { id: logId },
-      select: { id: true, status: true, sentAt: true, campaignSendId: true },
+      include: {
+        resolutions: { take: 1, orderBy: { createdAt: 'desc' } },
+      },
     });
     if (!log) throw new Error('Campaign send log not found');
     if (!['PENDING', 'AMBIGUOUS'].includes(log.status)) {
+      const existingResolution = log.resolutions?.[0];
+      if (existingResolution && existingResolution.status === status) {
+        return { log, resolution: existingResolution, alreadyResolved: true };
+      }
       throw new Error(`Log status ${log.status} cannot be resolved`);
     }
 
@@ -972,7 +1026,7 @@ export async function resolveCampaignLog({ logId, actorId, status, reason }) {
       throw new Error('Log is not resolvable or already resolved');
     }
 
-    await tx.campaignSendLogResolution.create({
+    const resolution = await tx.campaignSendLogResolution.create({
       data: {
         logId,
         status,
@@ -981,14 +1035,21 @@ export async function resolveCampaignLog({ logId, actorId, status, reason }) {
       },
     });
 
-    return { ...log, status, sentAt: status === 'SENT' ? new Date() : log.sentAt };
+    return { log, resolution: { id: resolution.id, status, reason, actorId }, alreadyResolved: false };
   });
 
-  if (result.campaignSendId) {
-    await recomputeCampaignSendStatus(result.campaignSendId);
+  // Recompute the campaign aggregate. If this fails, the durable reconciliation
+  // job will eventually repair it; the audit record and log resolution are
+  // already committed.
+  if (result.log.campaignSendId) {
+    try {
+      await recomputeCampaignSendStatus(result.log.campaignSendId);
+    } catch (error) {
+      console.error(`[resolveCampaignLog] recompute failed for send ${result.log.campaignSendId}:`, error);
+    }
   }
 
-  return result;
+  return { ...result.log, status, resolution: result.resolution, alreadyResolved: result.alreadyResolved };
 }
 
 export async function getCandidateCampaignLogs({ candidateId, email, limit = 100 }) {

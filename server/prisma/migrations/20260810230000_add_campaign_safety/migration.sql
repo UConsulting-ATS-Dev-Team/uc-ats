@@ -94,4 +94,3 @@ ALTER TABLE "consent_events" ADD CONSTRAINT "consent_events_subscriberId_fkey" F
 
 -- AddForeignKey
 ALTER TABLE "consent_events" ADD CONSTRAINT "consent_events_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-

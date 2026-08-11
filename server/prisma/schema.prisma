@@ -469,6 +469,7 @@ model CampaignSend {
   sentAt              DateTime?
   sentBy              String
   recipientCount      Int?
+  failedRecipientCount Int?
   previewCount        Int?
   errorLog            String?
   approvedBy          String?
@@ -600,6 +601,7 @@ enum CampaignSendStatus {
   SENDING
   SENT
   FAILED
+  PARTIAL
   CANCELLED
 }
 
