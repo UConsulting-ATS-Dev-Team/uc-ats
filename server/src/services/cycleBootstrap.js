@@ -11,12 +11,19 @@
 // have forms are committed with `formStatus = 'PENDING_FORM'` and surfaced as
 // "needs form link" in Event Management — an explicit gap, never a silent one.
 
+import { createHash } from 'node:crypto';
+
 import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   CYCLE_TIMELINE_STAGES,
   STAGE_BY_KEY,
   MILESTONE_EVENT_DURATION_MINUTES
 } from './cycleTimelineTemplate.js';
+import {
+  activateCycleExclusively,
+  isActiveCycleConflict,
+  ActiveCycleConflictError
+} from './activeCycle.js';
 
 // Timeline inputs are LA-local `YYYY-MM-DDTHH:mm` strings, matching every other
 // datetime the admin UI submits. Date-only values are anchored at 09:00 LA so
@@ -212,6 +219,29 @@ const canonicalJson = (value) => {
     .join(',')}}`;
 };
 
+// Identity of a bootstrap request, not just of its timeline: two requests that
+// differ in `activate` or in any per-event override are different operations, so
+// the second must not be answered with the first one's result.
+const bootstrapFingerprint = ({ name, snapshot, activate, events }) =>
+  createHash('sha256')
+    .update(
+      canonicalJson({
+        version: 1,
+        name,
+        activate: Boolean(activate),
+        timeline: snapshot,
+        events: events.map((event) => ({
+          stageKey: event.stageKey,
+          eventName: event.eventName,
+          eventLocation: event.eventLocation || '',
+          showToCandidates: event.showToCandidates,
+          eventStartDate: event.eventStartDate,
+          eventEndDate: event.eventEndDate
+        }))
+      })
+    )
+    .digest('hex');
+
 const bootstrapResult = ({ cycle, created }, publishChangeSet) => ({
   cycle,
   events: created,
@@ -220,18 +250,21 @@ const bootstrapResult = ({ cycle, created }, publishChangeSet) => ({
 });
 
 // Cycle names are unique, so an exact retry of a commit whose response was lost
-// finds the cycle it already created. Same name + same timeline means "this
-// request already succeeded" and the original bootstrap is returned; same name
-// with a different timeline is a genuine naming conflict.
-const recoverExistingBootstrap = async (prisma, name, snapshot) => {
+// finds the cycle it already created. Only a byte-identical request (same stored
+// fingerprint) is treated as that retry and answered with the original result;
+// anything else reusing the name — a changed timeline, a flipped `activate`, an
+// edited event name/location/visibility — is a conflict, because returning the
+// first commit's result would report a success that never happened.
+const recoverExistingBootstrap = async (prisma, name, fingerprint) => {
   const existing = await prisma.recruitingCycle.findFirst({ where: { name } });
   if (!existing) return null;
 
-  const sameTimeline =
+  const sameRequest =
     Boolean(existing.timelineCommittedAt) &&
-    canonicalJson(existing.timelineSnapshot) === canonicalJson(snapshot);
+    Boolean(existing.bootstrapFingerprint) &&
+    existing.bootstrapFingerprint === fingerprint;
 
-  if (!sameTimeline) {
+  if (!sameRequest) {
     throw validationError([
       { stage: null, field: 'name', message: 'A cycle with this name already exists' }
     ]);
@@ -316,15 +349,23 @@ export async function commitCycleBootstrap({
 
   const snapshot = timelineSnapshot(stages);
   const publishChangeSet = derivePublishChangeSet(name.trim(), stages);
+  const fingerprint = bootstrapFingerprint({
+    name: name.trim(),
+    snapshot,
+    activate,
+    events: eventsToCreate
+  });
 
-  const recovered = await recoverExistingBootstrap(prisma, name.trim(), snapshot);
+  const recovered = await recoverExistingBootstrap(prisma, name.trim(), fingerprint);
   if (recovered) return bootstrapResult(recovered, publishChangeSet);
 
   const runCommit = () => prisma.$transaction(async (tx) => {
-    const cycle = await tx.recruitingCycle.create({
+    let cycle = await tx.recruitingCycle.create({
       data: {
         name: name.trim(),
-        isActive: activate,
+        // Activation is a separate, ordered step below; creating the row already
+        // active would trip the single-active index before others are cleared.
+        isActive: false,
         startDate: stages.applications_open ? stages.applications_open.start : null,
         endDate: stages.offers_released
           ? stages.offers_released.start
@@ -339,6 +380,7 @@ export async function commitCycleBootstrap({
         createdById: actorId || null,
         timelineSnapshot: snapshot,
         timelineCommittedAt: new Date(),
+        bootstrapFingerprint: fingerprint,
         publishChangeSet
       }
     });
@@ -367,10 +409,7 @@ export async function commitCycleBootstrap({
     // transaction: a failure here must not leave a committed cycle behind, and
     // must never leave two cycles active.
     if (activate) {
-      await tx.recruitingCycle.updateMany({
-        where: { id: { not: cycle.id }, isActive: true },
-        data: { isActive: false }
-      });
+      cycle = await activateCycleExclusively(tx, cycle.id);
     }
 
     return { cycle, created };
@@ -380,9 +419,12 @@ export async function commitCycleBootstrap({
   try {
     result = await runCommit();
   } catch (error) {
+    // A concurrent activation that would have produced a second active cycle
+    // must fail rather than resolve to someone else's cycle.
+    if (isActiveCycleConflict(error)) throw new ActiveCycleConflictError();
     // Lost the race with a concurrent identical commit (unique cycle name).
     if (error.code === 'P2002') {
-      const raced = await recoverExistingBootstrap(prisma, name.trim(), snapshot);
+      const raced = await recoverExistingBootstrap(prisma, name.trim(), fingerprint);
       if (raced) return bootstrapResult(raced, publishChangeSet);
     }
     throw error;

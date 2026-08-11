@@ -16,12 +16,23 @@ const validTimeline = () => ({
   offers_released: { start: '2026-10-15' }
 });
 
+// The cycle as a later request would read it back from the database.
+const committedCycle = (cycle) => ({
+  id: cycle.id,
+  name: cycle.name,
+  isActive: cycle.isActive,
+  timelineSnapshot: JSON.parse(JSON.stringify(cycle.timelineSnapshot)),
+  timelineCommittedAt: new Date(),
+  bootstrapFingerprint: cycle.bootstrapFingerprint
+});
+
 const makePrisma = ({ existingCycle = null, cycles = {}, existingEvents = [], failOnEvent = null } = {}) => {
   const createdEvents = [];
   const tx = {
     recruitingCycle: {
       create: vi.fn(async ({ data }) => ({ id: 'cycle-1', ...data })),
-      updateMany: vi.fn(async () => ({ count: 1 }))
+      updateMany: vi.fn(async () => ({ count: 1 })),
+      update: vi.fn(async ({ where, data }) => ({ id: where.id, ...data }))
     },
     events: {
       create: vi.fn(async ({ data }) => {
@@ -172,6 +183,12 @@ describe('commitCycleBootstrap', () => {
       where: { id: { not: 'cycle-1' }, isActive: true },
       data: { isActive: false }
     });
+    // The row is created inactive and activated last: the reverse order would
+    // trip the single-active index against the cycle still marked active.
+    expect(prisma.tx.recruitingCycle.create.mock.calls[0][0].data.isActive).toBe(false);
+    expect(prisma.tx.recruitingCycle.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.tx.recruitingCycle.update.mock.invocationCallOrder[0]
+    );
     // No post-commit writes: a failure after commit can't leave two active cycles.
     expect(prisma.recruitingCycle.updateMany).not.toHaveBeenCalled();
     expect(prisma.recruitingCycle.update).not.toHaveBeenCalled();
@@ -192,7 +209,22 @@ describe('commitCycleBootstrap', () => {
     // Activation lives after the event inserts in the same transaction, so the
     // failure aborts it along with the cycle row.
     expect(prisma.tx.recruitingCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.tx.recruitingCycle.update).not.toHaveBeenCalled();
     expect(prisma.recruitingCycle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reports a concurrent activation as a conflict rather than a success', async () => {
+    const prisma = makePrisma();
+    prisma.$transaction.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['recruiting_cycles_single_active'] }
+      })
+    );
+
+    await expect(
+      commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline(), activate: true })
+    ).rejects.toMatchObject({ name: 'ActiveCycleConflictError' });
   });
 
   it('recovers the original bootstrap when an identical commit is retried', async () => {
@@ -206,12 +238,7 @@ describe('commitCycleBootstrap', () => {
 
     // The retry sees the cycle the first attempt committed.
     const retry = makePrisma({
-      existingCycle: {
-        id: 'cycle-1',
-        name: 'Fall 2026',
-        timelineSnapshot: JSON.parse(JSON.stringify(original.cycle.timelineSnapshot)),
-        timelineCommittedAt: new Date()
-      },
+      existingCycle: committedCycle(original.cycle),
       existingEvents: original.events
     });
 
@@ -226,6 +253,64 @@ describe('commitCycleBootstrap', () => {
     expect(result.cycle.id).toBe('cycle-1');
     expect(result.events).toHaveLength(4);
     expect(result.pendingFormCount).toBe(3);
+  });
+
+  it('does not treat a differing request as a retry just because name and timeline match', async () => {
+    const original = await commitCycleBootstrap({
+      prisma: makePrisma(),
+      name: 'Fall 2026',
+      timeline: validTimeline(),
+      events: [{ stageKey: 'coffee_chats', eventLocation: 'Kerckhoff 300' }]
+    });
+
+    // Same name, same timeline, but each of these is a different operation: the
+    // stored result of the first commit would be a lie about what happened.
+    const differingRequests = [
+      { label: 'activate flipped on', request: { activate: true } },
+      {
+        label: 'event location edited',
+        request: { events: [{ stageKey: 'coffee_chats', eventLocation: 'Ackerman 2410' }] }
+      },
+      {
+        label: 'event renamed',
+        request: { events: [{ stageKey: 'coffee_chats', eventName: 'Coffee Chats (round 2)', eventLocation: 'Kerckhoff 300' }] }
+      },
+      {
+        label: 'event visibility flipped',
+        request: {
+          events: [{ stageKey: 'coffee_chats', eventLocation: 'Kerckhoff 300', showToCandidates: false }]
+        }
+      }
+    ];
+
+    for (const { label, request } of differingRequests) {
+      const prisma = makePrisma({
+        existingCycle: committedCycle(original.cycle),
+        existingEvents: original.events
+      });
+
+      await expect(
+        commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline(), ...request }),
+        label
+      ).rejects.toMatchObject({ name: 'ValidationError' });
+      expect(prisma.$transaction, label).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses to adopt a same-named cycle that predates request fingerprints', async () => {
+    const original = await commitCycleBootstrap({
+      prisma: makePrisma(),
+      name: 'Fall 2026',
+      timeline: validTimeline()
+    });
+    const legacy = committedCycle(original.cycle);
+    delete legacy.bootstrapFingerprint;
+
+    const prisma = makePrisma({ existingCycle: legacy });
+
+    await expect(
+      commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline() })
+    ).rejects.toMatchObject({ name: 'ValidationError' });
   });
 
   it('rejects the same cycle name with a different timeline', async () => {
@@ -254,14 +339,7 @@ describe('commitCycleBootstrap', () => {
     prisma.recruitingCycle.findFirst.mockImplementation(async () => {
       // Absent on the pre-flight check, present once the race is lost.
       seen += 1;
-      return seen === 1
-        ? null
-        : {
-            id: 'cycle-1',
-            name: 'Fall 2026',
-            timelineSnapshot: JSON.parse(JSON.stringify(reference.cycle.timelineSnapshot)),
-            timelineCommittedAt: new Date()
-          };
+      return seen === 1 ? null : committedCycle(reference.cycle);
     });
     prisma.$transaction.mockRejectedValue(
       Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
