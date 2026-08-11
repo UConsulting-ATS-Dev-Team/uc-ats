@@ -389,9 +389,10 @@ router.get('/unsubscribe', async (req, res) => {
       return res.status(400).json({ error: 'email and token are required' });
     }
 
-    const decodedEmail = verifyUnsubscribeToken(token);
-    if (decodedEmail !== email) {
-      return res.status(400).json({ error: 'Invalid or expired unsubscribe link' });
+    try {
+      verifyUnsubscribeToken(token, email);
+    } catch {
+      return res.status(400).json({ error: 'Invalid unsubscribe token' });
     }
 
     await recordSuppression({
@@ -424,7 +425,6 @@ router.post('/ses-events', express.json({ type: '*/*' }), async (req, res) => {
     try {
       await verifySnsSignature(req.body, {
         requiredTopicArn: config.sesSnsTopicArn,
-        verify: config.sesSnsVerifySignature,
       });
     } catch (error) {
       console.error('[POST /api/ses-events] SNS verification failed:', error.message);

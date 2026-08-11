@@ -50,6 +50,7 @@ const mockPrisma = vi.hoisted(() => ({
   campaignSendLog: {
     create: vi.fn(),
     update: vi.fn(),
+    updateMany: vi.fn(),
     findMany: vi.fn(),
     count: vi.fn(),
     findUnique: vi.fn(),
@@ -146,7 +147,11 @@ describe('campaigns service', () => {
       id: `log-${args?.data?.email || 'x'}`,
     }));
     mockPrisma.campaignSendLog.update.mockResolvedValue({});
-    mockPrisma.$transaction.mockImplementation((ops) => Promise.all(ops));
+    mockPrisma.campaignSendLog.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.campaignSendLogResolution.create.mockResolvedValue({ id: 'res-1' });
+    mockPrisma.$transaction.mockImplementation((callbackOrOps) =>
+      typeof callbackOrOps === 'function' ? callbackOrOps(mockPrisma) : Promise.all(callbackOrOps)
+    );
   });
 
   describe('resolveAudience', () => {
@@ -232,7 +237,7 @@ describe('campaigns service', () => {
       mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
       mockPrisma.campaignSend.update.mockResolvedValue({ ...send, status: 'APPROVED' });
 
-      const previewFingerprint = '5fc4268ba190b05d565e6bb830ab12926dfa472ac7dca2a1b9d2057fc2e1b7cb';
+      const previewFingerprint = '7b8820b5b94d1c542ad06266921cad5be22ed6bb1ec4d2487cd44bc27e9224d4';
       await approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: previewFingerprint });
 
       expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
@@ -320,8 +325,42 @@ describe('campaigns service', () => {
       ]);
       mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
 
-      const oldPreviewFingerprint = '5fc4268ba190b05d565e6bb830ab12926dfa472ac7dca2a1b9d2057fc2e1b7cb';
+      const oldPreviewFingerprint = 'stale-fingerprint-7b8820b5b94d1c542ad06266921cad5be22ed6bb1ec4d2487cd44bc27e9224d4';
       await expect(approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: oldPreviewFingerprint })).rejects.toThrow(/stale/i);
+    });
+
+    it('rejects approval when a merge value or rendered content changes after preview', async () => {
+      const send = {
+        id: 'send-1',
+        name: 'Test',
+        status: 'PENDING_APPROVAL',
+        scheduledAt: null,
+        sentBy: 'admin-1',
+        template: {
+          id: 'tmpl-1',
+          name: 'Welcome',
+          subject: 'Hi {{name}}',
+          body: '<p>Hello {{name}}</p>',
+          version: 2,
+        },
+        audience: { id: 'aud-1', filters: { statuses: ['ACCEPTED'] } },
+        cycle: { id: 'cycle-1', name: 'Fall 2026' },
+      };
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.subscriber.findMany.mockResolvedValue([subscriberWithCandidate()]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+
+      const preview = await previewCampaignSend({ sendId: 'send-1' });
+
+      // The candidate name changes after preview; the rendered body and the
+      // per-recipient merge snapshot are now different, so approval must fail.
+      mockPrisma.subscriber.findMany.mockResolvedValue([
+        subscriberWithCandidate({ firstName: 'Alicia' }),
+      ]);
+
+      await expect(
+        approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: preview.approvalFingerprint })
+      ).rejects.toThrow(/stale/i);
     });
   });
 
@@ -519,6 +558,28 @@ describe('campaigns service', () => {
       // Second call without force should fail because status is SENT.
       mockPrisma.campaignSend.findUnique.mockResolvedValue({ ...send, status: 'SENT' });
       await expect(sendCampaign('send-1', 'admin-1')).rejects.toThrow(/already sent/i);
+    });
+
+    it('does not mark the send SENT while any recipient outcome is AMBIGUOUS', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend();
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSendLog.update
+        .mockRejectedValueOnce(new Error('write failed'))
+        .mockResolvedValueOnce({});
+
+      const result = await sendCampaign('send-1', 'admin-1');
+
+      expect(result.ambiguous).toBe(1);
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'SENDING' }),
+        })
+      );
     });
   });
 
@@ -738,15 +799,20 @@ describe('campaigns service', () => {
 
   describe('resolveCampaignLog', () => {
     it('allows an admin to resolve an AMBIGUOUS log to SENT with an audit record', async () => {
-      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null };
+      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null, campaignSendId: 'send-1' };
       mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
-      mockPrisma.campaignSendLog.update.mockResolvedValue({ ...log, status: 'SENT' });
+      mockPrisma.campaignSendLog.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.campaignSendLogResolution.create.mockResolvedValue({ id: 'res-1' });
 
       const result = await resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'confirmed delivery' });
 
       expect(result.status).toBe('SENT');
       expect(mockPrisma.$transaction).toHaveBeenCalled();
+      expect(mockPrisma.campaignSendLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'log-1', status: { in: ['PENDING', 'AMBIGUOUS'] } }),
+        })
+      );
       expect(mockPrisma.campaignSendLogResolution.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ logId: 'log-1', status: 'SENT', reason: 'confirmed delivery', actorId: 'admin-1' }),
@@ -764,6 +830,16 @@ describe('campaigns service', () => {
       mockPrisma.campaignSendLog.findUnique.mockResolvedValue({ id: 'log-1', status: 'AMBIGUOUS' });
 
       await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'PENDING' })).rejects.toThrow(/SENT or FAILED/i);
+    });
+
+    it('only lets one concurrent resolution win and prevents duplicate audit records', async () => {
+      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null, campaignSendId: 'send-1' };
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
+      mockPrisma.campaignSendLog.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'already resolved' })).rejects.toThrow(/already resolved/i);
+
+      expect(mockPrisma.campaignSendLogResolution.create).not.toHaveBeenCalled();
     });
   });
 

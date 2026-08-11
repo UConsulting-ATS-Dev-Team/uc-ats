@@ -57,7 +57,6 @@ const config = {
 
   // SES bounce/complaint SNS webhook authentication.
   sesSnsTopicArn: process.env.SES_SNS_TOPIC_ARN || null,
-  sesSnsVerifySignature: process.env.SES_SNS_VERIFY_SIGNATURE !== 'false',
 };
 
 export default config;

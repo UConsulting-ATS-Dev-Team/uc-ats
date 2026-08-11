@@ -154,11 +154,17 @@ describe('snsVerification', () => {
     ).resolves.toBe(true);
   });
 
-  it('skips verification when verify=false', async () => {
-    const payload = buildNotification({ Signature: 'invalid' });
+  it('does not allow verify=false to disable signature validation', async () => {
+    const payload = buildNotification();
+    payload.Signature = 'invalid';
     await expect(
-      verifySnsSignature(payload, { verify: false })
-    ).resolves.toBe(true);
+      verifySnsSignature(payload, {
+        requiredTopicArn: topicArn,
+        getSigningCert: makeCertFetcher(keyPair.publicKey.export({ type: 'spki', format: 'pem' })),
+        verifyCertificate: false,
+        now,
+      })
+    ).rejects.toThrow(/signature verification failed/i);
   });
 });
 

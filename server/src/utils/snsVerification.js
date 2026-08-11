@@ -105,16 +105,11 @@ export function getSnsSignatureAlgorithm(signatureVersion) {
 export async function verifySnsSignature(payload, options = {}) {
   const {
     requiredTopicArn,
-    verify = true,
     verifyCertificate = true,
     getSigningCert = fetchSnsSigningCert,
     now = Date.now(),
     maxTimestampAgeMs = 15 * 60 * 1000,
   } = options;
-
-  if (!verify) {
-    return true;
-  }
 
   if (!payload || typeof payload !== 'object') {
     throw new Error('SNS payload is required');

@@ -1,17 +1,7 @@
 import crypto from 'crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
-import jwt from 'jsonwebtoken';
 import { sendEmail } from './emailNotifications.js';
-
-const MERGE_FIELDS = [
-  'firstName',
-  'lastName',
-  'name',
-  'cycle',
-  'stage',
-  'status',
-];
 
 const escapeHtml = (value) => {
   if (value === null || value === undefined) return '';
@@ -52,17 +42,15 @@ export function renderCampaignSubject(template, context) {
 }
 
 export function generateUnsubscribeToken(email) {
-  return jwt.sign({ email, type: 'unsubscribe' }, config.jwtSecret, { expiresIn: '30d' });
+  return crypto.createHmac('sha256', config.jwtSecret).update(email).digest('hex');
 }
 
-export function verifyUnsubscribeToken(token) {
-  try {
-    const decoded = jwt.verify(token, config.jwtSecret);
-    if (decoded?.type !== 'unsubscribe' || !decoded?.email) return null;
-    return decoded.email;
-  } catch (error) {
-    return null;
+export function verifyUnsubscribeToken(token, email) {
+  const expected = generateUnsubscribeToken(email);
+  if (token !== expected) {
+    throw new Error('Invalid unsubscribe token');
   }
+  return email;
 }
 
 function buildSubscriberWhere(filters) {
@@ -96,9 +84,9 @@ function getLatestApplication(applications) {
 function buildRecipientContext(recipient, send, baseUrl) {
   const candidate = recipient.candidate;
   const application = getLatestApplication(candidate?.applications || []);
-  const cycleName = send.cycle?.name || application?.cycle?.name || '';
-  const stage = application?.currentRound || '';
-  const status = application?.status || '';
+  const cycleName = recipient.cycle || send?.cycle?.name || application?.cycle?.name || '';
+  const stage = recipient.stage || application?.currentRound || '';
+  const status = recipient.status || application?.status || '';
   const firstName = recipient.firstName || candidate?.firstName || '';
   const lastName = recipient.lastName || candidate?.lastName || '';
   const token = generateUnsubscribeToken(recipient.email);
@@ -130,6 +118,22 @@ function serializeSnapshot(recipient) {
   };
 }
 
+function buildRenderedSnapshot(recipients, template, baseUrl) {
+  const subjectTpl = template.templateSubject || template.subject || '';
+  const bodyTpl = template.templateBody || template.body || '';
+  return recipients
+    .map((recipient) => {
+      const snap = serializeSnapshot(recipient);
+      const context = buildRecipientContext({ ...recipient, ...snap }, null, baseUrl);
+      return {
+        ...snap,
+        renderedSubject: renderCampaignSubject({ subject: subjectTpl }, context),
+        renderedBody: renderCampaignBody({ body: bodyTpl }, context),
+      };
+    })
+    .sort((a, b) => a.email.localeCompare(b.email));
+}
+
 function buildApprovalBase({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot }) {
   return JSON.stringify({
     templateName,
@@ -138,8 +142,7 @@ function buildApprovalBase({ templateName, templateVersion, templateSubject, tem
     templateBody,
     audienceFilters,
     recipientSnapshot: [...recipientSnapshot]
-      .sort((a, b) => a.email.localeCompare(b.email))
-      .map((r) => ({ email: r.email, candidateId: r.candidateId })),
+      .sort((a, b) => a.email.localeCompare(b.email)),
   });
 }
 
@@ -431,14 +434,18 @@ export async function approveCampaignSend({ sendId, actorId, approvalFingerprint
   const filters = send.audience.filters || {};
   const recipients = await resolveAudience(filters, { includeApplications: true });
 
-  const snapshot = recipients.map(serializeSnapshot);
+  const template = {
+    templateSubject: send.templateSubject || send.template?.subject,
+    templateBody: send.templateBody || send.template?.body,
+  };
+  const snapshot = buildRenderedSnapshot(recipients, template, config.baseUrl);
   const eligibilityBasis = 'subscriber_consent' + (Object.keys(filters).length > 0 ? ' + audience_filters' : '');
 
   const previewFingerprint = buildPreviewFingerprint({
     templateName: send.template.name,
     templateVersion: send.template.version,
-    templateSubject: send.template.subject,
-    templateBody: send.template.body,
+    templateSubject: template.templateSubject,
+    templateBody: template.templateBody,
     audienceFilters: filters,
     recipientSnapshot: snapshot,
   });
@@ -447,17 +454,14 @@ export async function approveCampaignSend({ sendId, actorId, approvalFingerprint
     throw new Error('Preview is stale or does not match the current audience/template. Please review the preview again.');
   }
 
-  const firstContext = snapshot.length > 0
-    ? buildRecipientContext({ ...recipients[0], ...snapshot[0] }, send, config.baseUrl)
-    : { unsubscribeUrl: '#' };
-  const renderedPreview = renderCampaignBody(send.template, firstContext);
+  const renderedPreview = snapshot.length > 0 ? snapshot[0].renderedBody : '';
 
   const approvedAt = new Date();
   const approvalFingerprint = fingerprintApproval({
     templateName: send.template.name,
     templateVersion: send.template.version,
-    templateSubject: send.template.subject,
-    templateBody: send.template.body,
+    templateSubject: template.templateSubject,
+    templateBody: template.templateBody,
     audienceFilters: filters,
     recipientSnapshot: snapshot,
     actorId,
@@ -475,8 +479,8 @@ export async function approveCampaignSend({ sendId, actorId, approvalFingerprint
       approvalFingerprint,
       templateVersion: send.template.version,
       templateName: send.template.name,
-      templateSubject: send.template.subject,
-      templateBody: send.template.body,
+      templateSubject: template.templateSubject,
+      templateBody: template.templateBody,
       audienceFilters: filters,
       recipientSnapshot: snapshot,
       renderedPreview,
@@ -499,18 +503,19 @@ export async function previewCampaignSend({ sendId }) {
 
   const filters = send.audience.filters || {};
   const recipients = await resolveAudience(filters, { includeApplications: true });
-  const snapshot = recipients.map(serializeSnapshot);
 
-  const firstContext = snapshot.length > 0
-    ? buildRecipientContext({ ...recipients[0], ...snapshot[0] }, send, config.baseUrl)
-    : { unsubscribeUrl: '#' };
-  const renderedPreview = renderCampaignBody(send.template, firstContext);
+  const template = {
+    templateSubject: send.templateSubject || send.template?.subject,
+    templateBody: send.templateBody || send.template?.body,
+  };
+  const snapshot = buildRenderedSnapshot(recipients, template, config.baseUrl);
+  const renderedPreview = snapshot.length > 0 ? snapshot[0].renderedBody : '';
 
   const approvalFingerprint = buildPreviewFingerprint({
     templateName: send.template.name,
     templateVersion: send.template.version,
-    templateSubject: send.template.subject,
-    templateBody: send.template.body,
+    templateSubject: template.templateSubject,
+    templateBody: template.templateBody,
     audienceFilters: filters,
     recipientSnapshot: snapshot,
   });
@@ -540,8 +545,8 @@ async function getNextAttemptNumber(campaignSendId, email) {
 
 async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) {
   const context = buildRecipientContext(recipient, send, config.baseUrl);
-  const subject = renderCampaignSubject({ subject: send.templateSubject }, context);
-  const html = renderCampaignBody({ body: send.templateBody }, context);
+  const subject = recipient.renderedSubject || renderCampaignSubject({ subject: send.templateSubject }, context);
+  const html = recipient.renderedBody || renderCampaignBody({ body: send.templateBody }, context);
 
   // The PENDING log acts as a durable intent/outbox record. Its unique
   // (campaignSendId, email, attemptNumber) constraint ensures only one SES
@@ -615,6 +620,44 @@ function getLatestLogByEmail(logs) {
     }
   }
   return latestByEmail;
+}
+
+function computeCampaignSendStatus(outcomes) {
+  const hasPendingOrAmbiguous = outcomes.some((s) => ['PENDING', 'AMBIGUOUS'].includes(s));
+  const hasFailed = outcomes.some((s) => s === 'FAILED');
+  const hasSent = outcomes.some((s) => s === 'SENT');
+  if (hasPendingOrAmbiguous) return 'SENDING';
+  if (hasFailed) return hasSent ? 'SENT' : 'FAILED';
+  return 'SENT';
+}
+
+async function recomputeCampaignSendStatus(sendId) {
+  if (!sendId) return;
+  const send = await prisma.campaignSend.findUnique({
+    where: { id: sendId },
+    include: { logs: true },
+  });
+  if (!send) return;
+
+  const snapshot = send.recipientSnapshot || [];
+  const latestByEmail = getLatestLogByEmail(send.logs || []);
+  const latest = Array.from(latestByEmail.values());
+  const status = computeCampaignSendStatus(latest.map((l) => l.status));
+
+  if (status === 'SENT' && latest.length === 0 && snapshot.length > 0) {
+    // All recipients were skipped (suppressed / not consented) with no attempts.
+  }
+
+  if (status !== send.status) {
+    await prisma.campaignSend.update({
+      where: { id: sendId },
+      data: {
+        status,
+        sentAt: status === 'SENT' ? new Date() : send.sentAt,
+        recipientCount: latest.filter((l) => l.status === 'SENT').length,
+      },
+    });
+  }
 }
 
 async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
@@ -715,8 +758,11 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
   try {
     let recipients = send.recipientSnapshot || [];
     if (recipients.length === 0 && send.audience) {
-      recipients = (await resolveAudience(send.audience.filters || {}, { includeApplications: true }))
-        .map(serializeSnapshot);
+      recipients = buildRenderedSnapshot(
+        await resolveAudience(send.audience.filters || {}, { includeApplications: true }),
+        send,
+        config.baseUrl,
+      );
     }
 
     if (recipients.length === 0) {
@@ -727,15 +773,16 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
       return { sendId, sent: 0, failed: 0, total: 0 };
     }
 
-    const { sent, failed, ambiguous, errors } = await executeSend({ send, actorId, recipients });
+    const { sent, failed, ambiguous, errors, outcomes } = await executeSend({ send, actorId, recipients });
+    const resolvedSent = outcomes.filter((o) => o.status === 'SENT').length;
+    const finalStatus = computeCampaignSendStatus(outcomes.map((o) => o.status));
 
-    const finalStatus = failed === recipients.length ? 'FAILED' : 'SENT';
     await prisma.campaignSend.update({
       where: { id: sendId },
       data: {
         status: finalStatus,
-        sentAt: new Date(),
-        recipientCount: sent,
+        sentAt: finalStatus === 'SENDING' ? undefined : new Date(),
+        recipientCount: resolvedSent,
         errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
       },
     });
@@ -810,15 +857,17 @@ export async function retryFailedCampaignSend(sendId, actorId) {
       latestByEmail.set(outcome.email, { ...latestByEmail.get(outcome.email), status: outcome.status });
     }
 
-    const remainingFailed = Array.from(latestByEmail.values()).filter((log) => log.status === 'FAILED').length;
+    const latest = Array.from(latestByEmail.values());
+    const resolvedSent = latest.filter((log) => log.status === 'SENT').length;
+    const remainingFailed = latest.filter((log) => log.status === 'FAILED').length;
 
-    const finalStatus = remainingFailed === 0 ? 'SENT' : 'FAILED';
+    const finalStatus = computeCampaignSendStatus(latest.map((log) => log.status));
     await prisma.campaignSend.update({
       where: { id: sendId },
       data: {
         status: finalStatus,
-        sentAt: new Date(),
-        recipientCount: sent,
+        sentAt: finalStatus === 'SENDING' ? send.sentAt : new Date(),
+        recipientCount: resolvedSent,
         errorLog: errors.length > 0 ? errors.join('\n').slice(0, 4000) : null,
       },
     });
@@ -874,6 +923,7 @@ export async function reconcileCampaignLogs({ olderThanMs = 5 * 60 * 1000, now =
   });
 
   const results = [];
+  const sendIds = new Set();
   for (const log of pending) {
     try {
       await prisma.campaignSendLog.update({
@@ -881,8 +931,17 @@ export async function reconcileCampaignLogs({ olderThanMs = 5 * 60 * 1000, now =
         data: { status: 'AMBIGUOUS', sentAt: new Date() },
       });
       results.push({ id: log.id, status: 'AMBIGUOUS' });
+      if (log.campaignSendId) sendIds.add(log.campaignSendId);
     } catch (error) {
       results.push({ id: log.id, error: error.message });
+    }
+  }
+
+  for (const sendId of sendIds) {
+    try {
+      await recomputeCampaignSendStatus(sendId);
+    } catch (error) {
+      console.error(`[reconcileCampaignLogs] failed to recompute send ${sendId}:`, error);
     }
   }
 
@@ -894,31 +953,47 @@ export async function resolveCampaignLog({ logId, actorId, status, reason }) {
     throw new Error('Resolution status must be SENT or FAILED');
   }
 
-  const log = await prisma.campaignSendLog.findUnique({
-    where: { id: logId },
-    include: { campaignSend: true },
-  });
-  if (!log) throw new Error('Campaign send log not found');
-  if (!['PENDING', 'AMBIGUOUS'].includes(log.status)) {
-    throw new Error(`Log status ${log.status} cannot be resolved`);
-  }
-
-  const [updated] = await prisma.$transaction([
-    prisma.campaignSendLog.update({
+  const result = await prisma.$transaction(async (tx) => {
+    const log = await tx.campaignSendLog.findUnique({
       where: { id: logId },
-      data: { status, sentAt: status === 'SENT' ? new Date() : log.sentAt },
-    }),
-    prisma.campaignSendLogResolution.create({
+      select: { id: true, status: true, sentAt: true, campaignSendId: true },
+    });
+    if (!log) throw new Error('Campaign send log not found');
+    if (!['PENDING', 'AMBIGUOUS'].includes(log.status)) {
+      throw new Error(`Log status ${log.status} cannot be resolved`);
+    }
+
+    const updateResult = await tx.campaignSendLog.updateMany({
+      where: {
+        id: logId,
+        status: { in: ['PENDING', 'AMBIGUOUS'] },
+      },
+      data: {
+        status,
+        sentAt: status === 'SENT' ? new Date() : log.sentAt,
+      },
+    });
+    if (updateResult.count === 0) {
+      throw new Error('Log is not resolvable or already resolved');
+    }
+
+    await tx.campaignSendLogResolution.create({
       data: {
         logId,
         status,
         reason: reason || null,
         actorId,
       },
-    }),
-  ]);
+    });
 
-  return updated;
+    return { ...log, status, sentAt: status === 'SENT' ? new Date() : log.sentAt };
+  });
+
+  if (result.campaignSendId) {
+    await recomputeCampaignSendStatus(result.campaignSendId);
+  }
+
+  return result;
 }
 
 export async function getCandidateCampaignLogs({ candidateId, email, limit = 100 }) {

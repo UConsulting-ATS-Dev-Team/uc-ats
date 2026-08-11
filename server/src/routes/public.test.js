@@ -3,7 +3,6 @@ import express from 'express';
 
 const mockConfig = vi.hoisted(() => ({
   sesSnsTopicArn: 'arn:aws:sns:us-east-1:123456789012:ses-events',
-  sesSnsVerifySignature: true,
 }));
 
 const mockVerifySnsSignature = vi.hoisted(() => vi.fn());
@@ -65,7 +64,6 @@ describe('public routes /api/ses-events', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockConfig.sesSnsTopicArn = 'arn:aws:sns:us-east-1:123456789012:ses-events';
-    mockConfig.sesSnsVerifySignature = true;
     mockRecordSuppression.mockResolvedValue(undefined);
   });
 
@@ -145,5 +143,75 @@ describe('public routes /api/ses-events', () => {
     expect(res.status).toBe(200);
     expect(body.processed).toBe(1);
     expect(mockRecordSuppression).toHaveBeenCalledWith({ email: 'bounce@example.com', reason: 'bounce', source: 'ses' });
+    expect(mockVerifySnsSignature).toHaveBeenCalledWith(
+      expect.any(Object),
+      { requiredTopicArn: mockConfig.sesSnsTopicArn }
+    );
+  });
+
+  it('does not allow signature verification to be bypassed', async () => {
+    mockVerifySnsSignature.mockRejectedValue(new Error('SNS signature verification failed'));
+
+    const res = await post('/api/ses-events', {
+      Type: 'Notification',
+      Message: JSON.stringify({ notificationType: 'Bounce', bounce: { bouncedRecipients: [{ emailAddress: 'a@example.com' }] } }),
+      Signature: 'ignored',
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockRecordSuppression).not.toHaveBeenCalled();
+  });
+});
+
+describe('public routes /api/unsubscribe', () => {
+  let app;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    app = express();
+    app.use(express.json({ type: '*/*' }));
+    app.use('/api', publicRoutes);
+    server = app.listen(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRecordSuppression.mockResolvedValue(undefined);
+  });
+
+  async function get(path) {
+    return fetch(`http://localhost:${port}${path}`);
+  }
+
+  it('unsubscribes a recipient with a valid token', async () => {
+    const { verifyUnsubscribeToken } = await import('../services/campaigns.js');
+    verifyUnsubscribeToken.mockImplementation(() => undefined);
+
+    const res = await get('/api/unsubscribe?email=alice@example.com&token=validtoken');
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(verifyUnsubscribeToken).toHaveBeenCalledWith('validtoken', 'alice@example.com');
+    expect(mockRecordSuppression).toHaveBeenCalledWith({ email: 'alice@example.com', reason: 'unsubscribe', source: 'campaign_unsubscribe_link' });
+  });
+
+  it('rejects an unsubscribe request with an invalid token', async () => {
+    const { verifyUnsubscribeToken } = await import('../services/campaigns.js');
+    verifyUnsubscribeToken.mockImplementation(() => { throw new Error('Invalid unsubscribe token'); });
+
+    const res = await get('/api/unsubscribe?email=alice@example.com&token=badtoken');
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe('Invalid unsubscribe token');
+    expect(mockRecordSuppression).not.toHaveBeenCalled();
   });
 });
