@@ -249,11 +249,13 @@ export default function CampaignManagement() {
   };
 
   const handleApprove = async () => {
-    const { sendId } = approvalDialog;
-    if (!sendId) return;
+    const { sendId, preview } = approvalDialog;
+    if (!sendId || !preview?.approvalFingerprint) return;
     try {
       setError('');
-      const result = await apiClient.post(`/admin/campaigns/sends/${sendId}/approve`, {});
+      const result = await apiClient.post(`/admin/campaigns/sends/${sendId}/approve`, {
+        approvalFingerprint: preview.approvalFingerprint,
+      });
       setSendResult({ approved: true, fingerprint: result.approvalFingerprint });
       setApprovalDialog({ open: false, sendId: null, preview: null });
       await fetchSends();
@@ -646,9 +648,18 @@ export default function CampaignManagement() {
               <Box>
                 <Typography variant="subtitle2" gutterBottom>Rendered preview</Typography>
                 <Box
+                  component="iframe"
                   data-testid="approval-rendered-preview"
-                  sx={{ border: 1, borderColor: 'divider', p: 2, borderRadius: 1 }}
-                  dangerouslySetInnerHTML={{ __html: approvalDialog.preview.renderedPreview }}
+                  sandbox=""
+                  srcDoc={`<!DOCTYPE html><html><head><meta charset="UTF-8"><base target="_blank"></head><body>${approvalDialog.preview.renderedPreview}</body></html>`}
+                  sx={{
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 1,
+                    width: '100%',
+                    minHeight: 200,
+                  }}
+                  title="Campaign preview"
                 />
               </Box>
             </Stack>

@@ -21,6 +21,7 @@ import {
   previewCampaignSend,
   sendCampaign,
   retryFailedCampaignSend,
+  resolveCampaignLog,
   getSuppressedEmails,
   addSuppressedEmail,
   removeSuppressedEmail,
@@ -214,7 +215,11 @@ router.post('/sends', async (req, res) => {
 
 router.post('/sends/:id/approve', async (req, res) => {
   try {
-    const send = await approveCampaignSend({ sendId: req.params.id, actorId: req.user.id });
+    const { approvalFingerprint } = req.body || {};
+    if (!approvalFingerprint) {
+      return res.status(400).json({ error: 'approvalFingerprint is required' });
+    }
+    const send = await approveCampaignSend({ sendId: req.params.id, actorId: req.user.id, approvalFingerprint });
     res.json(send);
   } catch (error) {
     console.error('[POST /api/admin/campaigns/sends/:id/approve]', error);
@@ -281,6 +286,20 @@ router.post('/sends/:id/retry', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/campaigns/sends/:id/retry]', error);
     res.status(500).json({ error: error.message || 'Failed to retry campaign' });
+  }
+});
+
+router.post('/logs/:id/resolve', async (req, res) => {
+  try {
+    const { status, reason } = req.body || {};
+    if (!status) {
+      return res.status(400).json({ error: 'status is required' });
+    }
+    const log = await resolveCampaignLog({ logId: req.params.id, actorId: req.user.id, status, reason });
+    res.json(log);
+  } catch (error) {
+    console.error('[POST /api/admin/campaigns/logs/:id/resolve]', error);
+    res.status(400).json({ error: error.message || 'Failed to resolve log' });
   }
 });
 

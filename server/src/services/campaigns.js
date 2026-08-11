@@ -130,8 +130,8 @@ function serializeSnapshot(recipient) {
   };
 }
 
-function fingerprintApproval({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot, actorId, approvedAt }) {
-  const canonical = JSON.stringify({
+function buildApprovalBase({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot }) {
+  return JSON.stringify({
     templateName,
     templateVersion,
     templateSubject,
@@ -140,6 +140,19 @@ function fingerprintApproval({ templateName, templateVersion, templateSubject, t
     recipientSnapshot: [...recipientSnapshot]
       .sort((a, b) => a.email.localeCompare(b.email))
       .map((r) => ({ email: r.email, candidateId: r.candidateId })),
+  });
+}
+
+function buildPreviewFingerprint({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot }) {
+  return crypto.createHash('sha256').update(buildApprovalBase({
+    templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot,
+  })).digest('hex');
+}
+
+function fingerprintApproval({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot, actorId, approvedAt }) {
+  const base = buildApprovalBase({ templateName, templateVersion, templateSubject, templateBody, audienceFilters, recipientSnapshot });
+  const canonical = JSON.stringify({
+    base,
     actorId,
     approvedAt: approvedAt.toISOString(),
   });
@@ -396,7 +409,7 @@ export async function getCampaignSendById(id) {
   });
 }
 
-export async function approveCampaignSend({ sendId, actorId }) {
+export async function approveCampaignSend({ sendId, actorId, approvalFingerprint: suppliedFingerprint }) {
   const send = await prisma.campaignSend.findUnique({
     where: { id: sendId },
     include: { template: true, audience: true, cycle: true },
@@ -411,11 +424,28 @@ export async function approveCampaignSend({ sendId, actorId }) {
     throw new Error('Send must have a template and an audience');
   }
 
+  if (!suppliedFingerprint) {
+    throw new Error('approvalFingerprint is required; preview the send first');
+  }
+
   const filters = send.audience.filters || {};
   const recipients = await resolveAudience(filters, { includeApplications: true });
 
   const snapshot = recipients.map(serializeSnapshot);
   const eligibilityBasis = 'subscriber_consent' + (Object.keys(filters).length > 0 ? ' + audience_filters' : '');
+
+  const previewFingerprint = buildPreviewFingerprint({
+    templateName: send.template.name,
+    templateVersion: send.template.version,
+    templateSubject: send.template.subject,
+    templateBody: send.template.body,
+    audienceFilters: filters,
+    recipientSnapshot: snapshot,
+  });
+
+  if (previewFingerprint !== suppliedFingerprint) {
+    throw new Error('Preview is stale or does not match the current audience/template. Please review the preview again.');
+  }
 
   const firstContext = snapshot.length > 0
     ? buildRecipientContext({ ...recipients[0], ...snapshot[0] }, send, config.baseUrl)
@@ -467,7 +497,8 @@ export async function previewCampaignSend({ sendId }) {
     throw new Error('Send must have a template and an audience');
   }
 
-  const recipients = await resolveAudience(send.audience.filters || {}, { includeApplications: true });
+  const filters = send.audience.filters || {};
+  const recipients = await resolveAudience(filters, { includeApplications: true });
   const snapshot = recipients.map(serializeSnapshot);
 
   const firstContext = snapshot.length > 0
@@ -475,12 +506,22 @@ export async function previewCampaignSend({ sendId }) {
     : { unsubscribeUrl: '#' };
   const renderedPreview = renderCampaignBody(send.template, firstContext);
 
+  const approvalFingerprint = buildPreviewFingerprint({
+    templateName: send.template.name,
+    templateVersion: send.template.version,
+    templateSubject: send.template.subject,
+    templateBody: send.template.body,
+    audienceFilters: filters,
+    recipientSnapshot: snapshot,
+  });
+
   return {
     sendId,
     count: snapshot.length,
     sample: snapshot.slice(0, 10),
     renderedPreview,
     recipientSnapshot: snapshot,
+    approvalFingerprint,
   };
 }
 
@@ -548,7 +589,11 @@ async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) 
       try {
         await prisma.campaignSendLog.update({
           where: { id: log.id },
-          data: { status: 'AMBIGUOUS', error: String(updateError).slice(0, 1000) },
+          data: {
+            status: 'AMBIGUOUS',
+            providerMessageId: result.messageId || null,
+            error: String(updateError).slice(0, 1000),
+          },
         });
       } catch {
         // ignored
@@ -561,6 +606,17 @@ async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) 
   return { success: result.success, error: result.error };
 }
 
+function getLatestLogByEmail(logs) {
+  const latestByEmail = new Map();
+  for (const log of logs) {
+    const existing = latestByEmail.get(log.email);
+    if (!existing || log.attemptNumber > existing.attemptNumber) {
+      latestByEmail.set(log.email, log);
+    }
+  }
+  return latestByEmail;
+}
+
 async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
   const suppressed = await prisma.suppressedEmail.findMany({
     where: { email: { in: recipients.map((r) => r.email) } },
@@ -571,6 +627,7 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
   let failed = 0;
   let ambiguous = 0;
   const errors = [];
+  const outcomes = [];
 
   for (const recipient of recipients) {
     if (suppressedSet.has(recipient.email)) {
@@ -594,10 +651,14 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
         if (outcome.ambiguous) {
           ambiguous++;
           errors.push(`${recipient.email}: provider accepted but audit log write failed`);
+          outcomes.push({ email: recipient.email, status: 'AMBIGUOUS' });
+        } else {
+          outcomes.push({ email: recipient.email, status: 'SENT' });
         }
       } else {
         failed++;
         if (outcome.error) errors.push(`${recipient.email}: ${outcome.error}`);
+        outcomes.push({ email: recipient.email, status: 'FAILED' });
       }
     } catch (error) {
       // A unique constraint means another worker already claimed this attempt.
@@ -606,10 +667,11 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
       }
       failed++;
       errors.push(`${recipient.email}: ${error.message || String(error)}`);
+      outcomes.push({ email: recipient.email, status: 'FAILED' });
     }
   }
 
-  return { sent, failed, ambiguous, errors };
+  return { sent, failed, ambiguous, errors, outcomes };
 }
 
 export async function sendCampaign(sendId, actorId, { force = false } = {}) {
@@ -720,10 +782,7 @@ export async function retryFailedCampaignSend(sendId, actorId) {
 
     // Only retry a recipient whose latest attempt is FAILED. A later SENT log
     // means the recipient was already delivered successfully.
-    const latestByEmail = new Map();
-    for (const log of allLogs) {
-      latestByEmail.set(log.email, log);
-    }
+    const latestByEmail = getLatestLogByEmail(allLogs);
     const failedLogs = Array.from(latestByEmail.values()).filter((log) => log.status === 'FAILED');
 
     if (failedLogs.length === 0) {
@@ -739,16 +798,19 @@ export async function retryFailedCampaignSend(sendId, actorId) {
       .map((log) => snapshot.find((s) => s.email === log.email) || { email: log.email, candidateId: log.candidateId })
       .filter(Boolean);
 
-    const { sent, failed: stillFailed, errors } = await executeSend({
+    const { sent, failed: stillFailed, errors, outcomes } = await executeSend({
       send,
       actorId,
       recipients,
       attemptBase: 'auto',
     });
 
-    const remainingFailed = await prisma.campaignSendLog.count({
-      where: { campaignSendId: sendId, status: 'FAILED' },
-    });
+    // Apply the new attempt outcomes to compute each recipient's latest status.
+    for (const outcome of outcomes) {
+      latestByEmail.set(outcome.email, { ...latestByEmail.get(outcome.email), status: outcome.status });
+    }
+
+    const remainingFailed = Array.from(latestByEmail.values()).filter((log) => log.status === 'FAILED').length;
 
     const finalStatus = remainingFailed === 0 ? 'SENT' : 'FAILED';
     await prisma.campaignSend.update({
@@ -825,6 +887,38 @@ export async function reconcileCampaignLogs({ olderThanMs = 5 * 60 * 1000, now =
   }
 
   return results;
+}
+
+export async function resolveCampaignLog({ logId, actorId, status, reason }) {
+  if (!['SENT', 'FAILED'].includes(status)) {
+    throw new Error('Resolution status must be SENT or FAILED');
+  }
+
+  const log = await prisma.campaignSendLog.findUnique({
+    where: { id: logId },
+    include: { campaignSend: true },
+  });
+  if (!log) throw new Error('Campaign send log not found');
+  if (!['PENDING', 'AMBIGUOUS'].includes(log.status)) {
+    throw new Error(`Log status ${log.status} cannot be resolved`);
+  }
+
+  const [updated] = await prisma.$transaction([
+    prisma.campaignSendLog.update({
+      where: { id: logId },
+      data: { status, sentAt: status === 'SENT' ? new Date() : log.sentAt },
+    }),
+    prisma.campaignSendLogResolution.create({
+      data: {
+        logId,
+        status,
+        reason: reason || null,
+        actorId,
+      },
+    }),
+  ]);
+
+  return updated;
 }
 
 export async function getCandidateCampaignLogs({ candidateId, email, limit = 100 }) {

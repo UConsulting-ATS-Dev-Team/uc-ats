@@ -52,8 +52,13 @@ const mockPrisma = vi.hoisted(() => ({
     update: vi.fn(),
     findMany: vi.fn(),
     count: vi.fn(),
+    findUnique: vi.fn(),
+  },
+  campaignSendLogResolution: {
+    create: vi.fn(),
   },
   $queryRaw: vi.fn(),
+  $transaction: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -77,6 +82,7 @@ import {
   retryFailedCampaignSend,
   sendScheduledCampaigns,
   reconcileCampaignLogs,
+  resolveCampaignLog,
   updateCampaignSend,
   recordSuppression,
 } from './campaigns.js';
@@ -140,6 +146,7 @@ describe('campaigns service', () => {
       id: `log-${args?.data?.email || 'x'}`,
     }));
     mockPrisma.campaignSendLog.update.mockResolvedValue({});
+    mockPrisma.$transaction.mockImplementation((ops) => Promise.all(ops));
   });
 
   describe('resolveAudience', () => {
@@ -225,7 +232,8 @@ describe('campaigns service', () => {
       mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
       mockPrisma.campaignSend.update.mockResolvedValue({ ...send, status: 'APPROVED' });
 
-      await approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1' });
+      const previewFingerprint = '5fc4268ba190b05d565e6bb830ab12926dfa472ac7dca2a1b9d2057fc2e1b7cb';
+      await approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: previewFingerprint });
 
       expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -266,7 +274,8 @@ describe('campaigns service', () => {
       mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
       mockPrisma.campaignSend.update.mockResolvedValue({ ...send, status: 'SCHEDULED' });
 
-      await approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1' });
+      const previewFingerprint = 'dd0590dda8cd56aff20a017ed737b7a7da867df6eaf1e8c421000642a49d0f20';
+      await approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: previewFingerprint });
 
       expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -283,7 +292,36 @@ describe('campaigns service', () => {
         audience: { id: 'aud-1', filters: {} },
       });
 
-      await expect(approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1' })).rejects.toThrow(/cannot be approved/i);
+      await expect(approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: 'fp' })).rejects.toThrow(/cannot be approved/i);
+    });
+
+    it('rejects stale approval when the preview no longer matches', async () => {
+      const send = {
+        id: 'send-1',
+        name: 'Test',
+        status: 'PENDING_APPROVAL',
+        scheduledAt: null,
+        sentBy: 'admin-1',
+        template: {
+          id: 'tmpl-1',
+          name: 'Welcome',
+          subject: 'Hi {{name}}',
+          body: '<p>Hello {{name}}</p>',
+          version: 2,
+        },
+        audience: { id: 'aud-1', filters: { statuses: ['ACCEPTED'] } },
+        cycle: { id: 'cycle-1', name: 'Fall 2026' },
+      };
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      // After the preview, Bob was added to the audience.
+      mockPrisma.subscriber.findMany.mockResolvedValue([
+        subscriberWithCandidate(),
+        subscriberWithCandidate({ email: 'bob@example.com' }),
+      ]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+
+      const oldPreviewFingerprint = '5fc4268ba190b05d565e6bb830ab12926dfa472ac7dca2a1b9d2057fc2e1b7cb';
+      await expect(approveCampaignSend({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: oldPreviewFingerprint })).rejects.toThrow(/stale/i);
     });
   });
 
@@ -547,7 +585,7 @@ describe('campaigns service', () => {
       );
     });
 
-    it('retries a failed recipient when the later attempt also failed', async () => {
+    it('retries a failed recipient and keeps the send FAILED when the new attempt also fails', async () => {
       mockConfig.bulkCampaignSendsEnabled = true;
       const send = buildApprovedSend({ status: 'FAILED' });
       mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
@@ -561,13 +599,44 @@ describe('campaigns service', () => {
       mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
       mockPrisma.campaignSendLog.count.mockResolvedValue(0);
       mockPrisma.campaignSend.update.mockResolvedValue({});
+      mockSendEmail.fn.mockResolvedValue({ success: false, error: 'SES failure' });
 
       const result = await retryFailedCampaignSend('send-1', 'admin-1');
 
       expect(result.retried).toBe(1);
+      expect(result.stillFailed).toBe(1);
+      expect(result.remainingFailed).toBe(1);
       expect(mockSendEmail.fn).toHaveBeenCalledTimes(1);
       expect(mockPrisma.campaignSendLog.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ attemptNumber: 3 }) })
+      );
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) })
+      );
+    });
+
+    it('computes retry completion from the latest attempt, not the historical FAILED-row count', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend({ status: 'FAILED' });
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([
+        { id: 'l1', email: 'alice@example.com', attemptNumber: 1, status: 'FAILED', candidateId: 'cand-1' },
+        { id: 'l2', email: 'alice@example.com', attemptNumber: 2, status: 'FAILED', candidateId: 'cand-1' },
+        { id: 'l3', email: 'alice@example.com', attemptNumber: 3, status: 'FAILED', candidateId: 'cand-1' },
+      ]);
+      mockPrisma.$queryRaw.mockResolvedValue([{ max: '3' }]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+
+      const result = await retryFailedCampaignSend('send-1', 'admin-1');
+
+      expect(result.retried).toBe(1);
+      expect(result.remainingFailed).toBe(0);
+      expect(result.sent).toBe(1);
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) })
       );
     });
   });
@@ -664,6 +733,37 @@ describe('campaigns service', () => {
 
       expect(results).toEqual([]);
       expect(mockPrisma.campaignSendLog.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveCampaignLog', () => {
+    it('allows an admin to resolve an AMBIGUOUS log to SENT with an audit record', async () => {
+      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null };
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
+      mockPrisma.campaignSendLog.update.mockResolvedValue({ ...log, status: 'SENT' });
+      mockPrisma.campaignSendLogResolution.create.mockResolvedValue({ id: 'res-1' });
+
+      const result = await resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'confirmed delivery' });
+
+      expect(result.status).toBe('SENT');
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      expect(mockPrisma.campaignSendLogResolution.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ logId: 'log-1', status: 'SENT', reason: 'confirmed delivery', actorId: 'admin-1' }),
+        })
+      );
+    });
+
+    it('rejects resolving a log that is not PENDING or AMBIGUOUS', async () => {
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue({ id: 'log-1', status: 'SENT' });
+
+      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'FAILED' })).rejects.toThrow(/cannot be resolved/i);
+    });
+
+    it('rejects an invalid resolution status', async () => {
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue({ id: 'log-1', status: 'AMBIGUOUS' });
+
+      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'PENDING' })).rejects.toThrow(/SENT or FAILED/i);
     });
   });
 

@@ -406,34 +406,38 @@ router.get('/unsubscribe', async (req, res) => {
   }
 });
 
-// Public: SES bounce/complaint notifications. SES may deliver these directly
-// or through an SNS Message envelope. Authenticate SNS signatures/topic before
-// any suppression/consent mutation.
+// Public: SES bounce/complaint notifications delivered through an SNS envelope.
+// We require a configured SNS topic ARN and a valid SNS signature before any
+// suppression/consent mutation. Direct "raw SES" payloads are rejected.
 router.post('/ses-events', express.json({ type: '*/*' }), async (req, res) => {
   try {
-    let snsPayload = null;
-    let sesPayload = req.body;
-
-    // SNS envelopes have Message, Signature, SigningCertURL, etc.
-    if (req.body.Message && typeof req.body.Message === 'string' && req.body.Type) {
-      snsPayload = req.body;
-      try {
-        sesPayload = JSON.parse(req.body.Message);
-      } catch {
-        // keep original body
-      }
+    // A valid SNS notification has both Type and Message (the Message is the SES
+    // payload JSON for Notification messages).
+    if (!req.body?.Type || typeof req.body.Message !== 'string') {
+      return res.status(403).json({ error: 'SNS envelope required' });
     }
 
-    if (snsPayload) {
-      try {
-        await verifySnsSignature(snsPayload, {
-          requiredTopicArn: config.sesSnsTopicArn || undefined,
-          verify: config.sesSnsVerifySignature,
-        });
-      } catch (error) {
-        console.error('[POST /api/ses-events] SNS verification failed:', error.message);
-        return res.status(403).json({ error: 'SNS signature verification failed' });
-      }
+    if (!config.sesSnsTopicArn) {
+      return res.status(403).json({ error: 'SES SNS topic not configured' });
+    }
+
+    try {
+      await verifySnsSignature(req.body, {
+        requiredTopicArn: config.sesSnsTopicArn,
+        verify: config.sesSnsVerifySignature,
+      });
+    } catch (error) {
+      console.error('[POST /api/ses-events] SNS verification failed:', error.message);
+      return res.status(403).json({ error: 'SNS signature verification failed' });
+    }
+
+    let sesPayload;
+    try {
+      sesPayload = JSON.parse(req.body.Message);
+    } catch {
+      // SubscriptionConfirmation/UnsubscribeConfirmation Message is a plain
+      // string, not a JSON SES payload. No suppression to process.
+      return res.json({ ok: true, processed: 0, results: [] });
     }
 
     const type = sesPayload.notificationType || sesPayload.eventType;

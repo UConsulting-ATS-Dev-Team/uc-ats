@@ -49,9 +49,10 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   createdTemplates           CampaignTemplate[]
   createdAudiences           CampaignAudience[]
-  sentCampaigns              CampaignSend[]          @relation("CampaignSendSender")
-  approvedCampaigns          CampaignSend[]          @relation("CampaignSendApprover")
+  sentCampaigns              CampaignSend[]               @relation("CampaignSendSender")
+  approvedCampaigns          CampaignSend[]               @relation("CampaignSendApprover")
   campaignLogs               CampaignSendLog[]
+  campaignLogResolutions     CampaignSendLogResolution[]
   consentEvents              ConsentEvent[]
 
   @@map("users")
@@ -514,9 +515,10 @@ model CampaignSendLog {
   templateVersion   Int?
   subject           String
   renderedBody      String?
-  campaignSend      CampaignSend? @relation(fields: [campaignSendId], references: [id], onDelete: SetNull)
-  candidate         Candidate?    @relation("CandidateCampaignLog", fields: [candidateId], references: [id], onDelete: SetNull)
-  actor             User          @relation(fields: [actorId], references: [id])
+  campaignSend      CampaignSend?             @relation(fields: [campaignSendId], references: [id], onDelete: SetNull)
+  candidate         Candidate?                @relation("CandidateCampaignLog", fields: [candidateId], references: [id], onDelete: SetNull)
+  actor             User                      @relation(fields: [actorId], references: [id])
+  resolutions       CampaignSendLogResolution[]
 
   @@unique([campaignSendId, email, attemptNumber])
   @@index([sendId])
@@ -525,6 +527,21 @@ model CampaignSendLog {
   @@index([campaignSendId])
   @@index([status])
   @@map("campaign_send_logs")
+}
+
+model CampaignSendLogResolution {
+  id        String          @id @default(uuid())
+  logId     String
+  status    String
+  reason    String?
+  actorId   String
+  createdAt DateTime        @default(now())
+  log       CampaignSendLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+  actor     User            @relation(fields: [actorId], references: [id])
+
+  @@index([logId])
+  @@index([actorId])
+  @@map("campaign_send_log_resolutions")
 }
 
 model SuppressedEmail {

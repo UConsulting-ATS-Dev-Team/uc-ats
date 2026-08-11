@@ -24,6 +24,7 @@ const mockService = vi.hoisted(() => ({
   previewCampaignSend: vi.fn().mockResolvedValue({ id: 'send-1', count: 0, renderedPreview: '<p>Preview</p>' }),
   sendCampaign: vi.fn().mockRejectedValue(new Error('Bulk campaign sends are disabled')),
   retryFailedCampaignSend: vi.fn().mockResolvedValue({ retried: 1 }),
+  resolveCampaignLog: vi.fn().mockResolvedValue({ id: 'log-1', status: 'SENT' }),
   getSuppressedEmails: vi.fn().mockResolvedValue([]),
   addSuppressedEmail: vi.fn().mockResolvedValue({}),
   removeSuppressedEmail: vi.fn().mockResolvedValue({}),
@@ -100,10 +101,16 @@ describe('campaign admin routes', () => {
     expect(res.status).toBe(403);
   });
 
-  it('approves a send', async () => {
-    const res = await post('/api/admin/campaigns/sends/send-1/approve');
+  it('approves a send with a preview fingerprint', async () => {
+    const res = await post('/api/admin/campaigns/sends/send-1/approve', { approvalFingerprint: 'fp-123' });
     expect(res.status).toBe(200);
-    expect(mockService.approveCampaignSend).toHaveBeenCalledWith({ sendId: 'send-1', actorId: 'admin-1' });
+    expect(mockService.approveCampaignSend).toHaveBeenCalledWith({ sendId: 'send-1', actorId: 'admin-1', approvalFingerprint: 'fp-123' });
+  });
+
+  it('rejects approval without a preview fingerprint', async () => {
+    const res = await post('/api/admin/campaigns/sends/send-1/approve', {});
+    expect(res.status).toBe(400);
+    expect(mockService.approveCampaignSend).not.toHaveBeenCalled();
   });
 
   it('returns a preview for approval review', async () => {
@@ -129,5 +136,22 @@ describe('campaign admin routes', () => {
     expect(mockService.createCampaignSend).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Test', templateId: 'tmpl-1', audienceId: 'aud-1' })
     );
+  });
+
+  it('resolves an ambiguous campaign log to SENT with a reason', async () => {
+    const res = await post('/api/admin/campaigns/logs/log-1/resolve', { status: 'SENT', reason: 'confirmed delivery' });
+    expect(res.status).toBe(200);
+    expect(mockService.resolveCampaignLog).toHaveBeenCalledWith({
+      logId: 'log-1',
+      actorId: 'admin-1',
+      status: 'SENT',
+      reason: 'confirmed delivery',
+    });
+  });
+
+  it('rejects a log resolution without a status', async () => {
+    const res = await post('/api/admin/campaigns/logs/log-1/resolve', {});
+    expect(res.status).toBe(400);
+    expect(mockService.resolveCampaignLog).not.toHaveBeenCalled();
   });
 });

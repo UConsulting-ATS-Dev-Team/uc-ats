@@ -64,6 +64,7 @@ describe('CampaignManagement', () => {
               { email: 'bob@example.com', firstName: 'Bob' },
               { email: 'charlie@example.com', firstName: 'Charlie' },
             ],
+            approvalFingerprint: 'preview-fp-123',
           });
         }
         return Promise.resolve(sends);
@@ -71,9 +72,9 @@ describe('CampaignManagement', () => {
       if (url === '/admin/campaigns/suppressions') return Promise.resolve([]);
       return Promise.resolve([]);
     });
-    apiClient.post.mockImplementation((url) => {
+    apiClient.post.mockImplementation((url, body) => {
       if (url === '/admin/campaigns/sends/send-1/approve') {
-        return Promise.resolve({ id: 'send-1', approvalFingerprint: 'fp-123' });
+        return Promise.resolve({ id: 'send-1', approvalFingerprint: body?.approvalFingerprint });
       }
       return Promise.resolve({});
     });
@@ -105,7 +106,9 @@ describe('CampaignManagement', () => {
     expect(await screen.findByText(/Review campaign before approval/i)).toBeInTheDocument();
     expect(await screen.findByTestId('approval-recipient-count')).toHaveTextContent('Recipients: 3');
     expect(await screen.findByTestId('approval-sample')).toHaveTextContent(/alice@example.com/);
-    expect(await screen.findByTestId('approval-rendered-preview')).toContainHTML('Hi Alice');
+    const previewFrame = await screen.findByTestId('approval-rendered-preview');
+    expect(previewFrame).toHaveAttribute('sandbox', '');
+    expect(previewFrame).toHaveAttribute('srcdoc', expect.stringContaining('Hi Alice'));
   });
 
   it('calls the approve endpoint and refreshes the sends list', async () => {
@@ -126,7 +129,9 @@ describe('CampaignManagement', () => {
     fireEvent.click(screen.getByRole('button', { name: /approve send/i }));
 
     await waitFor(() => {
-      expect(apiClient.post).toHaveBeenCalledWith('/admin/campaigns/sends/send-1/approve', {});
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/campaigns/sends/send-1/approve', {
+        approvalFingerprint: 'preview-fp-123',
+      });
     });
 
     await waitFor(() => {

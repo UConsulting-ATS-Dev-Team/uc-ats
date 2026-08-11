@@ -64,6 +64,8 @@ describe('public routes /api/ses-events', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConfig.sesSnsTopicArn = 'arn:aws:sns:us-east-1:123456789012:ses-events';
+    mockConfig.sesSnsVerifySignature = true;
     mockRecordSuppression.mockResolvedValue(undefined);
   });
 
@@ -74,6 +76,32 @@ describe('public routes /api/ses-events', () => {
       body: JSON.stringify(body),
     });
   }
+
+  it('rejects direct (non-SNS) SES bodies and does not mutate suppression state', async () => {
+    const res = await post('/api/ses-events', {
+      notificationType: 'Complaint',
+      complaint: { complainedRecipients: [{ emailAddress: 'victim@example.com' }] },
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockRecordSuppression).not.toHaveBeenCalled();
+    expect(mockVerifySnsSignature).not.toHaveBeenCalled();
+  });
+
+  it('rejects SNS notifications when the SES topic is not configured', async () => {
+    mockConfig.sesSnsTopicArn = null;
+
+    const res = await post('/api/ses-events', {
+      Type: 'Notification',
+      Message: JSON.stringify({ notificationType: 'Bounce', bounce: { bouncedRecipients: [{ emailAddress: 'a@example.com' }] } }),
+      Signature: 'valid',
+      SigningCertURL: 'https://sns.us-east-1.amazonaws.com/SimpleNotificationService-123.pem',
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockRecordSuppression).not.toHaveBeenCalled();
+    expect(mockVerifySnsSignature).not.toHaveBeenCalled();
+  });
 
   it('rejects forged SNS notifications without mutating suppression state', async () => {
     mockVerifySnsSignature.mockRejectedValue(new Error('SNS signature verification failed'));
@@ -117,17 +145,5 @@ describe('public routes /api/ses-events', () => {
     expect(res.status).toBe(200);
     expect(body.processed).toBe(1);
     expect(mockRecordSuppression).toHaveBeenCalledWith({ email: 'bounce@example.com', reason: 'bounce', source: 'ses' });
-  });
-
-  it('processes a direct SES event when no SNS envelope is present', async () => {
-    const res = await post('/api/ses-events', {
-      notificationType: 'Complaint',
-      complaint: { complainedRecipients: [{ emailAddress: 'complaint@example.com' }] },
-    });
-
-    const body = await res.json();
-    expect(res.status).toBe(200);
-    expect(body.processed).toBe(1);
-    expect(mockRecordSuppression).toHaveBeenCalledWith({ email: 'complaint@example.com', reason: 'complaint', source: 'ses' });
   });
 });
