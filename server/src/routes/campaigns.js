@@ -295,6 +295,9 @@ router.post('/logs/:id/resolve', async (req, res) => {
     if (!status) {
       return res.status(400).json({ error: 'status is required' });
     }
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'reason is required' });
+    }
     const log = await resolveCampaignLog({ logId: req.params.id, actorId: req.user.id, status, reason });
     res.json(log);
   } catch (error) {

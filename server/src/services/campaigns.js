@@ -1004,6 +1004,9 @@ export async function resolveCampaignLog({ logId, actorId, status, reason }) {
       },
     });
     if (!log) throw new Error('Campaign send log not found');
+    if (['PENDING', 'AMBIGUOUS'].includes(log.status) && (!reason || !reason.trim())) {
+      throw new Error('Resolution reason is required');
+    }
     if (!['PENDING', 'AMBIGUOUS'].includes(log.status)) {
       const existingResolution = log.resolutions?.[0];
       if (existingResolution && existingResolution.status === status) {

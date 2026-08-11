@@ -138,7 +138,7 @@ describe('campaign admin routes', () => {
     );
   });
 
-  it('resolves an ambiguous campaign log to SENT with a reason', async () => {
+  it('resolves an ambiguous campaign log to SENT with a non-empty reason', async () => {
     const res = await post('/api/admin/campaigns/logs/log-1/resolve', { status: 'SENT', reason: 'confirmed delivery' });
     expect(res.status).toBe(200);
     expect(mockService.resolveCampaignLog).toHaveBeenCalledWith({
@@ -147,6 +147,14 @@ describe('campaign admin routes', () => {
       status: 'SENT',
       reason: 'confirmed delivery',
     });
+  });
+
+  it('rejects a log resolution with a blank or whitespace-only reason', async () => {
+    const res = await post('/api/admin/campaigns/logs/log-1/resolve', { status: 'SENT', reason: '   ' });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/reason is required/i);
+    expect(mockService.resolveCampaignLog).not.toHaveBeenCalled();
   });
 
   it('rejects a log resolution without a status', async () => {

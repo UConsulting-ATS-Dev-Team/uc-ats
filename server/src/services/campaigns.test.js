@@ -830,7 +830,14 @@ describe('campaigns service', () => {
     it('rejects an invalid resolution status', async () => {
       mockPrisma.campaignSendLog.findUnique.mockResolvedValue({ id: 'log-1', status: 'AMBIGUOUS' });
 
-      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'PENDING' })).rejects.toThrow(/SENT or FAILED/i);
+      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'PENDING', reason: 'bad status' })).rejects.toThrow(/SENT or FAILED/i);
+    });
+
+    it('rejects resolving an AMBIGUOUS log without a non-empty trimmed reason', async () => {
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue({ id: 'log-1', status: 'AMBIGUOUS' });
+
+      await expect(resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: '   ' })).rejects.toThrow(/reason is required/i);
+      expect(mockPrisma.campaignSendLogResolution.create).not.toHaveBeenCalled();
     });
 
     it('only lets one concurrent resolution win and prevents duplicate audit records', async () => {
@@ -879,6 +886,45 @@ describe('campaigns service', () => {
           data: expect.objectContaining({ status: 'SENT', recipientCount: 1, failedRecipientCount: 0 }),
         })
       );
+    });
+
+    it('commits one audit event and reconciles to one terminal aggregate when recompute fails', async () => {
+      const log = { id: 'log-1', status: 'AMBIGUOUS', providerMessageId: 'ses-123', sentAt: null, campaignSendId: 'send-1' };
+      mockPrisma.campaignSendLog.findUnique.mockResolvedValue(log);
+      mockPrisma.campaignSendLog.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSendLogResolution.create.mockResolvedValue({ id: 'res-1' });
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([]);
+      mockPrisma.campaignSend.findMany.mockResolvedValue([{ id: 'send-1' }]);
+      mockPrisma.campaignSend.findUnique.mockResolvedValue({
+        id: 'send-1',
+        status: 'SENDING',
+        sentAt: null,
+        recipientCount: 0,
+        failedRecipientCount: 0,
+        logs: [{ id: 'log-1', email: 'a@example.com', attemptNumber: 1, status: 'SENT' }],
+      });
+      mockPrisma.campaignSend.update
+        .mockRejectedValueOnce(new Error('aggregate update failed'))
+        .mockResolvedValue({});
+
+      const result = await resolveCampaignLog({ logId: 'log-1', actorId: 'admin-1', status: 'SENT', reason: 'provider confirmed delivery' });
+
+      // Resolution audit event is committed exactly once even though recompute fails.
+      expect(result.resolution.id).toBe('res-1');
+      expect(mockPrisma.campaignSendLogResolution.create).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalled();
+
+      await reconcileCampaignSendAggregates();
+
+      const updateCalls = mockPrisma.campaignSend.update.mock.calls.filter(
+        (call) => call[0]?.where?.id === 'send-1'
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(updateCalls[updateCalls.length - 1][0].data).toMatchObject({
+        status: 'SENT',
+        recipientCount: 1,
+        failedRecipientCount: 0,
+      });
     });
   });
 

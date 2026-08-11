@@ -744,8 +744,8 @@ export default function CampaignManagement() {
                                   sx={{ minWidth: 120 }}
                                   data-testid={`resolve-reason-${log.id}`}
                                 />
-                                <Button size="small" variant="outlined" data-testid={`resolve-delivered-${log.id}`} onClick={() => handleResolveLog(log.id, 'SENT')}>Delivered</Button>
-                                <Button size="small" variant="outlined" color="error" data-testid={`resolve-failed-${log.id}`} onClick={() => handleResolveLog(log.id, 'FAILED')}>Not sent</Button>
+                                <Button size="small" variant="outlined" data-testid={`resolve-delivered-${log.id}`} disabled={!(resolveReasons[log.id] || '').trim()} onClick={() => handleResolveLog(log.id, 'SENT')}>Delivered</Button>
+                                <Button size="small" variant="outlined" color="error" data-testid={`resolve-failed-${log.id}`} disabled={!(resolveReasons[log.id] || '').trim()} onClick={() => handleResolveLog(log.id, 'FAILED')}>Not sent</Button>
                               </Stack>
                             ) : (
                               log.resolutions?.length > 0 ? (

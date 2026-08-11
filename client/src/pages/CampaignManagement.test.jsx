@@ -208,12 +208,22 @@ describe('CampaignManagement', () => {
 
     expect(screen.getByText('ses-abc-123')).toBeInTheDocument();
     expect(screen.getByText('SMTP timeout')).toBeInTheDocument();
-    expect(screen.getByTestId('resolve-delivered-log-1')).toBeInTheDocument();
-    expect(screen.getByTestId('resolve-failed-log-1')).toBeInTheDocument();
+    const deliveredBtn = screen.getByTestId('resolve-delivered-log-1');
+    const failedBtn = screen.getByTestId('resolve-failed-log-1');
+    expect(deliveredBtn).toBeInTheDocument();
+    expect(failedBtn).toBeInTheDocument();
+    expect(deliveredBtn).toBeDisabled();
+    expect(failedBtn).toBeDisabled();
 
     const reasonInput = screen.getByTestId('resolve-reason-log-1').querySelector('input');
+    fireEvent.change(reasonInput, { target: { value: '   ' } });
+    expect(deliveredBtn).toBeDisabled();
+    expect(failedBtn).toBeDisabled();
+
     fireEvent.change(reasonInput, { target: { value: 'SES console confirms delivery' } });
-    fireEvent.click(screen.getByTestId('resolve-delivered-log-1'));
+    expect(deliveredBtn).not.toBeDisabled();
+    expect(failedBtn).not.toBeDisabled();
+    fireEvent.click(deliveredBtn);
 
     await waitFor(() => {
       expect(apiClient.post).toHaveBeenCalledWith('/admin/campaigns/logs/log-1/resolve', {
