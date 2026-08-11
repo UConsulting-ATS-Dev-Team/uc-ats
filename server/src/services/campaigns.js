@@ -639,14 +639,9 @@ async function recomputeCampaignSendStatus(sendId) {
   });
   if (!send) return;
 
-  const snapshot = send.recipientSnapshot || [];
   const latestByEmail = getLatestLogByEmail(send.logs || []);
   const latest = Array.from(latestByEmail.values());
   const status = computeCampaignSendStatus(latest.map((l) => l.status));
-
-  if (status === 'SENT' && latest.length === 0 && snapshot.length > 0) {
-    // All recipients were skipped (suppressed / not consented) with no attempts.
-  }
 
   if (status !== send.status) {
     await prisma.campaignSend.update({
