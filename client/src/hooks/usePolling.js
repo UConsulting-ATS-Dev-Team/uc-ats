@@ -37,6 +37,8 @@ function isDocumentVisible() {
  * @param {boolean} [options.pauseWhenHidden] pause while the tab/page is hidden
  * @param {number} [options.maxInterval] backoff ceiling in ms
  * @param {(payload: any) => number|string|null} [options.getVersion] monotonic server version
+ * @param {number|string|null} [options.initialVersion] version of data already on screen
+ *   (for example a snapshot restored from a cache) so responses older than it are dropped
  * @param {(payload: any) => void} [options.onData] called only for accepted responses
  * @param {(error: Error) => void} [options.onError]
  */
@@ -49,6 +51,7 @@ export default function usePolling({
   maxInterval = DEFAULT_MAX_INTERVAL,
   backoffFactor = DEFAULT_BACKOFF_FACTOR,
   getVersion,
+  initialVersion = null,
   onData,
   onError
 } = {}) {
@@ -74,7 +77,8 @@ export default function usePolling({
   const mountedRef = useRef(true);
   const sequenceRef = useRef(0);
   const appliedSequenceRef = useRef(0);
-  const appliedVersionRef = useRef(null);
+  // Seeded so a caller that painted from a cache is not overwritten by an older read.
+  const appliedVersionRef = useRef(initialVersion);
   const failuresRef = useRef(0);
   const runRef = useRef(null);
   const enabledRef = useRef(enabled);

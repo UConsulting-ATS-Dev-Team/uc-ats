@@ -159,6 +159,26 @@ describe('usePolling', () => {
     expect(onData).toHaveBeenLastCalledWith({ updatedAt: 300 });
   });
 
+  it('discards a response older than the version already on screen at mount', async () => {
+    // Remount with a cached snapshot the caller has already painted (version 300): the
+    // fresh hook must not accept the older read that comes back first.
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ updatedAt: 100 })
+      .mockResolvedValueOnce({ updatedAt: 400 });
+    const onData = vi.fn();
+    const { result } = renderHook(() =>
+      usePolling({ fetcher, interval: 1000, onData, initialVersion: 300, getVersion: (p) => p.updatedAt })
+    );
+    await flush();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(onData).not.toHaveBeenCalled();
+    expect(result.current.metrics.discarded).toBe(1);
+
+    await advance(1000);
+    expect(onData).toHaveBeenCalledWith({ updatedAt: 400 });
+  });
+
   it('discards a slow response after a newer one has been applied', async () => {
     const slow = deferred();
     const fetcher = vi.fn()

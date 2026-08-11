@@ -1,19 +1,19 @@
-// Monotonic version stamp for read-only snapshot responses.
-//
-// The version is the time the snapshot finished being read, so a larger version
-// always means the payload was read from the database no earlier than a smaller
-// one: a client can therefore drop a snapshot that is older than the one it has
-// already applied. Values are forced strictly increasing so two snapshots read
-// inside the same millisecond stay ordered.
-//
-// Scope: ordering holds per server process. Behind several instances the stamps
-// are only as consistent as the hosts' clocks, which is sufficient for dropping
-// stale reads but is not a transactional database version.
-let lastIssued = 0;
-
-export function nextSnapshotVersion(now = Date.now()) {
-  lastIssued = now > lastIssued ? now : lastIssued + 1;
-  return lastIssued;
+/**
+ * Version of a read, taken from the database rather than from this process.
+ *
+ * `clock_timestamp()` is evaluated by PostgreSQL when the statement runs, so every
+ * API instance stamps its reads from one clock: versions stay comparable across
+ * instances and across restarts, which a process-local counter cannot promise.
+ * Call it as the first statement of a repeatable-read transaction and the value also
+ * dates the database snapshot the rest of that transaction sees.
+ *
+ * @param {{ $queryRaw: Function }} client Prisma client or transaction client
+ * @returns {Promise<number|null>} milliseconds since the epoch, from the database
+ */
+export async function readSnapshotVersion(client) {
+  const rows = await client.$queryRaw`SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS version`;
+  const version = rows?.[0]?.version;
+  return version == null ? null : Number(version);
 }
 
-export default nextSnapshotVersion;
+export default readSnapshotVersion;

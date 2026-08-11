@@ -76,6 +76,7 @@ import {
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
 import usePolling, { POLL_STATUS } from '../hooks/usePolling';
+import stagingCache from '../utils/stagingCache';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
@@ -88,43 +89,12 @@ import ApplicationDetail from './ApplicationDetail';
 const STAGING_POLL_INTERVAL_MS = 60 * 1000;
 const STAGING_MAX_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
-// Simple cache for staging data
-const stagingCache = {
-  data: null,
-  timestamp: null,
-  TTL: 2 * 60 * 1000, // 2 minutes
-
-  isValid() {
-    return this.data && this.timestamp && (Date.now() - this.timestamp < this.TTL);
-  },
-
-  set(data) {
-    this.data = data;
-    this.timestamp = Date.now();
-  },
-
-  get() {
-    return this.isValid() ? this.data : null;
-  },
-
-  invalidate() {
-    this.data = null;
-    this.timestamp = null;
-  }
-};
-
 // API functions for staging
 const stagingAPI = {
-  async fetchCandidates(options) {
-    return await apiClient.get('/admin/staging/candidates', options);
-  },
-
-  async fetchActiveCycle(options) {
-    return await apiClient.get('/admin/cycles/active', options);
-  },
-
-  async fetchAdminApplications(options) {
-    return await apiClient.get('/admin/applications', options);
+  // One transactional read of every resource this page renders, carrying the database
+  // version that orders it against other snapshots.
+  async fetchSnapshot(options) {
+    return await apiClient.get('/admin/staging/snapshot', options);
   },
 
   async updateApproval(applicationId, approved) {
@@ -141,14 +111,6 @@ const stagingAPI = {
 
   async fetchCandidateScores(candidateId) {
     return await apiClient.get(`/applications/${candidateId}/grades/average`);
-  },
-
-  async fetchEventAttendance(options) {
-    return await apiClient.get('/admin/events', options);
-  },
-
-  async fetchReviewTeams(options) {
-    return await apiClient.get('/admin/review-teams', options);
   },
 
   async updateCandidateStatus(candidateId, status, notes = '') {
@@ -193,10 +155,6 @@ const stagingAPI = {
 
   async processFinalDecisions() {
     return await apiClient.post('/admin/process-final-decisions', {});
-  },
-
-  async loadExistingDecisions(options) {
-    return await apiClient.get('/admin/existing-decisions', options);
   },
 
   async saveDecision(candidateId, decision, phase = 'resume') {
@@ -841,28 +799,20 @@ export default function Staging() {
   }, []);
 
   const fetchStagingData = useCallback(async (signal) => {
-    const options = { signal };
-    const [candidatesResponse, activeCycle, adminApplicationsResponse, eventsData, reviewTeamsData, existingDecisionsData] = await Promise.all([
-      stagingAPI.fetchCandidates(options),
-      stagingAPI.fetchActiveCycle(options),
-      stagingAPI.fetchAdminApplications(options),
-      stagingAPI.fetchEventAttendance(options),
-      stagingAPI.fetchReviewTeams(options),
-      stagingAPI.loadExistingDecisions(options)
-    ]);
+    const snapshot = await stagingAPI.fetchSnapshot({ signal });
 
-    const candidatesData = candidatesResponse.candidates || candidatesResponse;
-    const adminApplicationsData = adminApplicationsResponse.applications || adminApplicationsResponse;
+    const candidatesData = snapshot.candidates || [];
+    const adminApplicationsData = snapshot.applications || [];
 
     return {
       candidatesData,
-      // Server stamp for the candidate read; orders this whole snapshot against others.
-      snapshotVersion: candidatesResponse.snapshotVersion ?? null,
-      activeCycle,
+      // Database version of the transaction all six resources were read in.
+      snapshotVersion: snapshot.snapshotVersion ?? null,
+      activeCycle: snapshot.activeCycle,
       adminApplicationsData,
-      eventsData,
-      reviewTeamsData,
-      perRoundDecisions: existingDecisionsData?.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
+      eventsData: snapshot.events || [],
+      reviewTeamsData: snapshot.reviewTeams || [],
+      perRoundDecisions: snapshot.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
       gradingMap: buildGradingMap(adminApplicationsData)
     };
   }, []);
@@ -874,6 +824,11 @@ export default function Staging() {
     initialCacheRef.current = cached;
     return false;
   });
+
+  // The cached snapshot is already on screen, so the poller has to treat its version as
+  // applied: without this a remount would accept the first response it gets, however
+  // much older than the cache it is.
+  const [initialSnapshotVersion] = useState(() => initialCacheRef.current?.snapshotVersion ?? null);
 
   useEffect(() => {
     const cached = initialCacheRef.current;
@@ -893,6 +848,7 @@ export default function Staging() {
     interval: STAGING_POLL_INTERVAL_MS,
     maxInterval: STAGING_MAX_POLL_INTERVAL_MS,
     immediate: pollImmediately,
+    initialVersion: initialSnapshotVersion,
     // Never apply a snapshot the server read before the one already on screen.
     getVersion: (data) => data.snapshotVersion,
     // Editing dialogs hold pending user input, so do not overwrite state underneath them.
