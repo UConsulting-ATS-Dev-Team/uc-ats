@@ -71,10 +71,12 @@ vi.mock('../services/emailNotifications.js', () => ({
 import {
   resolveAudience,
   previewAudience,
+  previewCampaignSend,
   approveCampaignSend,
   sendCampaign,
   retryFailedCampaignSend,
   sendScheduledCampaigns,
+  reconcileCampaignLogs,
   updateCampaignSend,
   recordSuppression,
 } from './campaigns.js';
@@ -517,6 +519,151 @@ describe('campaigns service', () => {
 
       expect(results).toEqual([]);
       expect(mockPrisma.campaignSend.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('retryFailedCampaignSend', () => {
+    it('does not retry a recipient whose latest attempt already succeeded', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend({ status: 'SENT' });
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([
+        { id: 'l1', email: 'alice@example.com', attemptNumber: 1, status: 'FAILED', candidateId: 'cand-1' },
+        { id: 'l2', email: 'alice@example.com', attemptNumber: 2, status: 'SENT', candidateId: 'cand-1' },
+      ]);
+      mockPrisma.$queryRaw.mockResolvedValue([{ max: '2' }]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSendLog.count.mockResolvedValue(0);
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+
+      const result = await retryFailedCampaignSend('send-1', 'admin-1');
+
+      expect(result.retried).toBe(0);
+      expect(mockSendEmail.fn).not.toHaveBeenCalled();
+      expect(mockPrisma.campaignSend.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) })
+      );
+    });
+
+    it('retries a failed recipient when the later attempt also failed', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend({ status: 'FAILED' });
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSendLog.findMany.mockResolvedValue([
+        { id: 'l1', email: 'alice@example.com', attemptNumber: 1, status: 'FAILED', candidateId: 'cand-1' },
+        { id: 'l2', email: 'alice@example.com', attemptNumber: 2, status: 'FAILED', candidateId: 'cand-1' },
+      ]);
+      mockPrisma.$queryRaw.mockResolvedValue([{ max: '2' }]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSendLog.count.mockResolvedValue(0);
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+
+      const result = await retryFailedCampaignSend('send-1', 'admin-1');
+
+      expect(result.retried).toBe(1);
+      expect(mockSendEmail.fn).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.campaignSendLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ attemptNumber: 3 }) })
+      );
+    });
+  });
+
+  describe('sendCampaign ambiguous states', () => {
+    it('marks a log AMBIGUOUS when SES succeeds but the audit update fails', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend();
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSendLog.update
+        .mockRejectedValueOnce(new Error('write failed'))
+        .mockResolvedValueOnce({});
+
+      const result = await sendCampaign('send-1', 'admin-1');
+
+      expect(result.sent).toBe(1);
+      expect(result.ambiguous).toBe(1);
+      expect(mockSendEmail.fn).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.campaignSendLog.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'AMBIGUOUS' }) })
+      );
+    });
+
+    it('does not perform a second SES effect when the first succeeded but the log update failed', async () => {
+      mockConfig.bulkCampaignSendsEnabled = true;
+      const send = buildApprovedSend();
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.campaignSend.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.campaignSend.update.mockResolvedValue({});
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+      mockPrisma.subscriber.findUnique.mockResolvedValue({ id: 'sub-1', email: 'alice@example.com', consented: true });
+      mockPrisma.campaignSendLog.update.mockRejectedValue(new Error('write failed'));
+
+      const result = await sendCampaign('send-1', 'admin-1');
+
+      expect(result.sent).toBe(1);
+      expect(mockSendEmail.fn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('previewCampaignSend', () => {
+    it('returns the recipient count, sample, and rendered preview for a send', async () => {
+      const send = buildApprovedSend({
+        id: 'send-1',
+        status: 'PENDING_APPROVAL',
+        template: { name: 'Welcome', subject: 'Hi {{name}}', body: '<p>Hello {{name}}</p>' },
+        audience: { filters: { statuses: ['ACCEPTED'] } },
+      });
+      mockPrisma.campaignSend.findUnique.mockResolvedValue(send);
+      mockPrisma.subscriber.findMany.mockResolvedValue([
+        subscriberWithCandidate({ email: 'a@example.com' }),
+        subscriberWithCandidate({ email: 'b@example.com' }),
+      ]);
+      mockPrisma.suppressedEmail.findMany.mockResolvedValue([]);
+
+      const result = await previewCampaignSend({ sendId: 'send-1' });
+
+      expect(result.count).toBe(2);
+      expect(result.sample).toHaveLength(2);
+      expect(result.renderedPreview).toContain('Hello Alice');
+    });
+  });
+
+  describe('reconcileCampaignLogs', () => {
+    it('marks stale PENDING logs as AMBIGUOUS', async () => {
+      const now = Date.now();
+      const staleLog = { id: 'log-1', email: 'alice@example.com', status: 'PENDING', createdAt: new Date(now - 10 * 60 * 1000) };
+      mockPrisma.campaignSendLog.findMany.mockImplementation(({ where }) => {
+        if (where?.createdAt?.lt && staleLog.createdAt >= where.createdAt.lt) return Promise.resolve([]);
+        return Promise.resolve([staleLog]);
+      });
+
+      const results = await reconcileCampaignLogs({ olderThanMs: 5 * 60 * 1000, now });
+
+      expect(results).toEqual([{ id: 'log-1', status: 'AMBIGUOUS' }]);
+      expect(mockPrisma.campaignSendLog.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'log-1' }, data: { status: 'AMBIGUOUS', sentAt: expect.any(Date) } })
+      );
+    });
+
+    it('does not touch recent PENDING logs', async () => {
+      const now = Date.now();
+      const recentLog = { id: 'log-1', email: 'alice@example.com', status: 'PENDING', createdAt: new Date(now - 60 * 1000) };
+      mockPrisma.campaignSendLog.findMany.mockImplementation(({ where }) => {
+        if (where?.createdAt?.lt && recentLog.createdAt >= where.createdAt.lt) return Promise.resolve([]);
+        return Promise.resolve([recentLog]);
+      });
+
+      const results = await reconcileCampaignLogs({ olderThanMs: 5 * 60 * 1000, now });
+
+      expect(results).toEqual([]);
+      expect(mockPrisma.campaignSendLog.update).not.toHaveBeenCalled();
     });
   });
 

@@ -18,6 +18,7 @@ import {
   getCampaignSends,
   getCampaignSendById,
   approveCampaignSend,
+  previewCampaignSend,
   sendCampaign,
   retryFailedCampaignSend,
   getSuppressedEmails,
@@ -43,7 +44,7 @@ router.get('/templates', async (req, res) => {
 
 router.post('/templates', async (req, res) => {
   try {
-    const { name, cycleId, category, subject, body, mergeFields, firstOfCycleGate } = req.body;
+    const { name, cycleId, category, subject, body, mergeFields } = req.body;
     if (!name || !subject || !body) {
       return res.status(400).json({ error: 'name, subject, and body are required' });
     }
@@ -54,7 +55,6 @@ router.post('/templates', async (req, res) => {
       subject,
       body,
       mergeFields: mergeFields || [],
-      firstOfCycleGate: firstOfCycleGate || false,
       createdBy: req.user.id,
     });
     res.json(template);
@@ -66,7 +66,7 @@ router.post('/templates', async (req, res) => {
 
 router.patch('/templates/:id', async (req, res) => {
   try {
-    const { name, cycleId, category, subject, body, mergeFields, firstOfCycleGate } = req.body;
+    const { name, cycleId, category, subject, body, mergeFields } = req.body;
     const template = await updateCampaignTemplate(req.params.id, {
       name,
       cycleId: cycleId || null,
@@ -74,7 +74,6 @@ router.patch('/templates/:id', async (req, res) => {
       subject,
       body,
       mergeFields,
-      firstOfCycleGate,
     });
     res.json(template);
   } catch (error) {
@@ -220,6 +219,16 @@ router.post('/sends/:id/approve', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/campaigns/sends/:id/approve]', error);
     res.status(400).json({ error: error.message || 'Failed to approve send' });
+  }
+});
+
+router.get('/sends/:id/preview', async (req, res) => {
+  try {
+    const preview = await previewCampaignSend({ sendId: req.params.id });
+    res.json(preview);
+  } catch (error) {
+    console.error('[GET /api/admin/campaigns/sends/:id/preview]', error);
+    res.status(400).json({ error: error.message || 'Failed to preview send' });
   }
 });
 

@@ -456,6 +456,34 @@ export async function approveCampaignSend({ sendId, actorId }) {
   });
 }
 
+export async function previewCampaignSend({ sendId }) {
+  const send = await prisma.campaignSend.findUnique({
+    where: { id: sendId },
+    include: { template: true, audience: true, cycle: true },
+  });
+
+  if (!send) throw new Error('Campaign send not found');
+  if (!send.template || !send.audience) {
+    throw new Error('Send must have a template and an audience');
+  }
+
+  const recipients = await resolveAudience(send.audience.filters || {}, { includeApplications: true });
+  const snapshot = recipients.map(serializeSnapshot);
+
+  const firstContext = snapshot.length > 0
+    ? buildRecipientContext({ ...recipients[0], ...snapshot[0] }, send, config.baseUrl)
+    : { unsubscribeUrl: '#' };
+  const renderedPreview = renderCampaignBody(send.template, firstContext);
+
+  return {
+    sendId,
+    count: snapshot.length,
+    sample: snapshot.slice(0, 10),
+    renderedPreview,
+    recipientSnapshot: snapshot,
+  };
+}
+
 function isPrismaUniqueViolation(error) {
   return error?.code === 'P2002';
 }
@@ -474,6 +502,9 @@ async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) 
   const subject = renderCampaignSubject({ subject: send.templateSubject }, context);
   const html = renderCampaignBody({ body: send.templateBody }, context);
 
+  // The PENDING log acts as a durable intent/outbox record. Its unique
+  // (campaignSendId, email, attemptNumber) constraint ensures only one SES
+  // effect per recipient per attempt, even when routes and the scheduler race.
   const log = await prisma.campaignSendLog.create({
     data: {
       sendId: send.id,
@@ -497,15 +528,35 @@ async function deliverOneRecipient({ send, recipient, actorId, attemptNumber }) 
     result = { success: false, error: error?.message || String(error) };
   }
 
-  await prisma.campaignSendLog.update({
-    where: { id: log.id },
-    data: {
-      status: result.success ? 'SENT' : 'FAILED',
-      providerMessageId: result.messageId || null,
-      error: result.error ? String(result.error).slice(0, 1000) : null,
-      sentAt: new Date(),
-    },
-  });
+  try {
+    await prisma.campaignSendLog.update({
+      where: { id: log.id },
+      data: {
+        status: result.success ? 'SENT' : 'FAILED',
+        providerMessageId: result.messageId || null,
+        error: result.error ? String(result.error).slice(0, 1000) : null,
+        sentAt: new Date(),
+      },
+    });
+  } catch (updateError) {
+    console.error(`[deliverOneRecipient] failed to persist outcome for ${recipient.email}:`, updateError);
+    // If the provider accepted the message but the audit log update failed, the
+    // PENDING intent record remains. Try to mark it AMBIGUOUS so a later
+    // reconciliation run can surface it. If that also fails, return an explicit
+    // ambiguous outcome without a second SES effect.
+    if (result.success) {
+      try {
+        await prisma.campaignSendLog.update({
+          where: { id: log.id },
+          data: { status: 'AMBIGUOUS', error: String(updateError).slice(0, 1000) },
+        });
+      } catch {
+        // ignored
+      }
+      return { success: true, ambiguous: true, messageId: result.messageId, error: String(updateError).slice(0, 1000) };
+    }
+    return { success: false, error: result.error };
+  }
 
   return { success: result.success, error: result.error };
 }
@@ -518,6 +569,7 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
 
   let sent = 0;
   let failed = 0;
+  let ambiguous = 0;
   const errors = [];
 
   for (const recipient of recipients) {
@@ -539,6 +591,10 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
       const outcome = await deliverOneRecipient({ send, recipient, actorId, attemptNumber });
       if (outcome.success) {
         sent++;
+        if (outcome.ambiguous) {
+          ambiguous++;
+          errors.push(`${recipient.email}: provider accepted but audit log write failed`);
+        }
       } else {
         failed++;
         if (outcome.error) errors.push(`${recipient.email}: ${outcome.error}`);
@@ -553,7 +609,7 @@ async function executeSend({ send, actorId, recipients, attemptBase = 1 }) {
     }
   }
 
-  return { sent, failed, errors };
+  return { sent, failed, ambiguous, errors };
 }
 
 export async function sendCampaign(sendId, actorId, { force = false } = {}) {
@@ -609,7 +665,7 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
       return { sendId, sent: 0, failed: 0, total: 0 };
     }
 
-    const { sent, failed, errors } = await executeSend({ send, actorId, recipients });
+    const { sent, failed, ambiguous, errors } = await executeSend({ send, actorId, recipients });
 
     const finalStatus = failed === recipients.length ? 'FAILED' : 'SENT';
     await prisma.campaignSend.update({
@@ -622,7 +678,7 @@ export async function sendCampaign(sendId, actorId, { force = false } = {}) {
       },
     });
 
-    return { sendId, sent, failed, total: recipients.length };
+    return { sendId, sent, failed, ambiguous, total: recipients.length };
   } catch (error) {
     // Revert SENDING so a retry can be attempted.
     await prisma.campaignSend.update({
@@ -657,9 +713,18 @@ export async function retryFailedCampaignSend(sendId, actorId) {
   }
 
   try {
-    const failedLogs = await prisma.campaignSendLog.findMany({
-      where: { campaignSendId: sendId, status: 'FAILED' },
+    const allLogs = await prisma.campaignSendLog.findMany({
+      where: { campaignSendId: sendId },
+      orderBy: { attemptNumber: 'asc' },
     });
+
+    // Only retry a recipient whose latest attempt is FAILED. A later SENT log
+    // means the recipient was already delivered successfully.
+    const latestByEmail = new Map();
+    for (const log of allLogs) {
+      latestByEmail.set(log.email, log);
+    }
+    const failedLogs = Array.from(latestByEmail.values()).filter((log) => log.status === 'FAILED');
 
     if (failedLogs.length === 0) {
       await prisma.campaignSend.update({
@@ -730,6 +795,32 @@ export async function sendScheduledCampaigns() {
     } catch (error) {
       console.error(`[sendScheduledCampaigns] failed to send ${item.id}:`, error);
       results.push({ id: item.id, error: error.message });
+    }
+  }
+
+  return results;
+}
+
+export async function reconcileCampaignLogs({ olderThanMs = 5 * 60 * 1000, now = Date.now() } = {}) {
+  const cutoff = new Date(now - olderThanMs);
+
+  const pending = await prisma.campaignSendLog.findMany({
+    where: {
+      status: 'PENDING',
+      createdAt: { lt: cutoff },
+    },
+  });
+
+  const results = [];
+  for (const log of pending) {
+    try {
+      await prisma.campaignSendLog.update({
+        where: { id: log.id },
+        data: { status: 'AMBIGUOUS', sentAt: new Date() },
+      });
+      results.push({ id: log.id, status: 'AMBIGUOUS' });
+    } catch (error) {
+      results.push({ id: log.id, error: error.message });
     }
   }
 

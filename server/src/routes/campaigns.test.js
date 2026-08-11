@@ -21,6 +21,7 @@ const mockService = vi.hoisted(() => ({
   updateCampaignSend: vi.fn().mockResolvedValue({}),
   getCampaignSendById: vi.fn().mockResolvedValue({ id: 'send-1' }),
   approveCampaignSend: vi.fn().mockResolvedValue({ id: 'send-1', status: 'APPROVED' }),
+  previewCampaignSend: vi.fn().mockResolvedValue({ id: 'send-1', count: 0, renderedPreview: '<p>Preview</p>' }),
   sendCampaign: vi.fn().mockRejectedValue(new Error('Bulk campaign sends are disabled')),
   retryFailedCampaignSend: vi.fn().mockResolvedValue({ retried: 1 }),
   getSuppressedEmails: vi.fn().mockResolvedValue([]),
@@ -103,6 +104,12 @@ describe('campaign admin routes', () => {
     const res = await post('/api/admin/campaigns/sends/send-1/approve');
     expect(res.status).toBe(200);
     expect(mockService.approveCampaignSend).toHaveBeenCalledWith({ sendId: 'send-1', actorId: 'admin-1' });
+  });
+
+  it('returns a preview for approval review', async () => {
+    const res = await get('/api/admin/campaigns/sends/send-1/preview');
+    expect(res.status).toBe(200);
+    expect(mockService.previewCampaignSend).toHaveBeenCalledWith({ sendId: 'send-1' });
   });
 
   it('forwards service errors from send without exposing stack traces', async () => {

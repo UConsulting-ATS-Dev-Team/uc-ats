@@ -1,9 +1,11 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
+import config from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { verifyUnsubscribeToken, recordSuppression } from '../services/campaigns.js';
+import { verifySnsSignature } from '../utils/snsVerification.js';
 
 const router = express.Router();
 
@@ -405,27 +407,44 @@ router.get('/unsubscribe', async (req, res) => {
 });
 
 // Public: SES bounce/complaint notifications. SES may deliver these directly
-// or through an SNS Message field.
+// or through an SNS Message envelope. Authenticate SNS signatures/topic before
+// any suppression/consent mutation.
 router.post('/ses-events', express.json({ type: '*/*' }), async (req, res) => {
   try {
-    let payload = req.body;
-    if (payload.Message && typeof payload.Message === 'string') {
+    let snsPayload = null;
+    let sesPayload = req.body;
+
+    // SNS envelopes have Message, Signature, SigningCertURL, etc.
+    if (req.body.Message && typeof req.body.Message === 'string' && req.body.Type) {
+      snsPayload = req.body;
       try {
-        payload = JSON.parse(payload.Message);
+        sesPayload = JSON.parse(req.body.Message);
       } catch {
-        // fall through with original payload
+        // keep original body
       }
     }
 
-    const type = payload.notificationType || payload.eventType;
+    if (snsPayload) {
+      try {
+        await verifySnsSignature(snsPayload, {
+          requiredTopicArn: config.sesSnsTopicArn || undefined,
+          verify: config.sesSnsVerifySignature,
+        });
+      } catch (error) {
+        console.error('[POST /api/ses-events] SNS verification failed:', error.message);
+        return res.status(403).json({ error: 'SNS signature verification failed' });
+      }
+    }
+
+    const type = sesPayload.notificationType || sesPayload.eventType;
     const emails = [];
 
-    if (type === 'Bounce' && payload.bounce?.bouncedRecipients) {
-      for (const r of payload.bounce.bouncedRecipients) {
+    if (type === 'Bounce' && sesPayload.bounce?.bouncedRecipients) {
+      for (const r of sesPayload.bounce.bouncedRecipients) {
         if (r.emailAddress) emails.push(r.emailAddress);
       }
-    } else if (type === 'Complaint' && payload.complaint?.complainedRecipients) {
-      for (const r of payload.complaint.complainedRecipients) {
+    } else if (type === 'Complaint' && sesPayload.complaint?.complainedRecipients) {
+      for (const r of sesPayload.complaint.complainedRecipients) {
         if (r.emailAddress) emails.push(r.emailAddress);
       }
     }

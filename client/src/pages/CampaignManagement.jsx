@@ -54,7 +54,7 @@ export default function CampaignManagement() {
   const [templateOpen, setTemplateOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({
-    name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [], firstOfCycleGate: false,
+    name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [],
   });
 
   // Audiences
@@ -73,6 +73,7 @@ export default function CampaignManagement() {
     name: '', templateId: '', audienceId: '', scheduledAt: '',
   });
   const [sendResult, setSendResult] = useState(null);
+  const [approvalDialog, setApprovalDialog] = useState({ open: false, sendId: null, preview: null });
 
   // Suppressions
   const [suppressions, setSuppressions] = useState([]);
@@ -148,7 +149,7 @@ export default function CampaignManagement() {
       }
       setTemplateOpen(false);
       setEditingTemplate(null);
-      setTemplateForm({ name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [], firstOfCycleGate: false });
+      setTemplateForm({ name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [] });
       await fetchTemplates();
     } catch (e) {
       setError(e.message || 'Failed to save template');
@@ -235,11 +236,26 @@ export default function CampaignManagement() {
     }
   };
 
-  const handleApprove = async (id) => {
+  const openApprovalDialog = async (id) => {
     try {
       setError('');
-      const result = await apiClient.post(`/admin/campaigns/sends/${id}/approve`, {});
+      setApprovalDialog({ open: true, sendId: id, preview: null });
+      const preview = await apiClient.get(`/admin/campaigns/sends/${id}/preview`);
+      setApprovalDialog((prev) => ({ ...prev, preview }));
+    } catch (e) {
+      setError(e.message || 'Failed to load approval preview');
+      setApprovalDialog({ open: false, sendId: null, preview: null });
+    }
+  };
+
+  const handleApprove = async () => {
+    const { sendId } = approvalDialog;
+    if (!sendId) return;
+    try {
+      setError('');
+      const result = await apiClient.post(`/admin/campaigns/sends/${sendId}/approve`, {});
       setSendResult({ approved: true, fingerprint: result.approvalFingerprint });
+      setApprovalDialog({ open: false, sendId: null, preview: null });
       await fetchSends();
     } catch (e) {
       setError(e.message || 'Failed to approve send');
@@ -298,11 +314,10 @@ export default function CampaignManagement() {
         subject: template.subject,
         body: template.body,
         mergeFields: template.mergeFields || [],
-        firstOfCycleGate: template.firstOfCycleGate || false,
       });
     } else {
       setEditingTemplate(null);
-      setTemplateForm({ name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [], firstOfCycleGate: false });
+      setTemplateForm({ name: '', category: '', subject: '', body: DEFAULT_BODY, mergeFields: [] });
     }
     setTemplateOpen(true);
   };
@@ -373,7 +388,6 @@ export default function CampaignManagement() {
                 <TableCell>Category</TableCell>
                 <TableCell>Subject</TableCell>
                 <TableCell>Version</TableCell>
-                <TableCell>First-cycle gate</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -384,7 +398,6 @@ export default function CampaignManagement() {
                   <TableCell>{t.category}</TableCell>
                   <TableCell>{t.subject}</TableCell>
                   <TableCell>{t.version}</TableCell>
-                  <TableCell>{t.firstOfCycleGate ? 'Yes' : 'No'}</TableCell>
                   <TableCell>
                     <IconButton onClick={() => openTemplate(t)}><EditIcon /></IconButton>
                     <IconButton onClick={() => handleDeleteTemplate(t.id)}><DeleteIcon /></IconButton>
@@ -453,7 +466,7 @@ export default function CampaignManagement() {
                   <TableCell>{s.recipientCount ?? '—'}</TableCell>
                   <TableCell>
                     {s.status === 'PENDING_APPROVAL' && (
-                      <Tooltip title="Approve rendered content and audience"><IconButton onClick={() => handleApprove(s.id)}><CheckCircleIcon /></IconButton></Tooltip>
+                      <Tooltip title="Approve rendered content and audience"><IconButton onClick={() => openApprovalDialog(s.id)}><CheckCircleIcon /></IconButton></Tooltip>
                     )}
                     {(s.status === 'APPROVED' || s.status === 'SCHEDULED') && s.status !== 'SENDING' && (
                       <Tooltip title="Send now"><IconButton onClick={() => handleSendNow(s.id)}><SendIcon /></IconButton></Tooltip>
@@ -512,10 +525,6 @@ export default function CampaignManagement() {
             <Typography variant="caption" color="text.secondary">
               Merge fields: {'{{firstName}} {{lastName}} {{name}} {{cycle}} {{stage}} {{status}}'}
             </Typography>
-            <FormControlLabel
-              control={<Checkbox checked={templateForm.firstOfCycleGate} onChange={(e) => setTemplateForm({ ...templateForm, firstOfCycleGate: e.target.checked })} />}
-              label="Require first-of-cycle human gate before sending"
-            />
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -616,6 +625,38 @@ export default function CampaignManagement() {
           <Button variant="contained" onClick={handleCreateSend}>
             {sendForm.scheduledAt ? 'Schedule' : 'Send'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={approvalDialog.open} onClose={() => setApprovalDialog({ open: false, sendId: null, preview: null })} maxWidth="md" fullWidth>
+        <DialogTitle>Review campaign before approval</DialogTitle>
+        <DialogContent>
+          {!approvalDialog.preview ? (
+            <Typography>Loading preview…</Typography>
+          ) : (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Typography variant="body2" data-testid="approval-recipient-count">
+                Recipients: <strong>{approvalDialog.preview.count}</strong>
+              </Typography>
+              {approvalDialog.preview.sample.length > 0 && (
+                <Typography variant="body2" color="text.secondary" data-testid="approval-sample">
+                  Sample: {approvalDialog.preview.sample.map((r) => r.email).join(', ')}
+                </Typography>
+              )}
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>Rendered preview</Typography>
+                <Box
+                  data-testid="approval-rendered-preview"
+                  sx={{ border: 1, borderColor: 'divider', p: 2, borderRadius: 1 }}
+                  dangerouslySetInnerHTML={{ __html: approvalDialog.preview.renderedPreview }}
+                />
+              </Box>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setApprovalDialog({ open: false, sendId: null, preview: null })}>Cancel</Button>
+          <Button variant="contained" onClick={handleApprove} disabled={!approvalDialog.preview}>Approve send</Button>
         </DialogActions>
       </Dialog>
     </Box>
