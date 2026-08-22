@@ -27,6 +27,7 @@ import {
   generateOfferLetterPdf
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
+import interviewSlotAdminRoutes from './interviewSlotAdmin.js';
 
 const router = express.Router();
 
@@ -2001,6 +2002,9 @@ router.delete('/interviews/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete interview' });
   }
 });
+
+// Interview slot CRUD/coverage routes (must come before /:id to avoid shadowing)
+router.use('/interviews', interviewSlotAdminRoutes);
 
 // Get interview details
 router.get('/interviews/:id', async (req, res) => {
