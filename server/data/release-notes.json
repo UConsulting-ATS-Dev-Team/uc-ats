@@ -1,0 +1,15 @@
+[
+  {
+    "id": "2026-07-28-admin-release-notes",
+    "releaseDate": "2026-07-28",
+    "title": "Admin-only ATS release notes page",
+    "summary": "Admins can now view a curated, in-product history of ATS changes directly in the app.",
+    "details": "The new page is reachable from the admin sidebar under \"What's new.\" Entries are sorted newest-first and include release date, category, affected area, summary, and expandable detail text with optional related links. The content is maintained as a versioned JSON file so release history persists across recruiting cycles. Member and candidate accounts cannot access the page or its API.",
+    "category": "feature",
+    "affectedArea": "Admin experience / navigation",
+    "status": "new",
+    "links": [
+      { "label": "Issue #114", "url": "https://github.com/UConsulting-ATS-Dev-Team/uc-ats/issues/114" }
+    ]
+  }
+]

@@ -2,13 +2,15 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
-import AuthenticatedImage from '../components/AuthenticatedImage';
+import CandidateAvatar from '../components/CandidateAvatar';
+import MemberAvatar from '../components/MemberAvatar';
 import ImageCache from '../utils/imageCache';
 import AddApplicationModal from '../components/AddApplicationModal';
 import EditApplicationModal from '../components/EditApplicationModal';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import { useApplications } from '../hooks/useApplications';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/ApplicationList.css';
 
@@ -26,7 +28,8 @@ export default function ApplicationList() {
     firstGen: '',
     transfer: '',
     decision: '',
-    returning: ''
+    returning: '',
+    eventAttendanceEventId: ''
   });
   const [appliedFilters, setAppliedFilters] = useState({
     year: '',
@@ -34,8 +37,10 @@ export default function ApplicationList() {
     firstGen: '',
     transfer: '',
     decision: '',
-    returning: ''
+    returning: '',
+    eventAttendanceEventId: ''
   });
+  const [events, setEvents] = useState([]);
 
   // Check if there are unapplied filter or search changes
   const hasUnappliedFilters = JSON.stringify(pendingFilters) !== JSON.stringify(appliedFilters) || pendingSearch !== appliedSearch;
@@ -49,7 +54,7 @@ export default function ApplicationList() {
 
   // Clear all filters
   const handleClearFilters = useCallback(() => {
-    const emptyFilters = { year: '', gender: '', firstGen: '', transfer: '', decision: '', returning: '' };
+    const emptyFilters = { year: '', gender: '', firstGen: '', transfer: '', decision: '', returning: '', eventAttendanceEventId: '' };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setPendingSearch('');
@@ -74,6 +79,7 @@ export default function ApplicationList() {
     firstGen: appliedFilters.firstGen || null,
     transfer: appliedFilters.transfer || null,
     returning: appliedFilters.returning || null,
+    eventAttendanceEventId: appliedFilters.eventAttendanceEventId || null,
   });
 
   // Transform applications data
@@ -88,11 +94,27 @@ export default function ApplicationList() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
 
+  // Fetch events (for the event attendance filter dropdown), restricted to the events
+  // candidates actually get credit for attending
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        const data = await apiClient.get('/member/events');
+        setEvents((data || []).filter((event) => isPointEligibleEvent(event.eventName)));
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
+    if (user?.id) {
+      fetchEvents();
+    }
+  }, [user?.id]);
+
   // Preload images when applications change
   useEffect(() => {
     if (applicants.length > 0) {
       const imageUrls = applicants
-        .filter(applicant => applicant.headshotUrl)
+        .filter(applicant => typeof applicant.headshotUrl === 'string' && applicant.headshotUrl.trim() !== '')
         .map(applicant => applicant.headshotUrl);
 
       if (imageUrls.length > 0) {
@@ -108,10 +130,6 @@ export default function ApplicationList() {
       }
     }
   }, [applicants]);
-
-  const getInitials = (firstName, lastName) => {
-    return `${firstName?.charAt(0) || ''}${lastName?.charAt(0) || ''}`.toUpperCase();
-  };
 
   const formatStatus = (status) => {
     return status.toLowerCase().replace('_', ' ');
@@ -294,6 +312,17 @@ export default function ApplicationList() {
           <option value="false">Returning: No</option>
         </select>
 
+        <select
+          className="filter-select"
+          value={pendingFilters.eventAttendanceEventId}
+          onChange={(e) => handleFilterChange('eventAttendanceEventId', e.target.value)}
+        >
+          <option value="">Event Attendance: All</option>
+          {events.map(event => (
+            <option key={`att-${event.id}`} value={event.id}>Attended: {event.eventName}</option>
+          ))}
+        </select>
+
         <button
           className={`apply-filters-btn ${hasUnappliedFilters ? 'has-changes' : ''}`}
           onClick={handleApplyFilters}
@@ -330,23 +359,7 @@ export default function ApplicationList() {
                 <div className="candidate-header">
                   <div className="candidate-info">
                     {/* Profile Picture with fallback */}
-                    {applicant.headshotUrl ? (
-                      <AuthenticatedImage
-                        src={applicant.headshotUrl}
-                        alt={`${applicant.firstName} ${applicant.lastName}`}
-                        className="candidate-avatar"
-                        style={{
-                          width: '60px',
-                          height: '60px',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                    ) : (
-                      <div className="candidate-avatar-fallback">
-                        {getInitials(applicant.firstName, applicant.lastName)}
-                      </div>
-                    )}
+                    <CandidateAvatar applicant={applicant} />
                     <div className="candidate-details">
                       <h3>{applicant.firstName} {applicant.lastName}</h3>
                       <p className="candidate-meta">
@@ -365,6 +378,17 @@ export default function ApplicationList() {
                     </span>
                   </div>
                 </div>
+
+                {applicant.reviewTeam && applicant.reviewTeam.members?.length > 0 && (
+                  <div className="candidate-review-team">
+                    <span className="review-team-label">Review team</span>
+                    <div className="review-team-members">
+                      {applicant.reviewTeam.members.map((member) => (
+                        <MemberAvatar key={member.id} member={member} />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Link>
               {isAdmin && (
                 <div className="candidate-actions">

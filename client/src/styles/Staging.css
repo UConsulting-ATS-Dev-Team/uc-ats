@@ -1,6 +1,6 @@
 /* Staging Page Styles */
 .staging-page {
-  background-color: #ffffff;
+  background-color: var(--bg-primary);
   min-height: 100vh;
   padding: 1.5rem;
   font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
@@ -15,7 +15,7 @@
 .staging-page h6 {
   font-family: 'Montserrat', sans-serif;
   font-weight: 700;
-  color: #042742;
+  color: var(--text-primary);
 }
 
 /* Ensure Material-UI components use proper fonts */
@@ -32,7 +32,7 @@
 .MuiTypography-h6 {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 700 !important;
-  color: #042742 !important;
+  color: var(--text-primary) !important;
 }
 
 .MuiTypography-body1,
@@ -44,8 +44,8 @@
 .MuiTableCell-head {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 700 !important;
-  color: #042742 !important;
-  background-color: #f8fafc !important;
+  color: var(--text-primary) !important;
+  background-color: var(--bg-secondary) !important;
 }
 
 .MuiTableCell-body {
@@ -56,12 +56,12 @@
 /* Card styling */
 .MuiCard-root {
   border-radius: 12px !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+  box-shadow: var(--shadow-md) !important;
   transition: box-shadow 0.3s ease-in-out !important;
 }
 
 .MuiCard-root:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 /* Table styling */
@@ -94,7 +94,7 @@
 }
 
 .MuiTableRow-root:hover {
-  background-color: #f8fafc !important;
+  background-color: var(--bg-secondary) !important;
 }
 
 /* Chip styling */
@@ -113,24 +113,24 @@
 }
 
 .MuiButton-contained {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+  box-shadow: var(--shadow-md) !important;
 }
 
 .MuiButton-contained:hover {
   transform: translateY(-1px) !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 /* Dialog styling */
 .MuiDialog-paper {
   border-radius: 12px !important;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .MuiDialogTitle-root {
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 700 !important;
-  color: #042742 !important;
+  color: var(--text-primary) !important;
 }
 
 /* Form control styling */
@@ -182,28 +182,28 @@
 }
 
 .status-submitted {
-  background-color: #e3f2fd;
-  color: #1976d2;
+  background-color: var(--status-info-bg);
+  color: var(--status-info-text);
 }
 
 .status-under-review {
-  background-color: #fff3e0;
-  color: #f57c00;
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 .status-accepted {
-  background-color: #e8f5e8;
-  color: #388e3c;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .status-rejected {
-  background-color: #ffebee;
-  color: #d32f2f;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 
 .status-waitlisted {
-  background-color: #fff8e1;
-  color: #f57f17;
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 /* Score display */
@@ -216,7 +216,7 @@
 .score-bar {
   width: 40px;
   height: 8px;
-  background-color: #e0e0e0;
+  background-color: var(--border-medium);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -229,15 +229,15 @@
 }
 
 .score-excellent {
-  background-color: #4caf50;
+  background-color: var(--status-success-border);
 }
 
 .score-good {
-  background-color: #ff9800;
+  background-color: var(--status-warning-border);
 }
 
 .score-poor {
-  background-color: #f44336;
+  background-color: var(--status-error-border);
 }
 
 /* Attendance display */
@@ -284,7 +284,7 @@
 
 /* Filter section */
 .filter-section {
-  background-color: #f8fafc;
+  background-color: var(--bg-secondary);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 24px;
@@ -300,25 +300,25 @@
 
 .round-card {
   padding: 16px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--border-medium);
   border-radius: 8px;
   text-align: center;
   transition: all 0.3s ease;
 }
 
 .round-card.active {
-  border-color: #1976d2;
-  background-color: #e3f2fd;
+  border-color: var(--primary-blue);
+  background-color: var(--status-info-bg);
 }
 
 .round-card.completed {
-  border-color: #4caf50;
-  background-color: #e8f5e8;
+  border-color: var(--status-success-border);
+  background-color: var(--status-success-bg);
 }
 
 .round-card.pending {
-  border-color: #e0e0e0;
-  background-color: #fafafa;
+  border-color: var(--border-medium);
+  background-color: var(--bg-white);
 }
 
 /* Candidate table enhancements */
@@ -327,7 +327,7 @@
 }
 
 .candidate-row:hover {
-  background-color: #f8fafc;
+  background-color: var(--bg-secondary);
 }
 
 .candidate-info {
@@ -338,12 +338,12 @@
 
 .candidate-name {
   font-weight: 600;
-  color: #042742;
+  color: var(--text-primary);
 }
 
 .candidate-details {
   font-size: 0.75rem;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .candidate-tags {
@@ -378,20 +378,20 @@
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--border-medium);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .decision-option:hover {
-  border-color: #1976d2;
-  background-color: #f8fafc;
+  border-color: var(--primary-blue);
+  background-color: var(--bg-secondary);
 }
 
 .decision-option.selected {
-  border-color: #1976d2;
-  background-color: #e3f2fd;
+  border-color: var(--primary-blue);
+  background-color: var(--status-info-bg);
 }
 
 /* Snackbar styling */
@@ -410,7 +410,8 @@
   font-family: 'Montserrat', sans-serif !important;
   font-weight: 500 !important;
   font-size: 0.75rem !important;
-  background-color: #333 !important;
+  background-color: var(--text-primary) !important;
+  color: var(--bg-primary) !important;
   border-radius: 6px !important;
 }
 
@@ -436,11 +437,11 @@
 
 /* Checkbox styling */
 .MuiCheckbox-root {
-  color: #1976d2 !important;
+  color: var(--primary-blue) !important;
 }
 
 .MuiCheckbox-root.Mui-checked {
-  color: #4caf50 !important;
+  color: var(--status-success-border) !important;
 }
 
 /* Switch styling */

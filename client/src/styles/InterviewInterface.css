@@ -112,16 +112,15 @@
 }
 
 .application-card {
-  background: white;
-  border: 1px solid var(--border-light);
+  background: var(--bg-white);  border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 1.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s ease;
 }
 
 .application-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Application Header */
@@ -176,8 +175,7 @@
   gap: 0.5rem;
   padding: 0.5rem 1rem;
   background-color: var(--primary-blue);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   border-radius: var(--border-radius);
   cursor: pointer;
   font-size: 0.875rem;
@@ -307,8 +305,7 @@
   height: 2.5rem;
   border: 2px solid var(--border-medium);
   border-radius: 50%;
-  background-color: white;
-  color: var(--text-secondary);
+  background-color: var(--bg-white);  color: var(--text-secondary);
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 600;
@@ -326,8 +323,7 @@
 .score-btn.selected {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: white;
-}
+  color: var(--text-white);}
 
 /* Decision Section */
 .decision-options {
@@ -360,34 +356,22 @@
 }
 
 .decision-label.green {
-  background-color: #f0f9ff;
-  border-color: #0ea5e9;
-  color: #0c4a6e;
-}
+  background-color: var(--status-info-bg);  border-color: var(--status-info-border);  color: var(--status-info-text);}
 
 .decision-label.light-green {
-  background-color: #f0fdf4;
-  border-color: #22c55e;
-  color: #14532d;
-}
+  background-color: var(--status-success-bg);  border-color: var(--status-success-border);  color: var(--status-success-text);}
 
 .decision-label.yellow {
-  background-color: #fefce8;
-  border-color: #eab308;
-  color: #713f12;
+  background-color: var(--status-warning-bg);
+  border-color: var(--status-warning-border);
+  color: var(--status-warning-text);
 }
 
 .decision-label.orange {
-  background-color: #fff7ed;
-  border-color: #f97316;
-  color: #9a3412;
-}
+  background-color: var(--status-warning-bg);  border-color: var(--status-warning-border);  color: var(--status-warning-text);}
 
 .decision-label.red {
-  background-color: #fef2f2;
-  border-color: #ef4444;
-  color: #991b1b;
-}
+  background-color: var(--status-error-bg);  border-color: var(--status-error-border);  color: var(--status-error-text);}
 
 .decision-option input[type="radio"]:checked + .decision-label {
   font-weight: 600;
@@ -432,7 +416,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -441,8 +425,7 @@
 }
 
 .modal-content {
-  background: white;
-  border-radius: var(--border-radius);
+  background: var(--bg-white);  border-radius: var(--border-radius);
   box-shadow: var(--shadow-lg);
   max-width: 90vw;
   max-height: 90vh;
@@ -610,8 +593,7 @@
   top: 1px;
   width: 6px;
   height: 10px;
-  border: solid white;
-  border-width: 0 2px 2px 0;
+  border: solid var(--text-white);  border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 
@@ -640,8 +622,7 @@
 
 .evaluation-badge {
   background-color: var(--status-success-border);
-  color: white;
-  font-size: 0.75rem;
+  color: var(--text-white);  font-size: 0.75rem;
   font-weight: 500;
   padding: 0.25rem 0.5rem;
   border-radius: 12px;
@@ -673,8 +654,7 @@
 
 .btn-primary {
   background-color: var(--primary-blue);
-  color: white;
-  border: none;
+  color: var(--text-white);  border: none;
   padding: 0.75rem 1.5rem;
   border-radius: var(--border-radius);
   font-size: 0.875rem;
@@ -693,8 +673,7 @@
 }
 
 .btn-secondary {
-  background-color: white;
-  color: var(--text-primary);
+  background-color: var(--bg-white);  color: var(--text-primary);
   border: 1px solid var(--border-medium);
   padding: 0.75rem 1.5rem;
   border-radius: var(--border-radius);

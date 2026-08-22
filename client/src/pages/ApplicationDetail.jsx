@@ -5,6 +5,7 @@ import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
+import OfferLetterSection from '../components/OfferLetterSection';
 import { useAuth } from '../context/AuthContext';
 import '../styles/ApplicationDetail.css';
 
@@ -602,6 +603,14 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               </div>
             </div>
           </div>
+
+          {/* Offer Letter - admin only, only for Final Round accepted candidates */}
+          <OfferLetterSection
+            application={application}
+            comments={comments}
+            isAdmin={isAdmin}
+            onSent={fetchComments}
+          />
 
           {/* Past Applications Section - only show if there are past applications */}
           {application.pastApplications && application.pastApplications.length > 0 && (

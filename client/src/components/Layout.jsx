@@ -17,11 +17,14 @@ import {
   ChatBubbleLeftRightIcon,
   ChatBubbleOvalLeftEllipsisIcon,
   LightBulbIcon,
-  PresentationChartBarIcon
+  PresentationChartBarIcon,
+  NewspaperIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
+import MemberAvatar from './MemberAvatar';
+import ThemeToggle from './ThemeToggle';
 import '../styles/Layout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -65,6 +68,7 @@ const Layout = ({ children }) => {
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
+      { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
       FEATURE_REQUEST_NAV,
     ] : [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
@@ -106,12 +110,16 @@ const Layout = ({ children }) => {
 
             {/* Right side - User info and logout */}
             <div className="nav-right">
-              <div className="user-info">
-                <p className="user-name">{user?.fullName}</p>
-                <p className="user-role">
-                  {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
-                </p>
-              </div>
+              <Link to="/profile" className="profile-link" aria-label="Edit profile">
+                <MemberAvatar member={user} size={32} />
+                <div className="user-info">
+                  <p className="user-name">{user?.fullName}</p>
+                  <p className="user-role">
+                    {user?.role === 'MEMBER' ? 'UC MEMBER' : user?.role}
+                  </p>
+                </div>
+              </Link>
+              <ThemeToggle />
               <button
                 onClick={handleLogout}
                 className="logout-btn"

@@ -1,8 +1,232 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
+import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
+import config from '../config.js';
+import { sendReviewerReminder } from '../services/emailNotifications.js';
+import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  isGroupMember,
+  getFirstEmptyLegacySlot,
+  buildCreateGroupData,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
 
 const router = express.Router();
+
+// Admin audit of each reviewer's grading contribution within their assigned team.
+router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true },
+      select: { id: true }
+    });
+
+    if (!activeCycle) {
+      return res.json([]);
+    }
+
+    const groups = await prisma.groups.findMany({
+      where: { cycleId: activeCycle.id },
+      select: {
+        id: true,
+        assignedCandidates: {
+          select: {
+            id: true,
+            applications: {
+              where: { cycleId: activeCycle.id },
+              orderBy: { submittedAt: 'desc' },
+              take: 1,
+              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+            }
+          }
+        },
+        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
+        groupMembers: {
+          select: {
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
+          }
+        }
+      }
+    });
+
+    const candidateIds = groups.flatMap(group => group.assignedCandidates.map(candidate => candidate.id));
+    const scoreFilter = {
+      candidateId: { in: candidateIds },
+      cycleId: activeCycle.id,
+      assignedGroupId: { not: null }
+    };
+
+    const [resumeScores, coverLetterScores, videoScores] = await Promise.all([
+      prisma.resumeScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } }),
+      prisma.coverLetterScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } }),
+      prisma.videoScore.findMany({ where: scoreFilter, select: { evaluatorId: true, assignedGroupId: true } })
+    ]);
+
+    const countScores = (scores, groupId, evaluatorId) => scores.filter(score =>
+      score.assignedGroupId === groupId && score.evaluatorId === evaluatorId
+    ).length;
+
+    res.json(groups.map(group => {
+      const applications = group.assignedCandidates
+        .map(candidate => candidate.applications[0])
+        .filter(Boolean);
+      const eligible = {
+        resume: applications.filter(application => Boolean(application.resumeUrl)).length,
+        coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+        video: applications.filter(application => Boolean(application.videoUrl)).length
+      };
+
+      const members = getGroupMemberUsers(group)
+        .map(member => {
+          const completed = {
+            resume: countScores(resumeScores, group.id, member.id),
+            coverLetter: countScores(coverLetterScores, group.id, member.id),
+            video: countScores(videoScores, group.id, member.id)
+          };
+          const completedTotal = completed.resume + completed.coverLetter + completed.video;
+          const expectedTotal = eligible.resume + eligible.coverLetter + eligible.video;
+
+          return {
+            ...member,
+            completed,
+            eligible,
+            completedTotal,
+            expectedTotal,
+            completionPercent: expectedTotal ? Math.round((completedTotal / expectedTotal) * 100) : 0
+          };
+        });
+
+      return { groupId: group.id, members };
+    }));
+  } catch (error) {
+    console.error('Error fetching reviewer contributions:', error);
+    res.status(500).json({ error: 'Failed to fetch reviewer contributions' });
+  }
+});
+
+// Send a grading reminder to a specific reviewer on a team.
+router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { groupId, reviewerId } = req.params;
+
+    const activeCycle = await prisma.recruitingCycle.findFirst({
+      where: { isActive: true },
+      select: { id: true, name: true }
+    });
+
+    if (!activeCycle) {
+      return res.status(400).json({ error: 'No active recruiting cycle' });
+    }
+
+    const group = await prisma.groups.findUnique({
+      where: { id: groupId },
+      select: {
+        id: true,
+        name: true,
+        cycleId: true,
+        memberOne: true,
+        memberTwo: true,
+        memberThree: true,
+        groupMembers: { select: { userId: true } },
+        assignedCandidates: {
+          select: {
+            id: true,
+            applications: {
+              where: { cycleId: activeCycle.id },
+              orderBy: { submittedAt: 'desc' },
+              take: 1,
+              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (!group || group.cycleId !== activeCycle.id) {
+      return res.status(404).json({ error: 'Review team not found in the active cycle' });
+    }
+
+    if (!isGroupMember(group, reviewerId)) {
+      return res.status(400).json({ error: 'Reviewer is not a member of this review team' });
+    }
+
+    const reviewer = await prisma.user.findUnique({
+      where: { id: reviewerId },
+      select: { id: true, fullName: true, email: true, profileImage: true }
+    });
+
+    if (!reviewer) {
+      return res.status(404).json({ error: 'Reviewer not found' });
+    }
+
+    if (!reviewer.email || !reviewer.email.includes('@')) {
+      return res.status(400).json({ error: 'Reviewer does not have a valid email address' });
+    }
+
+    const candidateIds = group.assignedCandidates.map(candidate => candidate.id);
+
+    const scoreFilter = {
+      candidateId: { in: candidateIds },
+      cycleId: activeCycle.id,
+      evaluatorId: reviewerId,
+      assignedGroupId: groupId
+    };
+
+    const [resumeScores, coverLetterScores, videoScores] = await Promise.all([
+      prisma.resumeScore.findMany({ where: scoreFilter, select: { id: true } }),
+      prisma.coverLetterScore.findMany({ where: scoreFilter, select: { id: true } }),
+      prisma.videoScore.findMany({ where: scoreFilter, select: { id: true } })
+    ]);
+
+    const applications = group.assignedCandidates
+      .map(candidate => candidate.applications[0])
+      .filter(Boolean);
+
+    const eligible = {
+      resume: applications.filter(application => Boolean(application.resumeUrl)).length,
+      coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+      video: applications.filter(application => Boolean(application.videoUrl)).length
+    };
+
+    const completed = {
+      resume: resumeScores.length,
+      coverLetter: coverLetterScores.length,
+      video: videoScores.length
+    };
+
+    const completedTotal = completed.resume + completed.coverLetter + completed.video;
+    const expectedTotal = eligible.resume + eligible.coverLetter + eligible.video;
+    const completionPercent = expectedTotal ? Math.round((completedTotal / expectedTotal) * 100) : 0;
+
+    const result = await sendReviewerReminder(
+      reviewer.email,
+      reviewer.fullName,
+      group.name || `Team ${group.id.slice(-4)}`,
+      activeCycle.name || 'Current cycle',
+      {
+        completed,
+        eligible,
+        completedTotal,
+        expectedTotal,
+        completionPercent,
+        gradingUrl: `${config.clientUrl}/document-grading`
+      }
+    );
+
+    if (!result.success) {
+      return res.status(502).json({ error: 'Failed to send reminder email', details: result.error });
+    }
+
+    res.json({ message: 'Reminder sent successfully' });
+  } catch (error) {
+    console.error('Error sending reviewer reminder:', error);
+    res.status(500).json({ error: 'Failed to send reminder' });
+  }
+});
 
 // Get all groups with their members and assigned candidates
 router.get('/', requireAuth, async (req, res) => {
@@ -33,21 +257,24 @@ router.get('/', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberTwoUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberThreeUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
+            email: true, profileImage: true }
+        },
+        groupMembers: {
+          select: {
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         },
         assignedCandidates: {
@@ -100,8 +327,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -120,8 +346,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -140,8 +365,7 @@ router.get('/', requireAuth, async (req, res) => {
         evaluator: {
           select: {
             id: true,
-            fullName: true
-          }
+            fullName: true, profileImage: true }
         }
       }
     });
@@ -186,13 +410,8 @@ router.get('/', requireAuth, async (req, res) => {
     
     // Transform the data to match the frontend expectations
     const transformedGroups = groups.map(group => {
-      const members = [
-        group.memberOneUser,
-        group.memberTwoUser,
-        group.memberThreeUser
-      ].filter(Boolean);
-      
-      const teamMemberIds = members.map(m => m.id);
+      const members = getGroupMemberUsers(group);
+      const teamMemberIds = getGroupMemberIds(group);
 
       const applications = group.assignedCandidates.map(candidate => {
         // Get the latest application for this candidate
@@ -266,8 +485,10 @@ router.get('/', requireAuth, async (req, res) => {
         members: members.map(member => ({
           id: member.id,
           name: member.fullName,
+          fullName: member.fullName,
           email: member.email,
-          avatar: null
+          profileImage: member.profileImage,
+          avatar: member.profileImage
         })),
         applications,
         cycleId: group.cycleId,
@@ -295,7 +516,7 @@ router.get('/', requireAuth, async (req, res) => {
 // Create a new group
 router.post('/', requireAuth, async (req, res) => {
   try {
-    const { name, memberOne, memberTwo, memberThree, cycleId } = req.body;
+    const { name, memberIds, memberOne, memberTwo, memberThree, cycleId } = req.body;
 
     // Validate that cycleId is provided
     if (!cycleId) {
@@ -311,36 +532,34 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Cycle not found' });
     }
 
+    // Support the new memberIds array as well as legacy individual fields
+    let incomingMemberIds = [];
+    if (Array.isArray(memberIds)) {
+      incomingMemberIds = memberIds;
+    } else {
+      incomingMemberIds = [memberOne, memberTwo, memberThree].filter(Boolean);
+    }
+    incomingMemberIds = [...new Set(incomingMemberIds.filter(Boolean))];
+
+    // Validate that every requested member exists and is allowed to review
+    if (incomingMemberIds.length > 0) {
+      const users = await prisma.user.findMany({
+        where: { id: { in: incomingMemberIds } },
+        select: { id: true, role: true }
+      });
+      const allowedIds = new Set(
+        users.filter(u => u.role === 'ADMIN' || u.role === 'MEMBER').map(u => u.id)
+      );
+      const invalid = incomingMemberIds.find(id => !allowedIds.has(id));
+      if (invalid) {
+        return res.status(400).json({ error: 'Invalid or unauthorized user in member list' });
+      }
+    }
+
     const group = await prisma.groups.create({
-      data: {
-        name: name?.trim() || null,
-        memberOne,
-        memberTwo,
-        memberThree,
-        cycleId
-      },
+      data: buildCreateGroupData(name, cycleId, incomingMemberIds),
       include: {
-        memberOneUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
+        ...groupMemberUserInclude,
         cycle: {
           select: {
             id: true,
@@ -350,11 +569,7 @@ router.post('/', requireAuth, async (req, res) => {
       }
     });
 
-    const members = [
-      group.memberOneUser,
-      group.memberTwoUser,
-      group.memberThreeUser
-    ].filter(Boolean);
+    const members = getGroupMemberUsers(group);
 
     const transformedGroup = {
       id: group.id,
@@ -363,8 +578,10 @@ router.post('/', requireAuth, async (req, res) => {
       members: members.map(member => ({
         id: member.id,
         name: member.fullName,
+        fullName: member.fullName,
         email: member.email,
-        avatar: null
+        profileImage: member.profileImage,
+        avatar: member.profileImage
       })),
       applications: [],
       cycleId: group.cycleId,
@@ -503,55 +720,97 @@ router.put('/:groupId/rename', requireAuth, async (req, res) => {
   }
 });
 
-// Update group members
+// Add one or more members to an existing review team.
 router.put('/:groupId/members', requireAuth, async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { memberOne, memberTwo, memberThree } = req.body;
+    const { memberId, memberIds } = req.body;
 
-    const updatedGroup = await prisma.groups.update({
+    const idsToAdd = [...new Set(
+      (Array.isArray(memberIds) ? memberIds : [memberId]).filter(Boolean)
+    )];
+
+    if (idsToAdd.length === 0) {
+      return res.status(400).json({ error: 'Member ID is required' });
+    }
+
+    const group = await prisma.groups.findUnique({
       where: { id: groupId },
-      data: {
-        memberOne,
-        memberTwo,
-        memberThree
-      },
       include: {
-        memberOneUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        }
+        ...groupMemberUserInclude,
+        cycle: { select: { id: true } }
       }
     });
 
-    const members = [
-      updatedGroup.memberOneUser,
-      updatedGroup.memberTwoUser,
-      updatedGroup.memberThreeUser
-    ].filter(Boolean);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const currentMemberIds = getGroupMemberIds(group);
+
+    // Validate each user exists and is allowed to review
+    const users = await prisma.user.findMany({
+      where: { id: { in: idsToAdd } },
+      select: { id: true, role: true }
+    });
+    const allowedIds = new Set(
+      users.filter(u => u.role === 'ADMIN' || u.role === 'MEMBER').map(u => u.id)
+    );
+
+    for (const id of idsToAdd) {
+      if (currentMemberIds.includes(id)) {
+        return res.status(400).json({ error: 'Member is already on this team' });
+      }
+      if (!allowedIds.has(id)) {
+        return res.status(400).json({ error: 'Invalid or unauthorized user' });
+      }
+    }
+
+    // Fill legacy slots first, then create join-table records for overflow
+    const updateData = {};
+    const additionalMembers = [];
+    let currentGroup = group;
+
+    for (const id of idsToAdd) {
+      const slot = getFirstEmptyLegacySlot(currentGroup);
+      if (slot) {
+        updateData[slot] = id;
+        // Keep our in-memory view consistent for the next iteration
+        currentGroup[slot] = id;
+      } else {
+        additionalMembers.push({ groupId, userId: id });
+      }
+    }
+
+    const ops = [];
+    if (Object.keys(updateData).length > 0) {
+      ops.push(prisma.groups.update({ where: { id: groupId }, data: updateData }));
+    }
+    if (additionalMembers.length > 0) {
+      ops.push(
+        prisma.groupMember.createMany({
+          data: additionalMembers,
+          skipDuplicates: true
+        })
+      );
+    }
+
+    await prisma.$transaction(ops);
+
+    const updatedGroup = await prisma.groups.findUnique({
+      where: { id: groupId },
+      include: groupMemberUserInclude
+    });
+
+    const members = getGroupMemberUsers(updatedGroup);
 
     const transformedMembers = members.map(member => ({
       id: member.id,
       name: member.fullName,
+      fullName: member.fullName,
       email: member.email,
-      avatar: null
+      profileImage: member.profileImage,
+      avatar: member.profileImage
     }));
 
     res.json(transformedMembers);
@@ -566,7 +825,6 @@ router.delete('/:groupId/members/:memberId', requireAuth, async (req, res) => {
   try {
     const { groupId, memberId } = req.params;
 
-    // Get the current group to see which member fields are set
     const group = await prisma.groups.findUnique({
       where: { id: groupId },
       select: {
@@ -580,58 +838,46 @@ router.delete('/:groupId/members/:memberId', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    // Determine which member field to clear
     let updateData = {};
+    let foundInLegacy = false;
     if (group.memberOne === memberId) {
       updateData.memberOne = null;
+      foundInLegacy = true;
     } else if (group.memberTwo === memberId) {
       updateData.memberTwo = null;
+      foundInLegacy = true;
     } else if (group.memberThree === memberId) {
       updateData.memberThree = null;
-    } else {
+      foundInLegacy = true;
+    }
+
+    const ops = [];
+    if (foundInLegacy) {
+      ops.push(prisma.groups.update({ where: { id: groupId }, data: updateData }));
+    }
+    ops.push(prisma.groupMember.deleteMany({ where: { groupId, userId: memberId } }));
+
+    const transactionResults = await prisma.$transaction(ops);
+    const deleteResult = transactionResults[transactionResults.length - 1];
+
+    if (!foundInLegacy && deleteResult.count === 0) {
       return res.status(404).json({ error: 'Member not found in this group' });
     }
 
-    // Update the group to remove the member
-    const updatedGroup = await prisma.groups.update({
+    const updatedGroup = await prisma.groups.findUnique({
       where: { id: groupId },
-      data: updateData,
-      include: {
-        memberOneUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        }
-      }
+      include: groupMemberUserInclude
     });
 
-    const members = [
-      updatedGroup.memberOneUser,
-      updatedGroup.memberTwoUser,
-      updatedGroup.memberThreeUser
-    ].filter(Boolean);
+    const members = getGroupMemberUsers(updatedGroup);
 
     const transformedMembers = members.map(member => ({
       id: member.id,
       name: member.fullName,
+      fullName: member.fullName,
       email: member.email,
-      avatar: null
+      profileImage: member.profileImage,
+      avatar: member.profileImage
     }));
 
     res.json(transformedMembers);
@@ -748,7 +994,8 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
         OR: [
           { memberOne: memberId },
           { memberTwo: memberId },
-          { memberThree: memberId }
+          { memberThree: memberId },
+          { groupMembers: { some: { userId: memberId } } }
         ]
       },
       include: {
@@ -942,7 +1189,8 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
         OR: [
           { memberOne: memberId },
           { memberTwo: memberId },
-          { memberThree: memberId }
+          { memberThree: memberId },
+          { groupMembers: { some: { userId: memberId } } }
         ]
       },
       select: {
@@ -954,21 +1202,24 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberTwoUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         },
         memberThreeUser: {
           select: {
             id: true,
             fullName: true,
-            email: true
+            email: true, profileImage: true }
+        },
+        groupMembers: {
+          select: {
+            userId: true,
+            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
           }
         }
       }
@@ -1113,11 +1364,7 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
       if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
       // Get all assigned team members with user info (filter out null/undefined)
-      const teamMembers = [
-        group.memberOneUser,
-        group.memberTwoUser,
-        group.memberThreeUser
-      ].filter(Boolean);
+      const teamMembers = getGroupMemberUsers(group);
       
       if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
       
@@ -1377,8 +1624,7 @@ router.get('/resume-scores/:candidateId', requireAuth, requireAdminOrMember, asy
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {
@@ -1536,8 +1782,7 @@ router.get('/cover-letter-scores/:candidateId', requireAuth, requireAdminOrMembe
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {
@@ -1694,8 +1939,7 @@ router.get('/video-scores/:candidateId', requireAuth, requireAdminOrMember, asyn
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       },
       orderBy: {
