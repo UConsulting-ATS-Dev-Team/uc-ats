@@ -91,6 +91,20 @@ export const AuthProvider = ({ children }) => {
     navigate('/login');
   };
 
+  const updateUser = (updates) => {
+    setUser((prev) => (prev ? { ...prev, ...updates } : updates));
+  };
+
+  const refreshUser = async () => {
+    if (!token) return;
+    try {
+      const data = await apiClient.get('/auth/verify');
+      setUser(data.user);
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+    }
+  };
+
   const value = {
     user,
     token,
@@ -98,7 +112,9 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     registerMember,
-    logout
+    logout,
+    updateUser,
+    refreshUser
   };
 
   return (

@@ -10,9 +10,11 @@ import {
   XMarkIcon,
   AcademicCapIcon,
   LightBulbIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import FeatureRequestModal from './FeatureRequestModal';
+import ThemeToggle from './ThemeToggle';
 import '../styles/CandidateLayout.css';
 
 const FEATURE_REQUEST_NAV = {
@@ -37,6 +39,7 @@ const CandidateLayout = ({ children }) => {
     { name: 'Dashboard', href: '/', icon: HomeIcon },
     { name: 'Applications', href: '/applications', icon: DocumentTextIcon },
     { name: 'Events', href: '/events', icon: CalendarDaysIcon },
+    { name: 'Get to Know UC', href: '/get-to-know-uc', icon: UserGroupIcon },
     { name: 'Recruitment Resources', href: '/interview-prep', icon: AcademicCapIcon },
     FEATURE_REQUEST_NAV,
   ];
@@ -78,6 +81,7 @@ const CandidateLayout = ({ children }) => {
                 <p className="user-name">{user?.fullName}</p>
                 <p className="user-role">CANDIDATE</p>
               </div>
+              <ThemeToggle />
               <button
                 onClick={handleLogout}
                 className="logout-btn"

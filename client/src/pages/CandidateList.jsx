@@ -2,12 +2,13 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
-import AuthenticatedImage from '../components/AuthenticatedImage';
+import CandidateAvatar from '../components/CandidateAvatar';
 import ImageCache from '../utils/imageCache';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
 import { useCandidates } from '../hooks/useCandidates';
+import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/CandidateList.css';
 
@@ -24,12 +25,14 @@ export default function CandidateList() {
   const [pendingFilters, setPendingFilters] = useState({
     group: '',
     createdDate: '',
-    cycle: ''
+    cycle: '',
+    eventAttendanceEventId: ''
   });
   const [appliedFilters, setAppliedFilters] = useState({
     group: '',
     createdDate: '',
-    cycle: ''
+    cycle: '',
+    eventAttendanceEventId: ''
   });
 
   // Check if there are unapplied filter or search changes
@@ -44,7 +47,7 @@ export default function CandidateList() {
 
   // Clear all filters
   const handleClearFilters = useCallback(() => {
-    const emptyFilters = { group: '', createdDate: '', cycle: '' };
+    const emptyFilters = { group: '', createdDate: '', cycle: '', eventAttendanceEventId: '' };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
     setPendingSearch('');
@@ -64,7 +67,8 @@ export default function CandidateList() {
     limit,
     search: appliedSearch,
     endpoint: '/member/all-candidates',
-    enabled: !!user?.id
+    enabled: !!user?.id,
+    eventAttendanceEventId: appliedFilters.eventAttendanceEventId
   });
 
   // Transform candidates data - apply client-side filters that aren't supported server-side
@@ -105,6 +109,7 @@ export default function CandidateList() {
     return data;
   }, [rawCandidates, appliedFilters]);
 
+  const [events, setEvents] = useState([]);
   const [cycles, setCycles] = useState([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingCandidate, setEditingCandidate] = useState(null);
@@ -112,7 +117,7 @@ export default function CandidateList() {
 
   const isAdmin = user?.role === 'ADMIN';
 
-  // Fetch cycles separately (they don't change often)
+  // Fetch cycles and events separately (they don't change often)
   useEffect(() => {
     const fetchCycles = async () => {
       try {
@@ -122,8 +127,17 @@ export default function CandidateList() {
         console.error('Error loading cycles:', err);
       }
     };
+    const fetchEvents = async () => {
+      try {
+        const eventsData = await apiClient.get('/member/events');
+        setEvents((eventsData || []).filter((event) => isPointEligibleEvent(event.eventName)));
+      } catch (err) {
+        console.error('Error loading events:', err);
+      }
+    };
     if (user?.id) {
       fetchCycles();
+      fetchEvents();
     }
   }, [user?.id]);
 
@@ -154,12 +168,6 @@ export default function CandidateList() {
 
   // Check if any filters are active
   const hasActiveFilters = Object.values(appliedFilters).some(v => v !== '') || appliedSearch !== '';
-
-  const getInitials = (name) => {
-    if (!name) return '?';
-    const nameParts = name.split(' ');
-    return nameParts.map(part => part.charAt(0)).join('').toUpperCase().slice(0, 2);
-  };
 
   const handleFilterChange = (filterType, value) => {
     setPendingFilters(prev => ({
@@ -308,6 +316,19 @@ export default function CandidateList() {
           ))}
         </select>
 
+        <select
+          className="filter-select"
+          value={pendingFilters.eventAttendanceEventId}
+          onChange={(e) => handleFilterChange('eventAttendanceEventId', e.target.value)}
+        >
+          <option value="">Event Attendance: All</option>
+          {events.map(event => (
+            <option key={`att-${event.id}`} value={event.id}>
+              Attended: {event.eventName}
+            </option>
+          ))}
+        </select>
+
         <button
           className={`apply-filters-btn ${hasUnappliedFilters ? 'has-changes' : ''}`}
           onClick={handleApplyFilters}
@@ -344,27 +365,7 @@ export default function CandidateList() {
                 <div className="candidate-header">
                   <div className="candidate-info">
                     {/* Profile Picture with fallback - extract from application */}
-                    {candidate.applications && candidate.applications.length > 0 && candidate.applications[0].headshotUrl ? (
-                      <AuthenticatedImage
-                        src={candidate.applications[0].headshotUrl}
-                        alt={candidate.applications[0] ? 
-                          `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 
-                          `${candidate.firstName} ${candidate.lastName}`}
-                        className="candidate-avatar"
-                        style={{
-                          width: '60px',
-                          height: '60px',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                    ) : (
-                      <div className="candidate-avatar-fallback">
-                        {getInitials(candidate.applications?.[0] ? 
-                          `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 
-                          `${candidate.firstName} ${candidate.lastName}`)}
-                      </div>
-                    )}
+                    <CandidateAvatar applicant={candidate} />
                     <div className="candidate-details">
                       <h3>{candidate.applications?.[0] ? 
                         `${candidate.applications[0].firstName} ${candidate.applications[0].lastName}` : 

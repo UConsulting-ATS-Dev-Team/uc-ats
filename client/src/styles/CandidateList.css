@@ -132,8 +132,7 @@
 .apply-filters-btn.has-changes {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: white;
-}
+  color: var(--text-white);}
 
 .apply-filters-btn.has-changes:hover {
   background-color: var(--primary-blue-dark);
@@ -306,13 +305,12 @@
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
-  background-color: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background-color: var(--bg-white);  box-shadow: var(--shadow-sm);
 }
 
 .action-btn:hover {
   transform: scale(1.1);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
 }
 
 .action-btn:disabled {
@@ -321,22 +319,16 @@
 }
 
 .edit-btn {
-  color: #2563eb;
-}
+  color: var(--link-default);}
 
 .edit-btn:hover {
-  background-color: #eff6ff;
-  color: #1d4ed8;
-}
+  background-color: var(--status-info-bg);  color: var(--link-hover);}
 
 .delete-btn {
-  color: #dc2626;
-}
+  color: var(--status-error-text);}
 
 .delete-btn:hover {
-  background-color: #fee2e2;
-  color: #b91c1c;
-}
+  background-color: var(--status-error-bg);  color: var(--status-error-text);}
 
 .action-icon {
   width: 1rem;

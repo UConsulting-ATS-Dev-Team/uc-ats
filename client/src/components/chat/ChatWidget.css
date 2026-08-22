@@ -135,6 +135,24 @@
   color: #b91c1c;
 }
 
+.chat-widget-panel__status {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.chat-widget-panel__status--disconnected {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.chat-widget-panel__error--unauthorized {
+  color: #7c2d12;
+  background: #fff7ed;
+  border-radius: 8px;
+}
+
 .chat-message-row {
   display: flex;
   gap: 8px;
@@ -212,6 +230,20 @@
   color: #9ca3af;
   margin-top: 4px;
   padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-message-row__retry {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
 }
 
 .chat-message-row__sender {

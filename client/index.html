@@ -4,7 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>UConsulting - Application Tracking System</title>
-    
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- Anti-flash: apply the saved or system theme before React hydrates -->
+    <script>
+      (function () {
+        try {
+          var key = 'uc-ats-theme-mode-v1';
+          var stored = localStorage.getItem(key);
+          var mode = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+          var isDark =
+            mode === 'dark' ||
+            (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
+
     <!-- Google Fonts - Montserrat for headers, Avenir Next fallback -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

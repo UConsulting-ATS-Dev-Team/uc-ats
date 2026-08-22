@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -14,13 +18,29 @@ import usersRoutes from './routes/users.js';
 import publicRoutes from './routes/public.js';
 import interviewResourcesRoutes from './routes/interviewResources.js';
 import memberRoutes from './routes/member.js';
+import candidateRoutes from './routes/candidate.js';
+import casesRoutes from './routes/cases.js';
 import conversationsRoutes from './routes/conversations.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
+import releaseNotesRoutes from './routes/releaseNotes.js';
 
 const app = express();
 
-app.use(helmet());
+// Single-service deploys (Render staging) build the SPA into client/dist and
+// serve it from here. Locally that directory doesn't exist — the Vite dev
+// server serves the client and proxies /api — so this stays switched off.
+const clientDistPath = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../client/dist');
+const serveClient = fs.existsSync(clientDistPath);
+
+app.use(helmet({
+  // Helmet's default CSP falls back to `default-src 'self'` for connect-src and
+  // img-src, which would block Supabase's realtime websocket and remotely
+  // hosted document/headshot images. That only bites when this service is the
+  // origin for the HTML too, so the policy is relaxed just for that case —
+  // API-only deploys keep the stricter default.
+  contentSecurityPolicy: serveClient ? false : undefined,
+}));
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
@@ -42,6 +62,7 @@ app.use('/api/uploads', express.static('uploads', {
 app.use('/api/auth', authRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
+app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
@@ -49,6 +70,8 @@ app.use('/api/interview-resources', interviewResourcesRoutes);
 app.use('/api/member', memberRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
+app.use('/api/cases', casesRoutes);
+app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
 // Test endpoint to check if uploads directory is accessible
@@ -99,6 +122,22 @@ app.get('/api/health', async (req, res) => {
     });
   }
 });
+
+// Serve the built client. Registered after every /api route so it can never
+// shadow one, and skipped entirely in local development.
+if (serveClient) {
+  app.use(express.static(clientDistPath));
+
+  // SPA fallback so deep links (/admin/candidates, password reset links, ...)
+  // resolve to index.html and let React Router take over. The negative lookahead
+  // keeps unmatched /api paths returning a real 404 instead of HTML. Express 5
+  // no longer accepts '*' as a path string, hence the RegExp.
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+
+  console.log(`Serving client bundle from ${clientDistPath}`);
+}
 
 // Run initial sync on startup
 await syncFormResponses();

@@ -3,7 +3,13 @@ import { requireAuth } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import {
+  getGroupMemberUsers,
+  getGroupMemberIds,
+  groupMemberUserInclude
+} from '../utils/groupMembers.js';
 
 const router = express.Router();
 
@@ -69,11 +75,21 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       return res.json([]);
     }
 
+    // Event attendance filter
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
+
+    const whereClause = { cycleId: activeCycle.id };
+
+    if (eventAttendanceEventId) {
+      whereClause.candidate = {
+        ...(whereClause.candidate || {}),
+        eventAttendance: { some: { eventId: eventAttendanceEventId } }
+      };
+    }
+
     // Get all applications for the active cycle
     const applications = await prisma.application.findMany({
-      where: {
-        cycleId: activeCycle.id
-      },
+      where: whereClause,
       include: {
         candidate: {
           select: {
@@ -133,10 +149,21 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
     // Search parameter
     const search = req.query.search?.trim() || '';
 
-    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}")`);
+    // Event attendance filter
+    const eventAttendanceEventId = req.query.eventAttendanceEventId || '';
 
-    // Build where clause for search
+    console.log('Fetching all candidates for member:', req.user.id, `(page ${page}, limit ${limit}, minimal: ${minimal}, search: "${search}", eventAttendance: "${eventAttendanceEventId}")`);
+
+    // Build where clause for search and event filters
     let whereClause = {};
+
+    // Event attendance filter
+    if (eventAttendanceEventId) {
+      whereClause.eventAttendance = {
+        some: { eventId: eventAttendanceEventId }
+      };
+    }
+
     if (search) {
       // Split search into words for full name matching
       const searchWords = search.split(/\s+/).filter(word => word.length > 0);
@@ -209,7 +236,8 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
                 id: true,
                 memberOne: true,
                 memberTwo: true,
-                memberThree: true
+                memberThree: true,
+                groupMembers: { select: { userId: true } }
               }
             },
             applications: {
@@ -310,7 +338,8 @@ router.get('/candidate/:id', requireAuth, async (req, res) => {
             memberOne: true,
             memberTwo: true,
             memberThree: true,
-            createdAt: true
+            createdAt: true,
+            groupMembers: { select: { userId: true } }
           }
         },
         applications: {
@@ -388,31 +417,12 @@ router.get('/my-team', requireAuth, async (req, res) => {
         OR: [
           { memberOne: userId },
           { memberTwo: userId },
-          { memberThree: userId }
+          { memberThree: userId },
+          { groupMembers: { some: { userId } } }
         ]
       },
       include: {
-        memberOneUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberTwoUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
-        memberThreeUser: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true
-          }
-        },
+        ...groupMemberUserInclude,
         assignedCandidates: {
           include: {
             applications: {
@@ -441,11 +451,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
     }
 
     // Transform the data to match the frontend expectations
-    const members = [
-      userTeam.memberOneUser,
-      userTeam.memberTwoUser,
-      userTeam.memberThreeUser
-    ].filter(Boolean);
+    const members = getGroupMemberUsers(userTeam);
 
     // Get all scoring data for the team's assigned candidates
     const candidateIds = userTeam.assignedCandidates.map(c => c.id);
@@ -481,11 +487,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
     ]);
 
     // Get team member IDs for progress calculation
-    const teamMemberIds = [
-      userTeam.memberOne,
-      userTeam.memberTwo,
-      userTeam.memberThree
-    ].filter(Boolean);
+    const teamMemberIds = getGroupMemberIds(userTeam);
 
     const applications = userTeam.assignedCandidates.map(candidate => {
       // Get the latest application for this candidate
@@ -545,8 +547,10 @@ router.get('/my-team', requireAuth, async (req, res) => {
       members: members.map(member => ({
         id: member.id,
         name: member.fullName,
+        fullName: member.fullName,
         email: member.email,
-        avatar: null
+        profileImage: member.profileImage,
+        avatar: member.profileImage
       })),
       applications,
       cycleId: userTeam.cycleId,
@@ -706,8 +710,7 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
               select: {
                 id: true,
                 fullName: true,
-                email: true
-              }
+                email: true, profileImage: true }
             }
           }
         });
@@ -965,7 +968,7 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
       include: { 
         signups: true,
         member: {
-          select: { fullName: true }
+          select: { fullName: true, profileImage: true }
         }
       }
     });
@@ -982,22 +985,26 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
     if (existingSlot.signups.length > 0) {
       const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
       
-      // Send cancellation emails to all signups
-      const emailPromises = existingSlot.signups.map(async (signup) => {
-        try {
-          await sendMeetingCancellationEmail(
+      // Send cancellation emails to all signups (and log each communication)
+      const emailPromises = existingSlot.signups.map((signup) =>
+        sendAndLogMeetingCommunication(
+          () => sendMeetingCancellationEmail(
             signup.email,
             signup.fullName,
             memberName,
             existingSlot.location,
             existingSlot.startTime,
             existingSlot.endTime
-          );
-        } catch (emailError) {
-          console.error(`Failed to send cancellation email to ${signup.email}:`, emailError);
-          // Don't fail the deletion if email fails, just log the error
-        }
-      });
+          ),
+          {
+            slotId: existingSlot.id,
+            signupId: signup.id,
+            type: 'CANCELLATION',
+            recipient: signup.email,
+            subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+          }
+        )
+      );
       
       // Wait for all emails to be sent (or fail)
       await Promise.allSettled(emailPromises);
@@ -1037,7 +1044,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
         slot: {
           include: {
             member: {
-              select: { fullName: true }
+              select: { fullName: true, profileImage: true }
             }
           }
         }
@@ -1052,22 +1059,27 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to delete this signup' });
     }
 
-    // Send cancellation email to the signup
+    // Send cancellation email to the signup (and log the communication).
+    // Logged before deletion; the log survives with signupId set null (slot remains).
     const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
 
-    try {
-      await sendMeetingCancellationEmail(
+    await sendAndLogMeetingCommunication(
+      () => sendMeetingCancellationEmail(
         signup.email,
         signup.fullName,
         memberName,
         signup.slot.location,
         signup.slot.startTime,
         signup.slot.endTime
-      );
-    } catch (emailError) {
-      console.error(`Failed to send cancellation email to ${signup.email}:`, emailError);
-      // Don't fail the deletion if email fails, just log the error
-    }
+      ),
+      {
+        slotId: signup.slotId,
+        signupId: signup.id,
+        type: 'CANCELLATION',
+        recipient: signup.email,
+        subject: MEETING_COMM_SUBJECTS.CANCELLATION,
+      }
+    );
 
     // Delete the signup
     await prisma.meetingSignup.delete({
@@ -1487,8 +1499,7 @@ router.post('/message-admin', requireAuth, async (req, res) => {
         select: {
           fullName: true,
           email: true,
-          role: true
-        }
+          role: true, profileImage: true }
       });
     } catch (dbError) {
       console.error('[POST /api/member/message-admin] Database error:', dbError);
@@ -1595,7 +1606,8 @@ router.post('/flag-document', requireAuth, async (req, res) => {
         OR: [
           { memberOne: flaggedBy },
           { memberTwo: flaggedBy },
-          { memberThree: flaggedBy }
+          { memberThree: flaggedBy },
+          { groupMembers: { some: { userId: flaggedBy } } }
         ],
         assignedCandidates: {
           some: {
@@ -1648,8 +1660,7 @@ router.post('/flag-document', requireAuth, async (req, res) => {
           select: {
             id: true,
             fullName: true,
-            email: true
-          }
+            email: true, profileImage: true }
         }
       }
     });

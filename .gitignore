@@ -9,6 +9,7 @@ server/.env
 .vscode/
 .env
 server/google-cloud-key.json
+server/storage/
 
 node_modules
 

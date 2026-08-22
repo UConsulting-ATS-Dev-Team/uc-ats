@@ -3,15 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Button,
-  CssBaseline,
   Paper,
   TextField,
-  ThemeProvider,
   Typography,
   Alert,
   Container,
 } from '@mui/material';
-import authTheme from '../styles/authTheme';
 import UConsultingLogo from '../components/UConsultingLogo';
 
 export default function ResetPassword() {
@@ -19,6 +16,8 @@ export default function ResetPassword() {
   const token = searchParams.get('token');
 
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [confirmError, setConfirmError] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const navigate = useNavigate();
@@ -29,10 +28,28 @@ export default function ResetPassword() {
     }
   }, [token, navigate]);
 
+  const clearErrors = () => {
+    setError('');
+    setConfirmError('');
+  };
+
   const handleResetPassword = async (e) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
+    clearErrors();
+
+    if (!newPassword.trim() || !confirmPassword.trim()) {
+      const message = 'Both password fields are required';
+      setError(message);
+      setConfirmError(message);
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      const message = 'Passwords do not match';
+      setError(message);
+      setConfirmError(message);
+      return;
+    }
 
     try {
       const res = await fetch('/api/auth/reset-password', {
@@ -55,9 +72,7 @@ export default function ResetPassword() {
   };
 
   return (
-    <ThemeProvider theme={authTheme}>
-      <CssBaseline />
-      <Box
+    <Box
         sx={{
           minHeight: '100vh',
           backgroundColor: 'background.default',
@@ -74,7 +89,7 @@ export default function ResetPassword() {
               Set Your New Password
             </Typography>
           </Box>
-          
+
           <Paper sx={{ p: 4, maxWidth: 400, mx: 'auto' }}>
             <Typography variant="h4" sx={{ mb: 4 }}>
               Reset Password
@@ -91,13 +106,30 @@ export default function ResetPassword() {
               </Alert>
             )}
 
-            <Box component="form" onSubmit={handleResetPassword}>
+            <Box component="form" onSubmit={handleResetPassword} data-testid="reset-password-form">
               <TextField
                 fullWidth
                 label="New Password"
                 type="password"
                 value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
+                onChange={(e) => {
+                  setNewPassword(e.target.value);
+                  if (confirmError || error) clearErrors();
+                }}
+                required
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="Confirm New Password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  if (confirmError || error) clearErrors();
+                }}
+                error={Boolean(confirmError)}
+                helperText={confirmError}
                 required
                 sx={{ mb: 4 }}
               />
@@ -108,6 +140,5 @@ export default function ResetPassword() {
           </Paper>
         </Container>
       </Box>
-    </ThemeProvider>
   );
 }
