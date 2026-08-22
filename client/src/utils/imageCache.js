@@ -6,7 +6,41 @@ const loadingPromises = new Map();
 const blobUrlCache = new Map();
 
 class ImageCache {
+  static isValidImageUrl(url) {
+    if (typeof url !== 'string' || !url.trim()) {
+      return false;
+    }
+    const trimmed = url.trim();
+    // Only accept same-origin relative API paths or explicit http(s) URLs.
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+      return true;
+    }
+    return /^https?:\/\//i.test(trimmed);
+  }
+
+  static isInternalImageUrl(url) {
+    if (typeof url !== 'string') {
+      return false;
+    }
+    if (url.startsWith('/')) {
+      return true;
+    }
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    try {
+      const parsed = new URL(url, window.location.href);
+      return parsed.origin === window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
   static async loadImage(src, token) {
+    if (!this.isValidImageUrl(src)) {
+      throw new Error('Invalid image source');
+    }
+
     // Return cached image if available
     if (imageCache.has(src)) {
       return imageCache.get(src);
@@ -31,50 +65,43 @@ class ImageCache {
   }
 
   static async fetchImage(src, token) {
-    try {
-      console.log('ImageCache: Fetching image from:', src);
-      console.log('ImageCache: Using token:', token ? 'Present' : 'Missing');
-      
-      // Normalize URL - if it's a relative path starting with /api/, ensure it's properly formatted
-      let normalizedSrc = src;
-      if (src.startsWith('/api/') && !src.startsWith('http')) {
-        // Relative URL - fetch will use current origin
-        normalizedSrc = src;
-      } else if (src.startsWith('http://') || src.startsWith('https://')) {
-        // Absolute URL - use as is
-        normalizedSrc = src;
-      }
-      
-      const headers = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      
-      const response = await fetch(normalizedSrc, {
-        headers: headers,
-        credentials: 'include' // Include cookies for session-based auth if needed
-      });
-
-      console.log('ImageCache: Response status:', response.status, response.statusText);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('ImageCache: Error response:', errorText);
-        throw new Error(`Failed to load image: ${response.status} ${response.statusText} - ${errorText}`);
-      }
-
-      const blob = await response.blob();
-      console.log('ImageCache: Blob created:', blob.size, 'bytes');
-      const blobUrl = URL.createObjectURL(blob);
-      
-      // Store blob URL for cleanup
-      blobUrlCache.set(src, blobUrl);
-      
-      return blobUrl;
-    } catch (error) {
-      console.error('ImageCache: Error loading image:', error);
-      throw error;
+    if (!this.isValidImageUrl(src)) {
+      throw new Error('Invalid image source');
     }
+
+    const headers = {};
+    // Only send the auth token to our own API; never forward it to external hosts.
+    if (token && this.isInternalImageUrl(src)) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch(src, {
+      headers,
+      credentials: 'include', // Include cookies for session-based auth if needed
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to load image: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType && !contentType.trim().toLowerCase().startsWith('image/')) {
+      throw new Error(`Non-image content type: ${contentType}`);
+    }
+
+    const blob = await response.blob();
+    if (blob.type && !blob.type.toLowerCase().startsWith('image/')) {
+      throw new Error(`Non-image blob type: ${blob.type}`);
+    }
+
+    const blobUrl = URL.createObjectURL(blob);
+
+    // Store blob URL for cleanup
+    blobUrlCache.set(src, blobUrl);
+    imageCache.set(src, blobUrl);
+
+    return blobUrl;
   }
 
   static getCachedImage(src) {
@@ -91,10 +118,10 @@ class ImageCache {
 
   static clearCache() {
     // Revoke all blob URLs to prevent memory leaks
-    blobUrlCache.forEach(blobUrl => {
+    blobUrlCache.forEach((blobUrl) => {
       URL.revokeObjectURL(blobUrl);
     });
-    
+
     imageCache.clear();
     loadingPromises.clear();
     blobUrlCache.clear();
@@ -102,7 +129,7 @@ class ImageCache {
 
   static preloadImages(imageUrls, token) {
     // Preload multiple images in parallel
-    const promises = imageUrls.map(src => this.loadImage(src, token));
+    const promises = imageUrls.map((src) => this.loadImage(src, token));
     return Promise.allSettled(promises);
   }
 }

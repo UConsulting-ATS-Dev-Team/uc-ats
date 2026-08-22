@@ -1,13 +1,12 @@
 import nodemailer from 'nodemailer';
+import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
-// Create reusable transporter object using SMTP transport
+const sesClient = new SESv2Client({ region: process.env.AWS_REGION });
+
+// Send through the Amazon SES v2 API over HTTPS, matching the production transport.
 const createTransporter = () => {
   return nodemailer.createTransport({
-    service: 'Gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
+    SES: { sesClient, SendEmailCommand }
   });
 };
 
@@ -108,7 +107,8 @@ const sendEmail = async (to, subject, html) => {
     const transporter = createTransporter();
     
     const mailOptions = {
-      from: `"UConsulting ATS" <${process.env.EMAIL_USER}>`,
+      from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
+      replyTo: process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,
       html: html

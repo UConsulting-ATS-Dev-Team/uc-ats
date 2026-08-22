@@ -35,8 +35,7 @@
 }
 
 .social-media-prompt {
-  color: #8b5cf6; /* Purple color for social media prompt */
-  font-size: 0.875rem;
+  color: var(--accent-purple); /* Purple color for social media prompt */  font-size: 0.875rem;
   font-weight: 500;
 }
 
@@ -55,12 +54,12 @@
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 1.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s ease;
 }
 
 .event-card:hover {
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 /* Date Section */
@@ -99,8 +98,7 @@
   font-weight: 600;
   margin-top: 0.25rem;
   padding: 0.25rem 0.5rem;
-  background-color: rgba(59, 130, 246, 0.1);
-  border-radius: 4px;
+  background-color: var(--primary-subtle-bg);  border-radius: 4px;
   text-align: center;
 }
 
@@ -145,8 +143,7 @@
   font-weight: 500;
   margin-top: 0.5rem;
   padding: 0.25rem 0.5rem;
-  background-color: rgba(59, 130, 246, 0.1);
-  border-radius: 4px;
+  background-color: var(--primary-subtle-bg);  border-radius: 4px;
   display: inline-block;
 }
 
@@ -175,8 +172,7 @@
 }
 
 .calendar-button {
-  background-color: #f8fafc;
-  color: var(--text-primary);
+  background-color: var(--bg-secondary);  color: var(--text-primary);
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 0.75rem 1.5rem;
@@ -191,8 +187,7 @@
 }
 
 .calendar-button:hover {
-  background-color: #e2e8f0;
-  border-color: var(--primary-blue);
+  background-color: var(--bg-gray-lighter);  border-color: var(--primary-blue);
 }
 
 .google-calendar-icon {
@@ -216,8 +211,7 @@
 }
 
 .rsvp-button.attended {
-  background-color: #10b981; /* Green color for attended */
-  color: var(--text-white);
+  background-color: var(--status-success-border); /* Green color for attended */  color: var(--text-white);
   cursor: not-allowed;
 }
 

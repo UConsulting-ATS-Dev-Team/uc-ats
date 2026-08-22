@@ -20,7 +20,8 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
-import { useCelebration } from '../context/CelebrationContext';
+import CaseViewer from '../components/case/CaseViewer';
+import { usePreviewActive } from '../utils/previewMode';
 import '../styles/FinalRoundInterviewInterface.css';
 
 export default function FinalRoundInterviewInterface() {
@@ -29,7 +30,7 @@ export default function FinalRoundInterviewInterface() {
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
   
-  const { triggerCelebration } = useCelebration();
+  const candidatePreviewActive = usePreviewActive();
   
   const [interview, setInterview] = useState(null);
   const [applications, setApplications] = useState([]);
@@ -41,6 +42,15 @@ export default function FinalRoundInterviewInterface() {
   const [saveStatus, setSaveStatus] = useState({});
   const [currentPage, setCurrentPage] = useState(0); // 0 = behavioral, 1 = casing
   const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
+  // Case module state
+  const [caseAssignments, setCaseAssignments] = useState({}); // applicationId -> { id, caseId, caseTitle, overriddenAt }
+  const [activeCases, setActiveCases] = useState([]);
+  const [canManageCase, setCanManageCase] = useState(false);
+  const [rubricCollapsed, setRubricCollapsed] = useState({}); // applicationId -> bool
+
+  const handleAssignmentChange = (applicationId, assignment) => {
+    setCaseAssignments((prev) => ({ ...prev, [applicationId]: assignment }));
+  };
 
   const decisionOptions = [
     { value: 'YES', label: 'Yes', color: 'green' },
@@ -140,7 +150,26 @@ export default function FinalRoundInterviewInterface() {
           evaluationsMap[`${evaluation.applicationId}_${evaluation.evaluatorId}`] = evaluation;
         });
         setEvaluations(evaluationsMap);
-        
+
+        // Load case assignments, active cases, and whether this user can manage cases.
+        // The /cases routes are shared (not under /admin or /member).
+        try {
+          const [assignmentsRes, activeCasesRes, permsRes] = await Promise.all([
+            apiClient.get(`/cases/assignments/for-interview?interviewId=${interviewId}`),
+            apiClient.get('/cases/active'),
+            apiClient.get(`/cases/interviews/${interviewId}/permissions`),
+          ]);
+          const caseMap = {};
+          (assignmentsRes || []).forEach((row) => {
+            if (row.assignment) caseMap[row.applicationId] = row.assignment;
+          });
+          setCaseAssignments(caseMap);
+          setActiveCases(activeCasesRes || []);
+          setCanManageCase(Boolean(permsRes?.canManage));
+        } catch (caseErr) {
+          console.warn('Failed to load case data:', caseErr);
+        }
+
       } catch (error) {
         console.error('Failed to load interview data:', error);
         alert('Failed to load interview data');
@@ -375,7 +404,6 @@ export default function FinalRoundInterviewInterface() {
       }
       
       alert('Evaluation saved successfully');
-      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluation:', error);
       alert('Failed to save evaluation');
@@ -412,7 +440,6 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      triggerCelebration();
       alert('All evaluations saved successfully!');
     } catch (error) {
       console.error('Failed to save evaluations:', error);
@@ -559,12 +586,12 @@ export default function FinalRoundInterviewInterface() {
                       width: '100%',
                       marginBottom: '16px',
                       padding: '12px',
-                      backgroundColor: '#eff6ff', 
-                      borderLeft: '4px solid #2563eb',
+                      backgroundColor: 'var(--status-info-bg)',
+                      borderLeft: '4px solid var(--status-info-border)',
                       borderRadius: '4px'
                     }}>
                       <p style={{ 
-                        color: '#1e40af', 
+                        color: 'var(--status-info-text)',
                         fontWeight: '600',
                         marginBottom: '6px',
                         fontSize: '0.875rem',
@@ -572,8 +599,8 @@ export default function FinalRoundInterviewInterface() {
                       }}>
                         Test For (Admin Note):
                       </p>
-                      <p style={{ 
-                        color: '#1e40af',
+                      <p style={{
+                        color: 'var(--status-info-text)',
                         margin: 0,
                         fontSize: '0.875rem',
                         lineHeight: '1.5',
@@ -718,38 +745,84 @@ export default function FinalRoundInterviewInterface() {
                   </div>
                 )}
 
-                {/* Casing Section */}
+                {/* Casing Section — case viewer docked beside the existing rubric */}
                 {currentPage === 1 && (
                   <div className="casing-section">
                     <h4 className="section-title">
                       <PresentationChartBarIcon className="section-icon" />
                       Case Interview
                     </h4>
-                    
-                    <div className="casing-sections">
-                      {casingSections.map((section) => {
-                        const IconComponent = section.icon;
-                        return (
-                          <div key={section.id} className="casing-section-row">
-                            <div className="section-cell">
-                              <h5 className="section-text">
-                                <IconComponent className="section-icon-small" />
-                                {section.title}
-                              </h5>
-                            </div>
-                            <div className="interviewer-notes-cell">
-                              <textarea
-                                className="notes-textarea"
-                                value={evaluation.casingNotes?.[section.id] || ''}
-                                onChange={(e) => updateCasingNotes(application.id, section.id, e.target.value)}
-                                placeholder="Your notes..."
-                                rows={5}
-                              />
-                            </div>
+
+                    <div className={`case-split ${rubricCollapsed[application.id] ? 'is-collapsed' : ''}`}>
+                      <div className="case-split__viewer">
+                        <CaseViewer
+                          interviewId={interviewId}
+                          applicationId={application.id}
+                          assignment={caseAssignments[application.id] || null}
+                          canManage={canManageCase}
+                          activeCases={activeCases}
+                          onAssignmentChange={handleAssignmentChange}
+                        />
+                      </div>
+
+                      {!rubricCollapsed[application.id] && (
+                        <div className="case-split__rubric">
+                          <div className="case-split__rubric-header">
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                              Casing Rubric
+                            </span>
+                            <button
+                              type="button"
+                              className="case-split__collapse-btn"
+                              onClick={() =>
+                                setRubricCollapsed((prev) => ({ ...prev, [application.id]: true }))
+                              }
+                            >
+                              Hide ▸
+                            </button>
                           </div>
-                        );
-                      })}
+                          <div className="casing-sections">
+                            {casingSections.map((section) => {
+                              const IconComponent = section.icon;
+                              return (
+                                <div key={section.id} className="casing-section-row">
+                                  <div className="section-cell">
+                                    <h5 className="section-text">
+                                      <IconComponent className="section-icon-small" />
+                                      {section.title}
+                                    </h5>
+                                  </div>
+                                  <div className="interviewer-notes-cell">
+                                    <textarea
+                                      className="notes-textarea"
+                                      value={evaluation.casingNotes?.[section.id] || ''}
+                                      onChange={(e) =>
+                                        updateCasingNotes(application.id, section.id, e.target.value)
+                                      }
+                                      placeholder="Your notes..."
+                                      rows={5}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
+
+                    {rubricCollapsed[application.id] && (
+                      <button
+                        type="button"
+                        className="case-split__collapse-btn"
+                        style={{ marginTop: 8 }}
+                        onClick={() =>
+                          setRubricCollapsed((prev) => ({ ...prev, [application.id]: false }))
+                        }
+                      >
+                        ◂ Show rubric
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -844,7 +917,10 @@ export default function FinalRoundInterviewInterface() {
             title={preview.title}
           />
         )}
-        <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+        {/* Chat is hidden entirely during candidate preview so nothing pops over the exhibit. */}
+        {!candidatePreviewActive && (
+          <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+        )}
       </div>
     </AccessControl>
   );

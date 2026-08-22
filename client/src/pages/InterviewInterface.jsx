@@ -9,7 +9,6 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
-import { useCelebration } from '../context/CelebrationContext';
 import '../styles/InterviewInterface.css';
 
 export default function InterviewInterface() {
@@ -17,8 +16,6 @@ export default function InterviewInterface() {
   const [searchParams] = useSearchParams();
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
-  
-  const { triggerCelebration } = useCelebration();
   
   const [interview, setInterview] = useState(null);
   const [applications, setApplications] = useState([]);
@@ -228,7 +225,6 @@ export default function InterviewInterface() {
       });
       
       alert('Evaluation saved successfully');
-      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluation:', error);
       alert('Failed to save evaluation');
@@ -253,7 +249,6 @@ export default function InterviewInterface() {
       await Promise.all(promises);
       setAllEvaluationsSaved(true);
       setShowNextActionModal(true);
-      triggerCelebration();
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert('Failed to save evaluations');
@@ -440,12 +435,12 @@ export default function InterviewInterface() {
                     width: '100%',
                     marginBottom: '16px',
                     padding: '12px',
-                    backgroundColor: '#eff6ff', 
-                    borderLeft: '4px solid #2563eb',
+                    backgroundColor: 'var(--status-info-bg)',
+                    borderLeft: '4px solid var(--status-info-border)',
                     borderRadius: '4px'
                   }}>
                     <p style={{ 
-                      color: '#1e40af', 
+                      color: 'var(--status-info-text)',
                       fontWeight: '600',
                       marginBottom: '6px',
                       fontSize: '0.875rem',
@@ -453,8 +448,8 @@ export default function InterviewInterface() {
                     }}>
                       Test For (Admin Note):
                     </p>
-                    <p style={{ 
-                      color: '#1e40af',
+                    <p style={{
+                      color: 'var(--status-info-text)',
                       margin: 0,
                       fontSize: '0.875rem',
                       lineHeight: '1.5',

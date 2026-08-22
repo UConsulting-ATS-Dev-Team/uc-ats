@@ -34,7 +34,7 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   background-color: var(--primary-blue);
-  color: white;
+  color: var(--text-white);
   border: none;
   border-radius: var(--border-radius);
   font-size: 0.875rem;
@@ -151,7 +151,7 @@
 .apply-filters-btn.has-changes {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: white;
+  color: var(--text-white);
 }
 
 .apply-filters-btn.has-changes:hover:not(:disabled) {
@@ -178,8 +178,8 @@
 }
 
 .clear-filters-btn:hover:not(:disabled) {
-  border-color: var(--error-red);
-  color: var(--error-red);
+  border-color: var(--status-error-text);
+  color: var(--status-error-text);
 }
 
 .clear-filters-btn:disabled {
@@ -241,9 +241,9 @@
 .applicant-email { font-size: 0.8rem; color: var(--text-tertiary); }
 
 .attendance-inline { display: flex; gap: 1rem; white-space: nowrap; }
-.doc-link { color: #2563eb; display: inline-flex; gap: 6px; align-items: center; }
-.doc-link.disabled { color: #94a3b8; cursor: default; }
-.score-bubble { display: inline-flex; min-width: 28px; height: 28px; border-radius: 9999px; background: #eaffea; color: #166534; align-items: center; justify-content: center; font-weight: 600; }
+.doc-link { color: var(--link-default); display: inline-flex; gap: 6px; align-items: center; }
+.doc-link.disabled { color: var(--text-muted); cursor: default; }
+.score-bubble { display: inline-flex; min-width: 28px; height: 28px; border-radius: 9999px; background: var(--status-success-bg); color: var(--status-success-text); align-items: center; justify-content: center; font-weight: 600; }
 
 .applications-details-row td { padding: 0 12px 12px; }
 .details-grid { border: 1px solid var(--border-light); border-top: none; border-radius: 0 0 var(--border-radius) var(--border-radius); background: var(--bg-white); padding: 12px; }
@@ -291,13 +291,13 @@
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
-  background-color: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background-color: var(--bg-white);
+  box-shadow: var(--shadow-sm);
 }
 
 .action-btn:hover {
   transform: scale(1.1);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
 }
 
 .action-btn:disabled {
@@ -306,21 +306,21 @@
 }
 
 .edit-btn {
-  color: #2563eb;
+  color: var(--link-default);
 }
 
 .edit-btn:hover {
-  background-color: #eff6ff;
-  color: #1d4ed8;
+  background-color: var(--status-info-bg);
+  color: var(--link-hover);
 }
 
 .delete-btn {
-  color: #dc2626;
+  color: var(--status-error-text);
 }
 
 .delete-btn:hover {
-  background-color: #fef2f2;
-  color: #b91c1c;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 
 .action-icon {
@@ -432,9 +432,9 @@
   font-size: 0.625rem;
   font-weight: 600;
   white-space: nowrap;
-  background-color: #dbeafe;
-  color: #1e40af;
-  border: 1px solid #93c5fd;
+  background-color: var(--status-info-bg);
+  color: var(--status-info-text);
+  border: 1px solid var(--status-info-border);
 }
 
 .status-badge {
@@ -512,7 +512,7 @@
 }
 
 .modal-content {
-  background: white;
+  background: var(--bg-white);
   border-radius: var(--border-radius);
   box-shadow: var(--shadow-lg);
   max-width: 800px;
@@ -649,7 +649,7 @@
 .cancel-btn {
   padding: 0.75rem 1.5rem;
   border: 1px solid var(--border-medium);
-  background: white;
+  background: var(--bg-white);
   color: var(--text-primary);
   border-radius: var(--border-radius-sm);
   font-size: 0.875rem;
@@ -666,7 +666,7 @@
   padding: 0.75rem 1.5rem;
   border: none;
   background: var(--primary-blue);
-  color: white;
+  color: var(--text-white);
   border-radius: var(--border-radius-sm);
   font-size: 0.875rem;
   font-weight: 500;
@@ -681,6 +681,55 @@
 .submit-btn:disabled {
   background: var(--text-tertiary);
   cursor: not-allowed;
+}
+
+/* Review team section */
+.candidate-review-team {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.review-team-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.review-team-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.member-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.member-avatar-fallback {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background-color: var(--bg-gray-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  border: 2px solid var(--border-light);
+  flex-shrink: 0;
 }
 
 /* Responsive adjustments */

@@ -3,8 +3,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
-import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import { sendPasswordResetEmail, sendPasswordResetConfirmationEmail } from '../services/emailNotifications.js';
 
 const router = express.Router(); 
 
@@ -124,6 +124,10 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
+    }
     
     // Generate JWT token
     const token = jwt.sign(
@@ -163,6 +167,10 @@ router.get('/verify', async (req, res) => {
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
     }
+
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Account deactivated' });
+    }
     
     const { password: _, ...userWithoutPassword } = user;
     res.json({ user: userWithoutPassword });
@@ -195,26 +203,8 @@ router.post('/forgot-password', async (req, res) => {
       }
     });
 
-    const transporter = nodemailer.createTransport({
-      service: 'Gmail',
-      auth: {
-        user: process.env.EMAIL_USER,  // Add to your .env
-        pass: process.env.EMAIL_PASS   // Add to your .env
-      }
-    });
-
     const resetLink = `${config.clientUrl}/reset-password?token=${resetToken}`;
-    await transporter.sendMail({
-      from: `"UConsulting ATS" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Reset Your Password',
-      html: `<p>You requested a password reset.</p>
-             <p><a href="${resetLink}">Click here to reset your password</a></p>`
-    }, (err) => {
-      if (err) {
-        console.error('Password reset email send failed');
-      }
-    });
+    await sendPasswordResetEmail(email, resetLink);
 
     res.json({ message: 'Reset link sent if email exists' });
 
@@ -255,6 +245,18 @@ router.post('/reset-password', async (req, res) => {
         resetTokenExpiry: null,
       },
     });
+
+    // Send confirmation email to the account email only; never expose the token or new password.
+    if (user.email) {
+      try {
+        const confirmationResult = await sendPasswordResetConfirmationEmail(user.email, user.fullName);
+        if (!confirmationResult.success) {
+          console.error('Failed to send password reset confirmation email:', confirmationResult.error);
+        }
+      } catch (confirmationError) {
+        console.error('Error sending password reset confirmation email:', confirmationError);
+      }
+    }
 
     res.json({ message: 'Password reset successful' });
   } catch (error) {

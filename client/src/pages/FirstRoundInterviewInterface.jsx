@@ -17,7 +17,6 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
-import { useCelebration } from '../context/CelebrationContext';
 import '../styles/FirstRoundInterviewInterface.css';
 
 export default function FirstRoundInterviewInterface() {
@@ -25,8 +24,6 @@ export default function FirstRoundInterviewInterface() {
   const [searchParams] = useSearchParams();
   const interviewId = searchParams.get('interviewId');
   const groupIds = searchParams.get('groupIds')?.split(',') || [];
-  
-  const { triggerCelebration } = useCelebration();
   
   const [interview, setInterview] = useState(null);
   const [applications, setApplications] = useState([]);
@@ -466,7 +463,6 @@ export default function FirstRoundInterviewInterface() {
       
       if (showAlert) {
         alert('Evaluation saved successfully');
-        triggerCelebration();
       }
     } catch (error) {
       console.error('Failed to save evaluation:', error);
@@ -517,7 +513,6 @@ export default function FirstRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      triggerCelebration();
       alert(`All ${applications.length} evaluation(s) saved successfully`);
     } catch (error) {
       console.error('Failed to save evaluations:', error);
