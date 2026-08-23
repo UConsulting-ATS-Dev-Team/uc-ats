@@ -13,10 +13,7 @@ const state = {
   profile: {
     industries: ['Consulting'],
     interests: ['Case prep'],
-    relevance: 'Happy to talk recruiting timelines.',
-    approvedRelevance: 'Happy to talk recruiting timelines.',
-    relevanceReviewStatus: 'APPROVED',
-    relevanceVisibleToCandidates: true,
+    linkedinUrl: 'https://www.linkedin.com/in/member-one',
     candidateVisible: true,
   },
   profileImage: 'https://example.com/photo.jpg',
@@ -26,7 +23,7 @@ const state = {
     interests: ['Case prep', 'Networking'],
     maxIndustries: 5,
     maxInterests: 8,
-    relevanceMaxLength: 500,
+    interestMaxLength: 40,
   },
 };
 
@@ -55,8 +52,8 @@ describe('GtkucProfileModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('blocks submission until industries, interests, and a blurb are all present', () => {
-    const empty = { ...state, profile: { industries: [], interests: [], relevance: '' } };
+  it('blocks submission until industries and interests are both present', () => {
+    const empty = { ...state, profile: { industries: [], interests: [] } };
     render(<GtkucProfileModal open state={empty} required />);
 
     expect(screen.getByRole('button', { name: 'Confirm profile' })).toBeDisabled();
@@ -73,39 +70,56 @@ describe('GtkucProfileModal', () => {
       expect(api.put).toHaveBeenCalledWith('/member/gtkuc-profile', {
         industries: ['Consulting'],
         interests: ['Case prep'],
-        relevance: 'Happy to talk recruiting timelines.',
+        linkedinUrl: 'https://www.linkedin.com/in/member-one',
         candidateVisible: true,
       })
     );
     expect(onSaved).toHaveBeenCalledWith({ confirmationRequired: false });
   });
 
-  it('tells the member whether candidates can see their blurb yet', async () => {
-    const { unmount } = render(<GtkucProfileModal open state={state} />);
-    expect(screen.getByText(/approved and visible to candidates/)).toBeInTheDocument();
-    unmount();
+  it('prefills the LinkedIn link and sends an edited one', async () => {
+    api.put.mockResolvedValue({ confirmationRequired: false });
+    render(<GtkucProfileModal open state={state} />);
 
-    const pending = {
-      ...state,
-      profile: {
-        ...state.profile,
-        relevanceReviewStatus: 'PENDING_REVIEW',
-        relevanceVisibleToCandidates: false,
-      },
-    };
-    render(<GtkucProfileModal open state={pending} />);
+    const field = screen.getByLabelText('LinkedIn profile');
+    expect(field).toHaveValue('https://www.linkedin.com/in/member-one');
 
-    expect(screen.getByText(/waiting on admin review/)).toBeInTheDocument();
+    await userEvent.clear(field);
+    await userEvent.type(field, 'linkedin.com/in/new-handle');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/member/gtkuc-profile',
+        expect.objectContaining({ linkedinUrl: 'linkedin.com/in/new-handle' })
+      )
+    );
+  });
+
+  it('accepts an interest that is not in the suggested list', async () => {
+    api.put.mockResolvedValue({ confirmationRequired: false });
+    render(<GtkucProfileModal open state={state} />);
+
+    const field = screen.getByLabelText('Interests');
+    await userEvent.type(field, 'Formula 1{enter}');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/member/gtkuc-profile',
+        expect.objectContaining({ interests: ['Case prep', 'Formula 1'] })
+      )
+    );
   });
 
   it('surfaces a save failure and keeps the dialog open', async () => {
-    api.put.mockRejectedValue(new Error('Add a short blurb'));
+    api.put.mockRejectedValue(new Error('Enter a LinkedIn profile URL'));
     const onSaved = vi.fn();
     render(<GtkucProfileModal open state={state} required onSaved={onSaved} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Confirm profile' }));
 
-    expect(await screen.findByText('Add a short blurb')).toBeInTheDocument();
+    expect(await screen.findByText('Enter a LinkedIn profile URL')).toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
   });
 });

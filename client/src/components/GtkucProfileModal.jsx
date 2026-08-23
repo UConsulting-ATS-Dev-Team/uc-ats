@@ -20,12 +20,12 @@ import {
 } from '@mui/material';
 
 // Confirm/update the candidate-facing GTKUC profile. Rendered as a hard gate on
-// the member's first timeslot of a cycle (required=true, no dismiss) and as an
-// editable dialog from the portal at any time.
+// the first timeslot of a cycle (required=true, no dismiss) and as an editable
+// dialog from the member portal or the admin console at any time.
 export default function GtkucProfileModal({ open, state, required = false, onClose, onSaved }) {
   const [industries, setIndustries] = useState([]);
   const [interests, setInterests] = useState([]);
-  const [relevance, setRelevance] = useState('');
+  const [linkedinUrl, setLinkedinUrl] = useState('');
   const [candidateVisible, setCandidateVisible] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -34,35 +34,13 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
     if (!open) return;
     setIndustries(state?.profile?.industries || []);
     setInterests(state?.profile?.interests || []);
-    setRelevance(state?.profile?.relevance || '');
+    setLinkedinUrl(state?.profile?.linkedinUrl || '');
     setCandidateVisible(state?.profile?.candidateVisible ?? true);
     setError('');
   }, [open, state]);
 
   const taxonomy = state?.taxonomy;
-  const relevanceMaxLength = taxonomy?.relevanceMaxLength || 500;
-  const reviewStatus = state?.profile?.relevanceReviewStatus;
-  const reviewNote = state?.profile?.relevanceReviewNote;
-  const blurbLive = Boolean(state?.profile?.relevanceVisibleToCandidates);
-  // The blurb is free text, so candidates only see it after an admin approves it.
-  const blurbStatus = !state?.profile?.relevance
-    ? null
-    : reviewStatus === 'APPROVED' && blurbLive
-      ? { severity: 'success', text: 'Your blurb is approved and visible to candidates.' }
-      : reviewStatus === 'REJECTED'
-        ? {
-            severity: 'warning',
-            text: `An admin asked for changes to your blurb, so candidates do not see it${
-              reviewNote ? `: ${reviewNote}` : '.'
-            }`
-          }
-        : {
-            severity: 'info',
-            text: blurbLive
-              ? 'Candidates still see your previously approved blurb while an admin reviews this edit.'
-              : 'Your blurb is waiting on admin review. Candidates see your industries and interests until it is approved.'
-          };
-  const canSubmit = industries.length > 0 && interests.length > 0 && relevance.trim().length > 0;
+  const canSubmit = industries.length > 0 && interests.length > 0;
 
   const handleSave = async () => {
     try {
@@ -71,7 +49,7 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
       const updated = await api.put('/member/gtkuc-profile', {
         industries,
         interests,
-        relevance,
+        linkedinUrl,
         candidateVisible,
       });
       onSaved?.(updated);
@@ -107,12 +85,6 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
           </Alert>
         )}
 
-        {blurbStatus && (
-          <Alert severity={blurbStatus.severity} sx={{ mb: 2 }}>
-            {blurbStatus.text}
-          </Alert>
-        )}
-
         <Stack spacing={2.5}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Avatar src={state?.profileImage || undefined} sx={{ width: 56, height: 56 }} />
@@ -143,18 +115,28 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
                 {...params}
                 label="Industries"
                 placeholder="Select industries"
-                helperText={`Industries only — candidates never see company names. Up to ${
+                helperText={`Pick from the list — candidates never see company names. Up to ${
                   taxonomy?.maxIndustries || 5
                 }.`}
               />
             )}
           />
 
+          {/* Interests are open: pick from the list or type your own. */}
           <Autocomplete
             multiple
+            freeSolo
+            autoSelect
             options={taxonomy?.interests || []}
             value={interests}
-            onChange={(_, value) => setInterests(value.slice(0, taxonomy?.maxInterests || 8))}
+            onChange={(_, value) =>
+              setInterests(
+                value
+                  .map((option) => String(option).trim().slice(0, taxonomy?.interestMaxLength || 40))
+                  .filter((option, index, all) => option && all.indexOf(option) === index)
+                  .slice(0, taxonomy?.maxInterests || 8)
+              )
+            }
             renderTags={(value, getTagProps) =>
               value.map((option, index) => (
                 <Chip label={option} size="small" {...getTagProps({ index })} key={option} />
@@ -164,20 +146,21 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
               <TextField
                 {...params}
                 label="Interests"
-                placeholder="Select interests"
-                helperText={`Up to ${taxonomy?.maxInterests || 8}.`}
+                placeholder="Select or type your own"
+                helperText={`Pick from the list or add your own — press Enter to add. Up to ${
+                  taxonomy?.maxInterests || 8
+                }.`}
               />
             )}
           />
 
           <TextField
-            label="Why candidates should chat with you"
-            value={relevance}
-            onChange={(e) => setRelevance(e.target.value.slice(0, relevanceMaxLength))}
-            multiline
-            minRows={3}
+            label="LinkedIn profile"
+            value={linkedinUrl}
+            onChange={(e) => setLinkedinUrl(e.target.value)}
             fullWidth
-            helperText={`${relevance.length}/${relevanceMaxLength} — reviewed by an admin before candidates see it. No company names.`}
+            placeholder="linkedin.com/in/your-handle"
+            helperText="Auto-filled from the UConsulting team page. Candidates get a LinkedIn link on your timeslots."
           />
 
           <FormControlLabel

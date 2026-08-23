@@ -24,6 +24,7 @@ import {
   Person as PersonIcon,
   CheckCircle as CheckCircleIcon,
   LockClock as LockClockIcon,
+  LinkedIn as LinkedInIcon,
 } from '@mui/icons-material';
 
 const MODIFY_CUTOFF_HOURS = 12;
@@ -58,7 +59,8 @@ const filterSlotsByCycle = (slotsToFilter, cycle) => {
 };
 
 // Curated background for the hosting member. Industries are taxonomy tags, so
-// this never surfaces employer names.
+// the only thing here that can name an employer is the member's own LinkedIn
+// link, which they published themselves.
 const MemberProfile = ({ profile, compact = false }) => {
   if (!profile) return null;
   return (
@@ -88,10 +90,17 @@ const MemberProfile = ({ profile, compact = false }) => {
           </Stack>
         </Box>
       )}
-      {profile.relevance && (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {profile.relevance}
-        </Typography>
+      {profile.linkedinUrl && (
+        <Button
+          size="small"
+          startIcon={<LinkedInIcon />}
+          href={profile.linkedinUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          sx={{ mt: 0.5, pl: 0 }}
+        >
+          View LinkedIn
+        </Button>
       )}
     </Box>
   );
