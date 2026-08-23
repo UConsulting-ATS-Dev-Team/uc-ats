@@ -56,10 +56,19 @@ function candidate(id, firstName) {
   };
 }
 
-// The page reads one endpoint: every resource below comes from a single database
-// transaction stamped with `snapshotVersion`.
-function snapshot({ candidates, snapshotVersion }) {
+// The page reads two endpoints: a cheap change token, and -- only when that token has
+// moved -- one snapshot whose resources all come from a single database transaction
+// stamped with `snapshotVersion`. The token defaults to the snapshot version so that
+// different data implies a different token, which is what these tests usually want.
+function snapshot(options) {
+  const { candidates, snapshotVersion } = options;
+  // `in`, not `??`: an explicitly null token is a case worth testing and must not be
+  // quietly replaced by the default.
+  const changeToken = 'changeToken' in options ? options.changeToken : String(snapshotVersion);
   return (endpoint) => {
+    if (endpoint === '/admin/staging/version') {
+      return Promise.resolve({ changeToken });
+    }
     if (endpoint === '/admin/staging/snapshot') {
       return Promise.resolve({
         snapshotVersion,
@@ -73,6 +82,11 @@ function snapshot({ candidates, snapshotVersion }) {
     }
     return Promise.resolve([]);
   };
+}
+
+// Only snapshot reads are interesting to count: token reads happen every tick.
+function snapshotCallCount() {
+  return apiClient.get.mock.calls.filter(([endpoint]) => endpoint === '/admin/staging/snapshot').length;
 }
 
 async function renderStaging() {
@@ -111,6 +125,56 @@ describe('Staging sync', () => {
     expect(screen.getByText('Alice Example')).toBeInTheDocument();
   });
 
+  it('does not re-read the snapshot while the change token stands still', async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    expect(snapshotCallCount()).toBe(1);
+
+    // Same token, different candidates: if the page ignored the token it would fetch
+    // this and Bob would appear. The whole point is that it does not.
+    apiClient.get.mockImplementation(
+      snapshot({ candidates: [candidate('c2', 'Bob')], snapshotVersion: 400, changeToken: '200' })
+    );
+
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+
+    await waitFor(() => expect(screen.getByText(/^Synced /)).toBeInTheDocument());
+    expect(snapshotCallCount()).toBe(1);
+    expect(screen.queryByText('Bob Example')).not.toBeInTheDocument();
+    expect(screen.getByText('Alice Example')).toBeInTheDocument();
+  });
+
+  it('re-reads the snapshot as soon as the change token moves', async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    expect(snapshotCallCount()).toBe(1);
+
+    apiClient.get.mockImplementation(
+      snapshot({ candidates: [candidate('c2', 'Bob')], snapshotVersion: 400, changeToken: '201' })
+    );
+
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+
+    await screen.findByText('Bob Example');
+    expect(snapshotCallCount()).toBe(2);
+  });
+
+  it('reads the snapshot when the server cannot report a change token', async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    // An absent token must not be mistaken for an unchanged one: unknown means fetch,
+    // otherwise a token outage would freeze every console on its current snapshot.
+    apiClient.get.mockImplementation(
+      snapshot({ candidates: [candidate('c2', 'Bob')], snapshotVersion: 400, changeToken: null })
+    );
+
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+
+    await screen.findByText('Bob Example');
+    expect(snapshotCallCount()).toBe(2);
+  });
+
   it('rejects a snapshot the database read before the one already applied', async () => {
     await renderStaging();
     await screen.findByText('Alice Example');
@@ -121,7 +185,7 @@ describe('Staging sync', () => {
 
     fireEvent.click(screen.getByLabelText('Refresh staging data'));
 
-    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(snapshotCallCount()).toBe(2));
     await waitFor(() => expect(screen.queryByText('Bob Example')).not.toBeInTheDocument());
     expect(screen.getByText('Alice Example')).toBeInTheDocument();
   });

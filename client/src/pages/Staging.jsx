@@ -75,7 +75,7 @@ import {
 } from '@mui/icons-material';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
-import usePolling, { POLL_STATUS } from '../hooks/usePolling';
+import usePolling, { POLL_STATUS, POLL_NO_CHANGE } from '../hooks/usePolling';
 import stagingCache from '../utils/stagingCache';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
@@ -86,7 +86,12 @@ import ApplicationDetail from './ApplicationDetail';
 
 // Staging is a QA/admin console: refresh often enough for multiple operators to
 // converge, but keep the interval bounded and back off hard when the API is down.
-const STAGING_POLL_INTERVAL_MS = 60 * 1000;
+//
+// Each tick reads a change token, not the snapshot. The token costs one row (~0.4s)
+// against the snapshot's six serialized loaders (~13s, ~840KB), which is what makes an
+// interval this short affordable: a quiet console does no snapshot reads at all, and a
+// change is picked up within one interval instead of one minute.
+const STAGING_POLL_INTERVAL_MS = 5 * 1000;
 const STAGING_MAX_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 // API functions for staging
@@ -95,6 +100,12 @@ const stagingAPI = {
   // version that orders it against other snapshots.
   async fetchSnapshot(options) {
     return await apiClient.get('/admin/staging/snapshot', options);
+  },
+
+  // One row, bumped by database triggers on every write the snapshot can see. Compare
+  // for equality only: it reports that something changed, not what or in what order.
+  async fetchVersion(options) {
+    return await apiClient.get('/admin/staging/version', options);
   },
 
   async updateApproval(applicationId, approved) {
@@ -798,8 +809,27 @@ export default function Staging() {
     // hoisted declaration in this component and only writes state.
   }, []);
 
+  // Change token behind the snapshot currently on screen. Null until the first
+  // snapshot of this mount lands, which is what makes that first poll always fetch.
+  const lastChangeTokenRef = useRef(null);
+
   const fetchStagingData = useCallback(async (signal) => {
+    const { changeToken } = await stagingAPI.fetchVersion({ signal });
+
+    // Nothing has changed since the snapshot on screen, so skip the expensive read.
+    // A null token means the server could not report one; treat that as "unknown" and
+    // fetch rather than risk sitting on stale data forever.
+    if (changeToken != null && changeToken === lastChangeTokenRef.current) {
+      return POLL_NO_CHANGE;
+    }
+
     const snapshot = await stagingAPI.fetchSnapshot({ signal });
+
+    // Recorded only once the snapshot has actually arrived: recording it before would
+    // let one failed snapshot fetch suppress every later one. Recording the token read
+    // *before* the snapshot also means a write landing between the two reads is seen
+    // again on the next poll -- one redundant fetch, never a missed change.
+    lastChangeTokenRef.current = changeToken;
 
     const candidatesData = snapshot.candidates || [];
     const adminApplicationsData = snapshot.applications || [];
@@ -1749,9 +1779,9 @@ export default function Staging() {
     [POLL_STATUS.LIVE]: `Synced ${syncedAtLabel}`
   }[syncStatus] || 'Syncing…';
   const syncStatusTooltip = [
-    `Auto-refresh every ${Math.round(STAGING_POLL_INTERVAL_MS / 1000)}s while this tab is visible`,
+    `Checks for changes every ${Math.round(STAGING_POLL_INTERVAL_MS / 1000)}s while this tab is visible`,
     `Last synced: ${syncedAtLabel}`,
-    `Requests: ${syncMetrics.requests} · failures: ${syncMetrics.failures} · stale responses dropped: ${syncMetrics.discarded}`,
+    `Checks: ${syncMetrics.requests} · unchanged: ${syncMetrics.unchanged} · failures: ${syncMetrics.failures} · stale responses dropped: ${syncMetrics.discarded}`,
     syncMetrics.lastLatencyMs != null ? `Last latency: ${syncMetrics.lastLatencyMs}ms` : null,
     syncError ? `Last error: ${syncError.message}` : null
   ].filter(Boolean).join('\n');

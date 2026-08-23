@@ -36,6 +36,7 @@ import {
   loadStagingCandidates,
   loadStagingSnapshot
 } from '../services/stagingSnapshot.js';
+import { readStagingChangeToken } from '../utils/stagingChangeToken.js';
 
 const router = express.Router();
 
@@ -2640,6 +2641,25 @@ router.get('/staging/snapshot', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/admin/staging/snapshot]', error);
     res.status(500).json({ error: 'Failed to load staging snapshot' });
+  }
+});
+
+// Cheap companion to the snapshot: one row, so clients can poll often and pay for the
+// full snapshot only when this token has actually moved. Compare it for equality only —
+// it reports *that* something changed, never how much or in what order.
+router.get('/staging/version', async (req, res) => {
+  try {
+    const changeToken = await readStagingChangeToken(prisma);
+    if (changeToken === null) {
+      // The row is seeded by migration, so its absence means the token is not installed
+      // on this database. Say so rather than returning a token that can never change,
+      // which would strand every client on its first snapshot.
+      return res.status(503).json({ error: 'Staging change token unavailable' });
+    }
+    res.json({ changeToken });
+  } catch (error) {
+    console.error('[GET /api/admin/staging/version]', error);
+    res.status(500).json({ error: 'Failed to load staging change token' });
   }
 });
 

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+/**
+ * Returned by a `fetcher` that checked for new data and found none. The poll counts as
+ * a success -- status stays LIVE and `lastSyncAt` advances -- but `onData` is not called
+ * and nothing on screen is replaced. Lets a caller poll a cheap change token often and
+ * pay for an expensive read only when that token moves.
+ */
+export const POLL_NO_CHANGE = Symbol('POLL_NO_CHANGE');
+
 export const POLL_STATUS = {
   IDLE: 'idle',
   LOADING: 'loading',
@@ -29,8 +37,11 @@ function isDocumentVisible() {
  * - failures back off exponentially up to `maxInterval` and surface as visible state
  * - a response is discarded when a newer response has already been applied, either by
  *   arrival order or by `getVersion` (server `updatedAt`/version semantics)
+ * - a fetcher may resolve with `POLL_NO_CHANGE` to report "nothing new" without
+ *   replacing anything on screen
  *
- * @param {(signal: AbortSignal) => Promise<any>} options.fetcher
+ * @param {(signal: AbortSignal) => Promise<any>} options.fetcher resolve with
+ *   `POLL_NO_CHANGE` to record a successful poll that found nothing new
  * @param {number} [options.interval] base interval in ms
  * @param {boolean} [options.enabled] pause polling entirely when false
  * @param {boolean} [options.immediate] fetch on mount instead of after one interval
@@ -62,6 +73,7 @@ export default function usePolling({
     requests: 0,
     failures: 0,
     discarded: 0,
+    unchanged: 0,
     consecutiveFailures: 0,
     lastLatencyMs: null
   });
@@ -138,6 +150,22 @@ export default function usePolling({
       if (!mountedRef.current || controller.signal.aborted) return;
 
       failuresRef.current = 0;
+
+      if (payload === POLL_NO_CHANGE) {
+        // A successful poll that found nothing new: leave the applied sequence and
+        // version untouched so the next real payload is still compared against the data
+        // actually on screen. `finally` arms the next poll as usual.
+        setMetrics((prev) => ({
+          ...prev,
+          unchanged: prev.unchanged + 1,
+          consecutiveFailures: 0,
+          lastLatencyMs: latency
+        }));
+        setLastSyncAt(new Date());
+        setError(null);
+        setStatus(POLL_STATUS.LIVE);
+        return;
+      }
 
       const incomingVersion = getVersionRef.current ? getVersionRef.current(payload) : null;
       const stale =

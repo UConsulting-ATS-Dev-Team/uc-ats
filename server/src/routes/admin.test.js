@@ -543,6 +543,33 @@ describe('GET /api/admin/users', () => {
       expect(second.snapshotVersion).toBeGreaterThan(first.snapshotVersion);
     });
 
+    it('serves the change token without touching the snapshot loaders', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ version: '42' }]);
+
+      const res = await fetch(`http://localhost:${port}/api/admin/staging/version`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ changeToken: '42' });
+      // The whole point of the endpoint: none of the expensive reads run.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.application.findMany).not.toHaveBeenCalled();
+    });
+
+    it('reports the change token as unavailable rather than inventing a stable one', async () => {
+      // A missing row must not read as "nothing has changed" -- that would strand every
+      // client on whatever snapshot it happened to be holding.
+      prisma.$queryRaw.mockResolvedValue([]);
+
+      const res = await fetch(`http://localhost:${port}/api/admin/staging/version`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+
+      expect(res.status).toBe(503);
+      expect((await res.json()).changeToken).toBeUndefined();
+    });
+
     it('fails the whole snapshot when any of its resources cannot be read', async () => {
       prisma.events.findMany.mockRejectedValue(new Error('connection terminated'));
 

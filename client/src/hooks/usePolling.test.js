@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import usePolling, { POLL_STATUS } from './usePolling';
+import usePolling, { POLL_STATUS, POLL_NO_CHANGE } from './usePolling';
 
 // Fake timers make polling deterministic, so flush pending microtasks/timers
 // explicitly instead of relying on waitFor.
@@ -222,6 +222,50 @@ describe('usePolling', () => {
     await act(async () => { replacement.resolve({}); });
     await advance(1000);
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('treats POLL_NO_CHANGE as a successful poll that applies nothing', async () => {
+    const onData = vi.fn();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 1 })
+      .mockResolvedValue(POLL_NO_CHANGE);
+
+    const { result } = renderHook(() =>
+      usePolling({ fetcher, interval: 1000, onData, getVersion: (d) => d.v })
+    );
+    await flush();
+
+    expect(onData).toHaveBeenCalledTimes(1);
+    const firstSyncAt = result.current.lastSyncAt;
+
+    await advance(1000);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    // Nothing new to show, but the poll succeeded: still live, still advancing.
+    expect(onData).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe(POLL_STATUS.LIVE);
+    expect(result.current.error).toBeNull();
+    expect(result.current.metrics.unchanged).toBe(1);
+    expect(result.current.metrics.discarded).toBe(0);
+    expect(result.current.lastSyncAt).not.toBe(firstSyncAt);
+  });
+
+  it('keeps polling after POLL_NO_CHANGE and still applies the next real payload', async () => {
+    const onData = vi.fn();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 1 })
+      .mockResolvedValueOnce(POLL_NO_CHANGE)
+      .mockResolvedValueOnce({ v: 2 });
+
+    renderHook(() => usePolling({ fetcher, interval: 1000, onData, getVersion: (d) => d.v }));
+    await flush();
+    await advance(1000);
+    await advance(1000);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(onData).toHaveBeenCalledTimes(2);
+    // An unchanged poll must not disturb the applied version: v2 still counts as newer.
+    expect(onData).toHaveBeenLastCalledWith({ v: 2 });
   });
 
   it('aborts the in-flight request on manual refresh and on unmount', async () => {

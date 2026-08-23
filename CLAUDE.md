@@ -65,6 +65,53 @@ npx prisma migrate deploy
 npx prisma studio
 ```
 
+#### Applying a migration (while `DIRECT_URL` is broken)
+
+`prisma migrate dev` and `migrate deploy` both authenticate with `DIRECT_URL`, whose
+password is stale (see Environment Variables). Until that is repaired, apply migrations
+by hand with the *session pooler* — same host and credentials as `DATABASE_URL`, but on
+port **5432** instead of 6543. Port 6543 is pgbouncer in transaction mode and the Prisma
+CLI cannot use it at all; it fails with a misleading "can't reach database server".
+
+```bash
+cd server
+
+# 1. Build the session-pooler URL: DATABASE_URL with port 5432 instead of 6543.
+SESSION_URL=$(node -e '
+  const u = new URL(require("fs").readFileSync(".env","utf8").match(/^DATABASE_URL=(.*)$/m)[1].trim());
+  u.port = "5432"; process.stdout.write(u.toString());
+')
+
+# 2. Apply the SQL.
+npx prisma db execute --url "$SESSION_URL" --file ./prisma/migrations/<name>/migration.sql
+
+# 3. Record it so a future `migrate deploy` does not replay it.
+DIRECT_URL="$SESSION_URL" npx prisma migrate resolve --applied <name>
+```
+
+Write the `migration.sql` by hand and make it re-runnable (`IF NOT EXISTS`,
+`ON CONFLICT DO NOTHING`, `DROP TRIGGER IF EXISTS` before `CREATE TRIGGER`) — step 2 has
+no transaction wrapper of its own, so a half-applied file has to be safe to re-run.
+
+#### After switching branches
+
+`prisma generate` writes the client into `node_modules/`, which git does not track and
+nodemon does not watch. Checking out a branch whose `schema.prisma` differs therefore
+leaves a **stale generated client**, and queries fail against columns that exist only in
+the other branch's schema:
+
+```
+The column `recruiting_cycles.createdById` does not exist in the current database.  (P2022)
+```
+
+The fix is both steps, in order — regenerating alone does nothing to a server that is
+already running, because the old client is already loaded in memory:
+
+```bash
+cd server && npx prisma generate   # rewrite the client from this branch's schema
+touch src/index.js                 # force nodemon to restart and load it
+```
+
 ### Utility Scripts
 ```bash
 cd server
@@ -213,6 +260,16 @@ Key notification types in [emailNotifications.js](server/src/services/emailNotif
 Required in `server/.env`:
 - `DATABASE_URL` - PostgreSQL connection string (Supabase). Use the IPv4 session pooler on port 5432 with username `postgres.<project-ref>`; the direct `db.<project-ref>.supabase.co` host is IPv6-only and will fail from IPv4-only environments.
 - `DIRECT_URL` - Direct database URL for Prisma migrations/introspection. In this setup it should also be the session pooler on port 5432; never use port 6543 (transaction mode) for migrations.
+
+> **Known drift (verified 2026-08-23):** the `DIRECT_URL` in `server/.env` carries a
+> *stale password* — same username as `DATABASE_URL`, different secret. Port 5432 is
+> reachable and the host is correct, so Prisma reports it as
+> `Please make sure to provide valid database credentials`, not as a network error.
+> This is why `prisma migrate dev` / `migrate deploy` fail here while the app itself
+> runs fine: the runtime uses `DATABASE_URL` (port 6543), which has the good password.
+>
+> The real fix is to repair `DIRECT_URL` with the current password. Until someone does,
+> see "Applying a migration" below.
 - `GOOGLE_CLOUD_KEY_PATH` - Path to Google Cloud service account JSON
 - `JWT_SECRET` - Secret for JWT signing
 - `BASE_URL` - Server URL (http://localhost:3001 in dev)
