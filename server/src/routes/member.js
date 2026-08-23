@@ -15,14 +15,15 @@ import {
   GTKUC_INTERESTS,
   MAX_INDUSTRIES,
   MAX_INTERESTS,
-  RELEVANCE_MAX_LENGTH,
+  INTEREST_MAX_LENGTH,
   sanitizeProfileInput,
   isProfileComplete,
-  missingProfileFields,
-  needsCycleConfirmation,
-  relevanceDraftUpdate,
-  visibleRelevance
+  missingProfileFields
 } from '../utils/gtkucProfile.js';
+// GTKUC profile shown to candidates on the member's slots, loaded with the
+// active cycle's confirmation so the portal knows whether to force the
+// confirm/update modal before the member can open slots.
+import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 
 const router = express.Router();
 
@@ -875,47 +876,12 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
   }
 });
 
-// GTKUC profile shown to candidates on the member's slots. Loaded with the
-// confirmations for the active cycle so the portal knows whether to force the
-// confirm/update modal before the member can open slots.
-const loadGtkucProfileState = async (userId) => {
-  const [user, activeCycle] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, fullName: true, profileImage: true, graduationClass: true }
-    }),
-    prisma.recruitingCycle.findFirst({ where: { isActive: true } })
-  ]);
-
-  const profile = await prisma.memberGtkucProfile.findUnique({
-    where: { memberId: userId },
-    include: { confirmations: true }
-  });
-
-  return {
-    user,
-    activeCycle,
-    profile,
-    confirmationRequired: needsCycleConfirmation({
-      profile,
-      user,
-      activeCycleId: activeCycle?.id || null
-    })
-  };
-};
-
 const serializeGtkucProfileState = ({ user, activeCycle, profile, confirmationRequired }) => ({
   profile: profile
     ? {
         industries: profile.industries,
         interests: profile.interests,
-        relevance: profile.relevance || '',
-        // The member sees their own draft plus where it stands in review; only
-        // the approved snapshot ever reaches candidates.
-        approvedRelevance: profile.approvedRelevance || '',
-        relevanceReviewStatus: profile.relevanceReviewStatus || 'PENDING_REVIEW',
-        relevanceReviewNote: profile.relevanceReviewNote || '',
-        relevanceVisibleToCandidates: Boolean(visibleRelevance(profile)),
+        linkedinUrl: profile.linkedinUrl || '',
         candidateVisible: profile.candidateVisible,
         hiddenFromGtkuc: profile.hiddenFromGtkuc,
         updatedAt: profile.updatedAt,
@@ -934,7 +900,7 @@ const serializeGtkucProfileState = ({ user, activeCycle, profile, confirmationRe
     interests: GTKUC_INTERESTS,
     maxIndustries: MAX_INDUSTRIES,
     maxInterests: MAX_INTERESTS,
-    relevanceMaxLength: RELEVANCE_MAX_LENGTH
+    interestMaxLength: INTEREST_MAX_LENGTH
   }
 });
 
@@ -953,7 +919,7 @@ router.get('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res)
 // confirmation for the active cycle, which is what unblocks slot creation.
 router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
-    const { industries, interests, relevance, candidateVisible, rejected } = sanitizeProfileInput(
+    const { industries, interests, linkedinUrl, candidateVisible, rejected } = sanitizeProfileInput(
       req.body || {}
     );
 
@@ -963,22 +929,20 @@ router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res)
     if (interests.length === 0) {
       return res.status(400).json({ error: 'Select at least one interest from the list' });
     }
-    if (!relevance) {
-      return res.status(400).json({ error: 'Add a short blurb about why candidates should chat with you' });
+    // A LinkedIn value that survived normalization is a profile URL; anything
+    // else the member typed is rejected rather than silently dropped.
+    if (req.body?.linkedinUrl && !linkedinUrl) {
+      return res.status(400).json({ error: 'Enter a LinkedIn profile URL, e.g. linkedin.com/in/your-handle' });
     }
 
-    const [activeCycle, existing] = await Promise.all([
-      prisma.recruitingCycle.findFirst({ where: { isActive: true } }),
-      prisma.memberGtkucProfile.findUnique({ where: { memberId: req.user.id } })
-    ]);
+    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
 
-    // Saving a changed blurb sends it back for review rather than publishing it.
-    const relevanceFields = relevanceDraftUpdate(existing, relevance);
-
+    // Members may clear an auto-filled LinkedIn link, so an empty submission
+    // overwrites rather than falling back to what was stored.
     const profile = await prisma.memberGtkucProfile.upsert({
       where: { memberId: req.user.id },
-      create: { memberId: req.user.id, industries, interests, candidateVisible, ...relevanceFields },
-      update: { industries, interests, candidateVisible, ...relevanceFields }
+      create: { memberId: req.user.id, industries, interests, linkedinUrl, candidateVisible },
+      update: { industries, interests, linkedinUrl, candidateVisible }
     });
 
     if (activeCycle) {

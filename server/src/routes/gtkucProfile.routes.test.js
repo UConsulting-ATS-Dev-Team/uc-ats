@@ -1,6 +1,7 @@
-// Route-level coverage for the GTKUC member profile workflow: role denial,
-// the per-cycle confirmation gate on slot creation, admin hide/unhide, and the
-// candidate-facing projection on the public slot list.
+// Route-level coverage for the GTKUC member profile workflow: role denial, the
+// per-cycle confirmation gate on slot creation (member portal and admin
+// console), admin hide/unhide, and the candidate-facing projection on the
+// public slot list.
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
@@ -23,7 +24,14 @@ vi.mock('../prismaClient.js', () => ({
   }
 }));
 
-const adminUser = { id: 'admin-1', role: 'ADMIN', isActive: true, email: 'admin@example.com', fullName: 'Admin' };
+const adminUser = {
+  id: 'admin-1',
+  role: 'ADMIN',
+  isActive: true,
+  email: 'admin@example.com',
+  fullName: 'Admin',
+  profileImage: 'https://example.com/admin.jpg'
+};
 const memberUser = {
   id: 'member-1',
   role: 'MEMBER',
@@ -42,9 +50,7 @@ const completeProfile = (overrides = {}) => ({
   memberId: memberUser.id,
   industries: [GTKUC_INDUSTRIES[0]],
   interests: [GTKUC_INTERESTS[0]],
-  relevance: 'Happy to talk recruiting timelines.',
-  approvedRelevance: 'Happy to talk recruiting timelines.',
-  relevanceReviewStatus: 'APPROVED',
+  linkedinUrl: 'https://www.linkedin.com/in/member-one',
   candidateVisible: true,
   hiddenFromGtkuc: false,
   updatedAt: new Date(),
@@ -152,13 +158,13 @@ describe('per-cycle confirmation gate on slot creation', () => {
 
   it('blocks members whose profile is missing required fields', async () => {
     prisma.memberGtkucProfile.findUnique.mockResolvedValue(
-      completeProfile({ relevance: '', confirmations: [{ cycleId: activeCycle.id, confirmedAt: new Date() }] })
+      completeProfile({ interests: [], confirmations: [{ cycleId: activeCycle.id, confirmedAt: new Date() }] })
     );
 
     const res = await createSlot();
 
     expect(res.status).toBe(409);
-    expect((await res.json()).missingFields).toContain('relevance');
+    expect((await res.json()).missingFields).toContain('interests');
   });
 
   it('allows further slots in the same cycle without re-prompting', async () => {
@@ -196,7 +202,7 @@ describe('per-cycle confirmation gate on slot creation', () => {
       body: {
         industries: [GTKUC_INDUSTRIES[0], 'McKinsey & Company'],
         interests: [GTKUC_INTERESTS[0]],
-        relevance: 'Happy to talk recruiting timelines.'
+        linkedinUrl: 'linkedin.com/in/member-one'
       }
     });
 
@@ -256,114 +262,44 @@ describe('admin GTKUC visibility', () => {
   });
 });
 
-// The blurb is free text, so nothing a member types can reach a candidate before
-// an admin approves that exact text.
-describe('relevance blurb review gate', () => {
-  const EMPLOYER_BLURB = 'I intern at Goldman Sachs, ask me about banking.';
-
-  const slotWith = (profile) => ({
-    id: 'slot-1',
-    location: 'Kerckhoff 300',
-    startTime: new Date(Date.now() + 86400000),
-    endTime: new Date(Date.now() + 90000000),
-    capacity: 2,
-    signups: [],
-    member: { ...memberUser, gtkucProfile: profile }
-  });
-
-  it('keeps a member-typed employer name out of candidate and public payloads', async () => {
-    const saved = completeProfile({
-      relevance: EMPLOYER_BLURB,
-      approvedRelevance: null,
-      relevanceReviewStatus: 'PENDING_REVIEW'
-    });
-    prisma.memberGtkucProfile.findUnique.mockResolvedValue(saved);
-    prisma.memberGtkucProfile.upsert.mockResolvedValue(saved);
-    prisma.memberGtkucProfileConfirmation.upsert.mockResolvedValue({});
-
-    const save = await request('/api/member/gtkuc-profile', {
-      user: memberUser,
-      method: 'PUT',
-      body: {
-        industries: [GTKUC_INDUSTRIES[0]],
-        interests: [GTKUC_INTERESTS[0]],
-        relevance: EMPLOYER_BLURB
-      }
-    });
-    expect(save.status).toBe(200);
-    // Saving stores the draft unapproved rather than publishing it.
-    expect(prisma.memberGtkucProfile.upsert.mock.calls[0][0].update).toMatchObject({
-      relevance: EMPLOYER_BLURB,
-      relevanceReviewStatus: 'PENDING_REVIEW'
-    });
-
-    prisma.meetingSlot.findMany.mockResolvedValue([slotWith(saved)]);
-    prisma.meetingSignup.findMany.mockResolvedValue([{ id: 'signup-1', slot: slotWith(saved) }]);
-
-    const [publicRes, candidateRes] = await Promise.all([
-      request('/api/meeting-slots'),
-      request('/api/my-meeting-signups', { user: candidateUser })
-    ]);
-    const [publicBody, candidateBody] = [await publicRes.text(), await candidateRes.text()];
-
-    expect(publicBody).not.toContain('Goldman Sachs');
-    expect(candidateBody).not.toContain('Goldman Sachs');
-    expect(JSON.parse(publicBody)[0].memberProfile.relevance).toBeNull();
-    expect(JSON.parse(candidateBody)[0].memberProfile.relevance).toBeNull();
-  });
-
-  it('publishes the blurb only through an admin approval of that exact text', async () => {
-    const pending = completeProfile({
-      relevance: 'Transferred in as a junior, happy to talk timelines.',
-      approvedRelevance: null,
-      relevanceReviewStatus: 'PENDING_REVIEW'
-    });
-    prisma.memberGtkucProfile.findUnique.mockResolvedValue(pending);
-    prisma.memberGtkucProfile.update.mockImplementation(({ data }) =>
-      Promise.resolve({ ...pending, ...data })
-    );
-
-    const res = await request(`/api/admin/gtkuc-profiles/${memberUser.id}/relevance-review`, {
+// Admins host slots from the admin console, so the same gate applies there.
+describe('per-cycle confirmation gate in the admin console', () => {
+  const createSlot = (body) =>
+    request('/api/admin/meeting-slots', {
       user: adminUser,
-      method: 'PATCH',
-      body: { decision: 'APPROVE' }
+      method: 'POST',
+      body: { location: 'Kerckhoff 300', startTime: '2026-09-25T10:00', ...body }
     });
+
+  it('blocks an admin opening their own first slot of the cycle', async () => {
+    prisma.memberGtkucProfile.findUnique.mockResolvedValue(completeProfile({ confirmations: [] }));
+
+    const res = await createSlot();
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('GTKUC_PROFILE_CONFIRMATION_REQUIRED');
+    expect(prisma.meetingSlot.create).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin open a slot on behalf of another member without confirming their own profile', async () => {
+    prisma.memberGtkucProfile.findUnique.mockResolvedValue(completeProfile({ confirmations: [] }));
+    prisma.meetingSlot.create.mockResolvedValue({ id: 'slot-1' });
+
+    const res = await createSlot({ memberId: memberUser.id });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      relevanceReviewStatus: 'APPROVED',
-      approvedRelevance: pending.relevance,
-      relevanceVisibleToCandidates: true
-    });
-    // The approval snapshots the reviewed text, so a later edit cannot ride on it.
-    expect(prisma.memberGtkucProfile.update.mock.calls[0][0].data.approvedRelevance).toBe(pending.relevance);
+    expect(prisma.meetingSlot.create).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a bad decision, an unknown member, and non-admins', async () => {
-    prisma.memberGtkucProfile.findUnique.mockResolvedValue(completeProfile());
+  it('allows an admin whose profile is confirmed for the cycle', async () => {
+    prisma.memberGtkucProfile.findUnique.mockResolvedValue(
+      completeProfile({ confirmations: [{ cycleId: activeCycle.id, confirmedAt: new Date() }] })
+    );
+    prisma.meetingSlot.create.mockResolvedValue({ id: 'slot-1' });
 
-    const [badDecision, member, unknown] = await Promise.all([
-      request(`/api/admin/gtkuc-profiles/${memberUser.id}/relevance-review`, {
-        user: adminUser,
-        method: 'PATCH',
-        body: { decision: 'MAYBE' }
-      }),
-      request(`/api/admin/gtkuc-profiles/${memberUser.id}/relevance-review`, {
-        user: memberUser,
-        method: 'PATCH',
-        body: { decision: 'APPROVE' }
-      }),
-      (async () => {
-        prisma.memberGtkucProfile.findUnique.mockResolvedValueOnce(null);
-        return request('/api/admin/gtkuc-profiles/nobody/relevance-review', {
-          user: adminUser,
-          method: 'PATCH',
-          body: { decision: 'APPROVE' }
-        });
-      })()
-    ]);
+    const res = await createSlot();
 
-    expect([badDecision.status, member.status, unknown.status]).toEqual([400, 403, 404]);
+    expect(res.status).toBe(200);
   });
 });
 
@@ -388,8 +324,8 @@ describe('public slot list projection', () => {
       'graduationClass',
       'industries',
       'interests',
-      'photo',
-      'relevance'
+      'linkedinUrl',
+      'photo'
     ]);
   });
 

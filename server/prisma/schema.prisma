@@ -48,7 +48,6 @@ model User {
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
-  gtkucRelevanceReviews      MemberGtkucProfile[]            @relation("GtkucRelevanceReviewer")
 
   @@map("users")
 }
@@ -149,21 +148,15 @@ model RecruitingCycle {
 
 // Candidate-facing background for a member hosting Get to Know UC slots.
 // Industries come from a fixed taxonomy so candidates never see employer names.
+// There is no free-text field on purpose: everything shown to a candidate is
+// either a taxonomy tag or the member's own LinkedIn link.
 model MemberGtkucProfile {
   id               String                           @id @default(uuid())
   memberId         String                           @unique
   industries       String[]
   interests        String[]
-  // Member-authored draft blurb. Never projected to candidates: only
-  // `approvedRelevance`, the exact text an admin cleared, is candidate-visible,
-  // so free text cannot bypass the fixed industry taxonomy.
-  relevance             String?
-  approvedRelevance     String?
-  relevanceReviewStatus GtkucRelevanceReviewStatus @default(PENDING_REVIEW)
-  relevanceReviewNote   String?
-  relevanceReviewedAt   DateTime?
-  relevanceReviewedById String?
-  relevanceReviewedBy   User?     @relation("GtkucRelevanceReviewer", fields: [relevanceReviewedById], references: [id])
+  // Auto-filled from the UConsulting team page and editable by the member.
+  linkedinUrl      String?
   candidateVisible Boolean                          @default(true)
   hiddenFromGtkuc  Boolean                          @default(false)
   createdAt        DateTime                         @default(now())
@@ -172,12 +165,6 @@ model MemberGtkucProfile {
   confirmations    MemberGtkucProfileConfirmation[]
 
   @@map("member_gtkuc_profiles")
-}
-
-enum GtkucRelevanceReviewStatus {
-  PENDING_REVIEW
-  APPROVED
-  REJECTED
 }
 
 // One row per member per cycle: the member confirmed their profile is current.
