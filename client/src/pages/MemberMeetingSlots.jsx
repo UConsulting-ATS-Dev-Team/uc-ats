@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import GtkucProfileModal from '../components/GtkucProfileModal';
 import {
   Box,
   Typography,
@@ -37,7 +38,8 @@ import {
   OpenInNew as OpenInNewIcon,
   Visibility as VisibilityIcon,
   Event as EventIcon,
-  Delete as DeleteIcon
+  Delete as DeleteIcon,
+  Badge as BadgeIcon
 } from '@mui/icons-material';
 
 export default function MemberMeetingSlots() {
@@ -53,10 +55,25 @@ export default function MemberMeetingSlots() {
   const [editingSlot, setEditingSlot] = useState(null);
   const [editForm, setEditForm] = useState({ location: '', startTime: '', endTime: '', capacity: 2 });
   const [editDateError, setEditDateError] = useState('');
+  const [profileState, setProfileState] = useState(null);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
 
   useEffect(() => {
     api.setToken(token);
   }, [token]);
+
+  // Candidate-facing profile must be confirmed once per cycle before the member
+  // can open timeslots, so the gate is checked up front.
+  const loadProfileState = async () => {
+    try {
+      const state = await api.get('/member/gtkuc-profile');
+      setProfileState(state);
+      return state;
+    } catch (e) {
+      console.error('Failed to load GTKUC profile state:', e);
+      return null;
+    }
+  };
 
   const loadActiveCycle = async () => {
     try {
@@ -97,6 +114,7 @@ export default function MemberMeetingSlots() {
       setError('');
       const data = await api.get('/member/meeting-slots');
       setAllSlots(data);
+      await loadProfileState();
       
       // Load active cycle and filter slots
       const cycle = await loadActiveCycle();
@@ -209,6 +227,13 @@ export default function MemberMeetingSlots() {
       return;
     }
     
+    // First slot of the cycle: confirm the candidate-facing profile first.
+    const currentProfileState = profileState || (await loadProfileState());
+    if (currentProfileState?.confirmationRequired) {
+      setProfileModalOpen(true);
+      return;
+    }
+
     try {
       setSubmitting(true);
       setError('');
@@ -457,6 +482,15 @@ export default function MemberMeetingSlots() {
               Manage your meeting slots and track attendance for 1:2 meetings with potential candidates.
             </Typography>
           </Box>
+          <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            startIcon={<BadgeIcon />}
+            onClick={() => setProfileModalOpen(true)}
+            sx={{ minWidth: 180 }}
+          >
+            My Candidate Profile
+          </Button>
           <Button
             variant="outlined"
             startIcon={<VisibilityIcon />}
@@ -474,14 +508,44 @@ export default function MemberMeetingSlots() {
           >
             View Public Page
           </Button>
+          </Stack>
         </Box>
       </Box>
+
+      {profileState?.confirmationRequired && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 3 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setProfileModalOpen(true)}>
+              Confirm profile
+            </Button>
+          }
+        >
+          {profileState.missingFields?.length > 0
+            ? `Candidates see your profile when they pick a timeslot. Add your ${profileState.missingFields.join(', ')} before opening timeslots.`
+            : `Confirm your Get to Know UC profile for ${
+                profileState.activeCycle?.name || 'this cycle'
+              } before opening timeslots.`}
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
           {error}
         </Alert>
       )}
+
+      <GtkucProfileModal
+        open={profileModalOpen}
+        state={profileState}
+        required={Boolean(profileState?.confirmationRequired)}
+        onClose={() => setProfileModalOpen(false)}
+        onSaved={(updated) => {
+          setProfileState(updated);
+          setProfileModalOpen(false);
+        }}
+      />
 
       {/* Create New Slot Form */}
       <Paper sx={{ p: 3, mb: 4 }}>

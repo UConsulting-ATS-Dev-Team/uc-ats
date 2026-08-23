@@ -16,6 +16,8 @@ import {
   getGroupMemberIds,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
+import { isProfileComplete, missingProfileFields } from '../utils/gtkucProfile.js';
+import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 import {
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
@@ -5793,6 +5795,21 @@ router.post('/meeting-slots', async (req, res) => {
       return res.status(400).json({ error: 'Host member not found' });
     }
 
+    // Admins host GTKUC slots too, so opening one for themselves goes through
+    // the same per-cycle profile confirmation members get. Slots an admin opens
+    // on behalf of someone else aren't gated — that host confirms their own
+    // profile, and until they do candidates simply see no profile card.
+    if (hostId === req.user.id) {
+      const profileState = await loadGtkucProfileState(req.user.id);
+      if (profileState.confirmationRequired) {
+        return res.status(409).json({
+          error: 'Confirm your Get to Know UC profile before opening a timeslot',
+          code: 'GTKUC_PROFILE_CONFIRMATION_REQUIRED',
+          missingFields: missingProfileFields(profileState.profile, profileState.user)
+        });
+      }
+    }
+
     const slot = await prisma.meetingSlot.create({
       data: {
         memberId: hostId,
@@ -5941,6 +5958,72 @@ router.delete('/meeting-slots/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to delete meeting slot' });
+  }
+});
+
+// Admin: list every member's GTKUC profile state (for the visibility controls).
+router.get('/gtkuc-profiles', async (req, res) => {
+  try {
+    const members = await prisma.user.findMany({
+      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+      orderBy: { fullName: 'asc' },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        profileImage: true,
+        graduationClass: true,
+        gtkucProfile: true
+      }
+    });
+
+    res.json(
+      members.map((member) => ({
+        id: member.id,
+        fullName: member.fullName,
+        email: member.email,
+        profileImage: member.profileImage,
+        graduationClass: member.graduationClass,
+        industries: member.gtkucProfile?.industries || [],
+        interests: member.gtkucProfile?.interests || [],
+        linkedinUrl: member.gtkucProfile?.linkedinUrl || '',
+        candidateVisible: member.gtkucProfile?.candidateVisible ?? true,
+        hiddenFromGtkuc: member.gtkucProfile?.hiddenFromGtkuc ?? false,
+        complete: isProfileComplete(member.gtkucProfile, member),
+        missingFields: missingProfileFields(member.gtkucProfile, member)
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/admin/gtkuc-profiles]', error);
+    res.status(500).json({ error: 'Failed to fetch GTKUC profiles' });
+  }
+});
+
+// Admin: hide/unhide a member from candidate-facing GTKUC.
+router.patch('/gtkuc-profiles/:memberId/visibility', async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { hiddenFromGtkuc } = req.body || {};
+
+    if (typeof hiddenFromGtkuc !== 'boolean') {
+      return res.status(400).json({ error: 'hiddenFromGtkuc must be a boolean' });
+    }
+
+    const member = await prisma.user.findUnique({ where: { id: memberId } });
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    const profile = await prisma.memberGtkucProfile.upsert({
+      where: { memberId },
+      create: { memberId, industries: [], interests: [], hiddenFromGtkuc },
+      update: { hiddenFromGtkuc }
+    });
+
+    res.json({ memberId, hiddenFromGtkuc: profile.hiddenFromGtkuc });
+  } catch (error) {
+    console.error('[PATCH /api/admin/gtkuc-profiles/:memberId/visibility]', error);
+    res.status(500).json({ error: 'Failed to update GTKUC visibility' });
   }
 });
 

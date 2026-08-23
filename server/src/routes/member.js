@@ -1,5 +1,5 @@
 import express from 'express';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
@@ -10,6 +10,20 @@ import {
   getGroupMemberIds,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
+import {
+  GTKUC_INDUSTRIES,
+  GTKUC_INTERESTS,
+  MAX_INDUSTRIES,
+  MAX_INTERESTS,
+  INTEREST_MAX_LENGTH,
+  sanitizeProfileInput,
+  isProfileComplete,
+  missingProfileFields
+} from '../utils/gtkucProfile.js';
+// GTKUC profile shown to candidates on the member's slots, loaded with the
+// active cycle's confirmation so the portal knows whether to force the
+// confirm/update modal before the member can open slots.
+import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 
 const router = express.Router();
 
@@ -862,12 +876,108 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
   }
 });
 
+const serializeGtkucProfileState = ({ user, activeCycle, profile, confirmationRequired }) => ({
+  profile: profile
+    ? {
+        industries: profile.industries,
+        interests: profile.interests,
+        linkedinUrl: profile.linkedinUrl || '',
+        candidateVisible: profile.candidateVisible,
+        hiddenFromGtkuc: profile.hiddenFromGtkuc,
+        updatedAt: profile.updatedAt,
+        confirmedAtForCycle:
+          profile.confirmations?.find((c) => c.cycleId === activeCycle?.id)?.confirmedAt || null
+      }
+    : null,
+  profileImage: user?.profileImage || null,
+  graduationClass: user?.graduationClass || null,
+  activeCycle: activeCycle ? { id: activeCycle.id, name: activeCycle.name } : null,
+  complete: isProfileComplete(profile, user),
+  missingFields: missingProfileFields(profile, user),
+  confirmationRequired,
+  taxonomy: {
+    industries: GTKUC_INDUSTRIES,
+    interests: GTKUC_INTERESTS,
+    maxIndustries: MAX_INDUSTRIES,
+    maxInterests: MAX_INTERESTS,
+    interestMaxLength: INTEREST_MAX_LENGTH
+  }
+});
+
+// Member: read own GTKUC profile plus whether this cycle still needs a confirm
+router.get('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const state = await loadGtkucProfileState(req.user.id);
+    res.json(serializeGtkucProfileState(state));
+  } catch (error) {
+    console.error('[GET /api/member/gtkuc-profile]', error);
+    res.status(500).json({ error: 'Failed to load your Get to Know UC profile' });
+  }
+});
+
+// Member: create/update own GTKUC profile. Submitting also counts as the
+// confirmation for the active cycle, which is what unblocks slot creation.
+router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { industries, interests, linkedinUrl, candidateVisible, rejected } = sanitizeProfileInput(
+      req.body || {}
+    );
+
+    if (industries.length === 0) {
+      return res.status(400).json({ error: 'Select at least one industry from the list' });
+    }
+    if (interests.length === 0) {
+      return res.status(400).json({ error: 'Select at least one interest from the list' });
+    }
+    // A LinkedIn value that survived normalization is a profile URL; anything
+    // else the member typed is rejected rather than silently dropped.
+    if (req.body?.linkedinUrl && !linkedinUrl) {
+      return res.status(400).json({ error: 'Enter a LinkedIn profile URL, e.g. linkedin.com/in/your-handle' });
+    }
+
+    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+
+    // Members may clear an auto-filled LinkedIn link, so an empty submission
+    // overwrites rather than falling back to what was stored.
+    const profile = await prisma.memberGtkucProfile.upsert({
+      where: { memberId: req.user.id },
+      create: { memberId: req.user.id, industries, interests, linkedinUrl, candidateVisible },
+      update: { industries, interests, linkedinUrl, candidateVisible }
+    });
+
+    if (activeCycle) {
+      await prisma.memberGtkucProfileConfirmation.upsert({
+        where: { profileId_cycleId: { profileId: profile.id, cycleId: activeCycle.id } },
+        create: { profileId: profile.id, cycleId: activeCycle.id },
+        update: { confirmedAt: new Date() }
+      });
+    }
+
+    const state = await loadGtkucProfileState(req.user.id);
+    res.json({ ...serializeGtkucProfileState(state), rejectedValues: rejected });
+  } catch (error) {
+    console.error('[PUT /api/member/gtkuc-profile]', error);
+    res.status(500).json({ error: 'Failed to save your Get to Know UC profile' });
+  }
+});
+
 // Member: create a meeting slot
-router.post('/meeting-slots', requireAuth, async (req, res) => {
+router.post('/meeting-slots', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { location, startTime, endTime, capacity } = req.body || {};
     if (!location || !startTime) {
       return res.status(400).json({ error: 'Location and start time are required' });
+    }
+
+    // Members can't open slots until their candidate-facing profile is complete
+    // and confirmed for the active cycle (first slot of each cycle).
+    const profileState = await loadGtkucProfileState(req.user.id);
+    if (profileState.confirmationRequired) {
+      return res.status(409).json({
+        error: 'Confirm your Get to Know UC profile before opening a timeslot',
+        code: 'GTKUC_PROFILE_CONFIRMATION_REQUIRED',
+        missingFields: missingProfileFields(profileState.profile, profileState.user)
+      });
     }
     
     console.log('Received startTime:', startTime);

@@ -47,6 +47,7 @@ model User {
   sentMessages               Message[]                       @relation("MessageSender")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
+  gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
 
   @@map("users")
@@ -122,44 +123,80 @@ model Application {
 }
 
 model RecruitingCycle {
-  id                  String             @id @default(uuid())
+  id                        String                           @id @default(uuid())
   // Unique so an exact retry of a bootstrap commit recovers the cycle it
   // already created instead of making a second one.
-  name                String             @unique
+  name                      String                           @unique
   // At most one cycle may be active. Enforced by the partial unique index
   // `recruiting_cycles_single_active`, which Prisma's schema cannot express, so it
   // is created in SQL by the migration and must be re-added by hand if this table
   // is ever recreated from scratch.
-  isActive            Boolean            @default(false)
-  startDate           DateTime?
-  endDate             DateTime?
-  createdAt           DateTime           @default(now())
-  formUrl             String?
-  resumeDeadline      String?
-  coverLetterDeadline String?
-  videoDeadline       String?
+  isActive                  Boolean                          @default(false)
+  startDate                 DateTime?
+  endDate                   DateTime?
+  createdAt                 DateTime                         @default(now())
+  formUrl                   String?
+  resumeDeadline            String?
+  coverLetterDeadline       String?
+  videoDeadline             String?
   // Structured timeline captured at cycle-create time, plus the audit of who
   // committed it. Stage dates live here (and on the generated events) rather
   // than in one column per stage, so adding a stage is config-only.
-  createdById         String?
-  timelineSnapshot    Json?
-  timelineCommittedAt DateTime?
+  createdById               String?
+  timelineSnapshot          Json?
+  timelineCommittedAt       DateTime?
   // Hash of the whole bootstrap request (name, timeline, activate flag, per-event
   // overrides), so only a byte-identical retry is answered with this cycle.
-  bootstrapFingerprint String?
-  publishChangeSet    Json?
-  createdBy           User?              @relation("RecruitingCycleCreator", fields: [createdById], references: [id])
-  applications        Application[]
-  coverLetterScores   CoverLetterScore[]
-  events              Events[]
-  groups              Groups[]
-  interviews          Interview[]
-  referrals           Referral[]
-  resumeScores        ResumeScore[]
-  videoScores         VideoScore[]
-  cases               Case[]
+  bootstrapFingerprint      String?
+  publishChangeSet          Json?
+  createdBy                 User?                            @relation("RecruitingCycleCreator", fields: [createdById], references: [id])
+  applications              Application[]
+  coverLetterScores         CoverLetterScore[]
+  events                    Events[]
+  groups                    Groups[]
+  interviews                Interview[]
+  referrals                 Referral[]
+  resumeScores              ResumeScore[]
+  videoScores               VideoScore[]
+  cases                     Case[]
+  gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
 
   @@map("recruiting_cycles")
+}
+
+// Candidate-facing background for a member hosting Get to Know UC slots.
+// Industries come from a fixed taxonomy so candidates never see employer names.
+// There is no free-text field on purpose: everything shown to a candidate is
+// either a taxonomy tag or the member's own LinkedIn link.
+model MemberGtkucProfile {
+  id               String                           @id @default(uuid())
+  memberId         String                           @unique
+  industries       String[]
+  interests        String[]
+  // Auto-filled from the UConsulting team page and editable by the member.
+  linkedinUrl      String?
+  candidateVisible Boolean                          @default(true)
+  hiddenFromGtkuc  Boolean                          @default(false)
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+  member           User                             @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  confirmations    MemberGtkucProfileConfirmation[]
+
+  @@map("member_gtkuc_profiles")
+}
+
+// One row per member per cycle: the member confirmed their profile is current.
+// Confirmation resets every cycle because there is no row for the new cycle.
+model MemberGtkucProfileConfirmation {
+  id          String             @id @default(uuid())
+  profileId   String
+  cycleId     String
+  confirmedAt DateTime           @default(now())
+  profile     MemberGtkucProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  cycle       RecruitingCycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, cycleId])
+  @@map("member_gtkuc_profile_confirmations")
 }
 
 model Comment {

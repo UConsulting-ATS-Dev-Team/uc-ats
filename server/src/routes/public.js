@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { toCandidateCard } from '../utils/gtkucProfile.js';
 
 const router = express.Router();
 
@@ -13,7 +14,14 @@ router.get('/meeting-slots', async (req, res) => {
       orderBy: { startTime: 'asc' },
       include: {
         member: {
-          select: { id: true, fullName: true, email: true }
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            profileImage: true,
+            graduationClass: true,
+            gtkucProfile: true
+          }
         },
         signups: {
           select: { id: true }
@@ -21,10 +29,15 @@ router.get('/meeting-slots', async (req, res) => {
       }
     });
 
-    const formatted = slots.map(slot => ({
+    // Slots hosted by a member an admin hid from GTKUC are not offered at all.
+    const visibleSlots = slots.filter(slot => !slot.member?.gtkucProfile?.hiddenFromGtkuc);
+
+    const formatted = visibleSlots.map(slot => ({
       id: slot.id,
       memberName: slot.member?.fullName || 'Member',
       memberEmail: slot.member?.email || null,
+      // Only candidate-visible, complete profiles are exposed; never employers.
+      memberProfile: toCandidateCard(slot.member),
       location: slot.location,
       startTime: slot.startTime,
       endTime: slot.endTime,
