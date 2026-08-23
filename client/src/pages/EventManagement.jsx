@@ -682,7 +682,18 @@ export default function EventManagement() {
               
                 return (
                   <TableRow key={event.id}>
-                  <TableCell data-label="Event Name">{event.eventName}</TableCell>
+                  <TableCell data-label="Event Name">
+                    <Stack spacing={0.5} alignItems="flex-start">
+                      <span>{event.eventName}</span>
+                      {/* Durable shim state from the server, not inferred from the
+                          URL fields: an event needs both forms to be connected. */}
+                      {event.formStatus === 'PENDING_FORM' && (
+                        <Tooltip title="Generated from the cycle timeline. Paste both the RSVP and attendance Google Form URLs to finish setup.">
+                          <Chip label="Needs form link" size="small" color="warning" variant="outlined" />
+                        </Tooltip>
+                      )}
+                    </Stack>
+                  </TableCell>
                   <TableCell data-label="Start Date">{formatDateTime(event.eventStartDate)}</TableCell>
                   <TableCell data-label="End Date">{formatDateTime(event.eventEndDate)}</TableCell>
                   <TableCell data-label="Location">{event.eventLocation || '-'}</TableCell>
