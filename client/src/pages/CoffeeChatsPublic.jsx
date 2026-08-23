@@ -16,7 +16,9 @@ import {
   Stack,
   Chip,
   Divider,
-  Container
+  Container,
+  Avatar,
+  IconButton
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
@@ -25,7 +27,8 @@ import {
   Person as PersonIcon,
   Email as EmailIcon,
   School as SchoolIcon,
-  CheckCircle as CheckCircleIcon
+  CheckCircle as CheckCircleIcon,
+  LinkedIn as LinkedInIcon
 } from '@mui/icons-material';
 
 export default function CoffeeChatsPublic() {
@@ -401,51 +404,112 @@ export default function CoffeeChatsPublic() {
                     onClick={() => slot.remaining > 0 && setSelectedSlot(slot.id)}
                   >
                     <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                      {/* Mobile-first layout */}
-                      <Box sx={{ 
-                        display: 'flex', 
-                        flexDirection: { xs: 'column', sm: 'row' },
-                        justifyContent: 'space-between', 
-                        alignItems: { xs: 'flex-start', sm: 'flex-start' },
-                        gap: { xs: 2, sm: 0 },
-                        mb: 2 
-                      }}>
-                        <Box sx={{ flex: 1, width: { xs: '100%', sm: 'auto' } }}>
-                          <Typography 
-                            variant="h6" 
-                            sx={{ 
-                              fontWeight: 600, 
-                              mb: 1,
-                              fontSize: { xs: '1.1rem', md: '1.25rem' },
-                              lineHeight: 1.3
-                            }}
-                          >
-                            {formatDateTime(slot.startTime)}
-                          </Typography>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <PersonIcon sx={{ fontSize: { xs: 18, md: 16 }, color: 'text.secondary' }} />
-                            <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.875rem' } }}>
-                              {slot.memberName}
-                            </Typography>
+                      {/* Member-led layout: who you would be meeting comes first. */}
+                      <Box sx={{ display: 'flex', gap: { xs: 2, sm: 2.5 }, alignItems: 'flex-start' }}>
+                        <Avatar
+                          src={slot.memberProfile?.photo || undefined}
+                          alt={slot.memberName}
+                          sx={{
+                            width: { xs: 72, md: 92 },
+                            height: { xs: 72, md: 92 },
+                            border: '3px solid',
+                            borderColor: 'primary.light',
+                            flexShrink: 0
+                          }}
+                        >
+                          <PersonIcon sx={{ fontSize: { xs: 36, md: 46 } }} />
+                        </Avatar>
+
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Box sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: 1,
+                            mb: 0.5
+                          }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                              <Typography
+                                variant="h6"
+                                sx={{ fontWeight: 700, fontSize: { xs: '1.15rem', md: '1.35rem' }, lineHeight: 1.2 }}
+                              >
+                                {slot.memberName}
+                              </Typography>
+                              {slot.memberProfile?.linkedinUrl && (
+                                <IconButton
+                                  component="a"
+                                  href={slot.memberProfile.linkedinUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={`${slot.memberName} on LinkedIn`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  sx={{ color: '#0A66C2', p: 0.5 }}
+                                >
+                                  <LinkedInIcon sx={{ fontSize: { xs: 26, md: 30 } }} />
+                                </IconButton>
+                              )}
+                            </Box>
+                            <Chip
+                              label={slot.remaining === 0 ? 'Full' : `${slot.remaining} ${slot.remaining === 1 ? 'spot' : 'spots'} left`}
+                              color={slot.remaining === 0 ? 'default' : 'primary'}
+                              variant={slot.remaining === 0 ? 'outlined' : 'filled'}
+                              size="small"
+                              sx={{ flexShrink: 0, fontWeight: 600 }}
+                            />
                           </Box>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <LocationIcon sx={{ fontSize: { xs: 18, md: 16 }, color: 'text.secondary' }} />
-                            <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.875rem' } }}>
-                              {slot.location}
+
+                          {slot.memberProfile?.graduationClass && (
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                              Class of {slot.memberProfile.graduationClass}
                             </Typography>
-                          </Box>
-                        </Box>
-                        <Box sx={{ 
-                          textAlign: { xs: 'left', sm: 'right' },
-                          alignSelf: { xs: 'flex-start', sm: 'flex-start' }
-                        }}>
-                          <Chip
-                            label={slot.remaining === 0 ? 'Full' : `${slot.remaining} spots left`}
-                            color={slot.remaining === 0 ? 'default' : 'primary'}
-                            variant={slot.remaining === 0 ? 'outlined' : 'filled'}
-                            size="small"
-                            sx={{ fontSize: { xs: '0.75rem', md: '0.75rem' } }}
-                          />
+                          )}
+
+                          <Stack spacing={0.75} sx={{ mb: slot.memberProfile ? 2 : 0 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <ScheduleIcon sx={{ fontSize: 20, color: 'primary.main' }} />
+                              <Typography variant="body1" sx={{ fontWeight: 600, fontSize: { xs: '0.95rem', md: '1rem' } }}>
+                                {formatDateTime(slot.startTime)}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <LocationIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+                              <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.925rem' } }}>
+                                {slot.location}
+                              </Typography>
+                            </Box>
+                          </Stack>
+
+                          {slot.memberProfile?.industries?.length > 0 && (
+                            <Box sx={{ mb: 1.5 }}>
+                              <Typography
+                                variant="overline"
+                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
+                              >
+                                Industry experience
+                              </Typography>
+                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
+                                {slot.memberProfile.industries.map((industry) => (
+                                  <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
+                                ))}
+                              </Stack>
+                            </Box>
+                          )}
+
+                          {slot.memberProfile?.interests?.length > 0 && (
+                            <Box>
+                              <Typography
+                                variant="overline"
+                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
+                              >
+                                Interests
+                              </Typography>
+                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
+                                {slot.memberProfile.interests.map((interest) => (
+                                  <Chip key={interest} label={interest} size="small" variant="outlined" />
+                                ))}
+                              </Stack>
+                            </Box>
+                          )}
                         </Box>
                       </Box>
                     </CardContent>

@@ -15,7 +15,8 @@
     "backfill-candidates": "node scripts/backfill-candidates.js",
     "verify-candidates": "node scripts/verify-candidates.js",
     "update-schema-relations": "node scripts/update-schema-relations.js",
-    "setup-candidate-relations": "node scripts/setup-candidate-relations.js"
+    "setup-candidate-relations": "node scripts/setup-candidate-relations.js",
+    "sync-member-linkedin": "node scripts/syncMemberLinkedin.js"
   },
   "keywords": [],
   "author": "",

@@ -16,6 +16,8 @@ import {
   getGroupMemberIds,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
+import { isProfileComplete, missingProfileFields } from '../utils/gtkucProfile.js';
+import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 import {
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
@@ -37,6 +39,18 @@ import {
   loadStagingSnapshot
 } from '../services/stagingSnapshot.js';
 import { readStagingChangeToken } from '../utils/stagingChangeToken.js';
+import {
+  previewCycleBootstrap,
+  commitCycleBootstrap,
+  timelineFromPriorCycle
+} from '../services/cycleBootstrap.js';
+import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
+import { resolveFormStatus } from '../services/eventFormStatus.js';
+import {
+  activateCycleExclusively,
+  isActiveCycleConflict,
+  ActiveCycleConflictError
+} from '../services/activeCycle.js';
 
 const router = express.Router();
 
@@ -1272,29 +1286,94 @@ router.get('/cycles/active', async (req, res) => {
 router.post('/cycles', async (req, res) => {
   try {
     const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
-    const created = await prisma.recruitingCycle.create({
-      data: {
-        name,
-        formUrl: formUrl || null,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
-        isActive: Boolean(isActive) || false,
-        resumeDeadline: resumeDeadline || null,
-        coverLetterDeadline: coverLetterDeadline || null,
-        videoDeadline: videoDeadline || null,
-      }
-    });
-    // If created as active, deactivate others
-    if (created.isActive) {
-      await prisma.recruitingCycle.updateMany({
-        where: { id: { not: created.id }, isActive: true },
-        data: { isActive: false }
+    const activate = Boolean(isActive);
+    // Create then activate in one transaction, so the single-active invariant is
+    // never briefly broken and a losing concurrent activation leaves no cycle.
+    const created = await prisma.$transaction(async (tx) => {
+      const cycle = await tx.recruitingCycle.create({
+        data: {
+          name,
+          formUrl: formUrl || null,
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+          isActive: false,
+          resumeDeadline: resumeDeadline || null,
+          coverLetterDeadline: coverLetterDeadline || null,
+          videoDeadline: videoDeadline || null,
+        }
       });
-    }
+      return activate ? activateCycleExclusively(tx, cycle.id) : cycle;
+    });
     res.status(201).json(created);
   } catch (error) {
     console.error('[POST /api/admin/cycles]', error);
+    if (isActiveCycleConflict(error)) {
+      return res.status(409).json({ error: new ActiveCycleConflictError().message });
+    }
     res.status(500).json({ error: 'Failed to create cycle' });
+  }
+});
+
+// Cycle bootstrap: full recruitment timeline -> cycle + generated event shells
+
+// Timeline field template that drives the cycle-create form.
+router.get('/cycles/timeline-template', (req, res) => {
+  res.json({ stages: CYCLE_TIMELINE_STAGES });
+});
+
+// Seed the timeline form from a prior cycle's stored snapshot (dates only).
+router.get('/cycles/:id/timeline-clone', async (req, res) => {
+  try {
+    const shiftYears = req.query.shiftYears ? parseInt(req.query.shiftYears, 10) : undefined;
+    const clone = await timelineFromPriorCycle({
+      prisma,
+      sourceCycleId: req.params.id,
+      ...(Number.isFinite(shiftYears) ? { shiftYears } : {})
+    });
+    res.json(clone);
+  } catch (error) {
+    console.error('[GET /api/admin/cycles/:id/timeline-clone]', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Preview the events a timeline would generate, before anything is written.
+router.post('/cycles/bootstrap-preview', async (req, res) => {
+  try {
+    const { name, timeline } = req.body || {};
+    const preview = await previewCycleBootstrap({ prisma, name, timeline });
+    res.json(preview);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-preview]', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Commit the timeline: one transaction creating the cycle and its event shells.
+router.post('/cycles/bootstrap-commit', async (req, res) => {
+  try {
+    const { name, timeline, events, activate } = req.body || {};
+    const result = await commitCycleBootstrap({
+      prisma,
+      name,
+      timeline,
+      events,
+      actorId: req.user?.id,
+      activate: Boolean(activate)
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/cycles/bootstrap-commit]', error);
+    if (error.name === 'ActiveCycleConflictError') {
+      return res.status(409).json({ error: error.message });
+    }
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message, validationErrors: error.validationErrors });
+    }
+    res.status(400).json({ error: error.message });
   }
 });
 
@@ -1303,21 +1382,14 @@ router.post('/cycles/:id/activate', async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Deactivate all current cycles
-    await prisma.recruitingCycle.updateMany({
-      where: { isActive: true },
-      data: { isActive: false }
-    });
-
-    // Activate selected one
-    const updated = await prisma.recruitingCycle.update({
-      where: { id },
-      data: { isActive: true }
-    });
+    const updated = await prisma.$transaction((tx) => activateCycleExclusively(tx, id));
 
     res.json({ message: 'Cycle activated', cycle: updated });
   } catch (error) {
     console.error('[POST /api/admin/cycles/:id/activate]', error);
+    if (isActiveCycleConflict(error)) {
+      return res.status(409).json({ error: new ActiveCycleConflictError().message });
+    }
     res.status(500).json({ error: 'Failed to activate cycle' });
   }
 });
@@ -1334,7 +1406,9 @@ router.patch('/cycles/:id', async (req, res) => {
       ...(formUrl !== undefined ? { formUrl } : {}),
       ...(startDate !== undefined ? { startDate: startDate ? new Date(startDate) : null } : {}),
       ...(endDate !== undefined ? { endDate: endDate ? new Date(endDate) : null } : {}),
-      ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
+      // Activation is applied separately below so it goes through the ordered
+      // deactivate-others-then-activate path that the single-active index needs.
+      ...(isActive === false ? { isActive: false } : {}),
     };
     
     // Add deadline fields if they exist in the schema
@@ -1350,18 +1424,20 @@ router.patch('/cycles/:id', async (req, res) => {
     
     console.log('[PATCH /api/admin/cycles/:id] Update data:', updateData);
     
-    const updated = await prisma.recruitingCycle.update({
-      where: { id },
-      data: updateData
+    const updated = await prisma.$transaction(async (tx) => {
+      const cycle = await tx.recruitingCycle.update({
+        where: { id },
+        data: updateData
+      });
+      return isActive ? activateCycleExclusively(tx, cycle.id) : cycle;
     });
-    
-    if (isActive) {
-      await prisma.recruitingCycle.updateMany({ where: { id: { not: id }, isActive: true }, data: { isActive: false } });
-    }
     
     console.log('[PATCH /api/admin/cycles/:id] Successfully updated cycle');
     res.json(updated);
   } catch (error) {
+    if (isActiveCycleConflict(error)) {
+      return res.status(409).json({ error: new ActiveCycleConflictError().message });
+    }
     console.error('[PATCH /api/admin/cycles/:id] Error:', error);
     console.error('[PATCH /api/admin/cycles/:id] Error details:', {
       message: error.message,
@@ -1597,10 +1673,18 @@ router.patch('/events/:id', async (req, res) => {
       }
     }
 
+    // Keep the generated-event form shim state in step with the links.
+    const nextFormStatus = resolveFormStatus({
+      currentStatus: existingEvent.formStatus,
+      rsvpForm: rsvpForm !== undefined ? rsvpForm : existingEvent.rsvpForm,
+      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm
+    });
+
     // Update the event
     const updatedEvent = await prisma.events.update({
       where: { id },
       data: {
+        ...(nextFormStatus !== undefined && { formStatus: nextFormStatus }),
         ...(eventName !== undefined && { eventName }),
         ...(eventStartDate !== undefined && { eventStartDate: new Date(eventStartDate) }),
         ...(eventEndDate !== undefined && { eventEndDate: new Date(eventEndDate) }),
@@ -5018,6 +5102,21 @@ router.post('/meeting-slots', async (req, res) => {
       return res.status(400).json({ error: 'Host member not found' });
     }
 
+    // Admins host GTKUC slots too, so opening one for themselves goes through
+    // the same per-cycle profile confirmation members get. Slots an admin opens
+    // on behalf of someone else aren't gated — that host confirms their own
+    // profile, and until they do candidates simply see no profile card.
+    if (hostId === req.user.id) {
+      const profileState = await loadGtkucProfileState(req.user.id);
+      if (profileState.confirmationRequired) {
+        return res.status(409).json({
+          error: 'Confirm your Get to Know UC profile before opening a timeslot',
+          code: 'GTKUC_PROFILE_CONFIRMATION_REQUIRED',
+          missingFields: missingProfileFields(profileState.profile, profileState.user)
+        });
+      }
+    }
+
     const slot = await prisma.meetingSlot.create({
       data: {
         memberId: hostId,
@@ -5166,6 +5265,72 @@ router.delete('/meeting-slots/:id', async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/admin/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to delete meeting slot' });
+  }
+});
+
+// Admin: list every member's GTKUC profile state (for the visibility controls).
+router.get('/gtkuc-profiles', async (req, res) => {
+  try {
+    const members = await prisma.user.findMany({
+      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+      orderBy: { fullName: 'asc' },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        profileImage: true,
+        graduationClass: true,
+        gtkucProfile: true
+      }
+    });
+
+    res.json(
+      members.map((member) => ({
+        id: member.id,
+        fullName: member.fullName,
+        email: member.email,
+        profileImage: member.profileImage,
+        graduationClass: member.graduationClass,
+        industries: member.gtkucProfile?.industries || [],
+        interests: member.gtkucProfile?.interests || [],
+        linkedinUrl: member.gtkucProfile?.linkedinUrl || '',
+        candidateVisible: member.gtkucProfile?.candidateVisible ?? true,
+        hiddenFromGtkuc: member.gtkucProfile?.hiddenFromGtkuc ?? false,
+        complete: isProfileComplete(member.gtkucProfile, member),
+        missingFields: missingProfileFields(member.gtkucProfile, member)
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/admin/gtkuc-profiles]', error);
+    res.status(500).json({ error: 'Failed to fetch GTKUC profiles' });
+  }
+});
+
+// Admin: hide/unhide a member from candidate-facing GTKUC.
+router.patch('/gtkuc-profiles/:memberId/visibility', async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { hiddenFromGtkuc } = req.body || {};
+
+    if (typeof hiddenFromGtkuc !== 'boolean') {
+      return res.status(400).json({ error: 'hiddenFromGtkuc must be a boolean' });
+    }
+
+    const member = await prisma.user.findUnique({ where: { id: memberId } });
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    const profile = await prisma.memberGtkucProfile.upsert({
+      where: { memberId },
+      create: { memberId, industries: [], interests: [], hiddenFromGtkuc },
+      update: { hiddenFromGtkuc }
+    });
+
+    res.json({ memberId, hiddenFromGtkuc: profile.hiddenFromGtkuc });
+  } catch (error) {
+    console.error('[PATCH /api/admin/gtkuc-profiles/:memberId/visibility]', error);
+    res.status(500).json({ error: 'Failed to update GTKUC visibility' });
   }
 });
 

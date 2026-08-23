@@ -37,10 +37,14 @@ import {
   Select,
   FormControl,
   InputLabel,
-  InputAdornment
+  InputAdornment,
+  Switch,
+  Link
 } from '@mui/material';
+import GtkucProfileModal from '../components/GtkucProfileModal';
 import {
   Add as AddIcon,
+  Badge as BadgeIcon,
   Schedule as ScheduleIcon,
   LocationOn as LocationIcon,
   People as PeopleIcon,
@@ -52,7 +56,8 @@ import {
   Search as SearchIcon,
   EventAvailable as EventAvailableIcon,
   PercentOutlined as PercentIcon,
-  OpenInNew as OpenInNewIcon
+  OpenInNew as OpenInNewIcon,
+  LinkedIn as LinkedInIcon
 } from '@mui/icons-material';
 
 // ---- helpers -------------------------------------------------------------
@@ -109,6 +114,12 @@ export default function AdminMeetingSlots() {
 
   const [slots, setSlots] = useState([]);
   const [members, setMembers] = useState([]);
+  const [gtkucProfiles, setGtkucProfiles] = useState([]);
+  const [profileState, setProfileState] = useState(null);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  // Set when the profile gate interrupted a "New Slot" click, so the create
+  // form opens by itself once the profile is confirmed.
+  const [createAfterProfile, setCreateAfterProfile] = useState(false);
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -136,18 +147,34 @@ export default function AdminMeetingSlots() {
 
   useEffect(() => { api.setToken(token); }, [token]);
 
+  // The signed-in admin's own candidate-facing profile. Admins host slots like
+  // members do, so the same per-cycle confirmation applies before they open one.
+  const loadProfileState = async () => {
+    try {
+      const state = await api.get('/member/gtkuc-profile');
+      setProfileState(state);
+      return state;
+    } catch (e) {
+      console.error('Failed to load GTKUC profile state:', e);
+      return null;
+    }
+  };
+
   const load = async () => {
     try {
       setLoading(true);
       setError('');
-      const [data, cycle, users] = await Promise.all([
+      const [data, cycle, users, profiles] = await Promise.all([
         api.get('/admin/meeting-slots'),
         api.get('/active-cycle').catch(() => null),
-        api.get('/admin/users').catch(() => [])
+        api.get('/admin/users').catch(() => []),
+        api.get('/admin/gtkuc-profiles').catch(() => []),
+        loadProfileState()
       ]);
       setSlots(data?.slots || []);
       setActiveCycle(cycle || null);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
+      setGtkucProfiles(profiles || []);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
     } finally {
@@ -171,6 +198,12 @@ export default function AdminMeetingSlots() {
     }
     return list;
   }, [members, user]);
+
+  // Profile completeness of whoever is hosting the slot being created/edited.
+  const selectedHostProfile = useMemo(() => {
+    const hostId = form.memberId || user?.id;
+    return gtkucProfiles.find((p) => p.id === hostId) || null;
+  }, [gtkucProfiles, form.memberId, user]);
 
   const hostLabel = (m) => `${m.fullName || 'Member'}${m.id === user?.id ? ' (You)' : ''}${m.email ? ` · ${m.email}` : ''}`;
 
@@ -259,7 +292,27 @@ export default function AdminMeetingSlots() {
     }
   };
 
-  const openCreate = () => {
+  // Hide a member from candidate-facing GTKUC (their slots stop being offered).
+  const setGtkucHidden = async (memberId, hiddenFromGtkuc) => {
+    try {
+      await api.patch(`/admin/gtkuc-profiles/${memberId}/visibility`, { hiddenFromGtkuc });
+      flash(hiddenFromGtkuc ? 'Member hidden from Get to Know UC.' : 'Member visible in Get to Know UC.');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to update GTKUC visibility');
+    }
+  };
+
+  const openCreate = async () => {
+    // Admins host slots too: confirm the candidate-facing profile once per cycle
+    // before the first one, same as the member portal.
+    const currentProfileState = profileState || (await loadProfileState());
+    if (currentProfileState?.confirmationRequired) {
+      setCreateAfterProfile(true);
+      setProfileModalOpen(true);
+      return;
+    }
+
     setEditingId(null);
     setForm({ ...emptyForm, memberId: user?.id || '' });
     setFormError('');
@@ -289,6 +342,17 @@ export default function AdminMeetingSlots() {
       setFormError('End time must be after start time.');
       return;
     }
+    // Backstop for a form opened before the profile lapsed; the create button
+    // gates first. Slots opened on behalf of another member are not gated.
+    const hostingSelf = !form.memberId || form.memberId === user?.id;
+    if (!editingId && hostingSelf) {
+      const currentProfileState = profileState || (await loadProfileState());
+      if (currentProfileState?.confirmationRequired) {
+        setProfileModalOpen(true);
+        return;
+      }
+    }
+
     try {
       setSubmitting(true);
       setFormError('');
@@ -379,12 +443,59 @@ export default function AdminMeetingSlots() {
             >
               View Public Page
             </Button>
+            <Button
+              variant="outlined"
+              startIcon={<BadgeIcon />}
+              onClick={() => setProfileModalOpen(true)}
+            >
+              My Candidate Profile
+            </Button>
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>New Slot</Button>
           </Stack>
         </Stack>
 
+        {profileState?.confirmationRequired && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 2 }}
+            action={
+              <Button color="inherit" size="small" onClick={() => setProfileModalOpen(true)}>
+                Confirm profile
+              </Button>
+            }
+          >
+            {profileState.missingFields?.length > 0
+              ? `Candidates see your profile when they pick one of your timeslots. Add your ${profileState.missingFields.join(', ')} before opening timeslots.`
+              : `Confirm your Get to Know UC profile for ${
+                  profileState.activeCycle?.name || 'this cycle'
+                } before opening your own timeslots.`}
+          </Alert>
+        )}
+
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
         {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
+
+        <GtkucProfileModal
+          open={profileModalOpen}
+          state={profileState}
+          required={Boolean(profileState?.confirmationRequired)}
+          onClose={() => {
+            setProfileModalOpen(false);
+            setCreateAfterProfile(false);
+          }}
+          onSaved={(updated) => {
+            setProfileState(updated);
+            setProfileModalOpen(false);
+            load();
+            if (createAfterProfile && !updated?.confirmationRequired) {
+              setCreateAfterProfile(false);
+              setEditingId(null);
+              setForm({ ...emptyForm, memberId: user?.id || '' });
+              setFormError('');
+              setFormOpen(true);
+            }
+          }}
+        />
 
         {/* Summary cards */}
         <Grid container spacing={2} mb={3}>
@@ -406,6 +517,7 @@ export default function AdminMeetingSlots() {
           <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
             <Tab label={`Time Slots (${stats.totalSlots})`} />
             <Tab label={`Attendance (${stats.totalSignups})`} />
+            <Tab label={`Member Profiles (${gtkucProfiles.length})`} />
           </Tabs>
 
           {loading ? (
@@ -426,7 +538,7 @@ export default function AdminMeetingSlots() {
               onEdit={openEdit}
               onDelete={deleteSlot}
             />
-          ) : (
+          ) : tab === 1 ? (
             <AttendanceTab
               rows={attendanceRows}
               search={attSearch}
@@ -436,6 +548,8 @@ export default function AdminMeetingSlots() {
               onToggle={setAttendance}
               onView={setDetailSlot}
             />
+          ) : (
+            <MemberProfilesTab profiles={gtkucProfiles} onToggleHidden={setGtkucHidden} />
           )}
         </Paper>
       </Box>
@@ -470,6 +584,11 @@ export default function AdminMeetingSlots() {
                   ))}
                 </Select>
               </FormControl>
+              {selectedHostProfile && !selectedHostProfile.complete && (
+                <Alert severity="info">
+                  {`${selectedHostProfile.fullName || 'This host'} hasn't finished their Get to Know UC profile (missing ${selectedHostProfile.missingFields.join(', ')}), so candidates won't see a profile on this slot.`}
+                </Alert>
+              )}
               <TextField
                 label="Location"
                 fullWidth
@@ -620,6 +739,91 @@ function TimeSlotsTab({
         </TableContainer>
       )}
     </Box>
+  );
+}
+
+// ---- Member profiles tab -------------------------------------------------
+
+// Candidate-facing GTKUC profiles: completeness at a glance plus the per-member
+// hide switch. Hidden members' slots are not offered to candidates at all.
+function MemberProfilesTab({ profiles, onToggleHidden }) {
+  if (profiles.length === 0) {
+    return <Box sx={{ p: 6, textAlign: 'center', color: 'text.secondary' }}>No member profiles yet.</Box>;
+  }
+
+  return (
+    <TableContainer sx={{ overflowX: 'auto' }}>
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableCell>Member</TableCell>
+            <TableCell>Industries</TableCell>
+            <TableCell>Interests</TableCell>
+            <TableCell>LinkedIn</TableCell>
+            <TableCell align="center">Profile</TableCell>
+            <TableCell align="center">Hidden from GTKUC</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {profiles.map((profile) => (
+            <TableRow key={profile.id} hover>
+              <TableCell>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <MemberAvatar member={profile} size={28} />
+                  <Box>
+                    <Typography variant="body2">{profile.fullName}</Typography>
+                    <Typography variant="caption" color="text.secondary">{profile.email}</Typography>
+                  </Box>
+                </Stack>
+              </TableCell>
+              <TableCell>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                  {profile.industries.map((industry) => (
+                    <Chip key={industry} size="small" label={industry} variant="outlined" />
+                  ))}
+                </Stack>
+              </TableCell>
+              <TableCell>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                  {profile.interests.map((interest) => (
+                    <Chip key={interest} size="small" label={interest} variant="outlined" />
+                  ))}
+                </Stack>
+              </TableCell>
+              <TableCell>
+                {profile.linkedinUrl ? (
+                  <Link href={profile.linkedinUrl} target="_blank" rel="noopener noreferrer" underline="hover">
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <LinkedInIcon fontSize="small" />
+                      <Typography variant="body2">Profile</Typography>
+                    </Stack>
+                  </Link>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    Not linked
+                  </Typography>
+                )}
+              </TableCell>
+              <TableCell align="center">
+                {profile.complete ? (
+                  <Chip size="small" color="success" label="Complete" />
+                ) : (
+                  <Tooltip title={`Missing: ${profile.missingFields.join(', ')}`}>
+                    <Chip size="small" color="warning" label="Incomplete" />
+                  </Tooltip>
+                )}
+              </TableCell>
+              <TableCell align="center">
+                <Switch
+                  checked={profile.hiddenFromGtkuc}
+                  onChange={(e) => onToggleHidden(profile.id, e.target.checked)}
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
 
