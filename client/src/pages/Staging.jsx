@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -75,6 +75,8 @@ import {
 } from '@mui/icons-material';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
+import usePolling, { POLL_STATUS, POLL_NO_CHANGE } from '../hooks/usePolling';
+import stagingCache from '../utils/stagingCache';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
@@ -82,43 +84,28 @@ import { useAuth } from '../context/AuthContext';
 import { useCelebration } from '../context/CelebrationContext';
 import ApplicationDetail from './ApplicationDetail';
 
-// Simple cache for staging data
-const stagingCache = {
-  data: null,
-  timestamp: null,
-  TTL: 2 * 60 * 1000, // 2 minutes
-
-  isValid() {
-    return this.data && this.timestamp && (Date.now() - this.timestamp < this.TTL);
-  },
-
-  set(data) {
-    this.data = data;
-    this.timestamp = Date.now();
-  },
-
-  get() {
-    return this.isValid() ? this.data : null;
-  },
-
-  invalidate() {
-    this.data = null;
-    this.timestamp = null;
-  }
-};
+// Staging is a QA/admin console: refresh often enough for multiple operators to
+// converge, but keep the interval bounded and back off hard when the API is down.
+//
+// Each tick reads a change token, not the snapshot. The token costs one row (~0.4s)
+// against the snapshot's six serialized loaders (~13s, ~840KB), which is what makes an
+// interval this short affordable: a quiet console does no snapshot reads at all, and a
+// change is picked up within one interval instead of one minute.
+const STAGING_POLL_INTERVAL_MS = 5 * 1000;
+const STAGING_MAX_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 // API functions for staging
 const stagingAPI = {
-  async fetchCandidates() {
-    return await apiClient.get('/admin/staging/candidates');
+  // One transactional read of every resource this page renders, carrying the database
+  // version that orders it against other snapshots.
+  async fetchSnapshot(options) {
+    return await apiClient.get('/admin/staging/snapshot', options);
   },
 
-  async fetchActiveCycle() {
-    return await apiClient.get('/admin/cycles/active');
-  },
-
-  async fetchAdminApplications() {
-    return await apiClient.get('/admin/applications');
+  // One row, bumped by database triggers on every write the snapshot can see. Compare
+  // for equality only: it reports that something changed, not what or in what order.
+  async fetchVersion(options) {
+    return await apiClient.get('/admin/staging/version', options);
   },
 
   async updateApproval(applicationId, approved) {
@@ -135,14 +122,6 @@ const stagingAPI = {
 
   async fetchCandidateScores(candidateId) {
     return await apiClient.get(`/applications/${candidateId}/grades/average`);
-  },
-
-  async fetchEventAttendance() {
-    return await apiClient.get('/admin/events');
-  },
-
-  async fetchReviewTeams() {
-    return await apiClient.get('/admin/review-teams');
   },
 
   async updateCandidateStatus(candidateId, status, notes = '') {
@@ -189,10 +168,6 @@ const stagingAPI = {
     return await apiClient.post('/admin/process-final-decisions', {});
   },
 
-  async loadExistingDecisions() {
-    return await apiClient.get('/admin/existing-decisions');
-  },
-
   async saveDecision(candidateId, decision, phase = 'resume') {
     return await apiClient.post('/admin/save-decision', { 
       candidateId, 
@@ -204,6 +179,38 @@ const stagingAPI = {
   async fetchEvaluationSummaries(applicationIds) {
     return await apiClient.post('/admin/applications/evaluation-summaries', { applicationIds });
   }
+};
+
+const buildGradingMap = (adminApplications) => {
+  const gradingMap = {};
+
+  (adminApplications || []).forEach(app => {
+    const hasResume = Boolean(app.resumeUrl);
+    const hasCoverLetter = Boolean(app.coverLetterUrl);
+    const hasVideo = Boolean(app.videoUrl);
+
+    const hasResumeScore = Boolean(app.hasResumeScore);
+    const hasCoverLetterScore = Boolean(app.hasCoverLetterScore);
+    const hasVideoScore = Boolean(app.hasVideoScore);
+
+    let gradingComplete = true;
+
+    if (hasResume && !hasResumeScore) gradingComplete = false;
+    if (hasCoverLetter && !hasCoverLetterScore) gradingComplete = false;
+    if (hasVideo && !hasVideoScore) gradingComplete = false;
+
+    gradingMap[app.candidateId] = {
+      complete: gradingComplete,
+      hasResume,
+      hasCoverLetter,
+      hasVideo,
+      hasResumeScore,
+      hasCoverLetterScore,
+      hasVideoScore
+    };
+  });
+
+  return gradingMap;
 };
 
 // Decision options
@@ -483,6 +490,7 @@ export default function Staging() {
   });
 
   const [loading, setLoading] = useState(true);
+  const initialCacheRef = useRef(null);
   const [currentCycle, setCurrentCycle] = useState(null);
   const [gradingCompleteByCandidate, setGradingCompleteByCandidate] = useState({});
   const [perRoundDecisions, setPerRoundDecisions] = useState({
@@ -775,15 +783,16 @@ export default function Staging() {
     feedback: ''
   });
 
-  // Memoized function to process and set staging data
-  const processStagingData = useCallback((data) => {
-    const { candidatesData, activeCycle, adminApplicationsData, eventsData, reviewTeamsData, existingDecisionsData } = data;
+  const applyStagingData = useCallback((data) => {
+    const candidatesData = data.candidatesData || [];
 
     setCandidates(candidatesData);
-    setCurrentCycle(activeCycle);
-    setAdminApplications(adminApplicationsData || []);
-    setEvents(eventsData || []);
-    setReviewTeams(reviewTeamsData || []);
+    setCurrentCycle(data.activeCycle);
+    setAdminApplications(data.adminApplicationsData || []);
+    setEvents(data.eventsData || []);
+    setReviewTeams(data.reviewTeamsData || []);
+    setPerRoundDecisions(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} });
+    setGradingCompleteByCandidate(data.gradingMap || {});
 
     calculateDemographics(candidatesData, false);
 
@@ -795,152 +804,97 @@ export default function Staging() {
       hasPrevPage: prev.page > 1
     }));
 
-    if (existingDecisionsData && existingDecisionsData.perRoundDecisions) {
-      setPerRoundDecisions(existingDecisionsData.perRoundDecisions);
+    setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- calculateDemographics is a
+    // hoisted declaration in this component and only writes state.
+  }, []);
+
+  // Change token behind the snapshot currently on screen. Null until the first
+  // snapshot of this mount lands, which is what makes that first poll always fetch.
+  const lastChangeTokenRef = useRef(null);
+
+  const fetchStagingData = useCallback(async (signal) => {
+    const { changeToken } = await stagingAPI.fetchVersion({ signal });
+
+    // Nothing has changed since the snapshot on screen, so skip the expensive read.
+    // A null token means the server could not report one; treat that as "unknown" and
+    // fetch rather than risk sitting on stale data forever.
+    if (changeToken != null && changeToken === lastChangeTokenRef.current) {
+      return POLL_NO_CHANGE;
     }
 
-    const gradingMap = {};
-    (adminApplicationsData || []).forEach(app => {
-      const hasResume = Boolean(app.resumeUrl);
-      const hasCoverLetter = Boolean(app.coverLetterUrl);
-      const hasVideo = Boolean(app.videoUrl);
+    const snapshot = await stagingAPI.fetchSnapshot({ signal });
 
-      const hasResumeScore = Boolean(app.hasResumeScore);
-      const hasCoverLetterScore = Boolean(app.hasCoverLetterScore);
-      const hasVideoScore = Boolean(app.hasVideoScore);
+    // Recorded only once the snapshot has actually arrived: recording it before would
+    // let one failed snapshot fetch suppress every later one. Recording the token read
+    // *before* the snapshot also means a write landing between the two reads is seen
+    // again on the next poll -- one redundant fetch, never a missed change.
+    lastChangeTokenRef.current = changeToken;
 
-      let gradingComplete = true;
+    const candidatesData = snapshot.candidates || [];
+    const adminApplicationsData = snapshot.applications || [];
 
-      if (hasResume && !hasResumeScore) gradingComplete = false;
-      if (hasCoverLetter && !hasCoverLetterScore) gradingComplete = false;
-      if (hasVideo && !hasVideoScore) gradingComplete = false;
-
-      gradingMap[app.candidateId] = {
-        complete: gradingComplete,
-        hasResume,
-        hasCoverLetter,
-        hasVideo,
-        hasResumeScore,
-        hasCoverLetterScore,
-        hasVideoScore
-      };
-    });
-    setGradingCompleteByCandidate(gradingMap);
+    return {
+      candidatesData,
+      // Database version of the transaction all six resources were read in.
+      snapshotVersion: snapshot.snapshotVersion ?? null,
+      activeCycle: snapshot.activeCycle,
+      adminApplicationsData,
+      eventsData: snapshot.events || [],
+      reviewTeamsData: snapshot.reviewTeams || [],
+      perRoundDecisions: snapshot.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
+      gradingMap: buildGradingMap(adminApplicationsData)
+    };
   }, []);
+
+  // Serve the cached snapshot for the first paint; poll from then on.
+  const [pollImmediately] = useState(() => {
+    const cached = stagingCache.get();
+    if (!cached) return true;
+    initialCacheRef.current = cached;
+    return false;
+  });
+
+  // The cached snapshot is already on screen, so the poller has to treat its version as
+  // applied: without this a remount would accept the first response it gets, however
+  // much older than the cache it is.
+  const [initialSnapshotVersion] = useState(() => initialCacheRef.current?.snapshotVersion ?? null);
 
   useEffect(() => {
-    const fetchData = async (skipCache = false) => {
-      try {
-        // Check cache first
-        if (!skipCache) {
-          const cached = stagingCache.get();
-          if (cached) {
-            setCandidates(cached.candidatesData);
-            setCurrentCycle(cached.activeCycle);
-            setAdminApplications(cached.adminApplicationsData || []);
-            setEvents(cached.eventsData || []);
-            setReviewTeams(cached.reviewTeamsData || []);
-            setPerRoundDecisions(cached.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} });
-            setGradingCompleteByCandidate(cached.gradingMap);
-            calculateDemographics(cached.candidatesData, false);
-            setPagination(prev => ({
-              ...prev,
-              total: cached.candidatesData.length,
-              totalPages: Math.ceil(cached.candidatesData.length / prev.limit),
-              hasNextPage: prev.page < Math.ceil(cached.candidatesData.length / prev.limit),
-              hasPrevPage: prev.page > 1
-            }));
-            setLoading(false);
-            return;
-          }
-        }
+    const cached = initialCacheRef.current;
+    if (!cached) return;
+    initialCacheRef.current = null;
+    applyStagingData(cached);
+  }, [applyStagingData]);
 
-        setLoading(true);
-        const [candidatesResponse, activeCycle, adminApplicationsResponse, eventsData, reviewTeamsData, existingDecisionsData] = await Promise.all([
-          stagingAPI.fetchCandidates(),
-          stagingAPI.fetchActiveCycle(),
-          stagingAPI.fetchAdminApplications(),
-          stagingAPI.fetchEventAttendance(),
-          stagingAPI.fetchReviewTeams(),
-          stagingAPI.loadExistingDecisions()
-        ]);
+  const {
+    status: syncStatus,
+    error: syncError,
+    lastSyncAt,
+    metrics: syncMetrics,
+    refresh: refreshStagingData
+  } = usePolling({
+    fetcher: fetchStagingData,
+    interval: STAGING_POLL_INTERVAL_MS,
+    maxInterval: STAGING_MAX_POLL_INTERVAL_MS,
+    immediate: pollImmediately,
+    initialVersion: initialSnapshotVersion,
+    // Never apply a snapshot the server read before the one already on screen.
+    getVersion: (data) => data.snapshotVersion,
+    // Editing dialogs hold pending user input, so do not overwrite state underneath them.
+    enabled: !appModalOpen && !decisionDialogOpen && !finalDecisionDialogOpen && !editScoreModalOpen,
+    onData: (data) => {
+      stagingCache.set(data);
+      applyStagingData(data);
+    },
+    onError: (error) => {
+      console.error('Staging sync failed:', error.message);
+    }
+  });
 
-        const candidatesData = candidatesResponse.candidates || candidatesResponse;
-        const adminApplicationsData = adminApplicationsResponse.applications || adminApplicationsResponse;
-
-        setCandidates(candidatesData);
-        setCurrentCycle(activeCycle);
-        setAdminApplications(adminApplicationsData || []);
-        setEvents(eventsData || []);
-        setReviewTeams(reviewTeamsData || []);
-
-        calculateDemographics(candidatesData, false);
-
-        setPagination(prev => ({
-          ...prev,
-          total: candidatesData.length,
-          totalPages: Math.ceil(candidatesData.length / prev.limit),
-          hasNextPage: prev.page < Math.ceil(candidatesData.length / prev.limit),
-          hasPrevPage: prev.page > 1
-        }));
-
-        const perRoundDecisionsData = existingDecisionsData?.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} };
-        if (existingDecisionsData && existingDecisionsData.perRoundDecisions) {
-          setPerRoundDecisions(existingDecisionsData.perRoundDecisions);
-        }
-
-        const gradingMap = {};
-        (adminApplicationsData || []).forEach(app => {
-          const hasResume = Boolean(app.resumeUrl);
-          const hasCoverLetter = Boolean(app.coverLetterUrl);
-          const hasVideo = Boolean(app.videoUrl);
-
-          const hasResumeScore = Boolean(app.hasResumeScore);
-          const hasCoverLetterScore = Boolean(app.hasCoverLetterScore);
-          const hasVideoScore = Boolean(app.hasVideoScore);
-
-          let gradingComplete = true;
-
-          if (hasResume && !hasResumeScore) gradingComplete = false;
-          if (hasCoverLetter && !hasCoverLetterScore) gradingComplete = false;
-          if (hasVideo && !hasVideoScore) gradingComplete = false;
-
-          gradingMap[app.candidateId] = {
-            complete: gradingComplete,
-            hasResume,
-            hasCoverLetter,
-            hasVideo,
-            hasResumeScore,
-            hasCoverLetterScore,
-            hasVideoScore
-          };
-        });
-        setGradingCompleteByCandidate(gradingMap);
-
-        // Save to cache
-        stagingCache.set({
-          candidatesData,
-          activeCycle,
-          adminApplicationsData,
-          eventsData,
-          reviewTeamsData,
-          perRoundDecisions: perRoundDecisionsData,
-          gradingMap
-        });
-      } catch (error) {
-        console.error('Error fetching data:', error);
-        setSnackbar({
-          open: true,
-          message: 'Error loading data',
-          severity: 'error'
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, []);
+  useEffect(() => {
+    if (syncStatus === POLL_STATUS.ERROR) setLoading(false);
+  }, [syncStatus]);
 
   useEffect(() => {
     if (currentTab === 1 && adminApplications.length > 0) {
@@ -1003,76 +957,11 @@ export default function Staging() {
     }
   }, [currentTab, adminApplications]);
 
+  // Kept as the page-wide "reload now" entry point: it bypasses the cache and the
+  // poll schedule, cancelling any request already in flight.
   const fetchCandidates = async () => {
-    // Invalidate cache when manually refreshing
     stagingCache.invalidate();
-
-    try {
-      const [candidatesResponse, adminApplicationsResponse, eventsData, reviewTeamsData, existingDecisionsData] = await Promise.all([
-        stagingAPI.fetchCandidates(),
-        stagingAPI.fetchAdminApplications(),
-        stagingAPI.fetchEventAttendance(),
-        stagingAPI.fetchReviewTeams(),
-        stagingAPI.loadExistingDecisions()
-      ]);
-      
-      const candidatesData = candidatesResponse.candidates || candidatesResponse;
-      const adminApplicationsData = adminApplicationsResponse.applications || adminApplicationsResponse;
-      
-      setCandidates(candidatesData);
-      setAdminApplications(adminApplicationsData || []);
-      setEvents(eventsData || []);
-      setReviewTeams(reviewTeamsData || []);
-      
-      calculateDemographics(candidatesData, false);
-      
-      setPagination(prev => ({
-        ...prev,
-        total: candidatesData.length,
-        totalPages: Math.ceil(candidatesData.length / prev.limit),
-        hasNextPage: prev.page < Math.ceil(candidatesData.length / prev.limit),
-        hasPrevPage: prev.page > 1
-      }));
-      
-      if (existingDecisionsData && existingDecisionsData.perRoundDecisions) {
-        setPerRoundDecisions(existingDecisionsData.perRoundDecisions);
-      }
-      
-      const gradingMap = {};
-      (adminApplicationsData || []).forEach(app => {
-        const hasResume = Boolean(app.resumeUrl);
-        const hasCoverLetter = Boolean(app.coverLetterUrl);
-        const hasVideo = Boolean(app.videoUrl);
-        
-        const hasResumeScore = Boolean(app.hasResumeScore);
-        const hasCoverLetterScore = Boolean(app.hasCoverLetterScore);
-        const hasVideoScore = Boolean(app.hasVideoScore);
-        
-        let gradingComplete = true;
-        
-        if (hasResume && !hasResumeScore) gradingComplete = false;
-        if (hasCoverLetter && !hasCoverLetterScore) gradingComplete = false;
-        if (hasVideo && !hasVideoScore) gradingComplete = false;
-        
-        gradingMap[app.candidateId] = {
-          complete: gradingComplete,
-          hasResume,
-          hasCoverLetter,
-          hasVideo,
-          hasResumeScore,
-          hasCoverLetterScore,
-          hasVideoScore
-        };
-      });
-      setGradingCompleteByCandidate(gradingMap);
-    } catch (error) {
-      console.error('Error fetching candidates:', error);
-      setSnackbar({
-        open: true,
-        message: 'Error loading candidates',
-        severity: 'error'
-      });
-    }
+    await refreshStagingData();
   };
 
   const calculateRankingScore = (evaluations) => {
@@ -1529,7 +1418,10 @@ export default function Staging() {
     }
   };
 
-  const calculateDemographics = (data, isApplicationData = false) => {
+  // Function declaration, not a const: applyStagingData above calls it during the
+  // first render's data apply, which a const in this position would not have
+  // initialised yet.
+  function calculateDemographics(data, isApplicationData = false) {
     const graduationYearBreakdown = {
       '2026': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
       '2027': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
@@ -1604,7 +1496,7 @@ export default function Staging() {
     });
     
     setDemographics({ graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown });
-  };
+  }
 
   const handleInlineDecisionChange = async (item, value, tabIndex = currentTab) => {
     const phase = tabToPhase(tabIndex);
@@ -1880,6 +1772,20 @@ export default function Staging() {
     pagination.page * pagination.limit
   );
 
+  const syncedAtLabel = lastSyncAt ? lastSyncAt.toLocaleTimeString() : 'never';
+  const syncStatusLabel = {
+    [POLL_STATUS.ERROR]: 'Sync failing — retrying',
+    [POLL_STATUS.PAUSED]: 'Sync paused',
+    [POLL_STATUS.LIVE]: `Synced ${syncedAtLabel}`
+  }[syncStatus] || 'Syncing…';
+  const syncStatusTooltip = [
+    `Checks for changes every ${Math.round(STAGING_POLL_INTERVAL_MS / 1000)}s while this tab is visible`,
+    `Last synced: ${syncedAtLabel}`,
+    `Checks: ${syncMetrics.requests} · unchanged: ${syncMetrics.unchanged} · failures: ${syncMetrics.failures} · stale responses dropped: ${syncMetrics.discarded}`,
+    syncMetrics.lastLatencyMs != null ? `Last latency: ${syncMetrics.lastLatencyMs}ms` : null,
+    syncError ? `Last error: ${syncError.message}` : null
+  ].filter(Boolean).join('\n');
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -1901,6 +1807,19 @@ export default function Staging() {
               </Typography>
             </Box>
             <Box display="flex" alignItems="center" gap={2}>
+              <Tooltip title={syncStatusTooltip}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={syncStatus === POLL_STATUS.ERROR ? 'error' : syncStatus === POLL_STATUS.PAUSED ? 'default' : 'success'}
+                  label={syncStatusLabel}
+                />
+              </Tooltip>
+              <Tooltip title="Refresh now">
+                <IconButton onClick={fetchCandidates} aria-label="Refresh staging data">
+                  <RefreshIcon />
+                </IconButton>
+              </Tooltip>
               <Button
                 variant="outlined"
                 startIcon={<DownloadIcon />}

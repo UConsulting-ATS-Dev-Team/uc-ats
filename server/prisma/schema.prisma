@@ -164,6 +164,18 @@ model RecruitingCycle {
   @@map("recruiting_cycles")
 }
 
+// Single-row table bumped by database triggers on every write to the tables the
+// Staging snapshot reads. Clients poll this instead of the snapshot itself and only
+// pay for the expensive read when `version` has actually moved. See the
+// `add_staging_change_token` migration for the trigger definitions.
+model StagingChangeToken {
+  id        String   @id
+  version   BigInt   @default(0)
+  changedAt DateTime @default(now())
+
+  @@map("staging_change_tokens")
+}
+
 // Candidate-facing background for a member hosting Get to Know UC slots.
 // Industries come from a fixed taxonomy so candidates never see employer names.
 // There is no free-text field on purpose: everything shown to a candidate is

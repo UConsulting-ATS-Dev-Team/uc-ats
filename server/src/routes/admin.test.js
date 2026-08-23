@@ -4,17 +4,32 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import adminRoutes from './admin.js';
 
-vi.mock('../prismaClient.js', () => ({
-  default: {
+vi.mock('../prismaClient.js', () => {
+  const client = {
     user: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
       updateMany: vi.fn(),
     },
     recruitingCycle: { findFirst: vi.fn(), findMany: vi.fn() },
-    $transaction: vi.fn((ops) => Promise.all(ops)),
-  }
-}));
+    application: { findMany: vi.fn(), count: vi.fn() },
+    resumeScore: { findMany: vi.fn() },
+    coverLetterScore: { findMany: vi.fn() },
+    videoScore: { findMany: vi.fn() },
+    eventAttendance: { findMany: vi.fn() },
+    meetingSignup: { findMany: vi.fn() },
+    groups: { findMany: vi.fn() },
+    events: { findMany: vi.fn() },
+    flaggedDocument: { findMany: vi.fn() },
+    $queryRaw: vi.fn(),
+  };
+  // Interactive transactions hand the callback a client bound to the transaction; the
+  // mock passes the same client so loaders and their version read share it.
+  client.$transaction = vi.fn((arg, options) =>
+    typeof arg === 'function' ? arg(client, options) : Promise.all(arg)
+  );
+  return { default: client };
+});
 
 const adminUser = {
   id: 'admin-1',
@@ -399,6 +414,171 @@ describe('GET /api/admin/users', () => {
           data: expect.objectContaining({ isActive: false })
         })
       );
+    });
+  });
+
+  describe('GET /api/admin/staging/candidates', () => {
+    const application = {
+      id: 'app-1',
+      candidateId: 'cand-1',
+      studentId: 'S1',
+      status: 'SUBMITTED',
+      submittedAt: new Date('2026-07-20T00:00:00Z'),
+      candidate: {
+        id: 'cand-1',
+        firstName: 'Alice',
+        lastName: 'Anderson',
+        email: 'alice@example.com',
+        studentId: 'S1',
+        assignedGroupId: null,
+        referrals: []
+      }
+    };
+
+    beforeEach(() => {
+      prisma.recruitingCycle.findFirst.mockResolvedValue({ id: 'cycle-1', startDate: null, endDate: null });
+      prisma.application.findMany.mockResolvedValue([application]);
+      prisma.resumeScore.findMany.mockResolvedValue([]);
+      prisma.coverLetterScore.findMany.mockResolvedValue([]);
+      prisma.videoScore.findMany.mockResolvedValue([]);
+      prisma.eventAttendance.findMany.mockResolvedValue([]);
+      prisma.meetingSignup.findMany.mockResolvedValue([]);
+      prisma.groups.findMany.mockResolvedValue([]);
+    });
+
+    async function getStaging(query = {}) {
+      const qs = new URLSearchParams(query).toString();
+      return fetch(`http://localhost:${port}/api/admin/staging/candidates${qs ? '?' + qs : ''}`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+    }
+
+    it('returns the candidates of the active cycle', async () => {
+      const res = await getStaging();
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.candidates).toHaveLength(1);
+      expect(body.candidates[0].candidateId).toBe('cand-1');
+    });
+
+    it('fails the request when the candidate query fails instead of returning an empty snapshot', async () => {
+      prisma.application.findMany.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await getStaging();
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.candidates).toBeUndefined();
+    });
+
+    it('fails the paginated request too instead of reporting zero candidates', async () => {
+      prisma.application.count.mockResolvedValue(1);
+      prisma.application.findMany.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await getStaging({ page: '1', limit: '25' });
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.candidates).toBeUndefined();
+      expect(body.total).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/admin/staging/snapshot', () => {
+    beforeEach(() => {
+      prisma.recruitingCycle.findFirst.mockResolvedValue({ id: 'cycle-1', startDate: null, endDate: null });
+      prisma.application.findMany.mockResolvedValue([]);
+      prisma.application.count.mockResolvedValue(0);
+      prisma.resumeScore.findMany.mockResolvedValue([]);
+      prisma.coverLetterScore.findMany.mockResolvedValue([]);
+      prisma.videoScore.findMany.mockResolvedValue([]);
+      prisma.eventAttendance.findMany.mockResolvedValue([]);
+      prisma.meetingSignup.findMany.mockResolvedValue([]);
+      prisma.groups.findMany.mockResolvedValue([]);
+      prisma.events.findMany.mockResolvedValue([]);
+      prisma.flaggedDocument.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockResolvedValue([{ version: 1000n }]);
+    });
+
+    async function getSnapshot() {
+      return fetch(`http://localhost:${port}/api/admin/staging/snapshot`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+    }
+
+    it('reads every staging resource in one repeatable-read transaction stamped by the database', async () => {
+      const res = await getSnapshot();
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toMatchObject({
+        snapshotVersion: 1000,
+        candidates: [],
+        activeCycle: { id: 'cycle-1' },
+        applications: [],
+        events: [],
+        reviewTeams: [],
+        perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} }
+      });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$transaction.mock.calls[0][1]).toMatchObject({ isolationLevel: 'RepeatableRead' });
+      // The version is the transaction's first statement, so it dates the reads that follow.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0])
+        .toBeLessThan(prisma.application.findMany.mock.invocationCallOrder[0]);
+    });
+
+    it('orders successive reads by the database version, not by the API process', async () => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ version: 1000n }])
+        .mockResolvedValueOnce([{ version: 1500n }]);
+
+      const first = await (await getSnapshot()).json();
+      const second = await (await getSnapshot()).json();
+
+      expect(first.snapshotVersion).toBe(1000);
+      expect(second.snapshotVersion).toBe(1500);
+      expect(second.snapshotVersion).toBeGreaterThan(first.snapshotVersion);
+    });
+
+    it('serves the change token without touching the snapshot loaders', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ version: '42' }]);
+
+      const res = await fetch(`http://localhost:${port}/api/admin/staging/version`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ changeToken: '42' });
+      // The whole point of the endpoint: none of the expensive reads run.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.application.findMany).not.toHaveBeenCalled();
+    });
+
+    it('reports the change token as unavailable rather than inventing a stable one', async () => {
+      // A missing row must not read as "nothing has changed" -- that would strand every
+      // client on whatever snapshot it happened to be holding.
+      prisma.$queryRaw.mockResolvedValue([]);
+
+      const res = await fetch(`http://localhost:${port}/api/admin/staging/version`, {
+        headers: { Authorization: `Bearer ${tokenFor(adminUser)}` }
+      });
+
+      expect(res.status).toBe(503);
+      expect((await res.json()).changeToken).toBeUndefined();
+    });
+
+    it('fails the whole snapshot when any of its resources cannot be read', async () => {
+      prisma.events.findMany.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await getSnapshot();
+
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body.snapshotVersion).toBeUndefined();
+      expect(body.candidates).toBeUndefined();
     });
   });
 });

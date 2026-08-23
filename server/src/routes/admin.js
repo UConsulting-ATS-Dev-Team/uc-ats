@@ -30,6 +30,16 @@ import {
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 import {
+  loadActiveCycle,
+  loadAdminApplications,
+  loadEvents,
+  loadExistingDecisions,
+  loadReviewTeams,
+  loadStagingCandidates,
+  loadStagingSnapshot
+} from '../services/stagingSnapshot.js';
+import { readStagingChangeToken } from '../utils/stagingChangeToken.js';
+import {
   previewCycleBootstrap,
   commitCycleBootstrap,
   timelineFromPriorCycle
@@ -1264,8 +1274,7 @@ router.get('/cycles', async (req, res) => {
 // Get active cycle
 router.get('/cycles/active', async (req, res) => {
   try {
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
-    res.json(active || null);
+    res.json(await loadActiveCycle(prisma));
   } catch (error) {
     console.error('[GET /api/admin/cycles/active]', error);
     // Return null instead of error to prevent dashboard from breaking
@@ -1544,23 +1553,7 @@ router.get('/profile', async (req, res) => {
 // Get all events
 router.get('/events', async (req, res) => {
   try {
-    // Get the active cycle to filter events
-    const activeCycle = await prisma.recruitingCycle.findFirst({
-      where: { isActive: true },
-      select: { id: true }
-    });
-
-    // Only return events from the active cycle (or empty if no active cycle)
-    const events = await prisma.events.findMany({
-      where: activeCycle ? { cycleId: activeCycle.id } : { cycleId: 'none' },
-      orderBy: { eventStartDate: 'desc' },
-      include: {
-        cycle: {
-          select: { name: true, isActive: true }
-        }
-      }
-    });
-    res.json(events);
+    res.json(await loadEvents(prisma));
   } catch (error) {
     console.error('[GET /api/admin/events]', error);
     // Return empty array instead of error to prevent dashboard from breaking
@@ -2574,311 +2567,14 @@ router.post('/interviews/:id/start', async (req, res) => {
 
 // Get all applications for admin document grading with optional pagination
 router.get('/applications', async (req, res) => {
+  const page = parseInt(req.query.page);
+  const limit = parseInt(req.query.limit);
+  const usePagination = Boolean(page && limit);
+
   try {
-    // Get pagination parameters - if not provided, return all applications
-    const page = parseInt(req.query.page);
-    const limit = parseInt(req.query.limit);
-    const usePagination = page && limit;
-    const skip = usePagination ? (page - 1) * limit : 0;
-
-    // Get the active cycle first
-    let activeCycle = null;
-    try {
-      activeCycle = await prisma.recruitingCycle.findFirst({ 
-        where: { isActive: true } 
-      });
-    } catch (error) {
-      console.error('Error fetching active cycle:', error);
-    }
-    
-    if (!activeCycle) {
-      return usePagination ? res.json({ applications: [], total: 0, page, totalPages: 0 }) : res.json([]);
-    }
-
-    // Get total count for pagination (only if using pagination)
-    let totalCount = 0;
-    if (usePagination) {
-      try {
-        totalCount = await prisma.application.count({
-          where: {
-            cycleId: activeCycle.id
-          }
-        });
-      } catch (error) {
-        console.error('Error fetching application count:', error);
-      }
-    }
-
-    // Get applications for the active cycle
-    let applications = [];
-    try {
-      const queryOptions = {
-        where: {
-          cycleId: activeCycle.id
-        },
-        include: {
-          candidate: {
-            select: {
-              id: true,
-              assignedGroupId: true
-            }
-          }
-        },
-        orderBy: {
-          submittedAt: 'desc'
-        }
-      };
-
-      // Add pagination options only if using pagination
-      if (usePagination) {
-        queryOptions.skip = skip;
-        queryOptions.take = limit;
-      }
-
-      applications = await prisma.application.findMany(queryOptions);
-    } catch (error) {
-      console.error('Error fetching applications:', error);
-      return usePagination ? res.json({ applications: [], total: 0, page, totalPages: 0 }) : res.json([]);
-    }
-
-    // Get all groups and their members for the active cycle with error handling
-    let groups = [];
-    try {
-      groups = await prisma.groups.findMany({
-        where: {
-          cycleId: activeCycle.id
-        },
-        select: {
-          id: true,
-          name: true,
-          memberOne: true,
-          memberTwo: true,
-          memberThree: true,
-          memberOneUser: {
-            select: {
-              id: true,
-              fullName: true,
-              email: true, profileImage: true }
-          },
-          memberTwoUser: {
-            select: {
-              id: true,
-              fullName: true,
-              email: true, profileImage: true }
-          },
-          memberThreeUser: {
-            select: {
-              id: true,
-              fullName: true,
-              email: true, profileImage: true }
-          },
-          groupMembers: {
-            select: {
-              userId: true,
-              user: { select: { id: true, fullName: true, email: true, profileImage: true } }
-            }
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching groups:', error);
-    }
-
-    // Get all grading records for these candidates with error handling
-    let resumeScores = [];
-    try {
-      resumeScores = await prisma.resumeScore.findMany({
-        where: {
-          candidateId: {
-            in: applications.map(app => app.candidateId)
-          },
-          cycleId: activeCycle.id
-        },
-        select: {
-          candidateId: true,
-          evaluatorId: true,
-          assignedGroupId: true
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching resume scores:', error);
-    }
-
-    // Get flagged documents for these applications
-    let flaggedDocuments = [];
-    try {
-      flaggedDocuments = await prisma.flaggedDocument.findMany({
-        where: {
-          applicationId: {
-            in: applications.map(app => app.id)
-          },
-          isResolved: false
-        },
-        select: {
-          applicationId: true,
-          documentType: true,
-          reason: true,
-          message: true,
-          flaggedBy: true,
-          createdAt: true
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching flagged documents:', error);
-    }
-
-    let coverLetterScores = [];
-    try {
-      coverLetterScores = await prisma.coverLetterScore.findMany({
-        where: {
-          candidateId: {
-            in: applications.map(app => app.candidateId)
-          },
-          cycle: {
-            id: activeCycle.id
-          }
-        },
-        select: {
-          candidateId: true,
-          evaluatorId: true,
-          assignedGroupId: true
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching cover letter scores:', error);
-    }
-
-    let videoScores = [];
-    try {
-      videoScores = await prisma.videoScore.findMany({
-        where: {
-          candidateId: {
-            in: applications.map(app => app.candidateId)
-          },
-          cycle: {
-            id: activeCycle.id
-          }
-        },
-        select: {
-          candidateId: true,
-          evaluatorId: true,
-          assignedGroupId: true
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching video scores:', error);
-    }
-
-    // Helper function to check team completion and get missing grades count
-    const checkTeamCompletion = (candidateId, groupId, scores, scoreType) => {
-      if (!groupId) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-      
-      const group = groups.find(g => g.id === groupId);
-      if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-      
-      // Get all assigned team members with user info (filter out null/undefined)
-      const teamMembers = getGroupMemberUsers(group);
-      
-      if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-      
-      // Get scores for this candidate and group
-      const candidateScores = scores.filter(score => 
-        score.candidateId === candidateId && score.assignedGroupId === groupId
-      );
-      
-      // Check if all team members have completed their scores
-      const completedEvaluators = candidateScores.map(score => score.evaluatorId);
-      const allMembersCompleted = teamMembers.every(member => 
-        completedEvaluators.includes(member.id)
-      );
-      
-      const missingGrades = teamMembers.length - completedEvaluators.length;
-      
-      return {
-        completed: allMembersCompleted,
-        missingGrades,
-        totalMembers: teamMembers.length,
-        teamMembers: teamMembers,
-        completedEvaluators: completedEvaluators
-      };
-    };
-
-    // Helper function to get flag info for a document type
-    const getFlagInfo = (applicationId, documentType) => {
-      return flaggedDocuments.find(flag => 
-        flag.applicationId === applicationId && flag.documentType === documentType
-      );
-    };
-
-    // Transform the data
-    const transformedApplications = [];
-    
-    applications.forEach(app => {
-      const resumeStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, resumeScores, 'resume');
-      const coverLetterStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, coverLetterScores, 'coverLetter');
-      const videoStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, videoScores, 'video');
-      
-      const assignedGroup = app.candidate.assignedGroupId
-        ? groups.find(g => g.id === app.candidate.assignedGroupId)
-        : null;
-      
-      transformedApplications.push({
-        id: app.id,
-        candidateId: app.candidateId,
-        name: `${app.firstName} ${app.lastName}`,
-        major: app.major1 || 'N/A',
-        year: app.graduationYear || 'N/A',
-        gpa: app.cumulativeGpa?.toString() || 'N/A',
-        status: app.status || 'SUBMITTED',
-        approved: app.approved, // Add approved field for decision status
-        currentRound: app.currentRound, // Add currentRound field for round filtering
-        email: app.email,
-        submittedAt: app.submittedAt,
-        gender: app.gender || 'N/A',
-        isFirstGeneration: app.isFirstGeneration,
-        isTransferStudent: app.isTransferStudent,
-        resumeUrl: app.resumeUrl,
-        coverLetterUrl: app.coverLetterUrl,
-        videoUrl: app.videoUrl,
-        headshotUrl: app.headshotUrl,
-        groupId: assignedGroup?.id || null,
-        groupName: assignedGroup?.name || (assignedGroup ? `Team ${assignedGroup.id.slice(-4)}` : 'Unknown Team'),
-        hasResumeScore: resumeStatus.completed,
-        hasCoverLetterScore: coverLetterStatus.completed,
-        hasVideoScore: videoStatus.completed,
-        resumeMissingGrades: resumeStatus.missingGrades,
-        coverLetterMissingGrades: coverLetterStatus.missingGrades,
-        videoMissingGrades: videoStatus.missingGrades,
-        resumeTotalMembers: resumeStatus.totalMembers,
-        coverLetterTotalMembers: coverLetterStatus.totalMembers,
-        videoTotalMembers: videoStatus.totalMembers,
-        groupMembers: resumeStatus.teamMembers, // Team members info
-        resumeCompletedEvaluators: resumeStatus.completedEvaluators,
-        coverLetterCompletedEvaluators: coverLetterStatus.completedEvaluators,
-        videoCompletedEvaluators: videoStatus.completedEvaluators,
-        // Flag information
-        resumeFlagged: getFlagInfo(app.id, 'resume'),
-        coverLetterFlagged: getFlagInfo(app.id, 'coverLetter'),
-        videoFlagged: getFlagInfo(app.id, 'video')
-      });
-    });
-
-    // Return response based on whether pagination was used
-    if (usePagination) {
-      const totalPages = Math.ceil(totalCount / limit);
-      
-      res.json({
-        applications: transformedApplications,
-        total: totalCount,
-        page: page,
-        totalPages: totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-      });
-    } else {
-      // Return just the applications array for backward compatibility
-      res.json(transformedApplications);
-    }
+    const result = await loadAdminApplications(prisma, { page, limit });
+    // Unpaginated callers still expect just the array
+    res.json(usePagination ? result : result.applications);
   } catch (error) {
     console.error('Error fetching admin applications:', error);
     // Return appropriate response based on pagination usage
@@ -3004,351 +2700,50 @@ router.get('/staging/candidates', async (req, res) => {
     // Get pagination parameters - if not provided, return all candidates
     const page = parseInt(req.query.page);
     const limit = parseInt(req.query.limit);
-    const usePagination = page && limit;
-    const skip = usePagination ? (page - 1) * limit : 0;
+    const usePagination = Boolean(page && limit);
 
-    const active = await prisma.recruitingCycle.findFirst({
-      where: { isActive: true },
-      select: { id: true, startDate: true, endDate: true }
-    });
-    console.log('Active cycle:', active ? active.id : 'No active cycle found');
-    if (!active) {
-      return usePagination ? res.json({ candidates: [], total: 0, page, totalPages: 0, hasNextPage: false, hasPrevPage: false }) : res.json([]);
-    }
+    const snapshot = await loadStagingCandidates(prisma, { page, limit });
 
-    // Get total count for pagination (only if using pagination)
-    let totalCount = 0;
     if (usePagination) {
-      totalCount = await prisma.application.count({
-        where: { cycleId: active.id }
-      });
-    }
-
-    // Optimized query - only get essential data first
-    const queryOptions = {
-      where: { cycleId: active.id },
-      include: {
-        candidate: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            studentId: true,
-            assignedGroupId: true,
-            // Only get referrals for the current cycle
-            referrals: {
-              where: { cycleId: active.id },
-              select: {
-                id: true,
-                referrerName: true
-              },
-              take: 1 // Only need one referral
-            }
-          }
-        }
-      },
-      orderBy: { submittedAt: 'desc' }
-    };
-
-    // Add pagination options only if using pagination
-    if (usePagination) {
-      queryOptions.skip = skip;
-      queryOptions.take = limit;
-    }
-
-    const applications = await prisma.application.findMany(queryOptions).catch((error) => {
-      console.error('Error fetching staging candidates:', error);
-      return []; // Return empty array if query fails
-    });
-
-    console.log(`Found ${applications.length} applications for staging candidates`);
-
-
-    // Get all candidate IDs and student IDs for batch queries
-    const candidateIds = applications.map(app => app.candidateId).filter(Boolean);
-    const studentIds = applications.map(app => app.studentId).filter(Boolean);
-    const reviewTeamIds = applications.map(app => app.candidate?.assignedGroupId).filter(Boolean);
-    
-    console.log(`Found ${candidateIds.length} candidate IDs, ${studentIds.length} student IDs, ${reviewTeamIds.length} review team IDs`);
-    console.log('Prisma object:', typeof prisma, prisma ? 'defined' : 'undefined');
-
-    // Batch fetch all related data in parallel
-    console.log('Starting batch queries...');
-    
-    const allResumeScores = await prisma.resumeScore.findMany({
-      where: { candidateId: { in: candidateIds }, cycleId: active.id },
-      select: { candidateId: true, overallScore: true, adminScore: true }
-    });
-    console.log('Resume scores fetched:', allResumeScores.length);
-    
-    const allCoverLetterScores = await prisma.coverLetterScore.findMany({
-      where: { candidateId: { in: candidateIds }, cycleId: active.id },
-      select: { candidateId: true, overallScore: true, adminScore: true }
-    });
-    console.log('Cover letter scores fetched:', allCoverLetterScores.length);
-    
-    const allVideoScores = await prisma.videoScore.findMany({
-      where: { candidateId: { in: candidateIds }, cycleId: active.id },
-      select: { candidateId: true, overallScore: true, adminScore: true }
-    });
-    console.log('Video scores fetched:', allVideoScores.length);
-    
-    const allEventAttendance = await prisma.eventAttendance.findMany({
-      where: {
-        candidateId: { in: candidateIds },
-        event: {
-          cycleId: active.id  // Only include attendance for events in the current cycle
-        }
-      },
-      select: { candidateId: true, eventId: true, event: { select: { id: true, eventName: true, cycleId: true } } }
-    });
-    console.log('Event attendance fetched:', allEventAttendance.length);
-    // Debug: log unique events being counted
-    const uniqueEvents = [...new Set(allEventAttendance.map(att => `${att.event.eventName} (cycleId: ${att.event.cycleId}, eventId: ${att.eventId})`))];
-    console.log('Unique events in attendance:', uniqueEvents);
-    
-    // Only count meetings within the current cycle's date range
-    // If the cycle has no start date, we cannot determine which meetings belong to this cycle,
-    // so we don't count any GTKUC attendance to avoid crediting old meetings
-    const cycleStartDate = active.startDate ? new Date(active.startDate) : null;
-    const cycleEndDate = active.endDate ? new Date(active.endDate) : null;
-
-    let allMeetingAttendance = [];
-    if (cycleStartDate) {
-      // Only query for meetings if we have at least a start date to filter by
-      allMeetingAttendance = await prisma.meetingSignup.findMany({
-        where: {
-          studentId: { in: studentIds },
-          attended: true,
-          slot: {
-            startTime: {
-              gte: cycleStartDate,
-              ...(cycleEndDate && { lte: cycleEndDate })
-            }
-          }
-        },
-        select: { studentId: true }
-      });
-    }
-    console.log('Meeting attendance fetched:', allMeetingAttendance.length);
-    
-    const allReviewTeams = await prisma.groups.findMany({
-      where: { id: { in: reviewTeamIds } },
-      select: {
-        id: true,
-        memberOneUser: { select: { fullName: true, profileImage: true } },
-        memberTwoUser: { select: { fullName: true, profileImage: true } },
-        memberThreeUser: { select: { fullName: true, profileImage: true } },
-        groupMembers: {
-          select: {
-            user: { select: { fullName: true, profileImage: true } }
-          }
-        }
-      }
-    });
-    console.log('Review teams fetched:', allReviewTeams.length);
-
-    // Create lookup maps for efficient data access
-    const resumeScoresMap = new Map();
-    const coverLetterScoresMap = new Map();
-    const videoScoresMap = new Map();
-    const eventAttendanceMap = new Map();
-    const meetingAttendanceSet = new Set(allMeetingAttendance.map(ma => ma.studentId));
-    const reviewTeamsMap = new Map();
-
-    // Populate lookup maps - use adminScore if available, otherwise use overallScore
-    allResumeScores.forEach(score => {
-      if (!resumeScoresMap.has(score.candidateId)) resumeScoresMap.set(score.candidateId, []);
-      // Use adminScore override if it exists, otherwise use overallScore
-      const scoreToUse = score.adminScore !== null && score.adminScore !== undefined 
-        ? parseFloat(score.adminScore) 
-        : parseFloat(score.overallScore);
-      resumeScoresMap.get(score.candidateId).push(scoreToUse);
-    });
-
-    allCoverLetterScores.forEach(score => {
-      if (!coverLetterScoresMap.has(score.candidateId)) coverLetterScoresMap.set(score.candidateId, []);
-      // Use adminScore override if it exists, otherwise use overallScore
-      const scoreToUse = score.adminScore !== null && score.adminScore !== undefined 
-        ? parseFloat(score.adminScore) 
-        : parseFloat(score.overallScore);
-      coverLetterScoresMap.get(score.candidateId).push(scoreToUse);
-    });
-
-    allVideoScores.forEach(score => {
-      if (!videoScoresMap.has(score.candidateId)) videoScoresMap.set(score.candidateId, []);
-      // Use adminScore override if it exists, otherwise use overallScore
-      const scoreToUse = score.adminScore !== null && score.adminScore !== undefined 
-        ? parseFloat(score.adminScore) 
-        : parseFloat(score.overallScore);
-      videoScoresMap.get(score.candidateId).push(scoreToUse);
-    });
-
-    // Use a Set to track unique eventIds per candidate to prevent duplicate counting
-    const eventAttendanceByCandidate = new Map();
-    allEventAttendance.forEach(att => {
-      if (!eventAttendanceByCandidate.has(att.candidateId)) {
-        eventAttendanceByCandidate.set(att.candidateId, new Set());
-      }
-      // Only add if we haven't seen this eventId for this candidate
-      eventAttendanceByCandidate.get(att.candidateId).add(att.eventId);
-    });
-
-    // Now build the eventAttendanceMap with unique events only
-    allEventAttendance.forEach(att => {
-      if (!eventAttendanceMap.has(att.candidateId)) eventAttendanceMap.set(att.candidateId, []);
-      const events = eventAttendanceMap.get(att.candidateId);
-      // Only add event name if we haven't added this eventId yet
-      if (!events.some(e => e.eventId === att.eventId)) {
-        events.push({ eventId: att.eventId, eventName: att.event.eventName });
-      }
-    });
-
-    allReviewTeams.forEach(team => {
-      const members = getGroupMemberUsers(team);
-
-      reviewTeamsMap.set(team.id, {
-        id: team.id,
-        name: members.length > 0 
-          ? `Team ${team.id.slice(-4)} (${members.map(m => m.fullName.split(' ')[0]).join(', ')})`
-          : `Team ${team.id.slice(-4)}`,
-        members: members,
-        memberCount: members.length
-      });
-    });
-
-    // Process applications with pre-fetched data (no more async operations)
-    // Filter out applications without candidates
-    const validApplications = applications.filter(app => app.candidate);
-    console.log(`Processing ${validApplications.length} valid applications (${applications.length - validApplications.length} without candidates)`);
-    
-    const stagingCandidates = validApplications.map(app => {
-      // Get scores from maps
-      const resumeScores = resumeScoresMap.get(app.candidateId) || [];
-      const coverLetterScores = coverLetterScoresMap.get(app.candidateId) || [];
-      const videoScores = videoScoresMap.get(app.candidateId) || [];
-
-      // Calculate averages
-      const avgResume = resumeScores.length > 0 ? 
-        resumeScores.reduce((a, b) => a + b, 0) / resumeScores.length : 0;
-      const avgCoverLetter = coverLetterScores.length > 0 ? 
-        coverLetterScores.reduce((a, b) => a + b, 0) / coverLetterScores.length : 0;
-      const avgVideo = videoScores.length > 0 ? 
-        videoScores.reduce((a, b) => a + b, 0) / videoScores.length : 0;
-
-      // Calculate overall total by summing all document scores
-      let overallScore = 0;
-      if (avgResume > 0) overallScore += avgResume;
-      if (avgCoverLetter > 0) overallScore += avgCoverLetter;
-      if (avgVideo > 0) overallScore += avgVideo;
-
-      // Add participation points (events + GTKUC meeting, capped at 3 total)
-      const attendedEvents = eventAttendanceMap.get(app.candidateId) || [];
-      let participationCount = attendedEvents.length;
-
-      // GTKUC meeting counts as a participation point
-      if (meetingAttendanceSet.has(app.studentId)) {
-        participationCount += 1;
-      }
-
-      // Cap at 3 points max (even if they attended all 4: info, womens, case, GTKUC)
-      const totalParticipationPoints = Math.min(participationCount, 3);
-      overallScore += totalParticipationPoints;
-
-
-      // Build attendance object from pre-fetched data
-      const attendance = {};
-      attendedEvents.forEach(event => {
-        attendance[event.eventName] = true;
-      });
-
-      // Add GTKUC attendance if candidate attended a meeting this cycle
-      if (meetingAttendanceSet.has(app.studentId)) {
-        attendance['GTKUC'] = true;
-      }
-
-      // Use the actual currentRound from the database, fallback to status-based calculation
-      let currentRound = app.currentRound ? parseInt(app.currentRound) : 1; // Default to Resume Review
-      if (!app.currentRound) {
-        // Fallback logic for legacy applications without currentRound
-        if (app.status === 'UNDER_REVIEW') currentRound = 2; // First Interview
-        else if (app.status === 'ACCEPTED') currentRound = 4; // Final Decision
-        else if (app.status === 'REJECTED') currentRound = 4; // Final Decision
-      }
-
-      // Get review team information from pre-fetched data
-      const reviewTeam = app.candidate.assignedGroupId ? 
-        (reviewTeamsMap.get(app.candidate.assignedGroupId) || null) : null;
-
-      return {
-        id: app.id,
-        candidateId: app.candidateId,
-        firstName: app.firstName,
-        lastName: app.lastName,
-        email: app.email,
-        studentId: app.studentId,
-        major: app.major1,
-        graduationYear: app.graduationYear,
-        cumulativeGpa: parseFloat(app.cumulativeGpa),
-        majorGpa: parseFloat(app.majorGpa),
-        status: app.status,
-        currentRound,
-        submittedAt: app.submittedAt,
-        isTransferStudent: app.isTransferStudent,
-        isFirstGeneration: app.isFirstGeneration,
-        gender: app.gender,
-        phoneNumber: app.phoneNumber,
-        headshotUrl: app.headshotUrl,
-        attendance,
-        reviewTeam,
-        scores: {
-          resume: parseFloat(avgResume.toFixed(1)),
-          coverLetter: parseFloat(avgCoverLetter.toFixed(1)),
-          video: parseFloat(avgVideo.toFixed(1)),
-          overall: parseFloat(overallScore.toFixed(1))
-        },
-        decisions: {
-          resumeReview: app.status === 'SUBMITTED' ? null : 'ADVANCE',
-          firstInterview: app.status === 'UNDER_REVIEW' ? null : 
-                         app.status === 'ACCEPTED' || app.status === 'REJECTED' ? 'ADVANCE' : null,
-          secondInterview: app.status === 'ACCEPTED' || app.status === 'REJECTED' ? 'ADVANCE' : null,
-          final: app.status === 'ACCEPTED' ? 'ACCEPT' : 
-                 app.status === 'REJECTED' ? 'REJECT' : null
-        },
-        hasReferral: app.candidate.referrals && app.candidate.referrals.length > 0,
-        referral: app.candidate.referrals && app.candidate.referrals.length > 0 ? app.candidate.referrals[0] : null,
-        notes: ''
-      };
-    });
-
-    console.log(`Processed ${stagingCandidates.length} staging candidates`);
-    
-    if (usePagination) {
-      const totalPages = Math.ceil(totalCount / limit);
-      res.json({
-        candidates: stagingCandidates,
-        total: totalCount,
-        page: page,
-        totalPages: totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-      });
+      res.json(snapshot);
     } else {
-      res.json(stagingCandidates);
+      res.json({ candidates: snapshot.candidates });
     }
   } catch (error) {
     console.error('[GET /api/admin/staging/candidates]', error);
-    // Check if pagination was requested from query params
-    const page = parseInt(req.query.page);
-    const limit = parseInt(req.query.limit);
-    const usePagination = page && limit;
-    
-    if (usePagination) {
-      res.json({ candidates: [], total: 0, page: 1, totalPages: 0, hasNextPage: false, hasPrevPage: false });
-    } else {
-      res.json([]);
+    // A read failure must stay a failure: returning an empty 200 makes pollers cache
+    // and render "no candidates" as if the cycle were empty.
+    res.status(500).json({ error: 'Failed to load staging candidates' });
+  }
+});
+
+// One transactional read of everything the Staging console renders, so the client can
+// order whole snapshots instead of guessing from six independent responses.
+router.get('/staging/snapshot', async (req, res) => {
+  try {
+    res.json(await loadStagingSnapshot(prisma));
+  } catch (error) {
+    console.error('[GET /api/admin/staging/snapshot]', error);
+    res.status(500).json({ error: 'Failed to load staging snapshot' });
+  }
+});
+
+// Cheap companion to the snapshot: one row, so clients can poll often and pay for the
+// full snapshot only when this token has actually moved. Compare it for equality only —
+// it reports *that* something changed, never how much or in what order.
+router.get('/staging/version', async (req, res) => {
+  try {
+    const changeToken = await readStagingChangeToken(prisma);
+    if (changeToken === null) {
+      // The row is seeded by migration, so its absence means the token is not installed
+      // on this database. Say so rather than returning a token that can never change,
+      // which would strand every client on its first snapshot.
+      return res.status(503).json({ error: 'Staging change token unavailable' });
     }
+    res.json({ changeToken });
+  } catch (error) {
+    console.error('[GET /api/admin/staging/version]', error);
+    res.status(500).json({ error: 'Failed to load staging change token' });
   }
 });
 
@@ -3439,47 +2834,7 @@ router.get('/interview-rounds', async (req, res) => {
 // Get review teams for filtering
 router.get('/review-teams', async (req, res) => {
   try {
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
-    if (!active) {
-      return res.json([]);
-    }
-
-    const reviewTeams = await prisma.groups.findMany({
-      where: { cycleId: active.id },
-      select: {
-        id: true,
-        name: true,
-        memberOneUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
-        memberTwoUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
-        memberThreeUser: { select: { id: true, fullName: true, email: true, profileImage: true } },
-        groupMembers: {
-          select: {
-            userId: true,
-            user: { select: { id: true, fullName: true, email: true, profileImage: true } }
-          }
-        }
-      },
-      orderBy: { createdAt: 'asc' }
-    });
-
-    // Transform to include team name and member count
-    const transformedTeams = reviewTeams.map(team => {
-      const members = getGroupMemberUsers(team);
-
-      // Use the name from the database if it exists, otherwise generate a fallback name
-      const teamName = team.name || (members.length > 0 
-        ? `Team ${team.id.slice(-4)} (${members.map(m => m.fullName.split(' ')[0]).join(', ')})`
-        : `Team ${team.id.slice(-4)}`);
-
-      return {
-        id: team.id,
-        name: teamName,
-        members: members,
-        memberCount: members.length
-      };
-    });
-
-    res.json(transformedTeams);
+    res.json(await loadReviewTeams(prisma));
   } catch (error) {
     console.error('[GET /api/admin/review-teams]', error);
     res.status(500).json({ error: 'Failed to fetch review teams' });
@@ -3615,55 +2970,7 @@ router.post('/save-decision', async (req, res) => {
 // Get existing decisions for the active cycle
 router.get('/existing-decisions', async (req, res) => {
   try {
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
-    if (!active) {
-      return res.json({ decisions: {}, perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} } });
-    }
-
-    // Get all applications for the current cycle with per-round decision fields
-    const applications = await prisma.application.findMany({
-      where: {
-        cycleId: active.id
-      },
-      select: {
-        id: true,
-        candidateId: true,
-        approved: true,
-        currentRound: true,
-        resumeDecision: true,
-        coffeeChatDecision: true,
-        firstRoundDecision: true,
-        finalRoundDecision: true
-      }
-    });
-
-    // Build per-round decisions structure
-    const perRoundDecisions = {
-      resume: {},
-      coffee: {},
-      firstRound: {},
-      final: {}
-    };
-
-    // Legacy format for backward compatibility
-    const decisions = {};
-
-    applications.forEach(app => {
-      // Per-round decisions from new fields
-      if (app.resumeDecision) perRoundDecisions.resume[app.id] = app.resumeDecision;
-      if (app.coffeeChatDecision) perRoundDecisions.coffee[app.id] = app.coffeeChatDecision;
-      if (app.firstRoundDecision) perRoundDecisions.firstRound[app.id] = app.firstRoundDecision;
-      if (app.finalRoundDecision) perRoundDecisions.final[app.id] = app.finalRoundDecision;
-
-      // Legacy: use approved field for backward compatibility
-      if (app.approved === true) {
-        decisions[app.id] = 'yes';
-      } else if (app.approved === false) {
-        decisions[app.id] = 'no';
-      }
-    });
-
-    res.json({ decisions, perRoundDecisions });
+    res.json(await loadExistingDecisions(prisma));
   } catch (error) {
     console.error('[GET /api/admin/existing-decisions]', error);
     res.status(500).json({ error: 'Failed to fetch existing decisions', details: error.message });
