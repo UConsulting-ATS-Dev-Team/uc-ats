@@ -1,0 +1,116 @@
+# Render Blueprint — staging environments for pull requests.
+#
+# What this gives you: every PR opened against this repo gets its own complete,
+# throwaway copy of the ATS — one URL, its own database, seeded with fake data.
+# Non-technical reviewers just click the link Render posts on the PR.
+#
+# One-time setup is documented in docs/STAGING.md. The short version:
+#   1. Create an environment group named "uc-ats-staging-secrets" in the Render
+#      Dashboard and fill in the keys listed under `fromGroup` below.
+#   2. Point a new Blueprint at this file.
+#
+# Note: this blueprint deploys the client and API as a SINGLE service. Render
+# cannot template a static site's rewrite rules per preview, so a split
+# static-site/API layout would leave each preview's frontend pointing at the
+# wrong backend. Serving the built SPA from Express keeps `/api` relative and
+# gives reviewers one link instead of two.
+
+previews:
+  # Every PR gets an environment automatically. Use `manual` instead if you'd
+  # rather opt in per PR with "[render preview]" in the PR title.
+  generation: automatic
+  # Torn down after a week of inactivity; the clock resets on each new commit.
+  expireAfterDays: 7
+
+databases:
+  - name: uc-ats-db
+    plan: basic-256mb
+    databaseName: uc_ats
+    user: uc_ats
+    region: oregon
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: uc-ats-staging
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+
+    previews:
+      plan: starter
+
+    # Build the SPA first, then install the API and generate the Prisma client.
+    # Chained with && so a failure anywhere fails the whole build.
+    buildCommand: cd client && npm ci && npm run build && cd ../server && npm ci && npx prisma generate
+
+    # Runs after the build, before the new instance takes traffic. A failure here
+    # aborts the deploy and leaves the previous version serving.
+    preDeployCommand: cd server && npx prisma migrate deploy
+
+    startCommand: cd server && node src/index.js
+
+    # Runs ONCE, after the first successful deploy of each environment. Render
+    # creates preview databases empty, so this is what makes a fresh PR
+    # environment actually usable — it creates the admin login and sample data.
+    initialDeployHook: cd server && node scripts/seed-preview.js
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+
+      # Both point at the same instance: Render Postgres has no pooled/direct
+      # split the way Supabase does, and Prisma needs DIRECT_URL for migrations.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: uc-ats-db
+          property: connectionString
+      - key: DIRECT_URL
+        fromDatabase:
+          name: uc-ats-db
+          property: connectionString
+
+      # The server refuses to boot without these. Generated per environment —
+      # a staging JWT can never be replayed against production.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MEMBER_REGISTRATION_TOKEN
+        generateValue: true
+
+      - key: FORM_CONFIG_PATH
+        value: ./form-config.json
+
+      # BASE_URL, CLIENT_URL and CORS_ORIGIN are deliberately NOT set here.
+      # Each preview gets a different hostname, which a static YAML value can't
+      # express, so server/src/config.js derives them from RENDER_EXTERNAL_URL
+      # when Render reports it's running a preview environment.
+
+      # Shared secrets live in a Dashboard-managed environment group.
+      #
+      # This group MUST be created by hand in the Render Dashboard, NOT declared
+      # in this file: an env group defined in the same blueprint that manages
+      # previews gets duplicated — empty — into every preview environment, and
+      # the secrets silently come back blank.
+      #
+      # Keys the group should define:
+      #   SEED_ADMIN_EMAIL        login handed to reviewers
+      #   SEED_ADMIN_PASSWORD     password handed to reviewers
+      #   SUPABASE_URL            realtime interview chat
+      #   SUPABASE_SERVICE_ROLE_KEY
+      #   VITE_SUPABASE_URL       browser-side Supabase (inlined at build time)
+      #   VITE_SUPABASE_ANON_KEY
+      #
+      # Intentionally omitted so staging can't reach real integrations:
+      #   AWS_* / EMAIL_*         SES sending — omitted, so decision emails are
+      #                           logged and skipped instead of delivered
+      #   GOOGLE_CLOUD_KEY_PATH   Google Forms sync — omitted, so staging never
+      #                           pulls real applicant PII into a preview DB
+      #   SLACK_WEBHOOK_URL       no staging noise in the team Slack
+      #   GITHUB_FEATURE_REQUEST_TOKEN  no issues filed from staging
+      # All of these fail soft — the app logs the error and carries on.
+      - fromGroup: uc-ats-staging-secrets
