@@ -30,6 +30,10 @@ import {
 } from '../services/offerLetter.js';
 import { previewCycleEventCopy, commitCycleEventCopy } from '../services/eventCopy.js';
 import {
+  previewCopyCandidateGroupToInterview,
+  commitCopyCandidateGroupToInterview,
+} from '../services/groupCopy.js';
+import {
   loadActiveCycle,
   loadAdminApplications,
   loadEvents,
@@ -2305,6 +2309,51 @@ router.patch('/interviews/:id/config', async (req, res) => {
   } catch (error) {
     console.error('[PATCH /api/admin/interviews/:id/config]', error);
     res.status(500).json({ error: 'Failed to update interview configuration' });
+  }
+});
+
+// Preview copying a candidate group into an interview group.
+router.post('/interviews/:id/copy-candidate-groups/preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sourceGroupId, targetGroupId, mode } = req.body;
+
+    const preview = await previewCopyCandidateGroupToInterview({
+      prisma,
+      interviewId: id,
+      sourceGroupId,
+      targetGroupId,
+      mode,
+    });
+
+    res.json({ preview });
+  } catch (error) {
+    console.error('[POST /api/admin/interviews/:id/copy-candidate-groups/preview]', error);
+    const status = error.message?.toLowerCase().includes('not found') ? 404 : 400;
+    res.status(status).json({ error: error.message || 'Failed to preview group copy' });
+  }
+});
+
+// Commit copying a candidate group into an interview group.
+router.post('/interviews/:id/copy-candidate-groups/commit', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sourceGroupId, targetGroupId, mode } = req.body;
+
+    const result = await commitCopyCandidateGroupToInterview({
+      prisma,
+      interviewId: id,
+      sourceGroupId,
+      targetGroupId,
+      mode,
+      actorId: req.user?.id,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[POST /api/admin/interviews/:id/copy-candidate-groups/commit]', error);
+    const status = error.message?.toLowerCase().includes('not found') ? 404 : 400;
+    res.status(status).json({ error: error.message || 'Failed to commit group copy' });
   }
 });
 

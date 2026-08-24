@@ -25,6 +25,7 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
 import '../styles/AdminAssignedInterviews.css';
+import CopyCandidateGroupDialog from '../components/CopyCandidateGroupDialog';
 
 // Application Group Card Component for Admin
 const AdminApplicationGroupCard = ({ group, interviewId }) => {
@@ -224,7 +225,9 @@ export default function AdminAssignedInterviews() {
   const [behavioralQuestionsConfig, setBehavioralQuestionsConfig] = useState([]);
   const [showBehavioralQuestionsConfig, setShowBehavioralQuestionsConfig] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [copyInterview, setCopyInterview] = useState(null);
+
   // Search/filter states for groups management
   const [memberGroupsSearch, setMemberGroupsSearch] = useState('');
   const [applicationGroupsSearch, setApplicationGroupsSearch] = useState('');
@@ -282,6 +285,7 @@ export default function AdminAssignedInterviews() {
             parsed = {};
           }
           initialData[interview.id] = {
+            ...parsed,
             memberGroups: parsed?.memberGroups || [],
             applicationGroups: parsed?.applicationGroups || [],
             groupAssignments: parsed?.groupAssignments || {} // Maps memberGroupId to array of applicationGroupIds
@@ -555,6 +559,36 @@ export default function AdminAssignedInterviews() {
     } else {
       setExpandedInterviewId(id);
     }
+  };
+
+  const openCopyDialog = (interview) => {
+    setCopyInterview(interview);
+    setCopyDialogOpen(true);
+  };
+
+  const closeCopyDialog = () => {
+    setCopyDialogOpen(false);
+    setCopyInterview(null);
+  };
+
+  const handleCopyCommitted = (interviewId, result) => {
+    const config = result.config;
+    if (config) {
+      setInterviewData((prev) => ({
+        ...prev,
+        [interviewId]: {
+          ...prev[interviewId],
+          applicationGroups: config.applicationGroups || [],
+          copyAudits: config.copyAudits || [],
+        },
+      }));
+      setInterviews((prev) =>
+        prev.map((iv) =>
+          iv.id === interviewId ? { ...iv, description: JSON.stringify(config) } : iv
+        )
+      );
+    }
+    closeCopyDialog();
   };
 
   const addMemberGroup = (interviewId) => {
@@ -1373,9 +1407,14 @@ export default function AdminAssignedInterviews() {
                           <div className="groups-column">
                             <div className="column-header">
                               <h4><DocumentDuplicateIcon className="section-icon" /> Application Groups</h4>
-                              <button className="btn-secondary small" onClick={() => addApplicationGroup(interview.id)}>
-                                <PlusIcon className="btn-icon" /> Add
-                              </button>
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button className="btn-secondary small" onClick={() => openCopyDialog(interview)}>
+                                  <DocumentDuplicateIcon className="btn-icon" /> Copy
+                                </button>
+                                <button className="btn-secondary small" onClick={() => addApplicationGroup(interview.id)}>
+                                  <PlusIcon className="btn-icon" /> Add
+                                </button>
+                              </div>
                             </div>
                             {/* Search for application groups */}
                             {data.applicationGroups?.length > 0 && (
@@ -1556,6 +1595,15 @@ export default function AdminAssignedInterviews() {
         )}
       </div>
     </div>
+
+    {copyDialogOpen && copyInterview && (
+      <CopyCandidateGroupDialog
+        interview={copyInterview}
+        applicationGroups={interviewData[copyInterview.id]?.applicationGroups || []}
+        onClose={closeCopyDialog}
+        onCommitted={handleCopyCommitted}
+      />
+    )}
     </AccessControl>
   );
 }
