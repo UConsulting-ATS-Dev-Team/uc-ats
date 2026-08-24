@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "id": "2026-08-23-candidate-release-notes",
+    "releaseDate": "2026-08-23",
+    "title": "Candidate What's New page",
+    "summary": "Candidates can now see a curated list of ATS updates relevant to them directly in the app.",
+    "details": "The new page is reachable from the candidate sidebar under \"What's new.\" Entries are sorted newest-first and include release date, category, affected area, summary, and expandable detail text with optional related links.",
+    "category": "feature",
+    "affectedArea": "Candidate experience / navigation",
+    "status": "new",
+    "links": []
+  }
+]

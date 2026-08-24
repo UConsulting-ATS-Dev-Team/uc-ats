@@ -1,5 +1,16 @@
 [
   {
+    "id": "2026-08-23-all-audiences-release-notes",
+    "releaseDate": "2026-08-23",
+    "title": "What's New for members and candidates",
+    "summary": "Admins, members, and candidates each now have their own What's New page so PRs can publish audience-specific release notes.",
+    "details": "Members can view release notes via the member sidebar, and candidates can view release notes via the candidate sidebar. Each audience has its own curated JSON feed and API endpoint, protected by role-based authorization. PR authors can add tailored entries for any affected audience.",
+    "category": "feature",
+    "affectedArea": "Navigation / release notes",
+    "status": "new",
+    "links": []
+  },
+  {
     "id": "2026-07-28-admin-release-notes",
     "releaseDate": "2026-07-28",
     "title": "Admin-only ATS release notes page",
