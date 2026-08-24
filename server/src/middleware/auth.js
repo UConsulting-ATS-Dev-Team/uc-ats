@@ -86,13 +86,22 @@ setInterval(() => {
   }
 }, CACHE_TTL); // Clean up every 5 minutes
 
-// Middleware to require admin role
-export const requireAdmin = async (req, res, next) => {
-  if (req.user?.role !== 'ADMIN') {
-    return res.status(403).json({ error: 'Admin access required' });
+// Generic role-gate middleware factory
+export const requireRole = (role) => (req, res, next) => {
+  if (req.user?.role !== role) {
+    return res.status(403).json({ error: `${role} access required` });
   }
   next();
 };
+
+// Middleware to require admin role
+export const requireAdmin = requireRole('ADMIN');
+
+// Middleware to require member role
+export const requireMember = requireRole('MEMBER');
+
+// Middleware to require candidate role (stored as USER in the DB)
+export const requireCandidate = requireRole('USER');
 
 // Middleware to require admin or member role (exclude USER/candidates)
 export const requireAdminOrMember = async (req, res, next) => {

@@ -18,8 +18,24 @@ const defaultPath = path.resolve(
   '../../data/release-notes.json'
 );
 
+const memberDefaultPath = path.resolve(
+  import.meta.dirname,
+  '../../data/release-notes-member.json'
+);
+
+const candidateDefaultPath = path.resolve(
+  import.meta.dirname,
+  '../../data/release-notes-candidate.json'
+);
+
 export const releaseNotesPath =
   process.env.RELEASE_NOTES_PATH || defaultPath;
+
+export const memberReleaseNotesPath =
+  process.env.MEMBER_RELEASE_NOTES_PATH || memberDefaultPath;
+
+export const candidateReleaseNotesPath =
+  process.env.CANDIDATE_RELEASE_NOTES_PATH || candidateDefaultPath;
 
 function isValidDateString(dateString) {
   if (!dateString || !ISO_DATE_REGEX.test(dateString)) return false;
@@ -150,4 +166,12 @@ export function loadReleaseNotes(filePath) {
 
 export function getReleaseNotes() {
   return loadReleaseNotes(releaseNotesPath);
+}
+
+export function getMemberReleaseNotes() {
+  return loadReleaseNotes(memberReleaseNotesPath);
+}
+
+export function getCandidateReleaseNotes() {
+  return loadReleaseNotes(candidateReleaseNotesPath);
 }

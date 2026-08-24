@@ -1,6 +1,6 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireCandidate } from '../middleware/auth.js';
 import {
   sendMeetingSignupConfirmation,
   sendMeetingSignupNotification,
@@ -8,8 +8,20 @@ import {
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
+import { getCandidateReleaseNotes } from '../services/releaseNotes.js';
 
 const router = express.Router();
+
+// Get candidate-facing release notes
+router.get('/candidate/release-notes', requireAuth, requireCandidate, async (req, res) => {
+  try {
+    const notes = getCandidateReleaseNotes();
+    res.json(notes);
+  } catch (error) {
+    console.error('[GET /api/candidate/release-notes] Error loading release notes:', error);
+    res.status(500).json({ error: 'Failed to load release notes' });
+  }
+});
 
 // A candidate may cancel or rebook their GTKUC slot only up to this many hours
 // before the slot start time. Inside this window, the booking is locked.

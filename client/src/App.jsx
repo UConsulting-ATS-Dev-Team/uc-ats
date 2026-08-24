@@ -42,6 +42,8 @@ import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
+import MemberReleaseNotes from './pages/MemberReleaseNotes';
+import CandidateReleaseNotes from './pages/CandidateReleaseNotes';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import Profile from './pages/Profile';
@@ -339,6 +341,15 @@ const AppRoutes = () => {
       />
 
       <Route
+        path="/candidate/release-notes"
+        element={
+          <ProtectedRoute>
+            <CandidateReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/get-to-know-uc"
         element={
           <ProtectedRoute>
@@ -376,6 +387,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Member release notes */}
+      <Route
+        path="/member/release-notes"
+        element={
+          <ProtectedRoute>
+            <MemberReleaseNotes />
           </ProtectedRoute>
         }
       />

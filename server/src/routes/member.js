@@ -1,10 +1,11 @@
 import express from 'express';
-import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
+import { requireAuth, requireAdminOrMember, requireMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { getMemberReleaseNotes } from '../services/releaseNotes.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -26,6 +27,17 @@ import {
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 
 const router = express.Router();
+
+// Get member-facing release notes
+router.get('/release-notes', requireAuth, requireMember, async (req, res) => {
+  try {
+    const notes = getMemberReleaseNotes();
+    res.json(notes);
+  } catch (error) {
+    console.error('[GET /api/member/release-notes] Error loading release notes:', error);
+    res.status(500).json({ error: 'Failed to load release notes' });
+  }
+});
 
 // Get events for members with per-user RSVP status
 router.get('/events', requireAuth, async (req, res) => {

@@ -7,6 +7,8 @@ import {
   validateEntry,
   loadReleaseNotes,
   getReleaseNotes,
+  getMemberReleaseNotes,
+  getCandidateReleaseNotes,
 } from './releaseNotes.js';
 
 function validEntry(overrides = {}) {
@@ -191,6 +193,48 @@ describe('getReleaseNotes (production file)', () => {
   it('loads the complete tracked release notes file without filtering', () => {
     const notes = getReleaseNotes();
     expect(notes.length).toBeGreaterThan(0);
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    for (const note of notes) {
+      expect(note.id).toBeTruthy();
+      expect(note.title).toBeTruthy();
+      expect(note.summary).toBeTruthy();
+      expect(note.category).toBeTruthy();
+      expect(note.affectedArea).toBeTruthy();
+      const noteDate = new Date(note.releaseDate).getTime();
+      expect(noteDate).not.toBeNaN();
+      expect(noteDate).toBeLessThanOrEqual(today.getTime());
+    }
+  });
+});
+
+describe('getMemberReleaseNotes (production file)', () => {
+  it('loads the member release notes file', () => {
+    const notes = getMemberReleaseNotes();
+    expect(Array.isArray(notes)).toBe(true);
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    for (const note of notes) {
+      expect(note.id).toBeTruthy();
+      expect(note.title).toBeTruthy();
+      expect(note.summary).toBeTruthy();
+      expect(note.category).toBeTruthy();
+      expect(note.affectedArea).toBeTruthy();
+      const noteDate = new Date(note.releaseDate).getTime();
+      expect(noteDate).not.toBeNaN();
+      expect(noteDate).toBeLessThanOrEqual(today.getTime());
+    }
+  });
+});
+
+describe('getCandidateReleaseNotes (production file)', () => {
+  it('loads the candidate release notes file', () => {
+    const notes = getCandidateReleaseNotes();
+    expect(Array.isArray(notes)).toBe(true);
 
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);

@@ -55,6 +55,7 @@ const Layout = ({ children }) => {
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
+      { name: "What's new", href: '/member/release-notes', icon: NewspaperIcon },
     ] : user?.role === 'ADMIN' ? [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
       { name: 'Candidates', href: '/candidate-list', icon: UserGroupIcon },

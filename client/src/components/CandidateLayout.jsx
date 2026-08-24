@@ -11,6 +11,7 @@ import {
   AcademicCapIcon,
   LightBulbIcon,
   UserGroupIcon,
+  NewspaperIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import FeatureRequestModal from './FeatureRequestModal';
@@ -41,6 +42,7 @@ const CandidateLayout = ({ children }) => {
     { name: 'Events', href: '/events', icon: CalendarDaysIcon },
     { name: 'Get to Know UC', href: '/get-to-know-uc', icon: UserGroupIcon },
     { name: 'Recruitment Resources', href: '/interview-prep', icon: AcademicCapIcon },
+    { name: "What's new", href: '/candidate/release-notes', icon: NewspaperIcon },
     FEATURE_REQUEST_NAV,
   ];
 
