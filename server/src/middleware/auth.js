@@ -6,63 +6,94 @@ import config from '../config.js';
 const userCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Middleware to verify JWT token and attach user to request
-export const requireAuth = async (req, res, next) => {
+// Fields every caller of resolveUserFromRequest gets. Deliberately excludes
+// password, resetToken and resetTokenExpiry.
+const AUTH_USER_SELECT = {
+  id: true,
+  email: true,
+  fullName: true,
+  role: true,
+  isActive: true,
+  graduationClass: true,
+  studentId: true,
+  profileImage: true,
+  createdAt: true
+};
+
+/**
+ * Resolve the authenticated user for a request, reading and populating the same
+ * 5-minute cache `requireAuth` uses. Returns `{ user }` on success or
+ * `{ error }` where error is one of 'no-token' | 'invalid' | 'not-found' |
+ * 'deactivated'.
+ *
+ * Extracted so the CLIENT containment middleware can ask "who is this?" before
+ * the route's own requireAuth runs, without a second DB round trip and without
+ * exporting the cache Map. Containment runs first, warms the cache, and
+ * requireAuth then hits it.
+ */
+export const resolveUserFromRequest = async (req) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+
+  if (!token) {
+    return { error: 'no-token' };
+  }
+
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-    
     const decoded = jwt.verify(token, config.jwtSecret);
     const userId = decoded.userId;
-    
-    // Check cache first to reduce DB calls
+
     const cached = userCache.get(userId);
     if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
-      req.user = cached.user;
-      return next();
+      return { user: cached.user };
     }
-    
-    // Only query DB if not in cache or cache expired
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        role: true,
-        isActive: true,
-        graduationClass: true,
-        studentId: true,
-        profileImage: true,
-        createdAt: true
-        // Explicitly exclude password
-      }
+      select: AUTH_USER_SELECT
     });
-    
+
     if (!user) {
-      return res.status(401).json({ error: 'User not found' });
+      return { error: 'not-found' };
     }
 
     if (user.isActive === false) {
       userCache.delete(userId);
-      return res.status(401).json({ error: 'Account deactivated' });
+      return { error: 'deactivated' };
     }
-    
-    // Cache the user data
-    userCache.set(userId, {
-      user,
-      timestamp: Date.now()
-    });
-    
-    req.user = user;
-    next();
-    
+
+    userCache.set(userId, { user, timestamp: Date.now() });
+
+    return { user };
   } catch (error) {
-    console.error('Auth middleware error:', error);
-    res.status(401).json({ error: 'Invalid token' });
+    return { error: 'invalid', cause: error };
+  }
+};
+
+// Middleware to verify JWT token and attach user to request
+export const requireAuth = async (req, res, next) => {
+  // Containment may already have resolved this request. Same cache either way,
+  // but skipping re-work keeps the hot path to a single lookup.
+  if (req.user) {
+    return next();
+  }
+
+  const result = await resolveUserFromRequest(req);
+
+  if (result.user) {
+    req.user = result.user;
+    return next();
+  }
+
+  switch (result.error) {
+    case 'no-token':
+      return res.status(401).json({ error: 'Authentication required' });
+    case 'not-found':
+      return res.status(401).json({ error: 'User not found' });
+    case 'deactivated':
+      return res.status(401).json({ error: 'Account deactivated' });
+    default:
+      console.error('Auth middleware error:', result.cause);
+      return res.status(401).json({ error: 'Invalid token' });
   }
 };
 
@@ -100,4 +131,35 @@ export const requireAdminOrMember = async (req, res, next) => {
     return res.status(403).json({ error: 'Admin or member access required' });
   }
   next();
-}; 
+};
+
+/**
+ * Gate for the Talent Partner Network portal. Allowlist-style like requireAdmin:
+ * the role must be exactly CLIENT. Loads the partner row onto req.partnerClient
+ * so no route handler has to, and turns an orphaned CLIENT user (one with no
+ * partner row, which POST /api/admin/talent-pool/clients makes impossible) into
+ * a clear message rather than a crash.
+ */
+export const requireClient = async (req, res, next) => {
+  if (req.user?.role !== 'CLIENT') {
+    return res.status(403).json({ error: 'Talent partner access required' });
+  }
+
+  try {
+    const partnerClient = await prisma.talentPartnerClient.findUnique({
+      where: { userId: req.user.id }
+    });
+
+    if (!partnerClient) {
+      return res.status(403).json({
+        error: 'Your partner account is not configured. Contact UConsulting.'
+      });
+    }
+
+    req.partnerClient = partnerClient;
+    next();
+  } catch (error) {
+    console.error('[requireClient]', error);
+    res.status(500).json({ error: 'Failed to load partner account' });
+  }
+};

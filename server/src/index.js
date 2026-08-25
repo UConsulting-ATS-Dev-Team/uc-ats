@@ -24,6 +24,7 @@ import conversationsRoutes from './routes/conversations.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
+import externalContainment from './middleware/externalContainment.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
 
@@ -59,6 +60,11 @@ app.use('/api/uploads', express.static('uploads', {
     res.set('Cross-Origin-Resource-Policy', 'cross-origin');
   }
 }));
+
+// Talent Partner Network clients reach only /api/client/*. Mounted ahead of
+// every route so a route file that forgets its own role gate is still covered.
+// Transparent to every other role and to unauthenticated requests.
+app.use(externalContainment);
 
 // Routes
 app.use('/api/auth', authRoutes);
