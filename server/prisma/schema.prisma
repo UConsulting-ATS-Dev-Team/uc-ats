@@ -49,6 +49,8 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
+  createdMessageTemplates    MessageTemplate[]              @relation("MessageTemplateCreator")
+  sentMessageLogs            MessageLog[]                   @relation("MessageLogSender")
 
   @@map("users")
 }
@@ -160,6 +162,8 @@ model RecruitingCycle {
   videoScores               VideoScore[]
   cases                     Case[]
   gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
+  messageTemplates          MessageTemplate[]                @relation("CycleTemplates")
+  messageLogs               MessageLog[]                     @relation("CycleLogs")
 
   @@map("recruiting_cycles")
 }
@@ -886,4 +890,41 @@ enum MeetingCommunicationType {
   HOST_NOTIFICATION
   CANCELLATION
   REMINDER
+}
+
+model MessageTemplate {
+  id          String            @id @default(uuid())
+  name        String
+  subject     String
+  body        String
+  channel     String
+  cycleId     String
+  createdBy   String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  cycle       RecruitingCycle   @relation("CycleTemplates", fields: [cycleId], references: [id], onDelete: Cascade)
+  creator     User              @relation("MessageTemplateCreator", fields: [createdBy], references: [id])
+  logs        MessageLog[]
+
+  @@index([cycleId])
+  @@map("message_templates")
+}
+
+model MessageLog {
+  id             String             @id @default(uuid())
+  templateId     String?
+  channel        String
+  recipientCount Int
+  subject        String?
+  body           String?
+  sentAt         DateTime           @default(now())
+  sentBy         String
+  cycleId        String?
+  template       MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle          RecruitingCycle?   @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender         User               @relation("MessageLogSender", fields: [sentBy], references: [id])
+
+  @@index([cycleId])
+  @@index([sentAt])
+  @@map("message_logs")
 }
