@@ -5539,4 +5539,120 @@ router.post('/users/deactivate', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Talent Partner Network (TPN)
+// ---------------------------------------------------------------------------
+// Opt-in is captured on the application form (see Application.talentPoolOptIn).
+// Requires auth + admin via router.use() at the top of this file.
+
+// Returns opt-in counts plus the roster of applicants who said yes.
+// `cycleId` is optional; omitted means the active cycle, `all` means every cycle.
+router.get('/talent-pool/stats', async (req, res) => {
+  try {
+    const cycles = await prisma.recruitingCycle.findMany({
+      select: { id: true, name: true, isActive: true },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const requested = req.query.cycleId;
+    let cycleFilter;
+    let selectedCycleId;
+
+    if (requested === 'all') {
+      cycleFilter = {};
+      selectedCycleId = 'all';
+    } else {
+      const target = requested
+        ? cycles.find((c) => c.id === requested)
+        : cycles.find((c) => c.isActive);
+      if (!target) {
+        return res.status(404).json({ error: 'Recruiting cycle not found' });
+      }
+      cycleFilter = { cycleId: target.id };
+      selectedCycleId = target.id;
+    }
+
+    const applications = await prisma.application.findMany({
+      where: cycleFilter,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        studentId: true,
+        candidateId: true,
+        major1: true,
+        graduationYear: true,
+        resumeUrl: true,
+        submittedAt: true,
+        talentPoolOptIn: true,
+        cycle: { select: { id: true, name: true } }
+      },
+      orderBy: { submittedAt: 'desc' }
+    });
+
+    // Across all cycles the same person appears once per cycle they applied in.
+    // Collapse those to one row each so the roster lists people rather than
+    // submissions. Rows arrive newest-first, so the first one seen for a person
+    // is their latest application - which carries their most recent resume and
+    // their most recent opt-in answer.
+    //
+    // Only done for the all-cycles view; within a single cycle each row is
+    // already a distinct applicant.
+    let applicants = applications;
+    let duplicatesCollapsed = 0;
+
+    if (selectedCycleId === 'all') {
+      const seen = new Map();
+      for (const app of applications) {
+        const key = app.candidateId
+          || (app.email ? `email:${app.email.trim().toLowerCase()}` : null)
+          || (app.studentId ? `student:${app.studentId.trim()}` : null)
+          || `app:${app.id}`;
+        const existing = seen.get(key);
+        if (!existing) {
+          seen.set(key, { ...app, priorApplications: 0 });
+        } else {
+          existing.priorApplications += 1;
+          duplicatesCollapsed += 1;
+        }
+      }
+      applicants = Array.from(seen.values());
+    }
+
+    // Counted off the same array the roster renders, so the breakdown always
+    // agrees with the rows behind it.
+    const optedIn = applicants.filter((a) => a.talentPoolOptIn === true).length;
+    const optedOut = applicants.filter((a) => a.talentPoolOptIn === false).length;
+    const noAnswer = applicants.filter((a) => a.talentPoolOptIn === null).length;
+
+    res.json({
+      cycles,
+      selectedCycleId,
+      optIn: {
+        total: applicants.length,
+        optedIn,
+        optedOut,
+        noAnswer
+      },
+      applicants,
+      // True when a row is a unique person rather than a single submission.
+      deduplicated: selectedCycleId === 'all',
+      duplicatesCollapsed,
+      totalApplications: applications.length,
+      // Two metrics on the TPN page have no source of truth yet:
+      //   * resumesUpdatedRecently - applications store a resume at submission
+      //     time only; there is no "resume last updated" timestamp to count.
+      //   * registeredClients - UserRole has no CLIENT variant yet.
+      // Reported as null so the UI can show "not tracked yet" rather than a
+      // zero that reads like a real measurement.
+      resumesUpdatedRecently: null,
+      registeredClients: null
+    });
+  } catch (error) {
+    console.error('Error fetching talent pool stats:', error);
+    res.status(500).json({ error: 'Failed to fetch talent pool stats' });
+  }
+});
+
 export default router;

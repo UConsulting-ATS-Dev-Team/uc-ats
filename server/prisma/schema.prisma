@@ -99,6 +99,10 @@ model Application {
   major2                String?
   gender                String?
   isFirstGeneration     Boolean
+  // Talent Partner Network opt-in, added to the application form for the
+  // Winter 2026 cycle. Nullable because every Fall 2025 application predates
+  // the question, and Winter 2026 applications that skipped it have no answer.
+  talentPoolOptIn       Boolean?
   resumeUrl             String
   blindResumeUrl        String?
   headshotUrl           String

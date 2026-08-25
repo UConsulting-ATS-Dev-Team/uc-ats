@@ -27,6 +27,7 @@ import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
 import Cases from './pages/Cases';
+import TalentPoolPartnerNetwork from './pages/TalentPoolPartnerNetwork';
 import CaseTagging from './pages/CaseTagging';
 import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
@@ -136,6 +137,15 @@ const AppRoutes = () => {
         }
       />
       
+      <Route
+        path="/talent-pool"
+        element={
+          <ProtectedRoute>
+            <TalentPoolPartnerNetwork />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/review-teams"
         element={
