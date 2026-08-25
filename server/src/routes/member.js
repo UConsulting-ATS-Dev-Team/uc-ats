@@ -5,6 +5,7 @@ import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -32,8 +33,12 @@ router.get('/events', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Fetch all events with cycle for ordering/filtering
+    // Scope in SQL rather than loading every event ever created and filtering in JS.
+    const activeCycle = await resolveCycleForRequest(prisma, req);
+    if (!activeCycle) return res.json([]);
+
     const events = await prisma.events.findMany({
+      where: { cycleId: activeCycle.id },
       include: {
         cycle: true
       },
@@ -42,11 +47,9 @@ router.get('/events', requireAuth, async (req, res) => {
       }
     });
 
-    // Only include events from active cycles
-    const activeEvents = events.filter(event => event.cycle?.isActive);
 
     // Build a Set of eventIds this member RSVP'd to
-    const eventIds = activeEvents.map(e => e.id);
+    const eventIds = events.map(e => e.id);
     let rsvpsByEventId = new Set();
     if (eventIds.length > 0) {
       const memberRsvps = await prisma.memberEventRsvp.findMany({
@@ -59,7 +62,7 @@ router.get('/events', requireAuth, async (req, res) => {
       rsvpsByEventId = new Set(memberRsvps.map(r => r.eventId));
     }
 
-    const eventsWithStatus = activeEvents.map(event => ({
+    const eventsWithStatus = events.map(event => ({
       ...event,
       memberRsvpUrl: event.memberRsvpUrl || null,
       hasMemberRsvpd: rsvpsByEventId.has(event.id)
@@ -78,9 +81,7 @@ router.get('/all-applications', requireAuth, async (req, res) => {
     console.log('Fetching all applications for member:', req.user.id);
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     console.log('Active cycle found:', activeCycle?.id);
     
@@ -416,9 +417,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
     const userId = req.user.id;
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json(null);
@@ -584,9 +583,7 @@ router.get('/interviews', requireAuth, async (req, res) => {
     const userId = req.user.id;
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -935,7 +932,9 @@ router.put('/gtkuc-profile', requireAuth, requireAdminOrMember, async (req, res)
       return res.status(400).json({ error: 'Enter a LinkedIn profile URL, e.g. linkedin.com/in/your-handle' });
     }
 
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    // Candidate pointer even for admin callers: the confirmation this writes is keyed
+    // (profileId, cycleId) and must match the cycle the gate checks.
+    const activeCycle = await resolveCandidateCycle(prisma);
 
     // Members may clear an auto-filled LinkedIn link, so an empty submission
     // overwrites rather than falling back to what was stored.
@@ -1245,9 +1244,7 @@ router.patch('/meeting-signups/:id/attendance', requireAuth, async (req, res) =>
 
         if (candidate && candidate.applications.length > 0) {
           // Get the latest application for the active cycle
-          const activeCycle = await prisma.recruitingCycle.findFirst({
-            where: { isActive: true }
-          });
+          const activeCycle = await resolveCycleForRequest(prisma, req);
 
           if (activeCycle) {
             const latestApplication = candidate.applications
@@ -1701,9 +1698,7 @@ router.post('/flag-document', requireAuth, async (req, res) => {
     }
 
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
 
     if (!activeCycle) {
       return res.status(400).json({ error: 'No active recruitment cycle found' });
