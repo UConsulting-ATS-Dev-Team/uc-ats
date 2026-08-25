@@ -5620,6 +5620,10 @@ router.get('/talent-pool/stats', async (req, res) => {
       applicants = Array.from(seen.values());
     }
 
+    const registeredClients = await prisma.talentPartnerClient.count({
+      where: { user: { isActive: true } }
+    });
+
     // Counted off the same array the roster renders, so the breakdown always
     // agrees with the rows behind it.
     const optedIn = applicants.filter((a) => a.talentPoolOptIn === true).length;
@@ -5640,14 +5644,15 @@ router.get('/talent-pool/stats', async (req, res) => {
       deduplicated: selectedCycleId === 'all',
       duplicatesCollapsed,
       totalApplications: applications.length,
-      // Two metrics on the TPN page have no source of truth yet:
-      //   * resumesUpdatedRecently - applications store a resume at submission
-      //     time only; there is no "resume last updated" timestamp to count.
-      //   * registeredClients - UserRole has no CLIENT variant yet.
-      // Reported as null so the UI can show "not tracked yet" rather than a
-      // zero that reads like a real measurement.
+      // resumesUpdatedRecently still has no source of truth: applications store
+      // a resume at submission time only, with no "resume last updated"
+      // timestamp to count. Reported as null so the UI shows "not tracked yet"
+      // rather than a zero that reads like a real measurement.
       resumesUpdatedRecently: null,
-      registeredClients: null
+      // registeredClients is now real - active CLIENT accounts with a partner
+      // row. Deactivated ones are excluded: the number is meant to answer "how
+      // many organizations can log in right now?".
+      registeredClients
     });
   } catch (error) {
     console.error('Error fetching talent pool stats:', error);

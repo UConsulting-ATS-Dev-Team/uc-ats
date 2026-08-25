@@ -182,25 +182,30 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   const rows = dsl?.rows ?? [];
 
   if (dsl?.pool === 'MEMBERS') {
-    return { where: null, notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
-  // Non-negotiable base predicates. These are not admin-controllable and are
-  // ANDed onto whatever the filter says.
-  const AND = [
+  // Clauses that come from the admin's filter, kept separate from the consent
+  // gates so the preview can count what each gate excluded and say so. Only
+  // `where` below is ever used to select rows for assignment - `filterOnlyWhere`
+  // exists to answer "how many did consent remove?" and nothing else.
+  const filterClauses = [{ resumeUrl: { not: '' } }];
+
+  // Non-negotiable gates. Not admin-controllable.
+  const gateClauses = [
     // The consent record. An applicant who answered No, and every Fall 2025
     // applicant who was never asked (null), is never assignable.
-    { talentPoolOptIn: true },
-    { resumeUrl: { not: '' } }
+    { talentPoolOptIn: true }
   ];
 
   if (visibility === 'BLIND') {
     // A BLIND client is only ever served blindResumeUrl, so an application
     // without one is not assignable to them at all.
-    AND.push({ blindResumeUrl: { not: null } });
-    AND.push({ blindResumeUrl: { not: '' } });
+    gateClauses.push({ blindResumeUrl: { not: null } });
+    gateClauses.push({ blindResumeUrl: { not: '' } });
   }
 
+  const AND = filterClauses;
   let sawCycleRow = false;
 
   for (const row of rows) {
@@ -242,7 +247,12 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
     notes.push('Limited to the active recruiting cycle. Add a cycle filter to widen it.');
   }
 
-  return { where: { AND }, notes };
+  return {
+    where: { AND: [...gateClauses, ...filterClauses] },
+    filterOnlyWhere: { AND: [...filterClauses] },
+    gateClauses,
+    notes
+  };
 };
 
 /**
@@ -257,7 +267,7 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   const rows = dsl?.rows ?? [];
 
   if (dsl?.pool === 'APPLICANTS') {
-    return { where: null, notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
   if (visibility === 'BLIND') {
@@ -265,15 +275,13 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
     // one file and there is no redacted variant of it, so there is nothing a
     // BLIND client could safely be shown.
     notes.push('Member resumes have no redacted version, so they cannot be assigned to a blind-visibility client.');
-    return { where: null, notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
-  const AND = [
-    { isCurrent: true },
-    { shareConsent: true },
-    { consentRevokedAt: null }
-  ];
+  const filterClauses = [{ isCurrent: true }];
+  const gateClauses = [{ shareConsent: true }, { consentRevokedAt: null }];
 
+  const AND = filterClauses;
   const unsupported = [];
 
   for (const row of rows) {
@@ -302,10 +310,15 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
     notes.push(
       `Member resumes do not record ${unsupported.join(', ')}, so no member resume can match this filter.`
     );
-    return { where: null, notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
-  return { where: { AND }, notes };
+  return {
+    where: { AND: [...gateClauses, ...filterClauses] },
+    filterOnlyWhere: { AND: [...filterClauses] },
+    gateClauses,
+    notes
+  };
 };
 
 // Assignment keys are opaque to the client UI and are what a commit sends back.
