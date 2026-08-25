@@ -54,8 +54,8 @@ const TEMPLATE_CHANNELS = ['email', 'slack', 'imessage'];
 
 const MERGE_FIELDS = {
   applicants: ['firstName', 'lastName', 'fullName', 'email', 'phoneNumber'],
-  members: ['fullName', 'email', 'role'],
-  admins: ['fullName', 'email', 'role'],
+  members: ['firstName', 'lastName', 'fullName', 'email', 'role'],
+  admins: ['firstName', 'lastName', 'fullName', 'email', 'role'],
 };
 
 const SELECT_PROPS = {

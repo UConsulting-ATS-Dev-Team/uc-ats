@@ -39,6 +39,8 @@ const MERGE_FIELDS = {
     phoneNumber: (r) => r.phoneNumber || '',
   },
   user: {
+    firstName: (r) => r.fullName?.split(' ')[0] || '',
+    lastName: (r) => r.fullName?.split(' ').slice(1).join(' ') || '',
     fullName: (r) => r.fullName,
     email: (r) => r.email,
     role: (r) => r.role || '',
