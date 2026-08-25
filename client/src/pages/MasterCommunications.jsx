@@ -30,6 +30,7 @@ import {
   Save as SaveIcon,
   ContentCopy as ContentCopyIcon,
   Preview as PreviewIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
@@ -41,6 +42,7 @@ const CHANNELS = [
   { key: 'imessage', label: 'iMessage' },
   { key: 'templates', label: 'Templates' },
   { key: 'logs', label: 'Logs' },
+  { key: 'scheduled', label: 'Scheduled' },
 ];
 
 const APPLICATION_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'ACCEPTED', 'REJECTED', 'WAITLISTED'];
@@ -67,6 +69,7 @@ const MasterCommunications = () => {
   const [events, setEvents] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [scheduledMessages, setScheduledMessages] = useState([]);
   const [selectedCycles, setSelectedCycles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -88,10 +91,12 @@ const MasterCommunications = () => {
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateName, setTemplateName] = useState('');
   const [templateChannel, setTemplateChannel] = useState('email');
+  const [scheduledAt, setScheduledAt] = useState('');
 
   const [preview, setPreview] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const filteredEvents = useMemo(
@@ -110,6 +115,12 @@ const MasterCommunications = () => {
       fetchLogs(primaryCycle);
     }
   }, [primaryCycle]);
+
+  useEffect(() => {
+    if (tab === 5 && primaryCycle) {
+      fetchScheduled(primaryCycle);
+    }
+  }, [tab, primaryCycle]);
 
   const fetchCycles = async () => {
     try {
@@ -148,6 +159,15 @@ const MasterCommunications = () => {
       setLogs(data || []);
     } catch (e) {
       setError(e.message || 'Failed to load logs');
+    }
+  };
+
+  const fetchScheduled = async (cycleId) => {
+    try {
+      const data = await apiClient.get(`/master-communications/schedule?cycleId=${cycleId}`);
+      setScheduledMessages(data || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load scheduled messages');
     }
   };
 
@@ -232,11 +252,52 @@ const MasterCommunications = () => {
       setSuccess(`Sent ${result.sent} of ${result.total} ${channel} messages`);
       setConfirmOpen(false);
       setPreview(null);
+      setScheduledAt('');
       fetchLogs(primaryCycle);
     } catch (e) {
       setError(e.message || 'Failed to send');
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    clearMessages();
+    if (!scheduledAt) {
+      setError('Pick a date and time to schedule');
+      return;
+    }
+    setScheduling(true);
+    try {
+      const payload = {
+        channel,
+        audience,
+        filters: buildFilters(),
+        subject,
+        body,
+        cycleId: primaryCycle,
+        templateId: selectedTemplate || undefined,
+        scheduledAt: new Date(scheduledAt).toISOString(),
+      };
+      await apiClient.post('/master-communications/schedule', payload);
+      setSuccess(`Message scheduled for ${new Date(scheduledAt).toLocaleString()}`);
+      setScheduledAt('');
+      if (tab === 5) fetchScheduled(primaryCycle);
+    } catch (e) {
+      setError(e.message || 'Failed to schedule');
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  const handleCancelSchedule = async (id) => {
+    clearMessages();
+    try {
+      await apiClient.delete(`/master-communications/schedule/${id}`);
+      setSuccess('Scheduled message cancelled');
+      fetchScheduled(primaryCycle);
+    } catch (e) {
+      setError(e.message || 'Failed to cancel');
     }
   };
 
@@ -305,11 +366,10 @@ const MasterCommunications = () => {
     }
   }, [audienceOptions]);
 
-  const cycleMenuItems = useMemo(() => (
-    cycles.map((c) => (
-      <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
-    ))
-  ), [cycles]);
+  const cycleMenuItems = useMemo(
+    () => cycles.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>),
+    [cycles]
+  );
 
   const renderFilters = () => (
     <Grid container spacing={2} sx={{ mt: 1 }}>
@@ -481,6 +541,18 @@ const MasterCommunications = () => {
           required
         />
       )}
+
+      {channel !== 'imessage' && (
+        <TextField
+          label="Schedule for later (optional)"
+          type="datetime-local"
+          value={scheduledAt}
+          onChange={(e) => setScheduledAt(e.target.value)}
+          fullWidth
+          InputLabelProps={{ shrink: true }}
+          inputProps={{ step: 60 }}
+        />
+      )}
     </Stack>
   );
 
@@ -489,7 +561,7 @@ const MasterCommunications = () => {
       {renderFilters()}
       {renderMessageComposer()}
 
-      <Box sx={{ mt: 2, display: 'flex', gap: 2 }}>
+      <Box sx={{ mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         <Button
           variant="outlined"
           startIcon={<PreviewIcon />}
@@ -500,14 +572,25 @@ const MasterCommunications = () => {
         </Button>
 
         {channel !== 'imessage' && (
-          <Button
-            variant="contained"
-            startIcon={<SendIcon />}
-            onClick={handleOpenSend}
-            disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
-          >
-            Send {channel === 'email' ? 'Email' : 'Slack'}
-          </Button>
+          <>
+            <Button
+              variant="contained"
+              startIcon={<SendIcon />}
+              onClick={handleOpenSend}
+              disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
+            >
+              Send {channel === 'email' ? 'Email' : 'Slack'}
+            </Button>
+            <Button
+              variant="outlined"
+              color="secondary"
+              startIcon={scheduling ? <CircularProgress size={20} /> : <SaveIcon />}
+              onClick={handleSchedule}
+              disabled={!body || (channel === 'email' && !subject) || !scheduledAt || selectedCycles.length === 0}
+            >
+              Schedule
+            </Button>
+          </>
         )}
 
         {channel === 'imessage' && (
@@ -679,6 +762,50 @@ const MasterCommunications = () => {
     </Box>
   );
 
+  const renderScheduledTab = () => (
+    <Box>
+      {scheduledMessages.length === 0 ? (
+        <Alert severity="info">No scheduled messages for this cycle yet.</Alert>
+      ) : (
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Scheduled For</TableCell>
+              <TableCell>Channel</TableCell>
+              <TableCell>Audience</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>Subject / Body</TableCell>
+              <TableCell></TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {scheduledMessages.map((m) => (
+              <TableRow key={m.id}>
+                <TableCell>{new Date(m.scheduledAt).toLocaleString()}</TableCell>
+                <TableCell>{m.channel}</TableCell>
+                <TableCell>{m.audience}</TableCell>
+                <TableCell>{m.status}</TableCell>
+                <TableCell>{m.subject ? `${m.subject} — ` : ''}{m.body.slice(0, 60)}{m.body.length > 60 ? '…' : ''}</TableCell>
+                <TableCell>
+                  {m.status === 'PENDING' && (
+                    <Button
+                      size="small"
+                      color="error"
+                      startIcon={<DeleteIcon />}
+                      onClick={() => handleCancelSchedule(m.id)}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Box>
+  );
+
   return (
     <AccessControl allowedRoles={['ADMIN']}>
       <Box sx={{ p: 3 }}>
@@ -714,6 +841,7 @@ const MasterCommunications = () => {
           <TabPanel value={tab} index={2}>{renderSendTab()}</TabPanel>
           <TabPanel value={tab} index={3}>{renderTemplatesTab()}</TabPanel>
           <TabPanel value={tab} index={4}>{renderLogsTab()}</TabPanel>
+          <TabPanel value={tab} index={5}>{renderScheduledTab()}</TabPanel>
         </Paper>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>

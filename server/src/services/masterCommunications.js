@@ -181,11 +181,13 @@ function formatImessagePacket(recipients) {
 
 async function logMessage({ templateId, channel, recipientCount, subject, body, sentBy, cycleId }) {
   try {
-    await prisma.messageLog.create({
+    const log = await prisma.messageLog.create({
       data: { templateId, channel, recipientCount, subject, body, sentBy, cycleId },
     });
+    return log.id;
   } catch (e) {
     console.error('[masterCommunications] failed to log message:', e);
+    return null;
   }
 }
 
@@ -240,8 +242,8 @@ export async function sendMasterCommunication({
       throw err;
     }
     await sendSlackMessage({ text: body });
-    await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
-    return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length };
+    const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
+    return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length, logId };
   }
 
   const results = await Promise.all(
@@ -254,7 +256,128 @@ export async function sendMasterCommunication({
   const sent = results.filter((r) => r.success).length;
   const failed = results.length - sent;
 
-  await logMessage({ templateId, channel, recipientCount: results.length, subject, body, sentBy, cycleId });
+  const logId = await logMessage({ templateId, channel, recipientCount: results.length, subject, body, sentBy, cycleId });
 
-  return { channel, audience, sent, failed, total: results.length, results };
+  return { channel, audience, sent, failed, total: results.length, results, logId };
+}
+
+export async function scheduleMessage({
+  channel,
+  audience,
+  filters,
+  subject,
+  body,
+  cycleId,
+  templateId,
+  sentBy,
+  scheduledAt,
+}) {
+  if (!scheduledAt) {
+    const err = new Error('scheduledAt is required');
+    err.status = 400;
+    throw err;
+  }
+  return prisma.messageSchedule.create({
+    data: {
+      channel,
+      audience,
+      filters,
+      subject,
+      body,
+      cycleId,
+      templateId,
+      sentBy,
+      scheduledAt: new Date(scheduledAt),
+      status: 'PENDING',
+    },
+    select: {
+      id: true,
+      channel: true,
+      audience: true,
+      scheduledAt: true,
+      status: true,
+      cycleId: true,
+      templateId: true,
+    },
+  });
+}
+
+export async function listScheduledMessages({ cycleId, status, limit = 50 }) {
+  const where = {};
+  if (cycleId) where.cycleId = cycleId;
+  if (status) where.status = status;
+  return prisma.messageSchedule.findMany({
+    where,
+    orderBy: { scheduledAt: 'asc' },
+    take: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200),
+    select: {
+      id: true,
+      channel: true,
+      audience: true,
+      scheduledAt: true,
+      status: true,
+      subject: true,
+      body: true,
+      cycleId: true,
+      templateId: true,
+      createdAt: true,
+    },
+  });
+}
+
+export async function cancelScheduledMessage({ id, sentBy }) {
+  const schedule = await prisma.messageSchedule.findUnique({
+    where: { id },
+    select: { id: true, status: true },
+  });
+  if (!schedule) {
+    const err = new Error('Scheduled message not found');
+    err.status = 404;
+    throw err;
+  }
+  if (schedule.status !== 'PENDING') {
+    const err = new Error('Only pending messages can be cancelled');
+    err.status = 400;
+    throw err;
+  }
+  return prisma.messageSchedule.update({
+    where: { id },
+    data: { status: 'CANCELLED' },
+    select: { id: true, status: true },
+  });
+}
+
+export async function processScheduledMessages() {
+  const now = new Date();
+  const pending = await prisma.messageSchedule.findMany({
+    where: { status: 'PENDING', scheduledAt: { lte: now } },
+    orderBy: { scheduledAt: 'asc' },
+  });
+
+  for (const s of pending) {
+    try {
+      const result = await sendMasterCommunication({
+        audience: s.audience,
+        channel: s.channel,
+        filters: s.filters || {},
+        subject: s.subject,
+        body: s.body,
+        sentBy: s.sentBy,
+        cycleId: s.cycleId,
+        templateId: s.templateId,
+      });
+      await prisma.messageSchedule.update({
+        where: { id: s.id },
+        data: { status: 'SENT', messageLogId: result.logId },
+      });
+    } catch (e) {
+      console.error('[masterCommunications] scheduled send failed:', e);
+      await prisma.messageSchedule.update({
+        where: { id: s.id },
+        data: { status: 'FAILED' },
+      });
+    }
+  }
+
+  return pending.length;
 }

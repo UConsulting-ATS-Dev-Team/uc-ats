@@ -22,6 +22,7 @@ import candidateRoutes from './routes/candidate.js';
 import casesRoutes from './routes/cases.js';
 import conversationsRoutes from './routes/conversations.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
+import { processScheduledMessages } from './services/masterCommunications.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
@@ -148,6 +149,14 @@ await syncFormResponses();
 cron.schedule('*/5 * * * *', () => {
   console.log('Running scheduled response sync...');
   syncFormResponses();
+});
+
+// Check for and send scheduled messages every minute
+cron.schedule('* * * * *', async () => {
+  const count = await processScheduledMessages();
+  if (count > 0) {
+    console.log(`Processed ${count} scheduled master communication(s)`);
+  }
 });
 
 app.listen(config.port, () => {
