@@ -42,6 +42,8 @@ import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
+import MemberHelp from './pages/MemberHelp';
+import AdminHelpManagement from './pages/AdminHelpManagement';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import Profile from './pages/Profile';
@@ -376,6 +378,26 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Member Help page */}
+      <Route
+        path="/help"
+        element={
+          <ProtectedRoute>
+            <MemberHelp />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin Help Management */}
+      <Route
+        path="/admin/help"
+        element={
+          <ProtectedRoute>
+            <AdminHelpManagement />
           </ProtectedRoute>
         }
       />

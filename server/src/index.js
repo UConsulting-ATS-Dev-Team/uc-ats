@@ -24,6 +24,8 @@ import conversationsRoutes from './routes/conversations.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
+import memberHelpRoutes from './routes/memberHelp.js';
+import adminHelpRoutes from './routes/adminHelp.js';
 
 const app = express();
 
@@ -63,11 +65,13 @@ app.use('/api/auth', authRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
+app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
 app.use('/api/member', memberRoutes);
+app.use('/api/member/help', requireAuth, memberHelpRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);

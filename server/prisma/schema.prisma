@@ -49,6 +49,7 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
+  announcementReads          MemberAnnouncementRead[]
 
   @@map("users")
 }
@@ -160,6 +161,7 @@ model RecruitingCycle {
   videoScores               VideoScore[]
   cases                     Case[]
   gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
+  helpAnnouncements       HelpAnnouncement[]
 
   @@map("recruiting_cycles")
 }
@@ -822,6 +824,58 @@ model CaseAssignment {
 
   @@unique([interviewId, applicationId])
   @@map("case_assignments")
+}
+
+model HelpAnnouncement {
+  id          String                @id @default(uuid())
+  title       String
+  body        String                @default("")
+  publishedAt DateTime              @default(now())
+  cycleId     String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  cycle       RecruitingCycle?      @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  reads       MemberAnnouncementRead[]
+
+  @@index([cycleId])
+  @@map("help_announcements")
+}
+
+model Tutorial {
+  id          String           @id @default(uuid())
+  title       String
+  description String?
+  category    TutorialCategory
+  videoUrl    String?
+  body        String?
+  order       Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([category])
+  @@map("tutorials")
+}
+
+model MemberAnnouncementRead {
+  id            String          @id @default(uuid())
+  memberId      String
+  announcementId String
+  readAt        DateTime        @default(now())
+  member        User            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  announcement  HelpAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, announcementId])
+  @@index([memberId])
+  @@index([announcementId])
+  @@map("member_announcement_reads")
+}
+
+enum TutorialCategory {
+  DOCUMENT_GRADING
+  INTERVIEW_CONDUCT
+  GTKUC
+  ATS_NAVIGATION
+  NEW_FEATURES
 }
 
 enum UserRole {
