@@ -18,6 +18,18 @@ function resolveDecisionField(round) {
   return ROUND_DECISION_FIELDS[round] || null;
 }
 
+function dedupeApplicants(applications) {
+  const seen = new Map();
+  const sorted = [...applications].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  for (const a of sorted) {
+    const key = a.candidateId || a.email.toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, a);
+    }
+  }
+  return [...seen.values()];
+}
+
 export async function listTemplates({ cycleId }) {
   const where = cycleId ? { cycleId } : {};
   return prisma.messageTemplate.findMany({
@@ -83,7 +95,7 @@ export async function resolveRecipients({ audience, filters = {} }) {
   if (audience === 'applicants') {
     const where = {};
 
-    if (filters.cycleId) where.cycleId = filters.cycleId;
+    if (filters.cycleIds?.length > 0) where.cycleId = { in: filters.cycleIds };
     if (filters.applicationStatus) where.status = filters.applicationStatus;
 
     const candidateWhere = {};
@@ -110,10 +122,14 @@ export async function resolveRecipients({ audience, filters = {} }) {
         lastName: true,
         phoneNumber: true,
         cycleId: true,
+        candidateId: true,
+        createdAt: true,
       },
     });
 
-    return applications.map((a) => ({
+    const unique = dedupeApplicants(applications);
+
+    return unique.map((a) => ({
       id: a.id,
       email: a.email,
       fullName: fullName(a.firstName, a.lastName),

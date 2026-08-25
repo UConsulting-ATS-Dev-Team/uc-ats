@@ -7,12 +7,8 @@ import {
   Tab,
   TextField,
   Button,
-  Select,
   MenuItem,
-  FormControl,
-  InputLabel,
   Grid,
-  Chip,
   Stack,
   Alert,
   CircularProgress,
@@ -25,11 +21,9 @@ import {
   TableBody,
   TableRow,
   TableCell,
-  IconButton,
   List,
   ListItem,
   ListItemText,
-  Divider,
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -53,6 +47,13 @@ const APPLICATION_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'ACCEPTED', 'REJECTED
 const INTERVIEW_ROUNDS = ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND'];
 const DECISIONS = ['yes', 'no', 'maybe'];
 const USER_ROLES = ['USER', 'MEMBER', 'ADMIN'];
+const TEMPLATE_CHANNELS = ['email', 'slack', 'imessage'];
+
+const SELECT_PROPS = {
+  MenuProps: {
+    PaperProps: { style: { maxHeight: 300 } },
+  },
+};
 
 function TabPanel({ children, value, index }) {
   if (value !== index) return null;
@@ -66,12 +67,13 @@ const MasterCommunications = () => {
   const [events, setEvents] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [selectedCycle, setSelectedCycle] = useState('');
+  const [selectedCycles, setSelectedCycles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   const channel = CHANNELS[tab].key;
+  const primaryCycle = selectedCycles[0] || '';
 
   const [audience, setAudience] = useState('applicants');
   const [applicationStatus, setApplicationStatus] = useState('');
@@ -92,24 +94,30 @@ const MasterCommunications = () => {
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const filteredEvents = useMemo(
+    () => events.filter((e) => selectedCycles.length === 0 || selectedCycles.includes(e.cycleId)),
+    [events, selectedCycles]
+  );
+
   useEffect(() => {
     fetchCycles();
     fetchEvents();
   }, []);
 
   useEffect(() => {
-    if (selectedCycle) {
-      fetchTemplates(selectedCycle);
-      fetchLogs(selectedCycle);
+    if (primaryCycle) {
+      fetchTemplates(primaryCycle);
+      fetchLogs(primaryCycle);
     }
-  }, [selectedCycle]);
+  }, [primaryCycle]);
 
   const fetchCycles = async () => {
     try {
       const data = await apiClient.get('/admin/cycles');
       setCycles(data || []);
-      if (data?.length > 0 && !selectedCycle) {
-        setSelectedCycle(data.find((c) => c.isActive)?.id || data[0].id);
+      if (data?.length > 0 && selectedCycles.length === 0) {
+        const active = data.find((c) => c.isActive);
+        setSelectedCycles(active ? [active.id] : [data[0].id]);
       }
     } catch (e) {
       setError(e.message || 'Failed to load cycles');
@@ -150,7 +158,7 @@ const MasterCommunications = () => {
 
   const buildFilters = () => {
     const filters = {};
-    if (selectedCycle) filters.cycleId = selectedCycle;
+    if (selectedCycles.length > 0) filters.cycleIds = selectedCycles;
 
     if (audience === 'applicants') {
       if (applicationStatus) filters.applicationStatus = applicationStatus;
@@ -218,13 +226,13 @@ const MasterCommunications = () => {
         filters: buildFilters(),
         subject,
         body,
-        cycleId: selectedCycle,
+        cycleId: primaryCycle,
         templateId: selectedTemplate || undefined,
       });
       setSuccess(`Sent ${result.sent} of ${result.total} ${channel} messages`);
       setConfirmOpen(false);
       setPreview(null);
-      fetchLogs(selectedCycle);
+      fetchLogs(primaryCycle);
     } catch (e) {
       setError(e.message || 'Failed to send');
     } finally {
@@ -234,21 +242,21 @@ const MasterCommunications = () => {
 
   const handleSaveTemplate = async () => {
     clearMessages();
-    if (!templateName || !body) {
-      setError('Template name and body are required');
+    if (!templateName || !body || !primaryCycle) {
+      setError('Template name, body, and a selected cycle are required');
       return;
     }
     try {
       await apiClient.post('/master-communications/templates', {
         name: templateName,
-        subject: channel === 'email' ? subject : '',
+        subject: templateChannel === 'email' ? subject : '',
         body,
         channel: templateChannel,
-        cycleId: selectedCycle,
+        cycleId: primaryCycle,
       });
       setSuccess('Template saved');
       setTemplateName('');
-      fetchTemplates(selectedCycle);
+      fetchTemplates(primaryCycle);
     } catch (e) {
       setError(e.message || 'Failed to save template');
     }
@@ -297,93 +305,139 @@ const MasterCommunications = () => {
     }
   }, [audienceOptions]);
 
+  const cycleMenuItems = useMemo(() => (
+    cycles.map((c) => (
+      <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
+    ))
+  ), [cycles]);
+
   const renderFilters = () => (
     <Grid container spacing={2} sx={{ mt: 1 }}>
-      <Grid item xs={12} md={4}>
-        <FormControl fullWidth>
-          <InputLabel>Audience</InputLabel>
-          <Select value={audience} label="Audience" onChange={(e) => setAudience(e.target.value)}>
-            {audienceOptions.map((o) => (
-              <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      <Grid item xs={12} sm={6} md={4}>
+        <TextField
+          select
+          fullWidth
+          label="Audience"
+          value={audience}
+          onChange={(e) => setAudience(e.target.value)}
+        >
+          {audienceOptions.map((o) => (
+            <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+          ))}
+        </TextField>
+      </Grid>
+
+      <Grid item xs={12} sm={6} md={4}>
+        <TextField
+          select
+          fullWidth
+          label="Recruiting Cycles"
+          value={selectedCycles}
+          onChange={(e) => setSelectedCycles(e.target.value)}
+          SelectProps={{ multiple: true, ...SELECT_PROPS }}
+          helperText={selectedCycles.length > 1 ? 'Recipients are de-duplicated across cycles.' : ''}
+        >
+          {cycleMenuItems}
+        </TextField>
       </Grid>
 
       {audience === 'applicants' && (
         <>
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>Application Status</InputLabel>
-              <Select value={applicationStatus} label="Application Status" onChange={(e) => setApplicationStatus(e.target.value)}>
-                <MenuItem value=""><em>Any</em></MenuItem>
-                {APPLICATION_STATUSES.map((s) => (
-                  <MenuItem key={s} value={s}>{s}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Grid item xs={12} sm={6} md={4}>
+            <TextField
+              select
+              fullWidth
+              label="Application Status"
+              value={applicationStatus}
+              onChange={(e) => setApplicationStatus(e.target.value)}
+            >
+              <MenuItem value=""><em>Any</em></MenuItem>
+              {APPLICATION_STATUSES.map((s) => (
+                <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
 
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>RSVP to Event</InputLabel>
-              <Select value={eventRsvpId} label="RSVP to Event" onChange={(e) => setEventRsvpId(e.target.value)}>
-                <MenuItem value=""><em>Any</em></MenuItem>
-                {events.map((e) => (
-                  <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Grid item xs={12} sm={6} md={4}>
+            <TextField
+              select
+              fullWidth
+              label="RSVP to Event"
+              value={eventRsvpId}
+              onChange={(e) => setEventRsvpId(e.target.value)}
+            >
+              <MenuItem value=""><em>Any</em></MenuItem>
+              {filteredEvents.map((e) => (
+                <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
 
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>Attended Event</InputLabel>
-              <Select value={eventAttendedId} label="Attended Event" onChange={(e) => setEventAttendedId(e.target.value)}>
-                <MenuItem value=""><em>Any</em></MenuItem>
-                {events.map((e) => (
-                  <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Grid item xs={12} sm={6} md={4}>
+            <TextField
+              select
+              fullWidth
+              label="Attended Event"
+              value={eventAttendedId}
+              onChange={(e) => setEventAttendedId(e.target.value)}
+            >
+              <MenuItem value=""><em>Any</em></MenuItem>
+              {filteredEvents.map((e) => (
+                <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
 
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>Interview Round</InputLabel>
-              <Select value={interviewRound} label="Interview Round" onChange={(e) => setInterviewRound(e.target.value)}>
-                <MenuItem value=""><em>Any</em></MenuItem>
-                {INTERVIEW_ROUNDS.map((r) => (
-                  <MenuItem key={r} value={r}>{r.replace(/_/g, ' ')}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Grid item xs={12} sm={6} md={4}>
+            <TextField
+              select
+              fullWidth
+              label="Interview Round"
+              value={interviewRound}
+              onChange={(e) => {
+                setInterviewRound(e.target.value);
+                setDecision('');
+              }}
+            >
+              <MenuItem value=""><em>Any</em></MenuItem>
+              {INTERVIEW_ROUNDS.map((r) => (
+                <MenuItem key={r} value={r}>{r.replace(/_/g, ' ')}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
 
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth disabled={!interviewRound}>
-              <InputLabel>Decision</InputLabel>
-              <Select value={decision} label="Decision" onChange={(e) => setDecision(e.target.value)}>
-                <MenuItem value=""><em>Any</em></MenuItem>
-                {DECISIONS.map((d) => (
-                  <MenuItem key={d} value={d}>{d}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Grid item xs={12} sm={6} md={4}>
+            <TextField
+              select
+              fullWidth
+              label="Decision"
+              value={decision}
+              onChange={(e) => setDecision(e.target.value)}
+              disabled={!interviewRound}
+            >
+              <MenuItem value=""><em>Any</em></MenuItem>
+              {DECISIONS.map((d) => (
+                <MenuItem key={d} value={d}>{d}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
         </>
       )}
 
       {(audience === 'members' || audience === 'users') && (
-        <Grid item xs={12} md={8}>
-          <FormControl fullWidth>
-            <InputLabel>Roles</InputLabel>
-            <Select multiple value={roles} onChange={(e) => setRoles(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}>
-              {USER_ROLES.map((r) => (
-                <MenuItem key={r} value={r}>{r}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+        <Grid item xs={12} sm={6} md={4}>
+          <TextField
+            select
+            fullWidth
+            label="Roles"
+            value={roles}
+            onChange={(e) => setRoles(e.target.value)}
+            SelectProps={{ multiple: true, renderValue: (selected) => selected.join(', ') }}
+          >
+            {USER_ROLES.map((r) => (
+              <MenuItem key={r} value={r}>{r}</MenuItem>
+            ))}
+          </TextField>
         </Grid>
       )}
     </Grid>
@@ -392,15 +446,18 @@ const MasterCommunications = () => {
   const renderMessageComposer = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {channel !== 'imessage' && (
-        <FormControl fullWidth>
-          <InputLabel>Use Template</InputLabel>
-          <Select value={selectedTemplate} label="Use Template" onChange={(e) => onSelectTemplate(e.target.value)}>
-            <MenuItem value=""><em>None / Custom</em></MenuItem>
-            {channelTemplates.map((t) => (
-              <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <TextField
+          select
+          fullWidth
+          label="Use Template"
+          value={selectedTemplate}
+          onChange={(e) => onSelectTemplate(e.target.value)}
+        >
+          <MenuItem value=""><em>None / Custom</em></MenuItem>
+          {channelTemplates.map((t) => (
+            <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+          ))}
+        </TextField>
       )}
 
       {channel === 'email' && (
@@ -437,7 +494,7 @@ const MasterCommunications = () => {
           variant="outlined"
           startIcon={<PreviewIcon />}
           onClick={handlePreview}
-          disabled={loading}
+          disabled={loading || selectedCycles.length === 0}
         >
           {loading ? <CircularProgress size={20} /> : 'Preview Recipients'}
         </Button>
@@ -447,7 +504,7 @@ const MasterCommunications = () => {
             variant="contained"
             startIcon={<SendIcon />}
             onClick={handleOpenSend}
-            disabled={!body || (channel === 'email' && !subject)}
+            disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
           >
             Send {channel === 'email' ? 'Email' : 'Slack'}
           </Button>
@@ -458,6 +515,7 @@ const MasterCommunications = () => {
             variant="contained"
             startIcon={<PreviewIcon />}
             onClick={handlePacket}
+            disabled={selectedCycles.length === 0}
           >
             Generate iMessage Packet
           </Button>
@@ -486,8 +544,8 @@ const MasterCommunications = () => {
                     </Button>
                   </Box>
                   <List dense>
-                    {preview.recipients.map((r) => (
-                      <ListItem key={r.phoneNumber} divider>
+                    {preview.recipients.map((r, i) => (
+                      <ListItem key={`${r.phoneNumber}-${i}`} divider>
                         <ListItemText primary={r.label} />
                       </ListItem>
                     ))}
@@ -526,7 +584,7 @@ const MasterCommunications = () => {
             fullWidth
             required
           />
-          {channel === 'email' && (
+          {templateChannel === 'email' && (
             <TextField label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} fullWidth />
           )}
           <TextField
@@ -538,15 +596,23 @@ const MasterCommunications = () => {
             rows={4}
             required
           />
-          <FormControl fullWidth>
-            <InputLabel>Template Channel</InputLabel>
-            <Select value={templateChannel} label="Template Channel" onChange={(e) => setTemplateChannel(e.target.value)}>
-              <MenuItem value="email">Email</MenuItem>
-              <MenuItem value="slack">Slack</MenuItem>
-              <MenuItem value="imessage">iMessage</MenuItem>
-            </Select>
-          </FormControl>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveTemplate}>
+          <TextField
+            select
+            fullWidth
+            label="Template Channel"
+            value={templateChannel}
+            onChange={(e) => setTemplateChannel(e.target.value)}
+          >
+            {TEMPLATE_CHANNELS.map((c) => (
+              <MenuItem key={c} value={c}>{c}</MenuItem>
+            ))}
+          </TextField>
+          <Button
+            variant="contained"
+            startIcon={<SaveIcon />}
+            onClick={handleSaveTemplate}
+            disabled={!primaryCycle}
+          >
             Save {templateChannel} Template
           </Button>
         </Stack>
@@ -624,14 +690,18 @@ const MasterCommunications = () => {
         {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
 
         <Paper sx={{ p: 2, mb: 2 }}>
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>Recruiting Cycle</InputLabel>
-            <Select value={selectedCycle} label="Recruiting Cycle" onChange={(e) => setSelectedCycle(e.target.value)}>
-              {cycles.map((c) => (
-                <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <TextField
+            select
+            fullWidth
+            label="Recruiting Cycles"
+            value={selectedCycles}
+            onChange={(e) => setSelectedCycles(e.target.value)}
+            SelectProps={{ multiple: true, ...SELECT_PROPS }}
+            helperText="Select one or more cycles. Recipients are de-duplicated across them."
+            sx={{ mb: 2 }}
+          >
+            {cycleMenuItems}
+          </TextField>
 
           <Tabs value={tab} onChange={(e, v) => setTab(v)}>
             {CHANNELS.map((c) => (
