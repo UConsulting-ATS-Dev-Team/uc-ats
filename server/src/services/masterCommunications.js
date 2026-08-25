@@ -1,3 +1,4 @@
+import { marked } from 'marked';
 import prisma from '../prismaClient.js';
 import { sendEmail } from './emailNotifications.js';
 import { sendSlackMessage } from './slackService.js';
@@ -76,16 +77,22 @@ async function withConcurrency(items, fn, concurrency = 5) {
   return results;
 }
 
+function markdownToHtml(text) {
+  if (!text) return text;
+  return marked.parse(text, { breaks: true });
+}
+
 async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2 }) {
   return withConcurrency(
     recipients,
     async (r) => {
       const subject = renderMessage(baseSubject, r);
       const body = renderMessage(baseBody, r);
+      const htmlBody = markdownToHtml(body);
       let lastError = 'Unknown error';
 
       for (let attempt = 0; attempt <= retries; attempt++) {
-        const result = await sendEmail(r.email, subject, body);
+        const result = await sendEmail(r.email, subject, htmlBody);
         if (result.success) {
           return { recipientId: r.id, ...result };
         }

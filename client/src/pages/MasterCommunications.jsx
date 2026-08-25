@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Paper,
@@ -7,6 +7,8 @@ import {
   Tab,
   TextField,
   Button,
+  IconButton,
+  Tooltip,
   MenuItem,
   Grid,
   Stack,
@@ -32,6 +34,10 @@ import {
   ContentCopy as ContentCopyIcon,
   Preview as PreviewIcon,
   Delete as DeleteIcon,
+  FormatBold as FormatBoldIcon,
+  FormatItalic as FormatItalicIcon,
+  FormatListBulleted as FormatListBulletedIcon,
+  Link as LinkIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
@@ -71,6 +77,7 @@ function TabPanel({ children, value, index }) {
 
 const MasterCommunications = () => {
   const { user } = useAuth();
+  const messageRef = useRef(null);
   const [tab, setTab] = useState(0);
   const [cycles, setCycles] = useState([]);
   const [events, setEvents] = useState([]);
@@ -317,6 +324,25 @@ const MasterCommunications = () => {
     }
   };
 
+  const insertMarkdown = (prefix, suffix = '') => {
+    const el = messageRef.current;
+    if (!el) return;
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const selected = body.substring(start, end) || 'text';
+    const before = body.substring(0, start);
+    const after = body.substring(end);
+    const replacement = `${prefix}${selected}${suffix}`;
+    const newBody = before + replacement + after;
+    setBody(newBody);
+    setTimeout(() => {
+      el.focus();
+      const newStart = start + prefix.length;
+      const newEnd = newStart + selected.length;
+      el.setSelectionRange(newStart, newEnd);
+    }, 0);
+  };
+
   const handleSaveTemplate = async () => {
     clearMessages();
     if (!templateName || !body || !primaryCycle) {
@@ -548,7 +574,8 @@ const MasterCommunications = () => {
 
       {channel !== 'imessage' && (
         <TextField
-          label="Message"
+          inputRef={messageRef}
+          label="Message (Markdown supported)"
           value={body}
           onChange={(e) => setBody(e.target.value)}
           fullWidth
@@ -556,6 +583,34 @@ const MasterCommunications = () => {
           rows={8}
           required
         />
+      )}
+
+      {channel !== 'imessage' && (
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Tooltip title="Bold">
+            <IconButton size="small" onClick={() => insertMarkdown('**', '**')}>
+              <FormatBoldIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Italic">
+            <IconButton size="small" onClick={() => insertMarkdown('*', '*')}>
+              <FormatItalicIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Bulleted list">
+            <IconButton size="small" onClick={() => insertMarkdown('- ', '')}>
+              <FormatListBulletedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Link">
+            <IconButton size="small" onClick={() => insertMarkdown('[', '](url)')}>
+              <LinkIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Typography variant="caption" color="text.secondary">
+            Use **bold**, *italic*, - lists, [links](url). Line breaks are preserved.
+          </Typography>
+        </Stack>
       )}
 
       {channel !== 'imessage' && (
