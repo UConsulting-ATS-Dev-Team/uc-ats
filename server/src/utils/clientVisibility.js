@@ -1,0 +1,136 @@
+// The single place that decides what a Talent Partner Network client is allowed
+// to see about a resume. Pure - no prisma, no express - so the "never leaks a
+// Drive id" property is provable in a unit test.
+//
+// Two rules that are load-bearing:
+//
+// 1. Fields above the client's visibility level are OMITTED, not set to null.
+//    A null key still tells the client the field exists and invites their code
+//    (and their next support request) to try to fill it.
+//
+// 2. resumeUrl / blindResumeUrl NEVER appear in the output, at any level. Those
+//    are Google Drive file ids, and /api/files/* is not reachable by a CLIENT
+//    anyway - a DTO carrying one would be a broken UI and a leak at the same
+//    time. The client gets an assignment-scoped proxy URL instead, and the
+//    assignment id is the security primitive: it is meaningless without a row
+//    that ties it to this client.
+
+export const VISIBILITY_LEVELS = ['BLIND', 'BASIC', 'FULL'];
+
+export const pdfUrlForAssignment = (assignmentId) =>
+  `/api/client/resumes/${assignmentId}/pdf`;
+
+const showsIdentity = (visibility) => visibility === 'BASIC' || visibility === 'FULL';
+const showsContact = (visibility) => visibility === 'FULL';
+
+/**
+ * Whether a resume can actually be rendered for this visibility level. Drives
+ * the `available` flag so the UI can say "not available" instead of handing the
+ * viewer a PDF pane that 404s.
+ */
+export const isViewable = (assignment, visibility) => {
+  if (assignment?.application) {
+    if (visibility === 'BLIND') {
+      return Boolean(assignment.application.blindResumeUrl);
+    }
+    return Boolean(assignment.application.resumeUrl);
+  }
+  if (assignment?.memberResume) {
+    // No redacted variant of a member-uploaded PDF exists.
+    return visibility !== 'BLIND';
+  }
+  return false;
+};
+
+/**
+ * Resolve which stored file this assignment should stream for a given
+ * visibility. Server-side only - the return value must never be serialized into
+ * a response.
+ *
+ * @returns {{ kind: 'drive', fileId: string } | { kind: 'local', storagePath: string } | null}
+ */
+export const resolveResumeSource = (assignment, visibility) => {
+  if (assignment?.application) {
+    const app = assignment.application;
+    const fileId = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
+    if (!fileId) return null;
+    return { kind: 'drive', fileId };
+  }
+  if (assignment?.memberResume) {
+    if (visibility === 'BLIND') return null;
+    if (!assignment.memberResume.storagePath) return null;
+    return { kind: 'local', storagePath: assignment.memberResume.storagePath };
+  }
+  return null;
+};
+
+/**
+ * Project one assignment row (with `application` or `memberResume` included)
+ * into the DTO a client receives.
+ */
+export const projectAssignment = (assignment, visibility) => {
+  const isApplicant = Boolean(assignment.application);
+  const source = isApplicant ? assignment.application : assignment.memberResume;
+
+  const dto = {
+    assignmentId: assignment.id,
+    kind: isApplicant ? 'APPLICANT' : 'MEMBER',
+    assignedAt: assignment.assignedAt,
+    pdfUrl: pdfUrlForAssignment(assignment.id),
+    available: isViewable(assignment, visibility),
+    graduationYear: source?.graduationYear ?? null,
+    major1: source?.major1 ?? null,
+    major2: source?.major2 ?? null
+  };
+
+  if (showsIdentity(visibility)) {
+    dto.gender = source?.gender ?? null;
+    if (isApplicant) {
+      dto.firstName = source?.firstName ?? null;
+      dto.lastName = source?.lastName ?? null;
+    } else {
+      // Member name lives on the related User, not on the resume row.
+      const member = assignment.memberResume?.member;
+      dto.firstName = member?.fullName ? member.fullName.split(' ')[0] : null;
+      dto.lastName = member?.fullName
+        ? member.fullName.split(' ').slice(1).join(' ') || null
+        : null;
+    }
+  }
+
+  if (showsContact(visibility)) {
+    if (isApplicant) {
+      dto.email = source?.email ?? null;
+      dto.phoneNumber = source?.phoneNumber ?? null;
+      // Decimal comes back as a Prisma Decimal; string keeps the precision the
+      // column was chosen for.
+      dto.cumulativeGpa = source?.cumulativeGpa != null ? String(source.cumulativeGpa) : null;
+      dto.majorGpa = source?.majorGpa != null ? String(source.majorGpa) : null;
+    } else {
+      // Members supply no contact details or GPA with an uploaded resume. The
+      // keys stay present so the client renders one component for both kinds.
+      dto.email = assignment.memberResume?.member?.email ?? null;
+      dto.phoneNumber = null;
+      dto.cumulativeGpa = null;
+      dto.majorGpa = null;
+    }
+  }
+
+  return dto;
+};
+
+/**
+ * Which fields a free-text search may look at for a given visibility.
+ *
+ * Under BLIND this must exclude names. If a blind client could search by name
+ * and read the result count, they would have a yes/no oracle for "is this
+ * person in my set" - which is deanonymization by another route, and it would
+ * make the whole blind mode theatre.
+ */
+export const searchableFields = (visibility) => {
+  const base = ['graduationYear', 'major1', 'major2'];
+  if (showsIdentity(visibility)) {
+    return [...base, 'firstName', 'lastName'];
+  }
+  return base;
+};
