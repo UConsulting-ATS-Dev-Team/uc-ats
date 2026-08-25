@@ -49,6 +49,9 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
+  createdMessageTemplates    MessageTemplate[]              @relation("MessageTemplateCreator")
+  sentMessageLogs            MessageLog[]                   @relation("MessageLogSender")
+  scheduledMessages          MessageSchedule[]              @relation("ScheduleSender")
 
   @@map("users")
 }
@@ -160,6 +163,9 @@ model RecruitingCycle {
   videoScores               VideoScore[]
   cases                     Case[]
   gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
+  messageTemplates          MessageTemplate[]                @relation("CycleTemplates")
+  messageLogs               MessageLog[]                     @relation("CycleLogs")
+  scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
 
   @@map("recruiting_cycles")
 }
@@ -886,4 +892,69 @@ enum MeetingCommunicationType {
   HOST_NOTIFICATION
   CANCELLATION
   REMINDER
+}
+
+model MessageTemplate {
+  id          String            @id @default(uuid())
+  name        String
+  subject     String
+  body        String
+  channel     String
+  cycleId     String
+  createdBy   String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  cycle       RecruitingCycle   @relation("CycleTemplates", fields: [cycleId], references: [id], onDelete: Cascade)
+  creator     User              @relation("MessageTemplateCreator", fields: [createdBy], references: [id])
+  logs        MessageLog[]
+  schedules   MessageSchedule[]
+
+  @@index([cycleId])
+  @@map("message_templates")
+}
+
+model MessageLog {
+  id             String             @id @default(uuid())
+  templateId     String?
+  channel        String
+  recipientCount Int
+  subject        String?
+  body           String?
+  sentAt         DateTime           @default(now())
+  sentBy         String
+  cycleId        String?
+  template       MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle          RecruitingCycle?   @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender         User               @relation("MessageLogSender", fields: [sentBy], references: [id])
+  schedules      MessageSchedule[]
+
+  @@index([cycleId])
+  @@index([sentAt])
+  @@map("message_logs")
+}
+
+model MessageSchedule {
+  id           String             @id @default(uuid())
+  channel      String
+  audience     String
+  filters      Json               @default("{}")
+  subject      String?
+  body         String
+  cycleId      String?
+  templateId   String?
+  sentBy       String
+  scheduledAt  DateTime
+  status       String             @default("PENDING")
+  messageLogId String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  template     MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle        RecruitingCycle?   @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender       User               @relation("ScheduleSender", fields: [sentBy], references: [id])
+  messageLog   MessageLog?        @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([cycleId])
+  @@map("message_schedules")
 }

@@ -44,6 +44,7 @@ import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import MasterCommunications from './pages/MasterCommunications';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
@@ -376,6 +377,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Master Communications */}
+      <Route
+        path="/master-communications"
+        element={
+          <ProtectedRoute>
+            <MasterCommunications />
           </ProtectedRoute>
         }
       />
