@@ -30,6 +30,30 @@ function dedupeApplicants(applications) {
   return [...seen.values()];
 }
 
+const MERGE_FIELDS = {
+  applicant: {
+    firstName: (r) => r.firstName || '',
+    lastName: (r) => r.lastName || '',
+    fullName: (r) => r.fullName,
+    email: (r) => r.email,
+    phoneNumber: (r) => r.phoneNumber || '',
+  },
+  user: {
+    fullName: (r) => r.fullName,
+    email: (r) => r.email,
+    role: (r) => r.role || '',
+  },
+};
+
+function renderMessage(text, recipient) {
+  if (!text) return text;
+  const fields = MERGE_FIELDS[recipient.audience] || MERGE_FIELDS.user;
+  return text.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    const resolver = fields[key];
+    return resolver ? resolver(recipient) : match;
+  });
+}
+
 export async function listTemplates({ cycleId }) {
   const where = cycleId ? { cycleId } : {};
   return prisma.messageTemplate.findMany({
@@ -132,6 +156,8 @@ export async function resolveRecipients({ audience, filters = {} }) {
     return unique.map((a) => ({
       id: a.id,
       email: a.email,
+      firstName: a.firstName || '',
+      lastName: a.lastName || '',
       fullName: fullName(a.firstName, a.lastName),
       phoneNumber: a.phoneNumber,
       audience: 'applicant',
@@ -248,7 +274,9 @@ export async function sendMasterCommunication({
 
   const results = await Promise.all(
     recipients.map(async (r) => {
-      const result = await sendEmail(r.email, subject, body);
+      const renderedSubject = renderMessage(subject, r);
+      const renderedBody = renderMessage(body, r);
+      const result = await sendEmail(r.email, renderedSubject, renderedBody);
       return { recipientId: r.id, ...result };
     })
   );

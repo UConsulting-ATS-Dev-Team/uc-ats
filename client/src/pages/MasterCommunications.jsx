@@ -10,6 +10,7 @@ import {
   MenuItem,
   Grid,
   Stack,
+  Chip,
   Alert,
   CircularProgress,
   Dialog,
@@ -50,6 +51,12 @@ const INTERVIEW_ROUNDS = ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND'];
 const DECISIONS = ['yes', 'no', 'maybe'];
 const USER_ROLES = ['USER', 'MEMBER', 'ADMIN'];
 const TEMPLATE_CHANNELS = ['email', 'slack', 'imessage'];
+
+const MERGE_FIELDS = {
+  applicants: ['firstName', 'lastName', 'fullName', 'email', 'phoneNumber'],
+  members: ['fullName', 'email', 'role'],
+  admins: ['fullName', 'email', 'role'],
+};
 
 const SELECT_PROPS = {
   MenuProps: {
@@ -301,6 +308,15 @@ const MasterCommunications = () => {
     }
   };
 
+  const insertMergeField = (field, target = 'body') => {
+    const token = `{{${field}}}`;
+    if (target === 'subject') {
+      setSubject((prev) => (prev ? `${prev} ${token}` : token));
+    } else {
+      setBody((prev) => (prev ? `${prev} ${token}` : token));
+    }
+  };
+
   const handleSaveTemplate = async () => {
     clearMessages();
     if (!templateName || !body || !primaryCycle) {
@@ -540,6 +556,25 @@ const MasterCommunications = () => {
           rows={8}
           required
         />
+      )}
+
+      {channel !== 'imessage' && (
+        <Box>
+          <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+            Click a field to insert it into the message:
+          </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            {(MERGE_FIELDS[audience] || []).map((field) => (
+              <Chip
+                key={field}
+                label={`{{${field}}}`}
+                size="small"
+                onClick={() => insertMergeField(field, 'body')}
+                sx={{ cursor: 'pointer' }}
+              />
+            ))}
+          </Stack>
+        </Box>
       )}
 
       {channel !== 'imessage' && (
