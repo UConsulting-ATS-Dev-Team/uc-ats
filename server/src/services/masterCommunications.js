@@ -56,6 +56,66 @@ function renderMessage(text, recipient) {
   });
 }
 
+async function withConcurrency(items, fn, concurrency = 5) {
+  const results = new Array(items.length);
+  const queue = items.map((item, index) => ({ item, index }));
+  const workers = [];
+
+  for (let i = 0; i < concurrency; i++) {
+    workers.push(
+      (async () => {
+        while (queue.length > 0) {
+          const { item, index } = queue.shift();
+          results[index] = await fn(item);
+        }
+      })()
+    );
+  }
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2 }) {
+  return withConcurrency(
+    recipients,
+    async (r) => {
+      const subject = renderMessage(baseSubject, r);
+      const body = renderMessage(baseBody, r);
+      let lastError = 'Unknown error';
+
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const result = await sendEmail(r.email, subject, body);
+        if (result.success) {
+          return { recipientId: r.id, ...result };
+        }
+        lastError = result.error || 'Send failed';
+        if (attempt < retries) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+
+      return { recipientId: r.id, success: false, error: lastError };
+    },
+    concurrency
+  );
+}
+
+async function notifyFailures({ channel, audience, failed, total, results }) {
+  if (failed === 0) return;
+  try {
+    const failures = results.filter((r) => !r.success).slice(0, 5);
+    const sample = failures
+      .map((r) => `• ${r.recipientId}${r.error ? ` — ${r.error}` : ''}`)
+      .join('\n');
+    const text = `⚠️ Master Communications bulk send finished for ${channel} to ${audience}.\n` +
+      `Delivered: ${total - failed} / ${total}\nFailed: ${failed}\nSample failures:\n${sample}`;
+    await sendSlackMessage({ text });
+  } catch (e) {
+    console.error('[masterCommunications] Slack failure notification failed:', e);
+  }
+}
+
 export async function listTemplates({ cycleId }) {
   const where = cycleId ? { cycleId } : {};
   return prisma.messageTemplate.findMany({
@@ -274,19 +334,20 @@ export async function sendMasterCommunication({
     return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length, logId };
   }
 
-  const results = await Promise.all(
-    recipients.map(async (r) => {
-      const renderedSubject = renderMessage(subject, r);
-      const renderedBody = renderMessage(body, r);
-      const result = await sendEmail(r.email, renderedSubject, renderedBody);
-      return { recipientId: r.id, ...result };
-    })
-  );
+  const results = await sendBulkEmails({
+    recipients,
+    baseSubject: subject,
+    baseBody: body,
+    concurrency: 5,
+    retries: 2,
+  });
 
   const sent = results.filter((r) => r.success).length;
   const failed = results.length - sent;
 
   const logId = await logMessage({ templateId, channel, recipientCount: results.length, subject, body, sentBy, cycleId });
+
+  await notifyFailures({ channel, audience, failed, total: results.length, results });
 
   return { channel, audience, sent, failed, total: results.length, results, logId };
 }
