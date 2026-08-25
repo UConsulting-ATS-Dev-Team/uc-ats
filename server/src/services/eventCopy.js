@@ -19,6 +19,7 @@ export const PORTABLE_EVENT_FIELDS = [
   { name: 'rsvpForm', label: 'RSVP Form URL', required: false, editable: true, type: 'url' },
   { name: 'attendanceForm', label: 'Attendance Form URL', required: false, editable: true, type: 'url' },
   { name: 'memberRsvpUrl', label: 'Member RSVP Form URL', required: false, editable: true, type: 'url' },
+  { name: 'memberAttendanceForm', label: 'Member Attendance Form URL', required: false, editable: true, type: 'url' },
 ];
 
 function toIsoString(value) {
@@ -82,6 +83,7 @@ export async function previewCycleEventCopy({ prisma, sourceCycleId, targetCycle
     rsvpForm: source.rsvpForm || '',
     attendanceForm: source.attendanceForm || '',
     memberRsvpUrl: source.memberRsvpUrl || '',
+    memberAttendanceForm: source.memberAttendanceForm || '',
     alreadyExists: targetBySource.has(source.id),
   }));
 
@@ -175,6 +177,10 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
       validationErrors.push({ index, field: 'memberRsvpUrl', message: 'Member RSVP form must be a valid URL' });
       continue;
     }
+    if (evt.memberAttendanceForm && !isValidUrl(evt.memberAttendanceForm)) {
+      validationErrors.push({ index, field: 'memberAttendanceForm', message: 'Member attendance form must be a valid URL' });
+      continue;
+    }
   }
 
   if (validationErrors.length > 0) {
@@ -263,6 +269,7 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
             rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
             attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
             memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
+            memberAttendanceForm: evt.memberAttendanceForm ? evt.memberAttendanceForm.trim() : null,
             copiedFromCycleId: sourceCycleId,
             copiedFromEventId: evt.sourceEventId,
             copiedByUserId: actorId || null,
@@ -290,6 +297,7 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
                     rsvpForm: true,
                     attendanceForm: true,
                     memberRsvpUrl: true,
+                    memberAttendanceForm: true,
                     createdAt: true,
                     copiedFromCycleId: true,
                     copiedFromEventId: true,

@@ -18,7 +18,8 @@ import {
   ChatBubbleOvalLeftEllipsisIcon,
   LightBulbIcon,
   PresentationChartBarIcon,
-  NewspaperIcon
+  NewspaperIcon,
+  CheckCircleIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -65,6 +66,7 @@ const Layout = ({ children }) => {
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
+      { name: 'Accountability', href: '/accountability', icon: CheckCircleIcon },
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },

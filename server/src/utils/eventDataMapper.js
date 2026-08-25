@@ -247,7 +247,7 @@ export function createDynamicEventMapping(formResponse, eventId, configType) {
 
 // Get supported event form types
 export function getSupportedEventFormTypes() {
-  return ['attendance', 'rsvp'];
+  return ['attendance', 'rsvp', 'member-rsvp', 'member-attendance'];
 }
 
 // Validate event form configuration

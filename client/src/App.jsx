@@ -32,6 +32,7 @@ import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
 import UserManagement from './pages/UserManagement';
 import EventManagement from './pages/EventManagement';
+import AccountabilityTracker from './pages/AccountabilityTracker';
 import CandidateEvents from './pages/CandidateEvents';
 import MemberEvents from './pages/MemberEvents';
 import CandidateApplications from './pages/CandidateApplications';
@@ -186,6 +187,15 @@ const AppRoutes = () => {
           <ProtectedRoute>
             {user?.role === 'USER' ? <CandidateEvents /> : 
              user?.role === 'MEMBER' ? <MemberEvents /> : <EventManagement />}
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/accountability"
+        element={
+          <ProtectedRoute>
+            <AccountabilityTracker />
           </ProtectedRoute>
         }
       />
