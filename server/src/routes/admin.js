@@ -7,6 +7,7 @@ import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { syncInterviewCalendarEvent, cancelInterviewCalendarEvent } from '../services/interviewCalendar.js';
 import {
   getDeactivationCandidates,
   parseGraduationYear
@@ -53,6 +54,17 @@ import {
 } from '../services/activeCycle.js';
 
 const router = express.Router();
+
+// Calendar sync is best-effort: an interview that exists must never be reported as a failed request,
+// because the client would retry the create and mint a second interview (and a second invite).
+async function bestEffortCalendarSync(interviewId, reason) {
+  try {
+    return await syncInterviewCalendarEvent(interviewId, { reason });
+  } catch (error) {
+    console.error(`[InterviewCalendar] Unexpected sync failure for interview ${interviewId}:`, error?.message);
+    return { status: 'FAILED', error: 'Calendar invite could not be sent. Use "Send invites" to retry.' };
+  }
+}
 
 const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
 
@@ -2023,7 +2035,9 @@ router.post('/interviews', async (req, res) => {
       }
     });
 
-    res.json(interview);
+    const calendarSync = await bestEffortCalendarSync(interview.id, 'interview created');
+
+    res.json({ ...interview, calendarSync });
   } catch (error) {
     console.error('[POST /api/admin/interviews]', {
       message: error?.message,
@@ -2052,6 +2066,18 @@ router.delete('/interviews/:id', async (req, res) => {
     if (!interview) {
       return res.status(404).json({ error: 'Interview not found' });
     }
+
+    // Withdraw the calendar invite before the row (and its stored event ID) disappears. Deleting
+    // the row after a failed cancellation would leave a live event with no way to retry, so the
+    // interview stays until Google confirms the event is gone.
+    const calendarSync = await cancelInterviewCalendarEvent(id);
+    if (calendarSync.status === 'FAILED') {
+      return res.status(409).json({
+        error: `Interview not deleted: the calendar invite could not be withdrawn, so interviewers would keep a stale event. ${calendarSync.error} Retry the delete once this is resolved.`,
+        calendarSync
+      });
+    }
+
     // Delete dependent records first to satisfy FK constraints
     const ops = [];
     if (prisma.interviewAssignment?.deleteMany) {
@@ -2099,6 +2125,76 @@ router.get('/interviews/:id', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/admin/interviews/:id]', error);
     res.status(500).json({ error: 'Failed to fetch interview details' });
+  }
+});
+
+// Update interview details (schedule/location). Keeps the calendar invite on the same provider
+// event so interviewers see an update rather than a second invitation.
+const EDITABLE_INTERVIEW_FIELDS = ['title', 'startDate', 'endDate', 'location', 'dresscode'];
+const LOCKED_INTERVIEW_STATUSES = ['COMPLETED', 'CANCELLED'];
+
+router.patch('/interviews/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.interview.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Interview not found' });
+    }
+    if (LOCKED_INTERVIEW_STATUSES.includes(existing.status)) {
+      return res.status(409).json({ error: `A ${existing.status.toLowerCase()} interview can no longer be edited` });
+    }
+
+    const rejected = Object.keys(req.body || {}).filter((field) => !EDITABLE_INTERVIEW_FIELDS.includes(field));
+    if (rejected.length) {
+      return res.status(400).json({ error: `Fields cannot be updated here: ${rejected.join(', ')}` });
+    }
+
+    const data = {};
+    for (const field of EDITABLE_INTERVIEW_FIELDS) {
+      if (req.body?.[field] === undefined) continue;
+      const value = req.body[field];
+
+      if (field === 'startDate' || field === 'endDate') {
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({ error: `${field} is not a valid date` });
+        }
+        data[field] = parsed;
+        continue;
+      }
+
+      if (field === 'title' && !String(value || '').trim()) {
+        return res.status(400).json({ error: 'Interview title is required' });
+      }
+      data[field] = value === '' ? null : value;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'No editable fields provided' });
+    }
+
+    const start = data.startDate ?? existing.startDate;
+    const end = data.endDate ?? existing.endDate;
+    if (start && end && end <= start) {
+      return res.status(400).json({ error: 'Interview end must be after its start' });
+    }
+
+    const interview = await prisma.interview.update({
+      where: { id },
+      data,
+      include: { cycle: true }
+    });
+
+    const calendarSync = await bestEffortCalendarSync(id, 'schedule updated');
+
+    res.json({ ...interview, calendarSync });
+  } catch (error) {
+    console.error('[PATCH /api/admin/interviews/:id]', error);
+    if (error?.code === 'P2021' || error?.code === 'P2022') {
+      return res.status(400).json({ error: 'Interview schema not found. Run migrations to create interview tables.' });
+    }
+    res.status(500).json({ error: 'Failed to update interview' });
   }
 });
 
@@ -2300,11 +2396,32 @@ router.patch('/interviews/:id/config', async (req, res) => {
         cycle: true
       }
     });
-    
-    res.json(updatedInterview);
+
+    // The member groups in this config are the interviewer roster, so keep the invite in step
+    const calendarSync = await bestEffortCalendarSync(id, 'roster updated');
+
+    res.json({ ...updatedInterview, calendarSync });
   } catch (error) {
     console.error('[PATCH /api/admin/interviews/:id/config]', error);
     res.status(500).json({ error: 'Failed to update interview configuration' });
+  }
+});
+
+// Retry / force the Google Calendar invite for an interview
+router.post('/interviews/:id/calendar-sync', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    if (!interview) {
+      return res.status(404).json({ error: 'Interview not found' });
+    }
+
+    const calendarSync = await bestEffortCalendarSync(id, 'manual retry');
+    res.json(calendarSync);
+  } catch (error) {
+    console.error('[POST /api/admin/interviews/:id/calendar-sync]', error);
+    res.status(500).json({ error: 'Failed to sync calendar invite' });
   }
 });
 

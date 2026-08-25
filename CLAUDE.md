@@ -172,6 +172,8 @@ The system follows a **recruiting cycle-based workflow**:
 - [server/src/services/emailNotifications.js](server/src/services/emailNotifications.js) - Nodemailer integration for notifications
 - [server/src/services/google/forms.js](server/src/services/google/forms.js) - Google Forms API wrapper
 - [server/src/services/google/drive.js](server/src/services/google/drive.js) - Google Drive file operations
+- [server/src/services/google/calendar.js](server/src/services/google/calendar.js) - Google Calendar API wrapper
+- [server/src/services/interviewCalendar.js](server/src/services/interviewCalendar.js) - Creates/updates the interviewer calendar invite for an interview
 
 **Data Mappers:**
 - [server/src/utils/dataMapper.js](server/src/utils/dataMapper.js) - Maps Google Forms responses to Application schema
@@ -242,9 +244,10 @@ When the application form changes:
 
 1. Admin creates `Interview` via Staging page or EventManagement
 2. Assigns interviewers via `InterviewAssignment` (role: LEAD_INTERVIEWER, INTERVIEWER, OBSERVER)
-3. Interviewers access via AssignedInterviews page
-4. During interview, create `InterviewEvaluation` (or `FirstRoundInterviewEvaluation` for Round 1) with rubric scores
-5. Deliberations: review all evaluations, make final decisions
+3. Saving the roster syncs a Google Calendar invite for the assigned interviewers (see `interviewCalendar.js`); sync state lives on `Interview.calendarEventId` / `calendarSyncStatus`. Editing the schedule/location goes through `PATCH /api/admin/interviews/:id` (title, startDate, endDate, location, dresscode; blocked once the interview is COMPLETED/CANCELLED), which re-syncs the same provider event rather than creating a second invite
+4. Interviewers access via AssignedInterviews page
+5. During interview, create `InterviewEvaluation` (or `FirstRoundInterviewEvaluation` for Round 1) with rubric scores
+6. Deliberations: review all evaluations, make final decisions
 
 ### Email Notifications
 
@@ -276,6 +279,8 @@ Required in `server/.env`:
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)
 - `EMAIL_USER`, `EMAIL_PASS` - Gmail credentials for nodemailer
 - `SLACK_WEBHOOK_URL` - (Optional) Slack webhook for admin notifications
+- `GOOGLE_CALENDAR_ID` - Calendar that interviewer invites are written to (share it with the service account)
+- `CALENDAR_INVITE_TEST_EMAIL` - (Optional) Redirects every calendar invite to one address for safe testing
 
 ## Common Patterns
 

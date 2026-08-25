@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { getGoogleAuthClient } from './auth.js';
 import config from '../../config.js';
 
-const TIMEZONE = 'America/Los_Angeles';
+export const TIMEZONE = 'America/Los_Angeles';
 
 let calendarClient;
 
@@ -29,7 +29,7 @@ function buildEventResource({ eventName, eventLocation, eventStartDate, eventEnd
 
 // Redirects real invites to a single test address when CALENDAR_INVITE_TEST_EMAIL is set,
 // so this can be exercised safely before it emails the whole team.
-function resolveAttendees(attendeeEmails) {
+export function resolveAttendees(attendeeEmails) {
   if (config.calendarInviteTestEmail) {
     console.warn(
       `[Calendar] TEST MODE active — redirecting ${attendeeEmails.length} real invite(s) to ${config.calendarInviteTestEmail}. Unset CALENDAR_INVITE_TEST_EMAIL to send to real members/admins.`
@@ -108,6 +108,45 @@ export async function cancelCalendarEvent(calendarEventId) {
 }
 
 function isGoneError(error) {
-  const status = error.code || error.response?.status;
+  const status = error?.code || error?.response?.status;
   return status === 404 || status === 410;
+}
+
+// Inserts an event using a caller-supplied event ID so repeated calls for the same record can
+// never create duplicates: Google rejects a second insert with 409 Conflict.
+export async function insertEventWithId(eventId, requestBody) {
+  const calendar = await getCalendarClient();
+  const res = await calendar.events.insert({
+    calendarId: config.googleCalendarId,
+    eventId,
+    sendUpdates: 'all',
+    requestBody: { ...requestBody, id: eventId },
+  });
+  return res.data;
+}
+
+// Patches an event in place. Attendees supplied here replace the existing attendee list, so
+// removed interviewers get a cancellation and remaining ones keep their original invite.
+export async function patchEventById(eventId, requestBody) {
+  const calendar = await getCalendarClient();
+  const res = await calendar.events.patch({
+    calendarId: config.googleCalendarId,
+    eventId,
+    sendUpdates: 'all',
+    requestBody,
+  });
+  return res.data;
+}
+
+export async function deleteEventById(eventId) {
+  const calendar = await getCalendarClient();
+  try {
+    await calendar.events.delete({
+      calendarId: config.googleCalendarId,
+      eventId,
+      sendUpdates: 'all',
+    });
+  } catch (error) {
+    if (!isGoneError(error)) throw error;
+  }
 }
