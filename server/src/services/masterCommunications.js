@@ -21,7 +21,7 @@ function resolveDecisionField(round) {
 
 function dedupeApplicants(applications) {
   const seen = new Map();
-  const sorted = [...applications].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const sorted = [...applications].sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
   for (const a of sorted) {
     const key = a.candidateId || a.email.toLowerCase();
     if (!seen.has(key)) {
@@ -216,7 +216,7 @@ export async function resolveRecipients({ audience, filters = {} }) {
         phoneNumber: true,
         cycleId: true,
         candidateId: true,
-        createdAt: true,
+        submittedAt: true,
       },
     });
 
