@@ -27,6 +27,7 @@ import {
 } from '../utils/gtkucProfile.js';
 import {
   MEMBER_GENDERS,
+  sanitizeMemberResumeDetails,
   sanitizeMemberResumeInput,
   serializeMemberResume
 } from '../utils/memberResume.js';
@@ -1863,15 +1864,21 @@ const requireMemberRole = (req, res, next) => {
 const loadOwnResume = (memberId) =>
   prisma.memberResume.findFirst({ where: { memberId, isCurrent: true } });
 
-const countLiveAssignments = (resumeId) =>
-  resumeId
-    ? prisma.clientResumeAssignment.count({ where: { memberResumeId: resumeId, revokedAt: null } })
-    : Promise.resolve(0);
+// Counted across every version the member has uploaded, not just the current
+// row. Replacing a PDF supersedes rather than revokes, so a client assigned
+// version 1 still holds it after version 2 goes up. Counting only the current
+// row would tell that member "0 organizations" while three partners were
+// reading their resume - and the number is the whole basis for deciding whether
+// to stop sharing.
+const countLiveAssignments = (memberId) =>
+  prisma.clientResumeAssignment.count({
+    where: { memberResume: { memberId }, revokedAt: null }
+  });
 
 router.get('/resume', requireAuth, requireMemberRole, async (req, res) => {
   try {
     const resume = await loadOwnResume(req.user.id);
-    const assignedCount = await countLiveAssignments(resume?.id);
+    const assignedCount = await countLiveAssignments(req.user.id);
     res.json({ resume: serializeMemberResume(resume, assignedCount), genders: MEMBER_GENDERS });
   } catch (error) {
     console.error('[GET /api/member/resume]', error);
@@ -1889,6 +1896,14 @@ router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, a
     if (errors.length > 0) {
       return res.status(400).json({ error: errors[0], errors });
     }
+
+    // Replacing a PDF says nothing about sharing, so an omitted checkbox
+    // carries the current answer forward instead of reading as a withdrawal.
+    // Without this a member who is sharing and swaps in a newer resume lands on
+    // a fresh row with shareConsent = false and silently drops out of the pool.
+    // An explicit false is still a false.
+    const previous = await loadOwnResume(req.user.id);
+    const shareConsent = value.shareConsent ?? previous?.shareConsent ?? false;
 
     // Re-uploading supersedes rather than overwrites. An assignment already
     // committed to a client keeps pointing at the exact file that was assigned,
@@ -1909,8 +1924,8 @@ router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, a
           major2: value.major2,
           graduationYear: value.graduationYear,
           gender: value.gender,
-          shareConsent: value.shareConsent,
-          consentAt: value.shareConsent ? new Date() : null
+          shareConsent,
+          consentAt: shareConsent ? previous?.consentAt ?? new Date() : null
         }
       });
     });
@@ -1931,10 +1946,57 @@ router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, a
       data: { storagePath: relPath }
     });
 
-    res.status(201).json({ resume: serializeMemberResume(resume, 0) });
+    // Not 0: the superseded version may still be out with partners, and the
+    // count is what the member reads before deciding whether to stop sharing.
+    const assignedCount = await countLiveAssignments(req.user.id);
+    res.status(201).json({ resume: serializeMemberResume(resume, assignedCount) });
   } catch (error) {
     console.error('[POST /api/member/resume]', error);
     res.status(500).json({ error: 'Failed to upload your resume' });
+  }
+});
+
+// Correct the descriptive fields without re-uploading the PDF. Separate from
+// POST because the two are different acts: a typo in a graduation year is not a
+// new document, and routing it through POST would supersede the row, strand the
+// live assignments on the old version, and hand partners a resume whose
+// metadata still says 2027.
+//
+// This edits in place, and that is deliberate. The client portal projects
+// major/graduationYear/gender live off this row (utils/clientVisibility.js) and
+// only the file itself is a snapshot - so a correction reaches the partners who
+// already hold the resume, which is the point of correcting it.
+router.patch('/resume', requireAuth, requireMemberRole, async (req, res) => {
+  try {
+    const existing = await loadOwnResume(req.user.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Upload a resume first' });
+    }
+
+    const { value, errors } = sanitizeMemberResumeDetails(req.body || {});
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0], errors });
+    }
+
+    // Consent is not editable here. It has its own endpoint because withdrawing
+    // has to revoke assignments in the same transaction, and folding it into a
+    // details save would make a partial form submission able to un-share a
+    // resume by omission.
+    const resume = await prisma.memberResume.update({
+      where: { id: existing.id },
+      data: {
+        major1: value.major1,
+        major2: value.major2,
+        graduationYear: value.graduationYear,
+        gender: value.gender
+      }
+    });
+
+    const assignedCount = await countLiveAssignments(req.user.id);
+    res.json({ resume: serializeMemberResume(resume, assignedCount) });
+  } catch (error) {
+    console.error('[PATCH /api/member/resume]', error);
+    res.status(500).json({ error: 'Failed to save your resume details' });
   }
 });
 
@@ -1963,8 +2025,18 @@ router.patch('/resume/consent', requireAuth, requireMemberRole, async (req, res)
         // Withdrawal takes effect immediately rather than waiting for an admin
         // to notice. This is the one place the snapshot rule yields, and it
         // yields to the person whose resume it is.
+        //
+        // Scoped to the member rather than to this row: superseded versions
+        // keep their assignments live, so revoking only the current row would
+        // leave the member's older resume with partners after they pressed
+        // "stop sharing" - the one action that must not half-work. The same
+        // reason clears consent on those rows, so nothing can be re-assigned.
+        await tx.memberResume.updateMany({
+          where: { memberId: req.user.id, shareConsent: true },
+          data: { shareConsent: false, consentRevokedAt: now }
+        });
         await tx.clientResumeAssignment.updateMany({
-          where: { memberResumeId: existing.id, revokedAt: null },
+          where: { memberResume: { memberId: req.user.id }, revokedAt: null },
           data: { revokedAt: now, revokedById: req.user.id }
         });
       }
@@ -1972,7 +2044,7 @@ router.patch('/resume/consent', requireAuth, requireMemberRole, async (req, res)
       return updated;
     });
 
-    const assignedCount = await countLiveAssignments(resume.id);
+    const assignedCount = await countLiveAssignments(req.user.id);
     res.json({ resume: serializeMemberResume(resume, assignedCount) });
   } catch (error) {
     console.error('[PATCH /api/member/resume/consent]', error);
@@ -2015,8 +2087,15 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
         where: { id: existing.id },
         data: { isCurrent: false, shareConsent: false, consentRevokedAt: now }
       });
+      // Every version, for the same reason consent withdrawal is member-scoped:
+      // "remove my resume" that leaves an older copy with a partner has not
+      // removed the member's resume.
+      await tx.memberResume.updateMany({
+        where: { memberId: req.user.id, shareConsent: true },
+        data: { shareConsent: false, consentRevokedAt: now }
+      });
       await tx.clientResumeAssignment.updateMany({
-        where: { memberResumeId: existing.id, revokedAt: null },
+        where: { memberResume: { memberId: req.user.id }, revokedAt: null },
         data: { revokedAt: now, revokedById: req.user.id }
       });
     });

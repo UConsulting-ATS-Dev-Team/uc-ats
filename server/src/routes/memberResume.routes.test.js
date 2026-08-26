@@ -194,7 +194,12 @@ describe('consent withdrawal', () => {
 
     expect(res.status).toBe(200);
     const revokeCall = prisma.__tx.clientResumeAssignment.updateMany.mock.calls[0][0];
-    expect(revokeCall.where).toMatchObject({ memberResumeId: 'mr-1', revokedAt: null });
+    // Scoped to the member, not to the current row: see "withdraws every
+    // version when sharing stops" below.
+    expect(revokeCall.where).toMatchObject({
+      memberResume: { memberId: memberUser.id },
+      revokedAt: null
+    });
     expect(revokeCall.data.revokedAt).toBeInstanceOf(Date);
   });
 
@@ -278,5 +283,177 @@ describe('removing a resume', () => {
       shareConsent: false
     });
     expect(prisma.__tx.clientResumeAssignment.updateMany).toHaveBeenCalled();
+  });
+
+  it('reaches superseded versions too - an older copy left with a partner is not removed', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume());
+    prisma.__tx.memberResume.update.mockResolvedValue(existingResume({ isCurrent: false }));
+    prisma.__tx.clientResumeAssignment.updateMany.mockResolvedValue({ count: 2 });
+
+    await request('/api/member/resume', { user: memberUser, method: 'DELETE' });
+
+    expect(prisma.__tx.clientResumeAssignment.updateMany.mock.calls[0][0].where).toMatchObject({
+      memberResume: { memberId: memberUser.id },
+      revokedAt: null
+    });
+  });
+});
+
+// The gap this branch closes: fixing a typo used to require re-uploading the
+// PDF, which supersedes the row and strands the live assignments on the old
+// version - so partners kept reading the wrong graduation year forever.
+describe('editing details without re-uploading', () => {
+  it('updates the current row in place instead of superseding it', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume());
+    prisma.memberResume.update.mockResolvedValue(
+      existingResume({ major1: 'Economics', graduationYear: '2028' })
+    );
+
+    const res = await request('/api/member/resume', {
+      user: memberUser,
+      method: 'PATCH',
+      body: { major1: 'Economics', graduationYear: '2028', gender: 'Other' }
+    });
+
+    expect(res.status).toBe(200);
+    expect(prisma.memberResume.update.mock.calls[0][0]).toMatchObject({
+      where: { id: 'mr-1' },
+      data: { major1: 'Economics', graduationYear: '2028', gender: 'Other' }
+    });
+    // No new row, so the assignments already out with partners keep pointing at
+    // this row and pick up the correction.
+    expect(prisma.__tx.memberResume.create).not.toHaveBeenCalled();
+    expect(prisma.__tx.memberResume.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('cannot change consent by omission', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume({ shareConsent: true }));
+    prisma.memberResume.update.mockResolvedValue(existingResume({ shareConsent: true }));
+
+    await request('/api/member/resume', {
+      user: memberUser,
+      method: 'PATCH',
+      body: { major1: 'Economics', graduationYear: '2028', shareConsent: false }
+    });
+
+    const { data } = prisma.memberResume.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty('shareConsent');
+    expect(prisma.clientResumeAssignment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('holds an edit to the same rules as the original upload', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume());
+
+    for (const body of [
+      { major1: 'Economics', graduationYear: 'Spring 2028' },
+      { major1: '', graduationYear: '2028' },
+      { major1: 'Economics', graduationYear: '2028', gender: 'Wizard' }
+    ]) {
+      const res = await request('/api/member/resume', { user: memberUser, method: 'PATCH', body });
+      expect({ body, status: res.status }).toEqual({ body, status: 400 });
+    }
+    expect(prisma.memberResume.update).not.toHaveBeenCalled();
+  });
+
+  it('404s when there is nothing on file to edit', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(null);
+    const res = await request('/api/member/resume', {
+      user: memberUser,
+      method: 'PATCH',
+      body: { major1: 'Economics', graduationYear: '2028' }
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('is closed to admins and candidates like the rest of the resume routes', async () => {
+    for (const user of [adminUser, candidateUser]) {
+      const res = await request('/api/member/resume', {
+        user,
+        method: 'PATCH',
+        body: { major1: 'Economics', graduationYear: '2028' }
+      });
+      expect({ role: user.role, status: res.status }).toEqual({ role: user.role, status: 403 });
+    }
+  });
+});
+
+describe('what a member is told is shared', () => {
+  it('counts every version, not just the current one', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume());
+    prisma.clientResumeAssignment.count.mockResolvedValue(3);
+
+    await request('/api/member/resume', { user: memberUser });
+
+    expect(prisma.clientResumeAssignment.count.mock.calls[0][0].where).toMatchObject({
+      memberResume: { memberId: memberUser.id },
+      revokedAt: null
+    });
+  });
+
+  it('withdraws every version when sharing stops', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume());
+    prisma.__tx.memberResume.update.mockResolvedValue(existingResume({ shareConsent: false }));
+    prisma.__tx.clientResumeAssignment.updateMany.mockResolvedValue({ count: 3 });
+
+    await request('/api/member/resume/consent', {
+      user: memberUser,
+      method: 'PATCH',
+      body: { shareConsent: false }
+    });
+
+    expect(prisma.__tx.clientResumeAssignment.updateMany.mock.calls[0][0].where).toMatchObject({
+      memberResume: { memberId: memberUser.id },
+      revokedAt: null
+    });
+    // Superseded rows lose consent too, so nothing can be re-assigned after a
+    // member has said stop.
+    expect(prisma.__tx.memberResume.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { memberId: memberUser.id, shareConsent: true },
+      data: { shareConsent: false }
+    });
+  });
+});
+
+describe('replacing a PDF does not silently un-share', () => {
+  it('carries consent forward when the upload does not mention it', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume({ shareConsent: true }));
+    prisma.__tx.memberResume.create.mockResolvedValue(existingResume({ id: 'mr-2' }));
+    prisma.memberResume.update.mockResolvedValue(existingResume({ id: 'mr-2' }));
+
+    await uploadRequest({
+      user: memberUser,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Statistics', graduationYear: '2027' }
+    });
+
+    expect(prisma.__tx.memberResume.create.mock.calls[0][0].data.shareConsent).toBe(true);
+  });
+
+  it('still honours an explicit no', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(existingResume({ shareConsent: true }));
+    prisma.__tx.memberResume.create.mockResolvedValue(existingResume({ id: 'mr-2' }));
+    prisma.memberResume.update.mockResolvedValue(existingResume({ id: 'mr-2' }));
+
+    await uploadRequest({
+      user: memberUser,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Statistics', graduationYear: '2027', shareConsent: 'false' }
+    });
+
+    expect(prisma.__tx.memberResume.create.mock.calls[0][0].data.shareConsent).toBe(false);
+  });
+
+  it('defaults a first upload to not shared', async () => {
+    prisma.memberResume.findFirst.mockResolvedValue(null);
+    prisma.__tx.memberResume.create.mockResolvedValue(existingResume({ id: 'mr-1' }));
+    prisma.memberResume.update.mockResolvedValue(existingResume({ id: 'mr-1' }));
+
+    await uploadRequest({
+      user: memberUser,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Statistics', graduationYear: '2027' }
+    });
+
+    expect(prisma.__tx.memberResume.create.mock.calls[0][0].data.shareConsent).toBe(false);
   });
 });
