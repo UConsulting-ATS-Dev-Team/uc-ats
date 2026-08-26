@@ -24,16 +24,58 @@ const showsIdentity = (visibility) => visibility === 'BASIC' || visibility === '
 const showsContact = (visibility) => visibility === 'FULL';
 
 /**
+ * `Application.resumeUrl` does not hold a bare Drive file id - it holds a URL
+ * that *wraps* one, and in at least two shapes, because the value was written
+ * by different generations of the sync:
+ *
+ *   /api/files/<id>/pdf                          (236 of 251 opted-in rows)
+ *   https://uconsultingats.com/api/files/<id>/pdf (the rest)
+ *
+ * The Drive SDK takes the id alone, so handing it either of these produces a
+ * 404 from Google and a 500 from us. Everything else in the app dodges this by
+ * fetching the stored URL directly from the browser; the client portal cannot,
+ * because the whole point is that the buyer never learns the Drive id.
+ *
+ * Returns null rather than a guess when the value is unrecognizable - the
+ * caller turns that into "not available", which is the honest answer and keeps
+ * an unparsed string from reaching the Drive API.
+ */
+export const extractDriveFileId = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // Our own proxy route, relative or absolute.
+  const proxied = trimmed.match(/\/api\/files\/([^/?#]+)/);
+  if (proxied) return decodeURIComponent(proxied[1]);
+
+  // Drive's own share links, in case a value is ever pasted in by hand.
+  const driveFile = trimmed.match(/\/file\/d\/([^/?#]+)/);
+  if (driveFile) return driveFile[1];
+  const driveQuery = trimmed.match(/[?&]id=([^&#]+)/);
+  if (driveQuery) return decodeURIComponent(driveQuery[1]);
+
+  // Already a bare id.
+  if (/^[A-Za-z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+
+  return null;
+};
+
+/**
  * Whether a resume can actually be rendered for this visibility level. Drives
  * the `available` flag so the UI can say "not available" instead of handing the
  * viewer a PDF pane that 404s.
  */
 export const isViewable = (assignment, visibility) => {
   if (assignment?.application) {
-    if (visibility === 'BLIND') {
-      return Boolean(assignment.application.blindResumeUrl);
-    }
-    return Boolean(assignment.application.resumeUrl);
+    // Deliberately the same predicate the stream handler uses: a row whose
+    // stored URL we cannot parse into a file id is not viewable, and saying so
+    // in the list beats a card that opens onto a 404.
+    const stored =
+      visibility === 'BLIND'
+        ? assignment.application.blindResumeUrl
+        : assignment.application.resumeUrl;
+    return Boolean(extractDriveFileId(stored));
   }
   if (assignment?.memberResume) {
     // No redacted variant of a member-uploaded PDF exists.
@@ -52,7 +94,8 @@ export const isViewable = (assignment, visibility) => {
 export const resolveResumeSource = (assignment, visibility) => {
   if (assignment?.application) {
     const app = assignment.application;
-    const fileId = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
+    const stored = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
+    const fileId = extractDriveFileId(stored);
     if (!fileId) return null;
     return { kind: 'drive', fileId };
   }

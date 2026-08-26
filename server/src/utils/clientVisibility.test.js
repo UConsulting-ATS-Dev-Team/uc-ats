@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   projectAssignment,
   resolveResumeSource,
+  extractDriveFileId,
   isViewable,
   searchableFields,
   pdfUrlForAssignment,
@@ -10,6 +11,13 @@ import {
 
 const DRIVE_REAL = 'drive-file-id-real-resume';
 const DRIVE_BLIND = 'drive-file-id-blind-resume';
+
+// The fixtures store what the database actually stores. Application.resumeUrl
+// is a proxy URL wrapping the Drive id, never the bare id - an earlier version
+// of these fixtures used bare ids, which let a bug that handed the whole URL to
+// the Drive SDK pass every test and 500 in the browser.
+const RESUME_URL_REAL = `/api/files/${DRIVE_REAL}/pdf`;
+const RESUME_URL_BLIND = `/api/files/${DRIVE_BLIND}/pdf`;
 
 const applicantAssignment = (overrides = {}) => ({
   id: 'assign-1',
@@ -27,8 +35,8 @@ const applicantAssignment = (overrides = {}) => ({
     gender: 'Female',
     cumulativeGpa: '3.85',
     majorGpa: '3.92',
-    resumeUrl: DRIVE_REAL,
-    blindResumeUrl: DRIVE_BLIND,
+    resumeUrl: RESUME_URL_REAL,
+    blindResumeUrl: RESUME_URL_BLIND,
     ...overrides
   },
   memberResume: null
@@ -138,6 +146,39 @@ describe('projectAssignment - BASIC and FULL', () => {
     expect(dto.lastName).toBe('Rivera Cruz');
     expect(dto.phoneNumber).toBeNull();
     expect(dto.cumulativeGpa).toBeNull();
+  });
+});
+
+describe('extractDriveFileId', () => {
+  // Both shapes below are present in the production database today; handing
+  // either one to the Drive SDK unchanged is a 500.
+  it('unwraps the proxy URL shapes the sync actually writes', () => {
+    expect(extractDriveFileId('/api/files/1AbC_def-123/pdf')).toBe('1AbC_def-123');
+    expect(extractDriveFileId('https://uconsultingats.com/api/files/1AbC_def-123/pdf')).toBe(
+      '1AbC_def-123'
+    );
+  });
+
+  it('unwraps a hand-pasted Drive share link', () => {
+    expect(extractDriveFileId('https://drive.google.com/file/d/1AbC_def/view?usp=sharing')).toBe(
+      '1AbC_def'
+    );
+    expect(extractDriveFileId('https://drive.google.com/open?id=1AbC_def')).toBe('1AbC_def');
+  });
+
+  it('passes a bare id through', () => {
+    expect(extractDriveFileId('1AbC_def-1234567890')).toBe('1AbC_def-1234567890');
+  });
+
+  it('returns null rather than guessing at something unusable', () => {
+    for (const value of ['', '   ', null, undefined, 42, {}, 'not a url']) {
+      expect(extractDriveFileId(value)).toBeNull();
+    }
+  });
+
+  it('drives isViewable, so an unparseable URL reads as not available', () => {
+    expect(isViewable(applicantAssignment({ resumeUrl: 'not a url' }), 'BASIC')).toBe(false);
+    expect(isViewable(applicantAssignment(), 'BASIC')).toBe(true);
   });
 });
 

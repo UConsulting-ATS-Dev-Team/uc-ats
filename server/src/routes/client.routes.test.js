@@ -26,6 +26,13 @@ vi.mock('../services/google/drive.js', () => ({
 const DRIVE_REAL = 'drive-real-resume-id';
 const DRIVE_BLIND = 'drive-blind-resume-id';
 
+// What the column actually holds: a proxy URL wrapping the Drive id. The
+// assertions below check getFileStream receives the bare id, so storing the
+// bare id in the fixture would make them tautological - and did, until a
+// wrapped URL reached the Drive SDK in the browser and 500'd.
+const RESUME_URL_REAL = `/api/files/${DRIVE_REAL}/pdf`;
+const RESUME_URL_BLIND = `https://uconsultingats.com/api/files/${DRIVE_BLIND}/pdf`;
+
 const clientUser = { id: 'client-user-1', role: 'CLIENT', isActive: true, email: 'p@acme.com', fullName: 'Acme' };
 const otherClientUser = { id: 'client-user-2', role: 'CLIENT', isActive: true, email: 'q@other.com', fullName: 'Other' };
 const adminUser = { id: 'admin-1', role: 'ADMIN', isActive: true, email: 'a@uc.org', fullName: 'Admin' };
@@ -56,8 +63,8 @@ const assignmentRow = (overrides = {}) => ({
     gender: 'Female',
     cumulativeGpa: '3.85',
     majorGpa: '3.90',
-    resumeUrl: DRIVE_REAL,
-    blindResumeUrl: DRIVE_BLIND
+    resumeUrl: RESUME_URL_REAL,
+    blindResumeUrl: RESUME_URL_BLIND
   },
   memberResume: null,
   ...overrides
