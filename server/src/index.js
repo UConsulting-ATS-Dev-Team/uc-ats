@@ -20,6 +20,7 @@ import interviewResourcesRoutes from './routes/interviewResources.js';
 import memberRoutes from './routes/member.js';
 import candidateRoutes from './routes/candidate.js';
 import casesRoutes from './routes/cases.js';
+import resumeUploadsRoutes from './routes/resumeUploads.js';
 import conversationsRoutes from './routes/conversations.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import featureRequestRoutes from './routes/featureRequests.js';
@@ -71,6 +72,7 @@ app.use('/api/member', memberRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
+app.use('/api/resume-uploads', resumeUploadsRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 

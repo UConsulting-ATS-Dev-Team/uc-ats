@@ -49,6 +49,7 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
+  resumeUploads              ResumeUpload[]                  @relation("ResumeUploader")
 
   @@map("users")
 }
@@ -118,8 +119,37 @@ model Application {
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
+  resumeUploads         ResumeUpload[]
 
   @@map("applications")
+}
+
+// One row per version of an application's resume, newest last. Candidates may
+// replace their own resume until the cycle's `resumeDeadline` passes, and
+// reviewers grade whatever `Application.resumeUrl` pointed at, so the version
+// that was actually scored has to stay recoverable.
+//
+// `storagePath` is null for the resume the application arrived with: that file
+// lives in Google Drive (uploaded through the application form), not in our
+// storage directory. `sourceUrl` records what `Application.resumeUrl` held for
+// this version, which is what the client fetches to view it either way.
+model ResumeUpload {
+  id            String      @id @default(uuid())
+  applicationId String
+  storagePath   String?
+  sourceUrl     String
+  originalName  String?
+  sizeBytes     Int?
+  uploadedById  String?
+  uploadedAt    DateTime    @default(now())
+  // Set when a newer upload takes over. Exactly one row per application should
+  // have this null — the version `Application.resumeUrl` currently points at.
+  supersededAt  DateTime?
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  uploadedBy    User?       @relation("ResumeUploader", fields: [uploadedById], references: [id])
+
+  @@index([applicationId, uploadedAt])
+  @@map("resume_uploads")
 }
 
 model RecruitingCycle {
