@@ -16,7 +16,8 @@
     "verify-candidates": "node scripts/verify-candidates.js",
     "update-schema-relations": "node scripts/update-schema-relations.js",
     "setup-candidate-relations": "node scripts/setup-candidate-relations.js",
-    "sync-member-linkedin": "node scripts/syncMemberLinkedin.js"
+    "sync-member-linkedin": "node scripts/syncMemberLinkedin.js",
+    "extract-resumes": "node scripts/extractResumeText.js"
   },
   "keywords": [],
   "author": "",
