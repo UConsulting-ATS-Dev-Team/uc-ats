@@ -86,8 +86,10 @@ router.post('/register', async (req, res) => {
       { expiresIn: config.jwtExpiresIn },
     );
 
-    // Return user info (without password) and token
-    const { password: _, ...userWithoutPassword } = user;
+    // Return user info and token. resetToken/resetTokenExpiry are stripped
+    // alongside the password - this payload now goes to Talent Partner Network
+    // clients too, and a live reset token is an account takeover primitive.
+    const { password: _, resetToken: __, resetTokenExpiry: ___, ...userWithoutPassword } = user;
     res.status(201).json({
       message: 'User created successfully',
       user: userWithoutPassword,
@@ -136,8 +138,10 @@ router.post('/login', async (req, res) => {
       { expiresIn: config.jwtExpiresIn },
     );
 
-    // Return user info (without password) and token
-    const { password: _, ...userWithoutPassword } = user;
+    // Return user info and token. resetToken/resetTokenExpiry are stripped
+    // alongside the password - this payload now goes to Talent Partner Network
+    // clients too, and a live reset token is an account takeover primitive.
+    const { password: _, resetToken: __, resetTokenExpiry: ___, ...userWithoutPassword } = user;
     res.json({
       message: 'Login successful',
       user: userWithoutPassword,
@@ -172,7 +176,7 @@ router.get('/verify', async (req, res) => {
       return res.status(401).json({ error: 'Account deactivated' });
     }
     
-    const { password: _, ...userWithoutPassword } = user;
+    const { password: _, resetToken: __, resetTokenExpiry: ___, ...userWithoutPassword } = user;
     res.json({ user: userWithoutPassword });
     
   } catch (error) {
@@ -189,6 +193,14 @@ router.post('/forgot-password', async (req, res) => {
 
     if (!user) {
       // Don't reveal if email exists
+      return res.json({ message: 'If that email exists, a reset link has been sent.' });
+    }
+
+    // Talent Partner Network clients have no self-service password reset - an
+    // admin sets their password. This endpoint is unauthenticated, so the
+    // containment middleware cannot see the role; the check has to live here.
+    // Same generic response as an unknown email, and no token is minted.
+    if (user.role === 'CLIENT') {
       return res.json({ message: 'If that email exists, a reset link has been sent.' });
     }
 
@@ -232,6 +244,12 @@ router.post('/reset-password', async (req, res) => {
     });
 
     if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+
+    // Belt and braces for the forgot-password guard above: a CLIENT should
+    // never hold a reset token, and if one exists it is not honoured.
+    if (user.role === 'CLIENT') {
       return res.status(400).json({ error: 'Invalid or expired token' });
     }
 
@@ -324,8 +342,10 @@ router.post('/register-member', async (req, res) => {
       { expiresIn: config.jwtExpiresIn },
     );
 
-    // Return user info (without password) and token
-    const { password: _, ...userWithoutPassword } = user;
+    // Return user info and token. resetToken/resetTokenExpiry are stripped
+    // alongside the password - this payload now goes to Talent Partner Network
+    // clients too, and a live reset token is an account takeover primitive.
+    const { password: _, resetToken: __, resetTokenExpiry: ___, ...userWithoutPassword } = user;
     res.status(201).json({
       message: 'Member created successfully',
       user: userWithoutPassword,

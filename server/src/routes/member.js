@@ -1,4 +1,9 @@
 import express from 'express';
+import multer from 'multer';
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { sendSlackMessage } from '../services/slackService.js';
@@ -21,6 +26,11 @@ import {
   isProfileComplete,
   missingProfileFields
 } from '../utils/gtkucProfile.js';
+import {
+  MEMBER_GENDERS,
+  sanitizeMemberResumeInput,
+  serializeMemberResume
+} from '../utils/memberResume.js';
 // GTKUC profile shown to candidates on the member's slots, loaded with the
 // active cycle's confirmation so the portal knows whether to force the
 // confirm/update modal before the member can open slots.
@@ -1793,6 +1803,225 @@ router.post('/flag-document', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[POST /api/member/flag-document]', error);
     res.status(500).json({ error: 'Failed to flag document' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Member resume - Talent Partner Network
+// ---------------------------------------------------------------------------
+// A member's own resume plus the consent that makes it assignable to a partner
+// client. Gated on MEMBER specifically rather than requireAdminOrMember: an
+// admin uploading "their" member resume is meaningless. The ownership key is
+// always req.user.id, never a route param.
+
+const __memberDirname = path.dirname(fileURLToPath(import.meta.url));
+// Same root cases.js uses. Deliberately NOT uploads/, which index.js serves
+// statically and unauthenticated - a resume there would be world-readable.
+const RESUME_STORAGE_DIR = path.join(__memberDirname, '../../storage');
+const MEMBER_RESUME_ROOT = path.join(RESUME_STORAGE_DIR, 'member-resumes');
+
+// In memory so the file can be named by the DB-generated row id, matching the
+// reasoning in cases.js.
+const resumeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new Error('Resume must be a PDF'));
+  }
+});
+
+// There is no global Express error handler in this app, so an unwrapped multer
+// rejection returns an HTML 500 that the client renders as
+// "Server Error (500): <!doctype html...". This wrapper is what turns it into a
+// usable message. Pattern copied from routes/featureRequests.js.
+function resumeUploadMiddleware(req, res, next) {
+  resumeUpload.single('resume')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Resume must be 10MB or smaller' });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    return res.status(400).json({ error: err.message || 'Invalid file upload' });
+  });
+}
+
+const requireMemberRole = (req, res, next) => {
+  if (req.user?.role !== 'MEMBER') {
+    return res.status(403).json({ error: 'Member access required' });
+  }
+  next();
+};
+
+const loadOwnResume = (memberId) =>
+  prisma.memberResume.findFirst({ where: { memberId, isCurrent: true } });
+
+const countLiveAssignments = (resumeId) =>
+  resumeId
+    ? prisma.clientResumeAssignment.count({ where: { memberResumeId: resumeId, revokedAt: null } })
+    : Promise.resolve(0);
+
+router.get('/resume', requireAuth, requireMemberRole, async (req, res) => {
+  try {
+    const resume = await loadOwnResume(req.user.id);
+    const assignedCount = await countLiveAssignments(resume?.id);
+    res.json({ resume: serializeMemberResume(resume, assignedCount), genders: MEMBER_GENDERS });
+  } catch (error) {
+    console.error('[GET /api/member/resume]', error);
+    res.status(500).json({ error: 'Failed to load your resume' });
+  }
+});
+
+router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Attach a PDF resume' });
+    }
+
+    const { value, errors } = sanitizeMemberResumeInput(req.body || {});
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0], errors });
+    }
+
+    // Re-uploading supersedes rather than overwrites. An assignment already
+    // committed to a client keeps pointing at the exact file that was assigned,
+    // which is what makes the snapshot true for members as well as applicants.
+    const created = await prisma.$transaction(async (tx) => {
+      await tx.memberResume.updateMany({
+        where: { memberId: req.user.id, isCurrent: true },
+        data: { isCurrent: false }
+      });
+      return tx.memberResume.create({
+        data: {
+          memberId: req.user.id,
+          isCurrent: true,
+          storagePath: 'pending',
+          originalName: req.file.originalname ? req.file.originalname.slice(0, 255) : 'resume.pdf',
+          fileSize: req.file.size,
+          major1: value.major1,
+          major2: value.major2,
+          graduationYear: value.graduationYear,
+          gender: value.gender,
+          shareConsent: value.shareConsent,
+          consentAt: value.shareConsent ? new Date() : null
+        }
+      });
+    });
+
+    const relPath = `member-resumes/${created.id}/resume.pdf`;
+    try {
+      await fsPromises.mkdir(path.join(MEMBER_RESUME_ROOT, created.id), { recursive: true });
+      await fsPromises.writeFile(path.join(RESUME_STORAGE_DIR, relPath), req.file.buffer);
+    } catch (writeError) {
+      // Leaving a row pointing at a file that does not exist would make the
+      // resume look uploaded and then 404 for whoever opens it.
+      await prisma.memberResume.delete({ where: { id: created.id } }).catch(() => {});
+      throw writeError;
+    }
+
+    const resume = await prisma.memberResume.update({
+      where: { id: created.id },
+      data: { storagePath: relPath }
+    });
+
+    res.status(201).json({ resume: serializeMemberResume(resume, 0) });
+  } catch (error) {
+    console.error('[POST /api/member/resume]', error);
+    res.status(500).json({ error: 'Failed to upload your resume' });
+  }
+});
+
+router.patch('/resume/consent', requireAuth, requireMemberRole, async (req, res) => {
+  try {
+    const shareConsent = req.body?.shareConsent === true || req.body?.shareConsent === 'true';
+
+    const existing = await loadOwnResume(req.user.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Upload a resume first' });
+    }
+
+    const now = new Date();
+
+    const resume = await prisma.$transaction(async (tx) => {
+      const updated = await tx.memberResume.update({
+        where: { id: existing.id },
+        data: {
+          shareConsent,
+          consentAt: shareConsent ? now : existing.consentAt,
+          consentRevokedAt: shareConsent ? null : now
+        }
+      });
+
+      if (!shareConsent) {
+        // Withdrawal takes effect immediately rather than waiting for an admin
+        // to notice. This is the one place the snapshot rule yields, and it
+        // yields to the person whose resume it is.
+        await tx.clientResumeAssignment.updateMany({
+          where: { memberResumeId: existing.id, revokedAt: null },
+          data: { revokedAt: now, revokedById: req.user.id }
+        });
+      }
+
+      return updated;
+    });
+
+    const assignedCount = await countLiveAssignments(resume.id);
+    res.json({ resume: serializeMemberResume(resume, assignedCount) });
+  } catch (error) {
+    console.error('[PATCH /api/member/resume/consent]', error);
+    res.status(500).json({ error: 'Failed to update your sharing preference' });
+  }
+});
+
+router.get('/resume/pdf', requireAuth, requireMemberRole, async (req, res) => {
+  try {
+    const resume = await loadOwnResume(req.user.id);
+    if (!resume) return res.status(404).json({ error: 'No resume on file' });
+
+    const absPath = path.join(RESUME_STORAGE_DIR, resume.storagePath);
+    if (!absPath.startsWith(MEMBER_RESUME_ROOT)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+    if (!fs.existsSync(absPath)) {
+      return res.status(404).json({ error: 'No resume on file' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    fs.createReadStream(absPath).pipe(res);
+  } catch (error) {
+    console.error('[GET /api/member/resume/pdf]', error);
+    res.status(500).json({ error: 'Failed to load your resume' });
+  }
+});
+
+router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
+  try {
+    const existing = await loadOwnResume(req.user.id);
+    if (!existing) return res.status(404).json({ error: 'No resume on file' });
+
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.memberResume.update({
+        where: { id: existing.id },
+        data: { isCurrent: false, shareConsent: false, consentRevokedAt: now }
+      });
+      await tx.clientResumeAssignment.updateMany({
+        where: { memberResumeId: existing.id, revokedAt: null },
+        data: { revokedAt: now, revokedById: req.user.id }
+      });
+    });
+
+    // The file stays on disk on purpose: revoked assignment rows still
+    // reference this resume, and the history is worth more than a few hundred KB.
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[DELETE /api/member/resume]', error);
+    res.status(500).json({ error: 'Failed to remove your resume' });
   }
 });
 

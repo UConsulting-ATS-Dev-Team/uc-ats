@@ -22,7 +22,10 @@ import {
   InputLabel,
   LinearProgress,
 } from '@mui/material';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
 import AccessControl from '../components/AccessControl';
+import TalentPoolClients from '../components/TalentPoolClients';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -87,6 +90,8 @@ const TalentPoolPartnerNetwork = () => {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [openingResumeId, setOpeningResumeId] = useState(null);
+  // Overview is the original opt-in roster; Clients is the portal side.
+  const [tab, setTab] = useState('overview');
 
   const load = useCallback(async (targetCycleId) => {
     setLoading(true);
@@ -200,6 +205,15 @@ const TalentPoolPartnerNetwork = () => {
           </Typography>
         </Box>
 
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
+          <Tab value="overview" label="Opt-in overview" />
+          <Tab value="clients" label="Partner clients" />
+        </Tabs>
+
+        {tab === 'clients' && <TalentPoolClients />}
+
+        {tab === 'overview' && (
+        <>
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
         {loading && <LinearProgress sx={{ mb: 2 }} />}
 
@@ -356,6 +370,8 @@ const TalentPoolPartnerNetwork = () => {
             </TableContainer>
           )}
         </Paper>
+        </>
+        )}
       </Box>
     </AccessControl>
   );
