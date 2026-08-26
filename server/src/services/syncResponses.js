@@ -3,13 +3,16 @@ import config from '../config.js';
 import { getResponses } from './google/forms.js'
 import { transformFormResponse } from '../utils/dataMapper.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
+import { resolveCandidateCycle } from './activeCycle.js'
 
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
 
-    // Require an active cycle and use its form URL exclusively
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    // Require an active cycle and use its form URL exclusively.
+    // Always the candidate pointer: applications belong to the cycle candidates are
+    // applying to, and this cron has no request or role to key on.
+    const activeCycle = await resolveCandidateCycle(prisma);
     if (!activeCycle) {
       console.warn('No active recruiting cycle. Skipping sync.');
       return;

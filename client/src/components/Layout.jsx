@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import CycleScopeBanner from './CycleScopeBanner';
 import {
   HomeIcon, 
   DocumentTextIcon, 
@@ -209,6 +210,7 @@ const Layout = ({ children }) => {
         <div className="content-area">
           <main className="main-content">
             <div className="content-container">
+              <CycleScopeBanner />
               {children}
             </div>
           </main>

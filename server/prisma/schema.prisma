@@ -134,11 +134,21 @@ model RecruitingCycle {
   // Unique so an exact retry of a bootstrap commit recovers the cycle it
   // already created instead of making a second one.
   name                      String                           @unique
-  // At most one cycle may be active. Enforced by the partial unique index
-  // `recruiting_cycles_single_active`, which Prisma's schema cannot express, so it
-  // is created in SQL by the migration and must be re-added by hand if this table
-  // is ever recreated from scratch.
+  // Activation is audience-scoped. `isActive` is the cycle members, candidates and
+  // the public pages see; `isAdminActive` is the cycle admins see. They are normally
+  // the same row and differ only during a handover, where admins finish out the
+  // closing cycle while the next one opens to candidates.
+  //
+  // At most one cycle may carry each flag. Enforced by the partial unique indexes
+  // `recruiting_cycles_single_active` and `recruiting_cycles_single_admin_active`,
+  // which Prisma's schema cannot express, so they are created in SQL by the
+  // migrations and must be re-added by hand if this table is ever recreated.
+  //
+  // Never read either column directly: go through resolveCycle()/resolveCycleForRequest()
+  // in services/activeCycle.js, which maps the caller's role to the right pointer and
+  // falls back to `isActive` when no admin cycle is pinned.
   isActive                  Boolean                          @default(false)
+  isAdminActive             Boolean                          @default(false)
   startDate                 DateTime?
   endDate                   DateTime?
   createdAt                 DateTime                         @default(now())
