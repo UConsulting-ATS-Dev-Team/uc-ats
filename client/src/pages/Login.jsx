@@ -22,7 +22,7 @@ const Login = () => {
   // Redirect if user is already logged in
   useEffect(() => {
     if (!loading && user) {
-      navigate('/dashboard');
+      navigate(user.role === 'CLIENT' ? '/partner/resumes' : '/dashboard');
     }
   }, [user, loading, navigate]);
 
@@ -47,7 +47,9 @@ const Login = () => {
     const result = await login(email, password);
 
     if (result.success) {
-      navigate('/application-list');
+      // Talent Partner Network clients have exactly one page, and every other
+      // route 403s for them.
+      navigate(result.user?.role === 'CLIENT' ? '/partner/resumes' : '/application-list');
     } else {
       setError(result.error);
     }
