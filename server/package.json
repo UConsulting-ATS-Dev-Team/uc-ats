@@ -23,6 +23,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.121.0",
     "@aws-sdk/client-sesv2": "^3.1091.0",
     "@google-cloud/local-auth": "^3.0.1",
     "@googleapis/forms": "^2.5.1",

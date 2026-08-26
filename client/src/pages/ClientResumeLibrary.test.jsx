@@ -125,21 +125,23 @@ describe('ClientResumeLibrary', () => {
     expect(screen.getByText(/Business Economics/)).toBeInTheDocument();
   });
 
-  it('renders a blind row with an opaque reference instead of a name', async () => {
+  it('renders a blind row without a name and without an assignment handle', async () => {
     mockApi({ visibility: 'BLIND', items: [blindItem] });
     renderPage();
 
-    // Under BLIND there is no name to show, so the row is identified by a
-    // prefix of the assignment id the client already holds.
-    await waitFor(() => expect(screen.getByText('ASSIGN1A')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Business Economics')).toBeInTheDocument());
     expect(screen.queryByText('Jane Doe')).not.toBeInTheDocument();
+    // The reference is not a column partners see - it only labels the row for
+    // screen readers and titles the preview.
+    expect(screen.queryByText('ASSIGN1A')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).not.toContain('Ref');
   });
 
   it('omits the columns a visibility level hides rather than blanking them', async () => {
     mockApi({ visibility: 'BLIND', items: [blindItem] });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('ASSIGN1A')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Business Economics')).toBeInTheDocument());
 
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
     expect(headers).not.toContain('Name');
@@ -210,7 +212,7 @@ describe('ClientResumeLibrary', () => {
 
     await waitFor(() => expect(screen.getByText('No file')).toBeInTheDocument());
 
-    await userEvent.click(screen.getByText('ASSIGN1A'));
+    await userEvent.click(screen.getByText('Business Economics'));
     expect(screen.queryByTestId('preview')).not.toBeInTheDocument();
   });
 
@@ -367,7 +369,7 @@ describe('sorting', () => {
     mockApi({ visibility: 'BLIND', items: [blindItem] });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('ASSIGN1A')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Business Economics')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /^gpa$/i })).not.toBeInTheDocument();
   });
 });

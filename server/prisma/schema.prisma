@@ -133,6 +133,7 @@ model Application {
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
   clientAssignments     ClientResumeAssignment[]
+  resumeExtraction      ResumeExtraction?
 
   @@map("applications")
 }
@@ -1042,6 +1043,7 @@ model MemberResume {
   updatedAt        DateTime                 @updatedAt
   member           User                     @relation(fields: [memberId], references: [id], onDelete: Cascade)
   assignments      ClientResumeAssignment[]
+  resumeExtraction ResumeExtraction?
 
   @@index([memberId, isCurrent])
   @@index([shareConsent, isCurrent])
@@ -1101,6 +1103,40 @@ model ClientResumeAssignment {
   @@index([applicationId])
   @@index([memberResumeId])
   @@map("client_resume_assignments")
+}
+
+/// Searchable text pulled out of one resume PDF, so a partner can search what a
+/// resume SAYS and not just the columns around it. Derived data: dropping this
+/// table costs a re-run of scripts/extractResumeText.js and nothing else.
+///
+/// Keyed to the source row rather than to a person, matching the snapshot rule
+/// the assignment model already follows - a member re-uploading a resume writes
+/// a new MemberResume row, and its extraction is a new row too, so an already
+/// assigned resume keeps the text it was assigned with.
+///
+/// Holds text from the FULL resume only. Search over it is gated to FULL-tier
+/// partners in searchableFields(); a BLIND partner matching on unredacted text
+/// would be the same deanonymization oracle that gate exists to close. Indexing
+/// the redacted variant is a separate row and a separate decision.
+model ResumeExtraction {
+  id               String        @id @default(uuid())
+  applicationId    String?       @unique
+  memberResumeId   String?       @unique
+  /// Resume prose plus an expanded skill line, lowercased at query time by the
+  /// insensitive `contains`. One column because one column is one search target.
+  text             String
+  /// Bumped when the prompt or output shape changes, so a re-run can target
+  /// stale rows instead of re-reading all of them.
+  extractorVersion String
+  model            String
+  charCount        Int
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  application      Application?  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  memberResume     MemberResume? @relation(fields: [memberResumeId], references: [id], onDelete: Cascade)
+
+  @@index([extractorVersion])
+  @@map("resume_extractions")
 }
 
 /// The first access-log table in this schema. House style is attribution columns

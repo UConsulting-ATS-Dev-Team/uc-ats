@@ -159,6 +159,22 @@ describe('free-text search', () => {
     expect(json).toContain('lastName');
     expect(json).toContain('fullName');
   });
+
+  it('searches resume text only at FULL, for both pools', () => {
+    const full = JSON.stringify(buildSearchClause('Python', 'FULL'));
+    expect(full).toContain('resumeExtraction');
+    // Both an application and a member resume can carry an extraction, and a
+    // search that reached only one pool would silently hide half the library.
+    expect(full.match(/resumeExtraction/g)).toHaveLength(2);
+  });
+
+  it('keeps resume text away from the tiers that cannot see the resume', () => {
+    // The extraction is of the UNREDACTED resume: it names employers and
+    // projects a blind partner is never shown, and matching on it plus a result
+    // count is the same identity oracle the name rule closes.
+    expect(JSON.stringify(buildSearchClause('Goldman', 'BLIND'))).not.toContain('resumeExtraction');
+    expect(JSON.stringify(buildSearchClause('Goldman', 'BASIC'))).not.toContain('resumeExtraction');
+  });
 });
 
 describe('sorting', () => {

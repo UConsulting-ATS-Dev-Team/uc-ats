@@ -71,9 +71,9 @@ const COLUMNS = {
   // Wide enough for the checkbox plus its ripple target. Left at MUI's default
   // the box sat flush against the cell edge and clipped.
   select: { width: 52, minWidth: 52 },
-  ref: { width: 120, whiteSpace: 'nowrap' },
   name: { minWidth: 160, whiteSpace: 'nowrap' },
-  kind: { width: 110, whiteSpace: 'nowrap' },
+  // Wide enough for the label plus the "No file" chip that sits beside it.
+  kind: { minWidth: 150, whiteSpace: 'nowrap' },
   graduationYear: { width: 90, whiteSpace: 'nowrap' },
   major: { minWidth: 180 },
   major2: { minWidth: 180 },
@@ -96,8 +96,9 @@ const displayName = (item) => {
   return null;
 };
 
-// Mirrors referenceFor() on the server so the on-screen handle and the CSV cell
-// are the same string.
+// Mirrors referenceFor() on the server so the CSV cell, the row's accessible
+// label, and the preview title all use the same string. Not shown as a column:
+// partners see the resume itself, not the assignment handle.
 const referenceFor = (assignmentId) =>
   String(assignmentId || '').replace(/-/g, '').slice(0, 8).toUpperCase();
 
@@ -387,7 +388,7 @@ const ClientResumeLibrary = () => {
   );
 
   const columnCount =
-    2 + // checkbox + reference
+    1 + // checkbox
     (showsIdentity ? 2 : 0) + // name, gender
     4 + // type, class, major, second major
     (showsContact ? 4 : 0) + // cumulative gpa, major gpa, phone, email
@@ -459,9 +460,11 @@ const ClientResumeLibrary = () => {
                 size="small"
                 fullWidth
                 placeholder={
-                  showsIdentity
-                    ? 'Search by name, major, or graduation year'
-                    : 'Search by major or graduation year'
+                  showsContact
+                    ? 'Search skills, employers, name, or major'
+                    : showsIdentity
+                      ? 'Search by name, major, or graduation year'
+                      : 'Search by major or graduation year'
                 }
                 value={pendingSearch}
                 onChange={(e) => setPendingSearch(e.target.value)}
@@ -558,7 +561,6 @@ const ClientResumeLibrary = () => {
                       inputProps={{ 'aria-label': 'Select all rows on this page' }}
                     />
                   </TableCell>
-                  <TableCell sx={COLUMNS.ref}>Ref</TableCell>
                   {showsIdentity && sortLabel('name', 'Name', { sx: COLUMNS.name })}
                   {sortLabel('kind', 'Type', { sx: COLUMNS.kind })}
                   {sortLabel('graduationYear', 'Class', { sx: COLUMNS.graduationYear })}
@@ -631,22 +633,16 @@ const ClientResumeLibrary = () => {
                           />
                         </TableCell>
 
-                        <TableCell sx={COLUMNS.ref}>
+                        {showsIdentity && <TableCell sx={COLUMNS.name}>{name || '—'}</TableCell>}
+                        <TableCell sx={COLUMNS.kind}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                              {referenceFor(item.assignmentId)}
-                            </Typography>
+                            <span>{item.kind === 'MEMBER' ? 'Member' : 'Applicant'}</span>
                             {!item.available && (
                               <Tooltip title="No resume file is available for this entry">
                                 <Chip size="small" variant="outlined" label="No file" />
                               </Tooltip>
                             )}
                           </Stack>
-                        </TableCell>
-
-                        {showsIdentity && <TableCell sx={COLUMNS.name}>{name || '—'}</TableCell>}
-                        <TableCell sx={COLUMNS.kind}>
-                          {item.kind === 'MEMBER' ? 'Member' : 'Applicant'}
                         </TableCell>
                         <TableCell sx={COLUMNS.graduationYear}>
                           {item.graduationYear || '—'}

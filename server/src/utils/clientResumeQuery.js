@@ -30,6 +30,7 @@ export const MAX_EXPORT = 1000;
 
 const showsIdentity = (visibility) => visibility === 'BASIC' || visibility === 'FULL';
 const showsContact = (visibility) => visibility === 'FULL';
+export const searchesResumeText = (visibility) => visibility === 'FULL';
 
 export const KINDS = ['APPLICANT', 'MEMBER'];
 
@@ -253,6 +254,16 @@ export const buildSearchClause = (q, visibility) => {
   const contains = { contains: q, mode: 'insensitive' };
   const or = [];
   let memberNameAdded = false;
+
+  // Resume text is FULL-tier only, and for the same reason names are: matching
+  // on unredacted prose plus a result count is a yes/no oracle for "is this
+  // person in my set", and the text carries employers and project names a BLIND
+  // partner is not shown. A FULL partner already sees the whole resume, so
+  // searching it reveals nothing the PDF does not.
+  if (searchesResumeText(visibility)) {
+    or.push({ application: { resumeExtraction: { text: contains } } });
+    or.push({ memberResume: { resumeExtraction: { text: contains } } });
+  }
 
   for (const field of searchableFields(visibility)) {
     if (field === 'firstName' || field === 'lastName') {
