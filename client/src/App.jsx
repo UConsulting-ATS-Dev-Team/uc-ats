@@ -49,6 +49,9 @@ import CandidateDetail from './pages/CandidateDetail';
 import MasterCommunications from './pages/MasterCommunications';
 import Profile from './pages/Profile';
 import ClientResumeLibrary from './pages/ClientResumeLibrary';
+import TalentSignUp from './pages/TalentSignUp';
+import TalentVerifyEmail from './pages/TalentVerifyEmail';
+import TalentProfile from './pages/TalentProfile';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
 import './styles/variables.css';
@@ -75,6 +78,18 @@ const ProtectedRoute = ({ children }) => {
     return <ClientLayout>{children}</ClientLayout>;
   }
 
+  // Self-registered talent accounts get the same treatment as clients, and for
+  // the same reason. They are role USER, so without this they would fall
+  // through to CandidateLayout and be handed a nav bar of Applications, Events,
+  // Get To Know UC and Interview Prep - every one of which is empty for someone
+  // who never applied. The page itself carries its own header and sign-out.
+  if (user.isExternalTalent) {
+    if (location.pathname !== '/talent/profile') {
+      return <Navigate to="/talent/profile" replace />;
+    }
+    return children;
+  }
+
   // Use different layouts based on user role
   if (user.role === 'USER') {
     return <CandidateLayout>{children}</CandidateLayout>;
@@ -93,6 +108,12 @@ const HomeRoute = () => {
 
   if (user?.role === 'CLIENT') {
     return <Navigate to="/partner/resumes" replace />;
+  }
+
+  // A self-registered talent account has no application to track and no
+  // dashboard to land on - its profile is the whole app for them.
+  if (user?.isExternalTalent) {
+    return <Navigate to="/talent/profile" replace />;
   }
 
   if (user?.role === 'ADMIN' || user?.role === 'MEMBER') {
@@ -114,6 +135,11 @@ const AppRoutes = () => {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<SignUp />} />
       <Route path="/member-signup" element={<MemberSignUp />} />
+      {/* Public talent-network signup, open to any UCLA student. The verify
+          page is public too: the emailed link usually opens in whichever
+          browser the mail client hands it to, not the one that signed up. */}
+      <Route path="/talent/signup" element={<TalentSignUp />} />
+      <Route path="/talent/verify" element={<TalentVerifyEmail />} />
       
       <Route path="/" element={<HomeRoute />} />
       
@@ -375,6 +401,17 @@ const AppRoutes = () => {
         }
       />
       
+      {/* External talent portal - one page, its own shell, no nav chrome:
+          these accounts have nothing else in the app to navigate to. */}
+      <Route
+        path="/talent/profile"
+        element={
+          <ProtectedRoute>
+            <TalentProfile />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Talent Partner Network client portal - one page, its own shell */}
       <Route
         path="/partner/resumes"

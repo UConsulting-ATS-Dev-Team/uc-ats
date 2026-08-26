@@ -40,11 +40,23 @@ import apiClient from '../utils/api';
 // `contains` sweep over free-text major columns on every keystroke is a bad
 // idea on a table this size.
 
+// 'BOTH' is the every-pool value. The name predates the external pool and is
+// kept because it is what the server still accepts - only the label changed.
 const POOLS = [
   { value: 'APPLICANTS', label: 'Applicants' },
   { value: 'MEMBERS', label: 'Members' },
-  { value: 'BOTH', label: 'Applicants and members' },
+  { value: 'EXTERNALS', label: 'UCLA students' },
+  { value: 'BOTH', label: 'All pools' },
 ];
+
+// What an admin sees in the Type column. "UCLA student" rather than "external":
+// the row is a person, and the word describes their relationship to
+// UConsulting, not a system boundary.
+const KIND_LABELS = {
+  APPLICANT: 'Applicant',
+  MEMBER: 'Member',
+  EXTERNAL: 'UCLA student',
+};
 
 const NUMBER_OPS = [
   { value: 'gte', label: 'at least' },
@@ -316,7 +328,8 @@ const ClientAssignBuilder = ({ client, onDone }) => {
 
           {(preview.excluded?.noOptIn > 0 ||
             preview.excluded?.noBlindResume > 0 ||
-            preview.excluded?.memberNoConsent > 0) && (
+            preview.excluded?.memberNoConsent > 0 ||
+            preview.excluded?.externalNotAssignable > 0) && (
             <Alert severity="info" sx={{ mb: 2 }}>
               <AlertTitle>Excluded from these matches</AlertTitle>
               <Stack spacing={0.5}>
@@ -334,6 +347,12 @@ const ClientAssignBuilder = ({ client, onDone }) => {
                 {preview.excluded.memberNoConsent > 0 && (
                   <Typography variant="body2">
                     {preview.excluded.memberNoConsent} member(s) have not consented to sharing.
+                  </Typography>
+                )}
+                {preview.excluded.externalNotAssignable > 0 && (
+                  <Typography variant="body2">
+                    {preview.excluded.externalNotAssignable} UCLA student(s) have not consented to
+                    sharing, or have not verified their UCLA email.
                   </Typography>
                 )}
               </Stack>
@@ -391,7 +410,7 @@ const ClientAssignBuilder = ({ client, onDone }) => {
                         <Chip size="small" label="Already shared" sx={{ ml: 1 }} variant="outlined" />
                       )}
                     </TableCell>
-                    <TableCell>{row.kind === 'MEMBER' ? 'Member' : 'Applicant'}</TableCell>
+                    <TableCell>{KIND_LABELS[row.kind] || 'Applicant'}</TableCell>
                     <TableCell>{row.graduationYear || '—'}</TableCell>
                     <TableCell>{[row.major1, row.major2].filter(Boolean).join(', ') || '—'}</TableCell>
                     <TableCell>{row.gender || '—'}</TableCell>

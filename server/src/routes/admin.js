@@ -5624,6 +5624,26 @@ router.get('/talent-pool/stats', async (req, res) => {
       where: { user: { isActive: true } }
     });
 
+    // Self-registered UCLA students. Deliberately NOT folded into the opt-in
+    // breakdown above: that one counts applicants within a recruiting cycle,
+    // and an external account belongs to no cycle at all. Adding them would
+    // make the percentages answer a question nobody asked.
+    const [externalAccounts, externalVerified, externalShared] = await Promise.all([
+      prisma.user.count({ where: { isExternalTalent: true, isActive: true } }),
+      prisma.user.count({
+        where: { isExternalTalent: true, isActive: true, emailVerifiedAt: { not: null } }
+      }),
+      // The number that actually matters: how many are assignable right now.
+      prisma.externalResume.count({
+        where: {
+          isCurrent: true,
+          shareConsent: true,
+          consentRevokedAt: null,
+          user: { emailVerifiedAt: { not: null }, isActive: true }
+        }
+      })
+    ]);
+
     // Counted off the same array the roster renders, so the breakdown always
     // agrees with the rows behind it.
     const optedIn = applicants.filter((a) => a.talentPoolOptIn === true).length;
@@ -5652,7 +5672,14 @@ router.get('/talent-pool/stats', async (req, res) => {
       // registeredClients is now real - active CLIENT accounts with a partner
       // row. Deactivated ones are excluded: the number is meant to answer "how
       // many organizations can log in right now?".
-      registeredClients
+      registeredClients,
+      // The external talent portal, which is cycle-independent - these counts
+      // do not move when the cycle selector does.
+      externalTalent: {
+        accounts: externalAccounts,
+        verified: externalVerified,
+        shareable: externalShared
+      }
     });
   } catch (error) {
     console.error('Error fetching talent pool stats:', error);

@@ -160,6 +160,10 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/auth` - Authentication (login, signup, password reset)
 - `/api/admin` - Admin-only operations (cycle mgmt, interviews, user mgmt, document grading)
 - `/api/member` - Member role operations (interview assignments, document grading)
+- `/api/talent` - External talent portal: a self-registered UCLA student's own profile,
+  resume and Talent Partner Network consent. Gated on `role === 'USER' &&
+  isExternalTalent`; the upload and consent routes additionally require
+  `User.emailVerifiedAt`.
 - `/api/applications` - Application CRUD and review
 - `/api/review-teams` - Review team management and scoring
 - `/api/files` - File upload/download via Google Drive
@@ -180,7 +184,13 @@ The system follows a **recruiting cycle-based workflow**:
 
 **Authentication:**
 - JWT-based auth with [server/src/middleware/auth.js](server/src/middleware/auth.js)
-- Three roles: `USER` (candidate), `MEMBER` (interviewer/reviewer), `ADMIN`
+- Three roles: `USER` (candidate), `MEMBER` (interviewer/reviewer), `ADMIN`, plus
+  `CLIENT` (Talent Partner Network buyer, contained to `/api/client/*`)
+- `USER` covers two different people, distinguished by `User.isExternalTalent`: an
+  applicant tracking an application (has a `Candidate` row, created by
+  `POST /api/auth/register`) and a self-registered UCLA student in the talent portal
+  (no `Candidate` row, created by `POST /api/auth/register-external`). Both the
+  server gate and `ProtectedRoute` branch on that flag, not on the role.
 - User cache with 5-minute TTL to reduce DB queries
 - Use `requireAuth` middleware for protected routes, `requireAdmin` for admin-only
 
@@ -210,7 +220,7 @@ The system follows a **recruiting cycle-based workflow**:
 ### Database Schema Notes
 
 **Important Enum Values:**
-- `UserRole`: USER, ADMIN, MEMBER
+- `UserRole`: USER, ADMIN, MEMBER, CLIENT
 - `ApplicationStatus`: SUBMITTED, UNDER_REVIEW, ACCEPTED, REJECTED, WAITLISTED
 - `InterviewType`: COFFEE_CHAT, ROUND_ONE, ROUND_TWO, FINAL_ROUND, DELIBERATIONS
 - `InterviewStatus`: DRAFT, UPCOMING, ACTIVE, COMPLETED, CANCELLED

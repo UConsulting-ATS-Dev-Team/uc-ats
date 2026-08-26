@@ -17,7 +17,14 @@ const AUTH_USER_SELECT = {
   graduationClass: true,
   studentId: true,
   profileImage: true,
-  createdAt: true
+  createdAt: true,
+  // Read by the talent portal on every request to decide whether an account may
+  // put a resume in front of a partner. Carried here rather than fetched per
+  // route so the gate costs nothing extra - and note that verifying an email
+  // must call invalidateUserCache(), or the 5-minute TTL would leave the owner
+  // looking unverified to themselves right after they clicked the link.
+  emailVerifiedAt: true,
+  isExternalTalent: true
 };
 
 /**

@@ -71,6 +71,25 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Public talent-portal signup. Separate from register() because the endpoint
+  // is: /auth/register creates a Candidate row for an applicant tracking an
+  // application, which is not what a self-registered UCLA student is.
+  const registerExternal = async (userData) => {
+    try {
+      const data = await apiClient.post('/auth/register-external', userData);
+
+      // A session is issued before the email is verified so the portal can show
+      // a real "check your inbox" state rather than a dead end.
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+      setUser(data.user);
+      return { success: true, user: data.user };
+
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  };
+
   const registerMember = async (userData) => {
     try {
       const data = await apiClient.post('/auth/register-member', userData);
@@ -113,6 +132,7 @@ export const AuthProvider = ({ children }) => {
     loading,
     login,
     register,
+    registerExternal,
     registerMember,
     logout,
     updateUser,

@@ -1461,3 +1461,102 @@ export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName
 
 // Reused by the Master Communications service for raw, non-templated sends.
 export { sendEmail };
+
+// ---------------------------------------------------------------------------
+// External talent portal
+// ---------------------------------------------------------------------------
+
+const createEmailVerificationEmail = (fullName, verifyLink) => {
+  // verifyLink is server-generated (CLIENT_URL + token), not user-controlled,
+  // so it is safe to embed directly in the href and visible link text. fullName
+  // IS user-controlled - it is whatever the person typed at signup - so it is
+  // escaped before it reaches the template.
+  const greeting = fullName ? `Hi ${escapeHtml(fullName)},` : 'Hi,';
+  return {
+    subject: 'Verify Your Email - UConsulting Talent Network',
+    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify Your Email</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+              <h2 style="color: #042742; margin: 0;">UConsulting Talent Network</h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 30px 20px;">
+              <h3 style="color: #333; margin: 0 0 20px 0;">Confirm your UCLA email</h3>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                ${greeting}
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Thanks for joining the UConsulting Talent Network. Confirm this address to finish setting up your profile and upload your resume. This link expires in 24 hours.
+              </p>
+              <p style="text-align: center; margin: 30px 0;">
+                <a href="${verifyLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Verify Email</a>
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                If the button doesn&apos;t work, copy and paste this link into your browser:
+              </p>
+              <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
+                <a href="${verifyLink}" style="color: #0C74C1; text-decoration: underline;">${verifyLink}</a>
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                If you didn&apos;t sign up, you can safely ignore this email &mdash; no profile will be created.
+              </p>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+                Best regards,<br>
+                UConsulting Talent Network
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+  };
+};
+
+/**
+ * Send the address-verification link for a talent portal signup.
+ *
+ * Returns the same { success, error } shape every other sender here does. The
+ * caller must not fail the signup on a send failure - the account exists either
+ * way, and the portal offers a resend.
+ */
+export const sendEmailVerification = async (email, fullName, verifyLink) => {
+  try {
+    if (!email) {
+      return { success: false, error: 'No recipient email provided' };
+    }
+
+    const emailContent = createEmailVerificationEmail(fullName, verifyLink);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Email verification sent to ${email}`);
+    } else {
+      console.error(`Failed to send email verification to ${email}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendEmailVerification:', error);
+    return { success: false, error: error.message };
+  }
+};

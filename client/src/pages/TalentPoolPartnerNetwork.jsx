@@ -242,6 +242,18 @@ const TalentPoolPartnerNetwork = () => {
               'There is no client user role yet — accounts are USER, MEMBER, or ADMIN.'
             }
           />
+          {/* Cycle-independent, unlike every other card here: a self-registered
+              student belongs to no recruiting cycle, so this number does not
+              move when the cycle selector does. */}
+          <StatCard
+            label="UCLA students shareable"
+            value={data ? data.externalTalent?.shareable : undefined}
+            caption={
+              data?.externalTalent
+                ? `${data.externalTalent.verified} verified of ${data.externalTalent.accounts} self-registered — all cycles`
+                : undefined
+            }
+          />
         </Stack>
 
         {optIn && (

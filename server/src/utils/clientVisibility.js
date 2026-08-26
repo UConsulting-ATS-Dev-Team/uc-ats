@@ -77,8 +77,8 @@ export const isViewable = (assignment, visibility) => {
         : assignment.application.resumeUrl;
     return Boolean(extractDriveFileId(stored));
   }
-  if (assignment?.memberResume) {
-    // No redacted variant of a member-uploaded PDF exists.
+  // No redacted variant of an uploaded PDF exists, for a member or a student.
+  if (assignment?.memberResume || assignment?.externalResume) {
     return visibility !== 'BLIND';
   }
   return false;
@@ -99,25 +99,41 @@ export const resolveResumeSource = (assignment, visibility) => {
     if (!fileId) return null;
     return { kind: 'drive', fileId };
   }
-  if (assignment?.memberResume) {
+  const uploaded = assignment?.memberResume || assignment?.externalResume;
+  if (uploaded) {
     if (visibility === 'BLIND') return null;
-    if (!assignment.memberResume.storagePath) return null;
-    return { kind: 'local', storagePath: assignment.memberResume.storagePath };
+    if (!uploaded.storagePath) return null;
+    return { kind: 'local', storagePath: uploaded.storagePath };
   }
   return null;
 };
 
 /**
- * Project one assignment row (with `application` or `memberResume` included)
- * into the DTO a client receives.
+ * Project one assignment row (with `application`, `memberResume` or
+ * `externalResume` included) into the DTO a client receives.
+ *
+ * The two uploaded-resume pools - members and self-registered students - are
+ * projected identically. They differ only in `kind`, which the client uses as a
+ * label, and in nothing the visibility rules act on: both are one PDF with no
+ * redacted variant, both carry their owner's name on the related User rather
+ * than on the resume row, and neither supplies a GPA or a phone number.
  */
 export const projectAssignment = (assignment, visibility) => {
   const isApplicant = Boolean(assignment.application);
-  const source = isApplicant ? assignment.application : assignment.memberResume;
+  const isExternal = !isApplicant && Boolean(assignment.externalResume);
+  const source = isApplicant
+    ? assignment.application
+    : assignment.memberResume || assignment.externalResume;
+
+  // For an uploaded resume the person's name and email live on the related
+  // User, not on the resume row.
+  const owner = isApplicant
+    ? null
+    : assignment.memberResume?.member || assignment.externalResume?.user || null;
 
   const dto = {
     assignmentId: assignment.id,
-    kind: isApplicant ? 'APPLICANT' : 'MEMBER',
+    kind: isApplicant ? 'APPLICANT' : isExternal ? 'EXTERNAL' : 'MEMBER',
     assignedAt: assignment.assignedAt,
     pdfUrl: pdfUrlForAssignment(assignment.id),
     available: isViewable(assignment, visibility),
@@ -132,11 +148,9 @@ export const projectAssignment = (assignment, visibility) => {
       dto.firstName = source?.firstName ?? null;
       dto.lastName = source?.lastName ?? null;
     } else {
-      // Member name lives on the related User, not on the resume row.
-      const member = assignment.memberResume?.member;
-      dto.firstName = member?.fullName ? member.fullName.split(' ')[0] : null;
-      dto.lastName = member?.fullName
-        ? member.fullName.split(' ').slice(1).join(' ') || null
+      dto.firstName = owner?.fullName ? owner.fullName.split(' ')[0] : null;
+      dto.lastName = owner?.fullName
+        ? owner.fullName.split(' ').slice(1).join(' ') || null
         : null;
     }
   }
@@ -150,9 +164,10 @@ export const projectAssignment = (assignment, visibility) => {
       dto.cumulativeGpa = source?.cumulativeGpa != null ? String(source.cumulativeGpa) : null;
       dto.majorGpa = source?.majorGpa != null ? String(source.majorGpa) : null;
     } else {
-      // Members supply no contact details or GPA with an uploaded resume. The
-      // keys stay present so the client renders one component for both kinds.
-      dto.email = assignment.memberResume?.member?.email ?? null;
+      // Neither members nor students supply contact details or a GPA with an
+      // uploaded resume. The keys stay present so the client renders one
+      // component for all three kinds.
+      dto.email = owner?.email ?? null;
       dto.phoneNumber = null;
       dto.cumulativeGpa = null;
       dto.majorGpa = null;

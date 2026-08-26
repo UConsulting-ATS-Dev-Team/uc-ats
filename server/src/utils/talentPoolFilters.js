@@ -1,5 +1,6 @@
-// Translates the admin assignment filter into Prisma where clauses, for both
-// the applicant pool (Application) and the member pool (MemberResume).
+// Translates the admin assignment filter into Prisma where clauses, for each of
+// the three resume pools: applicants (Application), members (MemberResume) and
+// self-registered UCLA students (ExternalResume).
 //
 // Pure on purpose - no prisma import - so the consent gates and the
 // "never match everything" guards below are unit-testable without a database.
@@ -7,7 +8,7 @@
 // returns { value, errors } and leaves the route thin.
 //
 // Shape of the DSL:
-//   { pool: 'APPLICANTS' | 'MEMBERS' | 'BOTH',
+//   { pool: 'APPLICANTS' | 'MEMBERS' | 'EXTERNALS' | 'BOTH',
 //     rows: [ { field: 'graduationYear', values: ['2029', '2030'] },
 //             { field: 'cumulativeGpa',  op: 'gte', value: '3.50' },
 //             { field: 'isFirstGeneration', value: true } ] }
@@ -15,7 +16,19 @@
 // Rows AND together. Values within a row OR. One field per row - that is the
 // whole grammar, and it is what the builder UI produces.
 
-export const POOLS = ['APPLICANTS', 'MEMBERS', 'BOTH'];
+// 'BOTH' predates the external pool and is kept as the "every pool" value
+// rather than renamed: it is the value the admin UI already sends, and the
+// saved filterJson on historical batches is documentation that is never
+// re-run, so nothing depends on it having meant exactly two. It now widens the
+// PREVIEW to three pools, which is safe because a commit only ever assigns the
+// explicit keys the admin left checked - see the snapshot note in
+// routes/talentPoolAdmin.js.
+export const POOLS = ['APPLICANTS', 'MEMBERS', 'EXTERNALS', 'BOTH'];
+
+// Pool membership is expressed as exclusion rather than an allowlist so an
+// absent or unrecognized `pool` keeps its historical meaning - every pool -
+// instead of silently collapsing to one.
+const excludedFrom = (dsl, ...pools) => pools.includes(dsl?.pool);
 
 export const APPLICATION_STATUSES = [
   'SUBMITTED',
@@ -25,10 +38,11 @@ export const APPLICATION_STATUSES = [
   'WAITLISTED'
 ];
 
-// `pool: 'both'` means the field exists on applicants and on member resumes.
-// `applicants` fields have no member equivalent - a filter using one cannot
-// match any member resume, which buildMemberResumeWhere reports rather than
-// silently returning zero rows.
+// `pool: 'both'` means the field exists on every pool - applicants, member
+// resumes and external resumes. `applicants` fields have no equivalent on
+// either uploaded-resume pool: a filter using one cannot match a member or
+// external resume, which buildMemberResumeWhere and buildExternalResumeWhere
+// report rather than silently returning zero rows.
 export const FILTER_FIELDS = [
   { key: 'graduationYear', label: 'Graduation year', pool: 'both', type: 'multiText' },
   { key: 'gender', label: 'Gender', pool: 'both', type: 'multiText' },
@@ -181,7 +195,7 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   const notes = [];
   const rows = dsl?.rows ?? [];
 
-  if (dsl?.pool === 'MEMBERS') {
+  if (excludedFrom(dsl, 'MEMBERS', 'EXTERNALS')) {
     return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
@@ -266,7 +280,7 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
-  if (dsl?.pool === 'APPLICANTS') {
+  if (excludedFrom(dsl, 'APPLICANTS', 'EXTERNALS')) {
     return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
@@ -321,8 +335,85 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   };
 };
 
+/**
+ * Build the Prisma where clause for the external resume pool - UCLA students
+ * who registered through the public talent portal.
+ *
+ * Same shape as buildMemberResumeWhere, with one gate members do not need. A
+ * member is vouched for by having been recruited; an external account is
+ * vouched for by nothing except a verified ucla.edu address, so an unverified
+ * or deactivated owner's resume is not assignable at any visibility. That gate
+ * lives here, in the same place as the consent gate, so no caller can assemble
+ * one without the other.
+ *
+ * @returns {{ where: object|null, notes: string[] }} where is null when the
+ * filter cannot match any external resume - which the caller must surface
+ * rather than rendering an empty result as "nothing matched".
+ */
+export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
+  const notes = [];
+  const rows = dsl?.rows ?? [];
+
+  if (excludedFrom(dsl, 'APPLICANTS', 'MEMBERS')) {
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+  }
+
+  if (visibility === 'BLIND') {
+    // Applications carry a separately redacted blindResumeUrl. A student
+    // uploads one file and there is no redacted variant of it, so there is
+    // nothing a BLIND client could safely be shown.
+    notes.push(
+      'Student-uploaded resumes have no redacted version, so they cannot be assigned to a blind-visibility client.'
+    );
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+  }
+
+  const filterClauses = [{ isCurrent: true }];
+  const gateClauses = [
+    { shareConsent: true },
+    { consentRevokedAt: null },
+    { user: { emailVerifiedAt: { not: null }, isActive: true } }
+  ];
+
+  const AND = filterClauses;
+  const unsupported = [];
+
+  for (const row of rows) {
+    switch (row.field) {
+      case 'graduationYear':
+        AND.push(anyOf('graduationYear', row.values));
+        break;
+      case 'gender':
+        AND.push(anyOf('gender', row.values));
+        break;
+      case 'major':
+        AND.push(majorAnyOf(row.values));
+        break;
+      default: {
+        const field = FIELD_BY_KEY.get(row.field);
+        if (field) unsupported.push(field.label);
+        break;
+      }
+    }
+  }
+
+  if (unsupported.length > 0) {
+    notes.push(
+      `Student-uploaded resumes do not record ${unsupported.join(', ')}, so no student resume can match this filter.`
+    );
+    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+  }
+
+  return {
+    where: { AND: [...gateClauses, ...filterClauses] },
+    filterOnlyWhere: { AND: [...filterClauses] },
+    gateClauses,
+    notes
+  };
+};
+
 // Assignment keys are opaque to the client UI and are what a commit sends back.
-export const ASSIGNMENT_KEY_KINDS = ['APPLICATION', 'MEMBER_RESUME'];
+export const ASSIGNMENT_KEY_KINDS = ['APPLICATION', 'MEMBER_RESUME', 'EXTERNAL_RESUME'];
 
 export const buildAssignmentKey = (kind, id) => `${kind}:${id}`;
 
