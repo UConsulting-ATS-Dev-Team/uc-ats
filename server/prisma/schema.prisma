@@ -1112,6 +1112,11 @@ model ClientResumeAccessLog {
   clientId     String
   userId       String
   assignmentId String?
+  // What the client did. Defaults to VIEW so every row written before the
+  // action column existed keeps its original meaning - they were all PDF
+  // fetches. An EXPORT writes one row per resume in the CSV, so the count of
+  // rows a partner has pulled out stays readable off this table alone.
+  action       ClientAccessAction      @default(VIEW)
   ipAddress    String?
   userAgent    String?
   createdAt    DateTime                @default(now())
@@ -1120,6 +1125,17 @@ model ClientResumeAccessLog {
   assignment   ClientResumeAssignment? @relation(fields: [assignmentId], references: [id])
 
   @@index([clientId, createdAt])
+  @@index([clientId, action, createdAt])
   @@index([assignmentId])
   @@map("client_resume_access_logs")
+}
+
+/// VIEW_DENIED is written when a client asks for an assignment id that is not
+/// theirs, was revoked, or has no file their visibility permits - the half of
+/// the record worth keeping, and previously indistinguishable from a VIEW with
+/// a null assignmentId.
+enum ClientAccessAction {
+  VIEW
+  VIEW_DENIED
+  EXPORT
 }

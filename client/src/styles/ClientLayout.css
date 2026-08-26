@@ -241,6 +241,17 @@
   width: 100%;
 }
 
+/* `.content-container` is a global class name shared with Layout.css and
+   CandidateLayout.css, all three capping at 1200px. A client's only page is a
+   wide spreadsheet, so it gets the whole viewport instead - zooming out then
+   actually buys more columns rather than just shrinking the text.
+   Scoped by ancestor so the specificity beats the other two files' rule no
+   matter which order the bundler emits them in, and so neither the admin nor
+   the candidate layout changes. */
+.client-layout-container .content-container {
+  max-width: none;
+}
+
 /* Responsive Design */
 @media (min-width: 768px) {
   .mobile-menu-btn {

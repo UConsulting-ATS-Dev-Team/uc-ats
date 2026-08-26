@@ -14,7 +14,7 @@ vi.mock('../prismaClient.js', () => ({
     user: { findUnique: vi.fn() },
     talentPartnerClient: { findUnique: vi.fn() },
     clientResumeAssignment: { count: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
-    clientResumeAccessLog: { create: vi.fn() }
+    clientResumeAccessLog: { create: vi.fn(), createMany: vi.fn() }
   }
 }));
 
@@ -110,8 +110,19 @@ beforeEach(() => {
   prisma.clientResumeAssignment.findMany.mockResolvedValue([]);
   prisma.clientResumeAssignment.findFirst.mockResolvedValue(null);
   prisma.clientResumeAccessLog.create.mockResolvedValue({ id: 'log-1' });
+  prisma.clientResumeAccessLog.createMany.mockResolvedValue({ count: 1 });
   getFileStream.mockImplementation(async () => fakeStream());
 });
+
+const post = (path, body, { user } = {}) => {
+  const headers = { 'Content-Type': 'application/json' };
+  if (user) headers.Authorization = `Bearer ${tokenFor(user)}`;
+  return fetch(`http://localhost:${port}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+};
 
 describe('portal access control', () => {
   it('refuses every non-CLIENT role', async () => {
@@ -185,9 +196,35 @@ describe('resume list', () => {
     expect(JSON.stringify(where.AND)).toContain('firstName');
   });
 
+  // Paging moved into memory when sorting did (an assignment points at an
+  // application OR a member resume, and no orderBy interleaves the two), so the
+  // cap is now on what the response carries rather than on the query's take.
   it('caps page size', async () => {
-    await request('/api/client/resumes?limit=100000', { user: clientUser });
-    expect(prisma.clientResumeAssignment.findMany.mock.calls[0][0].take).toBe(100);
+    prisma.clientResumeAssignment.count.mockResolvedValue(500);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue(
+      Array.from({ length: 500 }, (_, i) => assignmentRow({ id: `assign-${i}` }))
+    );
+
+    const res = await request('/api/client/resumes?limit=100000', { user: clientUser });
+    const body = await res.json();
+
+    expect(body.limit).toBe(100);
+    expect(body.items).toHaveLength(100);
+  });
+
+  it('bounds what it materializes, and says so rather than serving a prefix silently', async () => {
+    prisma.clientResumeAssignment.count.mockResolvedValue(5000);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue(
+      Array.from({ length: 2000 }, (_, i) => assignmentRow({ id: `assign-${i}` }))
+    );
+
+    const res = await request('/api/client/resumes', { user: clientUser });
+    const body = await res.json();
+
+    expect(prisma.clientResumeAssignment.findMany.mock.calls[0][0].take).toBe(2000);
+    expect(body.total).toBe(5000);
+    expect(body.truncated).toBe(true);
+    expect(body.notes.join(' ')).toContain('2000');
   });
 });
 
@@ -313,6 +350,260 @@ describe('access logging', () => {
     prisma.clientResumeAccessLog.create.mockRejectedValue(new Error('log table down'));
 
     const res = await request('/api/client/resumes/assign-1/pdf', { user: clientUser });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('access actions', () => {
+  it('labels a successful view VIEW', async () => {
+    prisma.clientResumeAssignment.findFirst.mockResolvedValue(assignmentRow());
+    await request('/api/client/resumes/assign-1/pdf', { user: clientUser });
+
+    expect(prisma.clientResumeAccessLog.create.mock.calls[0][0].data.action).toBe('VIEW');
+  });
+
+  it('labels an unknown assignment VIEW_DENIED', async () => {
+    prisma.clientResumeAssignment.findFirst.mockResolvedValue(null);
+    await request('/api/client/resumes/not-mine/pdf', { user: clientUser });
+
+    expect(prisma.clientResumeAccessLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'VIEW_DENIED',
+      assignmentId: null
+    });
+  });
+
+  it('labels a BLIND miss VIEW_DENIED and names the assignment it refused', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('BLIND'));
+    const row = assignmentRow();
+    row.application.blindResumeUrl = null;
+    prisma.clientResumeAssignment.findFirst.mockResolvedValue(row);
+
+    const res = await request('/api/client/resumes/assign-1/pdf', { user: clientUser });
+
+    expect(res.status).toBe(404);
+    expect(prisma.clientResumeAccessLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'VIEW_DENIED',
+      assignmentId: 'assign-1'
+    });
+    expect(getFileStream).not.toHaveBeenCalled();
+  });
+});
+
+describe('account capabilities', () => {
+  it('tells the UI which controls to render, per visibility level', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('BLIND'));
+    const blind = await (await request('/api/client/me', { user: clientUser })).json();
+
+    // The UI renders columns, filters and sort headers from these lists, so a
+    // level that hides a field must not advertise a control for it.
+    expect(blind.filterableFields).not.toContain('gender');
+    expect(blind.filterableFields).not.toContain('gpa');
+    expect(blind.sortableFields).not.toContain('name');
+
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('FULL'));
+    const full = await (await request('/api/client/me', { user: clientUser })).json();
+
+    expect(full.filterableFields).toEqual(expect.arrayContaining(['gender', 'gpa']));
+    expect(full.sortableFields).toContain('cumulativeGpa');
+  });
+});
+
+describe('filters', () => {
+  it('scopes the facet query to this client and offers no gender under BLIND', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('BLIND'));
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow()]);
+
+    const res = await request('/api/client/facets', { user: clientUser });
+    const body = await res.json();
+
+    expect(prisma.clientResumeAssignment.findMany.mock.calls[0][0].where).toMatchObject({
+      clientId: 'partner-1',
+      revokedAt: null
+    });
+    expect(body.graduationYear).toEqual(['2030']);
+    expect(body).not.toHaveProperty('gender');
+  });
+
+  it('translates a graduation year into a clause against both pools', async () => {
+    await request('/api/client/resumes?graduationYear=2030,2029', { user: clientUser });
+
+    const where = prisma.clientResumeAssignment.findMany.mock.calls[0][0].where;
+    const json = JSON.stringify(where.AND);
+    expect(json).toContain('2030');
+    expect(json).toContain('memberResume');
+  });
+
+  it('ignores a gender filter from a BLIND client instead of honouring it', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('BLIND'));
+    await request('/api/client/resumes?gender=Female', { user: clientUser });
+
+    const where = prisma.clientResumeAssignment.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(where.AND || [])).not.toContain('Female');
+  });
+
+  it('honours a GPA range at FULL and warns that it excludes members', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('FULL'));
+    const res = await request('/api/client/resumes?gpaMin=3.50', { user: clientUser });
+    const body = await res.json();
+
+    const where = prisma.clientResumeAssignment.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(where.AND)).toContain('3.50');
+    expect(body.notes.join(' ')).toMatch(/do not record a GPA/);
+  });
+
+  it('rejects a malformed GPA rather than dropping it silently', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('FULL'));
+    const res = await request('/api/client/resumes?gpaMin=abc', { user: clientUser });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/Minimum GPA/);
+  });
+});
+
+describe('CSV export', () => {
+  const twoRows = [assignmentRow({ id: 'assign-1' }), assignmentRow({ id: 'assign-2' })];
+
+  it('scopes the lookup to this client and to live assignments', async () => {
+    prisma.clientResumeAssignment.findMany.mockResolvedValue(twoRows);
+
+    await post(
+      '/api/client/resumes/export',
+      { assignmentIds: ['assign-1', 'assign-2'] },
+      { user: clientUser }
+    );
+
+    expect(prisma.clientResumeAssignment.findMany.mock.calls[0][0].where).toMatchObject({
+      clientId: 'partner-1',
+      revokedAt: null
+    });
+  });
+
+  it('exports only the columns this visibility already shows', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('BLIND'));
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow()]);
+
+    const res = await post('/api/client/resumes/export', { assignmentIds: ['assign-1'] }, {
+      user: clientUser
+    });
+    const csv = await res.text();
+
+    // The CSV is a spreadsheet of the table, not a second and more generous API.
+    expect(csv).not.toContain('Jane');
+    expect(csv).not.toContain('jane@ucla.edu');
+    expect(csv).not.toContain('3.85');
+    expect(csv).not.toContain(DRIVE_REAL);
+    expect(csv).not.toContain(DRIVE_BLIND);
+    expect(csv).toContain('Economics');
+  });
+
+  it('includes identity and contact at FULL', async () => {
+    prisma.talentPartnerClient.findUnique.mockResolvedValue(partnerFor('FULL'));
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow()]);
+
+    const csv = await (
+      await post('/api/client/resumes/export', { assignmentIds: ['assign-1'] }, { user: clientUser })
+    ).text();
+
+    expect(csv).toContain('Jane');
+    expect(csv).toContain('jane@ucla.edu');
+    expect(csv).toContain('3.85');
+  });
+
+  it('sends a CSV attachment that browsers will not sniff', async () => {
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow()]);
+
+    const res = await post('/api/client/resumes/export', { assignmentIds: ['assign-1'] }, {
+      user: clientUser
+    });
+
+    expect(res.headers.get('content-type')).toMatch(/text\/csv/);
+    expect(res.headers.get('content-disposition')).toMatch(/attachment/);
+    expect(res.headers.get('content-disposition')).toMatch(/acme-recruiting-resumes-/);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('records one EXPORT row per resume actually exported', async () => {
+    prisma.clientResumeAssignment.findMany.mockResolvedValue(twoRows);
+
+    await post(
+      '/api/client/resumes/export',
+      { assignmentIds: ['assign-1', 'assign-2'] },
+      { user: clientUser }
+    );
+
+    const logged = prisma.clientResumeAccessLog.createMany.mock.calls[0][0].data;
+    expect(logged).toHaveLength(2);
+    expect(logged[0]).toMatchObject({
+      clientId: 'partner-1',
+      userId: clientUser.id,
+      action: 'EXPORT'
+    });
+    expect(logged.map((r) => r.assignmentId).sort()).toEqual(['assign-1', 'assign-2']);
+  });
+
+  it('drops a borrowed id rather than exporting it or announcing that it exists', async () => {
+    // findMany is already scoped by clientId, so another client's id simply does
+    // not come back - and 404ing on it would confirm it exists.
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow({ id: 'assign-1' })]);
+
+    const res = await post(
+      '/api/client/resumes/export',
+      { assignmentIds: ['assign-1', 'someone-elses-assignment'] },
+      { user: clientUser }
+    );
+
+    expect(res.status).toBe(200);
+    const csv = await res.text();
+    expect(csv.trim().split('\r\n')).toHaveLength(2); // header + one row
+  });
+
+  it('refuses an empty selection', async () => {
+    const res = await post('/api/client/resumes/export', { assignmentIds: [] }, {
+      user: clientUser
+    });
+    expect(res.status).toBe(400);
+    expect(prisma.clientResumeAccessLog.createMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a selection larger than the export cap', async () => {
+    const res = await post(
+      '/api/client/resumes/export',
+      { assignmentIds: Array.from({ length: 1001 }, (_, i) => `assign-${i}`) },
+      { user: clientUser }
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/at most 1000/);
+    expect(prisma.clientResumeAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 when nothing in the selection is exportable', async () => {
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([]);
+    const res = await post('/api/client/resumes/export', { assignmentIds: ['gone'] }, {
+      user: clientUser
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('refuses every non-CLIENT role', async () => {
+    for (const user of [adminUser, memberUser, candidateUser]) {
+      const res = await post(
+        '/api/client/resumes/export',
+        { assignmentIds: ['assign-1'] },
+        { user }
+      );
+      expect({ role: user.role, status: res.status }).toEqual({ role: user.role, status: 403 });
+    }
+  });
+
+  it('still returns the CSV if logging fails', async () => {
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([assignmentRow()]);
+    prisma.clientResumeAccessLog.createMany.mockRejectedValue(new Error('log table down'));
+
+    const res = await post('/api/client/resumes/export', { assignmentIds: ['assign-1'] }, {
+      user: clientUser
+    });
     expect(res.status).toBe(200);
   });
 });
