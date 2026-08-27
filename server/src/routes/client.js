@@ -13,10 +13,8 @@
 // select. That is what keeps the filter, facet, table and CSV paths from
 // drifting apart: four features, one projection, one place a field can leak.
 import express from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import prisma from '../prismaClient.js';
+import { getResume } from '../services/resumeStorage.js';
 import { requireAuth, requireClient } from '../middleware/auth.js';
 import { getFileStream } from '../services/google/drive.js';
 import {
@@ -37,18 +35,11 @@ import {
   toCsv
 } from '../utils/clientResumeQuery.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Same root cases.js uses, and deliberately not the statically-served uploads/
-// directory - see the comment in routes/cases.js.
-const STORAGE_DIR = path.join(__dirname, '../../storage');
 // The two directories an uploaded resume can legitimately live in. A resolved
 // path must sit under one of them: `storagePath` comes out of the database, and
 // this is the check that keeps a malformed or tampered value from reading its
 // way out of the storage tree.
-const UPLOADED_RESUME_ROOTS = [
-  path.join(STORAGE_DIR, 'member-resumes'),
-  path.join(STORAGE_DIR, 'external-resumes')
-];
+const UPLOADED_RESUME_PREFIXES = ['member-resumes/', 'external-resumes/'];
 
 const router = express.Router();
 
@@ -352,14 +343,18 @@ router.get('/resumes/:assignmentId/pdf', async (req, res) => {
       return stream.pipe(res);
     }
 
-    const absPath = path.join(STORAGE_DIR, source.storagePath);
-    if (!UPLOADED_RESUME_ROOTS.some((root) => absPath.startsWith(root))) {
+    // The two prefixes an uploaded resume can legitimately carry. `storagePath`
+    // comes out of the database, and this is the check that keeps a malformed or
+    // tampered value from reaching for something it should not.
+    if (!UPLOADED_RESUME_PREFIXES.some((prefix) => source.storagePath.startsWith(prefix))) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-    if (!fs.existsSync(absPath)) {
+
+    const buffer = await getResume(source.storagePath);
+    if (!buffer) {
       return res.status(404).json({ error: 'This resume is not available.' });
     }
-    return fs.createReadStream(absPath).pipe(res);
+    return res.send(buffer);
   } catch (error) {
     console.error('[GET /api/client/resumes/:assignmentId/pdf]', error);
     if (!res.headersSent) {

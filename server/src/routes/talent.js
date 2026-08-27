@@ -12,12 +12,11 @@
 // So nothing that could reach a partner - the upload, and the consent that makes
 // it assignable - is reachable before that address is proved.
 import express from 'express';
-import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
+import { putResume, getResume } from '../services/resumeStorage.js';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import {
   EXTERNAL_GENDERS,
@@ -29,11 +28,6 @@ import {
 const router = express.Router();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Same root member.js and cases.js use, and deliberately NOT uploads/, which
-// index.js serves statically and unauthenticated - a resume there would be
-// world-readable.
-const STORAGE_DIR = path.join(__dirname, '../../storage');
-const EXTERNAL_RESUME_ROOT = path.join(STORAGE_DIR, 'external-resumes');
 
 // In memory so the file can be named by the DB-generated row id, matching the
 // reasoning in member.js and cases.js.
@@ -203,8 +197,7 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
 
     const relPath = `external-resumes/${created.id}/resume.pdf`;
     try {
-      await fsPromises.mkdir(path.join(EXTERNAL_RESUME_ROOT, created.id), { recursive: true });
-      await fsPromises.writeFile(path.join(STORAGE_DIR, relPath), req.file.buffer);
+      await putResume(relPath, req.file.buffer);
     } catch (writeError) {
       // Leaving a row pointing at a file that does not exist would make the
       // resume look uploaded and then 404 for whoever opens it.
@@ -271,18 +264,19 @@ router.get('/resume/pdf', async (req, res) => {
     const resume = await loadOwnResume(req.user.id);
     if (!resume) return res.status(404).json({ error: 'No resume on file' });
 
-    const absPath = path.join(STORAGE_DIR, resume.storagePath);
-    if (!absPath.startsWith(EXTERNAL_RESUME_ROOT)) {
+    if (!resume.storagePath.startsWith('external-resumes/')) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-    if (!fs.existsSync(absPath)) {
-      return res.status(404).json({ error: 'No resume on file' });
+
+    const buffer = await getResume(resume.storagePath);
+    if (!buffer) {
+      return res.status(404).json({ error: 'Your resume file could not be found. Please upload it again.' });
     }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'private, max-age=300');
-    fs.createReadStream(absPath).pipe(res);
+    res.send(buffer);
   } catch (error) {
     console.error('[GET /api/talent/resume/pdf]', error);
     res.status(500).json({ error: 'Failed to load your resume' });
