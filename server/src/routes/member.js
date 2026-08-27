@@ -2027,4 +2027,56 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
   }
 });
 
+// Cast or change a vote in an open session (ATS-54 / ATS-67)
+router.post('/vote-sessions/:sessionId/vote', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { optionId } = req.body || {};
+    const userId = req.user.id;
+
+    if (!optionId) {
+      return res.status(400).json({ error: 'optionId is required' });
+    }
+
+    const session = await prisma.voteSession.findUnique({
+      where: { id: sessionId },
+      include: { options: true }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+
+    if (session.status !== 'OPEN') {
+      return res.status(400).json({ error: 'Voting is not open for this session' });
+    }
+
+    const option = session.options.find((o) => o.id === optionId);
+    if (!option) {
+      return res.status(400).json({ error: 'Invalid option for this session' });
+    }
+
+    const existing = await prisma.vote.findFirst({
+      where: { voteSessionId: sessionId, voterId: userId }
+    });
+
+    let vote;
+    if (existing) {
+      vote = await prisma.vote.update({
+        where: { id: existing.id },
+        data: { optionId }
+      });
+    } else {
+      vote = await prisma.vote.create({
+        data: { voteSessionId: sessionId, optionId, voterId: userId }
+      });
+    }
+
+    res.json({ ...vote, option: { label: option.label, value: option.value } });
+  } catch (error) {
+    console.error('[POST /api/member/vote-sessions/:sessionId/vote]', error);
+    res.status(500).json({ error: 'Failed to cast vote' });
+  }
+});
+
 export default router;
