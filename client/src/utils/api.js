@@ -80,7 +80,9 @@ class ApiClient {
     return this.request(endpoint, {
       ...options,
       method: 'PUT',
-      body: JSON.stringify(data),
+      // Same FormData check post() has. Without it an upload sent over PUT or
+      // PATCH is stringified to "[object FormData]" and the file never arrives.
+      body: data instanceof FormData ? data : JSON.stringify(data),
     });
   }
 
@@ -88,7 +90,9 @@ class ApiClient {
     return this.request(endpoint, {
       ...options,
       method: 'PATCH',
-      body: JSON.stringify(data),
+      // Same FormData check post() has. Without it an upload sent over PUT or
+      // PATCH is stringified to "[object FormData]" and the file never arrives.
+      body: data instanceof FormData ? data : JSON.stringify(data),
     });
   }
 

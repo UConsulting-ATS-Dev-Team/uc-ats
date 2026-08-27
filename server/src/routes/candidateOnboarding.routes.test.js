@@ -24,7 +24,8 @@ vi.mock('../prismaClient.js', () => {
       __tx: tx,
       user: { findUnique: vi.fn() },
       candidate: { findFirst: vi.fn() },
-      candidateOnboarding: { upsert: vi.fn() },
+      application: { count: vi.fn() },
+      candidateOnboarding: { upsert: vi.fn(), update: vi.fn() },
       externalResume: { findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
       clientResumeAssignment: { updateMany: vi.fn() },
       $transaction: vi.fn((fn) => fn(tx))
@@ -174,6 +175,7 @@ beforeEach(() => {
     ALL_USERS.find((u) => u.id === id) || null
   );
   prisma.candidate.findFirst.mockResolvedValue(candidateRow());
+  prisma.application.count.mockResolvedValue(0);
   prisma.candidateOnboarding.upsert.mockImplementation(({ create, update }) =>
     Promise.resolve(onboardingRow({ ...create, ...update }))
   );
@@ -182,6 +184,9 @@ beforeEach(() => {
   prisma.__tx.externalResume.updateMany.mockResolvedValue({ count: 0 });
   prisma.__tx.clientResumeAssignment.updateMany.mockResolvedValue({ count: 0 });
   prisma.externalResume.update.mockResolvedValue(externalResumeRow());
+  prisma.candidateOnboarding.update.mockImplementation(({ data }) =>
+    Promise.resolve(onboardingRow(data))
+  );
 });
 
 describe('access gating', () => {
@@ -223,7 +228,7 @@ describe('whether onboarding is required', () => {
   });
 
   it('is not required once an application exists - it carries everything this asks', async () => {
-    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [{ id: 'app-1' }] }));
+    prisma.application.count.mockResolvedValue(1);
     const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
     expect(body).toMatchObject({ required: false, hasApplication: true });
   });
@@ -294,7 +299,7 @@ describe('submitting', () => {
   });
 
   it('refuses a candidate who already has an application', async () => {
-    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [{ id: 'app-1' }] }));
+    prisma.application.count.mockResolvedValue(1);
     const res = await submit({ user: verifiedCandidate });
     expect(res.status).toBe(409);
   });
@@ -394,5 +399,104 @@ describe('talent partner network opt-in', () => {
     );
     const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
     expect(body.talentPool.shared).toBe(false);
+  });
+});
+
+describe('finding a past application', () => {
+  it('looks in the applications table, not through the candidate relation', async () => {
+    // Regression. Signup creates its own Candidate row, so an applicant who
+    // signed up with a different address than they applied with has two: the
+    // new empty one, and the one their application hangs off. Reading the
+    // relation found the empty one and told four real past applicants to
+    // complete onboarding and verify an email they never had a link for.
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [] }));
+    prisma.application.count.mockResolvedValue(2);
+
+    const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
+    expect(body).toMatchObject({ required: false, hasApplication: true });
+  });
+
+  it('matches on student ID as well as email, like the Forms sync', async () => {
+    await request('/api/candidate/onboarding/status', { user: verifiedCandidate });
+    expect(prisma.application.count).toHaveBeenCalledWith({
+      where: { OR: [{ studentId: '123456789' }, { email: 'bruin@g.ucla.edu' }] }
+    });
+  });
+
+  it('still onboards someone with genuinely no application anywhere', async () => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [] }));
+    prisma.application.count.mockResolvedValue(0);
+
+    const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
+    expect(body).toMatchObject({ required: true, hasApplication: false });
+  });
+});
+
+describe('editing details without re-uploading', () => {
+  const patch = (user, body) =>
+    fetch(`http://localhost:${port}/api/candidate/onboarding`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${tokenFor(user)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+  const details = {
+    phoneNumber: '3105550134',
+    graduationYear: '2029',
+    cumulativeGpa: '3.90',
+    major1: 'Social Sciences',
+    isTransferStudent: 'false',
+    isFirstGeneration: 'true'
+  };
+
+  beforeEach(() => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ onboarding: onboardingRow() }));
+  });
+
+  it('updates the record without asking for a file', async () => {
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+    expect((await res.json()).onboarding).toMatchObject({ major1: 'Social Sciences', graduationYear: '2029' });
+  });
+
+  it('does not require a sharing answer - that was settled at submission', async () => {
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+  });
+
+  it('carries corrections onto the pooled resume, which partners filter on', async () => {
+    prisma.externalResume.findFirst.mockResolvedValue(externalResumeRow());
+    await patch(verifiedCandidate, details);
+
+    expect(prisma.externalResume.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ major1: 'Social Sciences', graduationYear: '2029' })
+      })
+    );
+  });
+
+  it('is fine when there is no pooled resume to carry them to', async () => {
+    prisma.externalResume.findFirst.mockResolvedValue(null);
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+    expect(prisma.externalResume.update).not.toHaveBeenCalled();
+  });
+
+  it('validates the same way the submission does', async () => {
+    const res = await patch(verifiedCandidate, { ...details, cumulativeGpa: '3.456' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/two decimal places/);
+    expect(prisma.candidateOnboarding.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unverified account', async () => {
+    const res = await patch(unverifiedCandidate, details);
+    expect(res.status).toBe(403);
+  });
+
+  it('404s for someone who has not onboarded', async () => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ onboarding: null }));
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(404);
   });
 });

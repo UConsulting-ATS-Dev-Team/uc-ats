@@ -3,6 +3,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import ResumeReuploadSection from '../components/ResumeReuploadSection';
+import OnboardingResumeSection from '../components/OnboardingResumeSection';
 import '../styles/ApplicantInformation.css';
 
 // The fields a candidate may correct themselves, in the order they are shown.
@@ -66,6 +67,43 @@ const SECTIONS = [
 
 const EDITABLE_NAMES = SECTIONS.flatMap((section) => section.fields.map((field) => field.name));
 
+// What a candidate who onboarded instead of applying can maintain here.
+//
+// Their details live on CandidateOnboarding, which stores everything above
+// except a name (that is on the Candidate row), a major GPA and prior college
+// years — the application form asks for those and the onboarding module does
+// not. Rendering a field with nothing behind it would invite an edit that
+// silently goes nowhere.
+const ONBOARDING_FIELD_NAMES = new Set([
+  'phoneNumber',
+  'gender',
+  'graduationYear',
+  'major1',
+  'major2',
+  'cumulativeGpa',
+  'isTransferStudent',
+  'isFirstGeneration',
+]);
+
+const onboardingSections = () =>
+  SECTIONS.map((section) => ({
+    ...section,
+    fields: section.fields.filter((field) => ONBOARDING_FIELD_NAMES.has(field.name)),
+  })).filter((section) => section.fields.length > 0);
+
+// The onboarding record uses the same field names as an application, so the
+// existing form state maps straight across.
+const onboardingToFormState = (record) => ({
+  phoneNumber: record.phoneNumber ?? '',
+  gender: record.gender ?? '',
+  graduationYear: record.graduationYear ?? '',
+  major1: record.major1 ?? '',
+  major2: record.major2 ?? '',
+  cumulativeGpa: record.cumulativeGpa ?? '',
+  isTransferStudent: Boolean(record.isTransferStudent),
+  isFirstGeneration: Boolean(record.isFirstGeneration),
+});
+
 // Inputs are controlled, so every value has to be a string (or a boolean for the
 // yes/no fields) — null would make React treat the input as uncontrolled.
 function toFormState(application) {
@@ -94,6 +132,34 @@ export default function ApplicantInformation() {
   const [saveError, setSaveError] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [preview, setPreview] = useState({ open: false, src: '', title: '' });
+  // 'application' when editing a submitted application, 'onboarding' when the
+  // candidate never applied and is maintaining what they gave us at signup.
+  const [mode, setMode] = useState('application');
+
+  /**
+   * Load what this candidate gave us at signup, for someone with no application.
+   *
+   * Their details should stay theirs to keep current whether or not they ever
+   * applied - before this the page simply told them they had nothing here, even
+   * though they had filled the whole module in.
+   */
+  const loadOnboarding = useCallback(async () => {
+    try {
+      const data = await apiClient.get('/candidate/onboarding/status');
+      if (data?.onboarding) {
+        setMode('onboarding');
+        setRecord(data.onboarding);
+        const initial = onboardingToFormState(data.onboarding);
+        setForm(initial);
+        setBaseline(initial);
+      }
+    } catch {
+      // Leave the empty state as it was. Someone with neither an application nor
+      // an onboarding record genuinely has nothing to edit here.
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   // Which application to edit. A candidate can have one per cycle, so prefer the
   // one still open, then the most recent.
@@ -110,7 +176,7 @@ export default function ApplicantInformation() {
           (a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)
         )[0];
         setSelectedId((active || newest)?.id ?? null);
-        if (list.length === 0) setLoading(false);
+        if (list.length === 0) await loadOnboarding();
       } catch (e) {
         if (cancelled) return;
         // A candidate with no application yet gets a 404 from this endpoint;
@@ -120,13 +186,13 @@ export default function ApplicantInformation() {
           e.message?.includes('Candidate not found for this user');
         if (!noApplication) setLoadError(e.message || 'Failed to load your applications');
         setApplications([]);
-        setLoading(false);
+        await loadOnboarding();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadOnboarding]);
 
   const loadRecord = useCallback(async (applicationId) => {
     setLoading(true);
@@ -171,6 +237,20 @@ export default function ApplicantInformation() {
     setSaveError('');
     setConfirmation('');
     try {
+      if (mode === 'onboarding') {
+        // Sent whole rather than as a diff: the onboarding endpoint validates
+        // every field together, the way the module itself does, so a partial
+        // body would fail on the fields that were not touched.
+        const result = await apiClient.patch('/candidate/onboarding', form);
+        const updated = result.onboarding;
+        setRecord(updated);
+        const next = onboardingToFormState(updated);
+        setForm(next);
+        setBaseline(next);
+        setConfirmation(result.message || 'Your information has been updated.');
+        return;
+      }
+
       const result = await apiClient.patch(
         `/applicant-info/applications/${selectedId}`,
         changedFields(form, baseline)
@@ -283,7 +363,14 @@ export default function ApplicantInformation() {
 
         {loading && <p className="applicant-note">Loading your information…</p>}
         {!loading && loadError && <p className="applicant-error">{loadError}</p>}
-        {!loading && !loadError && applications.length === 0 && (
+        {!loading && !loadError && applications.length === 0 && mode === 'onboarding' && (
+          <p className="applicant-note">
+            You have not applied yet. This is the information you gave us when you signed up —
+            keeping it current means partner organizations see the right details.
+          </p>
+        )}
+
+        {!loading && !loadError && applications.length === 0 && mode !== 'onboarding' && (
           <p className="applicant-note">
             You do not have an application yet. Once you apply, you can update your details here.
           </p>
@@ -292,6 +379,7 @@ export default function ApplicantInformation() {
         {!loading && !loadError && record && form && (
           <>
             <form className="applicant-card" onSubmit={handleSubmit}>
+              {mode !== 'onboarding' && (
               <section className="applicant-section">
                 <h2 className="applicant-section-title">Identity</h2>
                 <p className="applicant-note">
@@ -309,8 +397,9 @@ export default function ApplicantInformation() {
                   </div>
                 </div>
               </section>
+              )}
 
-              {SECTIONS.map((section) => (
+              {(mode === 'onboarding' ? onboardingSections() : SECTIONS).map((section) => (
                 <section className="applicant-section" key={section.title}>
                   <h2 className="applicant-section-title">{section.title}</h2>
                   <div className="applicant-grid">{section.fields.map(renderField)}</div>
@@ -338,10 +427,18 @@ export default function ApplicantInformation() {
             <div className="applicant-card">
               <section className="applicant-section">
                 <h2 className="applicant-section-title">Resume</h2>
-                <ResumeReuploadSection
-                  applicationId={selectedId}
-                  onPreview={(src, title) => setPreview({ open: true, src, title })}
-                />
+                {mode === 'onboarding' ? (
+                  <OnboardingResumeSection
+                    record={record}
+                    onPreview={(src, title) => setPreview({ open: true, src, title })}
+                    onReplaced={(updated) => setRecord(updated)}
+                  />
+                ) : (
+                  <ResumeReuploadSection
+                    applicationId={selectedId}
+                    onPreview={(src, title) => setPreview({ open: true, src, title })}
+                  />
+                )}
               </section>
             </div>
           </>
