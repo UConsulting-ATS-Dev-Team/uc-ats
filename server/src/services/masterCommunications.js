@@ -479,3 +479,59 @@ export async function processScheduledMessages() {
 
   return pending.length;
 }
+
+// Sends the composed message to whoever pressed the button, so an admin can see
+// the real thing — merge fields resolved, markdown rendered — before it goes to
+// hundreds of people. Deliberately not logged to messageLog: a test is not a send.
+export async function sendTestCommunication({ audience, filters, subject, body, user }) {
+  if (!user?.email) {
+    const err = new Error('No email address on the requesting account');
+    err.status = 400;
+    throw err;
+  }
+  if (!subject || !body) {
+    const err = new Error('subject and body are required');
+    err.status = 400;
+    throw err;
+  }
+
+  // Render against a real recipient so merge fields show what the audience will
+  // actually receive; fall back to the sender when the filters match nobody.
+  const recipients = await resolveRecipients({ audience, filters });
+  const sample = recipients[0] || null;
+  const nameParts = (user.fullName || '').split(' ');
+  const mergeSource = sample || {
+    id: user.id,
+    email: user.email,
+    firstName: nameParts[0] || '',
+    lastName: nameParts.slice(1).join(' '),
+    fullName: user.fullName || user.email,
+    phoneNumber: '',
+    role: user.role,
+    audience: audience === 'applicants' ? 'applicant' : 'user',
+  };
+
+  const renderedSubject = renderMessage(subject, mergeSource);
+  const renderedBody = renderMessage(body, mergeSource);
+
+  const banner =
+    `<div style="background:#fff4e5;border:1px solid #ffb74d;border-radius:6px;padding:12px;margin-bottom:16px;font-family:sans-serif;font-size:13px;color:#663c00;">` +
+    `<strong>Test email</strong> — nobody else received this. Merge fields were filled in from ` +
+    `${sample ? `a matching recipient (${mergeSource.fullName || mergeSource.email})` : 'your own account, because no recipient matched the current filters'}.` +
+    `</div>`;
+
+  const result = await sendEmail(user.email, `[TEST] ${renderedSubject}`, banner + markdownToHtml(renderedBody));
+
+  if (!result.success) {
+    const err = new Error(result.error || 'Failed to send test email');
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    sentTo: user.email,
+    recipientCount: recipients.length,
+    mergeSource: { fullName: mergeSource.fullName, email: mergeSource.email },
+    usedFallback: !sample,
+  };
+}

@@ -7,6 +7,7 @@ import {
   previewMasterCommunication,
   buildImessagePacket,
   sendMasterCommunication,
+  sendTestCommunication,
   scheduleMessage,
   listScheduledMessages,
   cancelScheduledMessage,
@@ -152,6 +153,28 @@ router.post('/send', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[POST /api/master-communications/send]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to send communication' });
+  }
+});
+
+router.post('/test', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { audience, filters, subject, body } = req.body || {};
+
+    if (!audience || !subject || !body) {
+      return res.status(400).json({ error: 'audience, subject, and body are required' });
+    }
+
+    const result = await sendTestCommunication({
+      audience,
+      filters,
+      subject,
+      body,
+      user: req.user,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[POST /api/master-communications/test]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to send test email' });
   }
 });
 

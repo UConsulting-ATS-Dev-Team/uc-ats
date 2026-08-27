@@ -111,6 +111,7 @@ const MasterCommunications = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const filteredEvents = useMemo(
@@ -272,6 +273,28 @@ const MasterCommunications = () => {
       setError(e.message || 'Failed to send');
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    clearMessages();
+    setTesting(true);
+    try {
+      const result = await apiClient.post('/master-communications/test', {
+        audience,
+        filters: buildFilters(),
+        subject,
+        body,
+      });
+      setSuccess(
+        result.usedFallback
+          ? `Test email sent to ${result.sentTo}. No recipients matched the filters, so merge fields used your own account.`
+          : `Test email sent to ${result.sentTo}, using ${result.mergeSource.fullName || result.mergeSource.email} for merge fields.`
+      );
+    } catch (e) {
+      setError(e.message || 'Failed to send test email');
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -671,6 +694,16 @@ const MasterCommunications = () => {
             >
               Send {channel === 'email' ? 'Email' : 'Slack'}
             </Button>
+            {channel === 'email' && (
+              <Button
+                variant="outlined"
+                startIcon={testing ? <CircularProgress size={20} /> : <SendIcon />}
+                onClick={handleSendTest}
+                disabled={testing || !body || !subject || selectedCycles.length === 0}
+              >
+                {user?.email ? `Send Test to ${user.email}` : 'Send Test to Me'}
+              </Button>
+            )}
             <Button
               variant="outlined"
               color="secondary"
