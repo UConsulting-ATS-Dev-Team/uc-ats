@@ -171,7 +171,7 @@ const MemberResumeCard = () => {
         )}
 
         <Grid container spacing={2} sx={{ mt: 0 }}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               size="small"
@@ -181,7 +181,7 @@ const MemberResumeCard = () => {
               onChange={(e) => setForm({ ...form, major1: e.target.value })}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               size="small"
@@ -190,7 +190,7 @@ const MemberResumeCard = () => {
               onChange={(e) => setForm({ ...form, major2: e.target.value })}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               size="small"
@@ -201,7 +201,7 @@ const MemberResumeCard = () => {
               onChange={(e) => setForm({ ...form, graduationYear: e.target.value })}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Gender (optional)</InputLabel>
               <Select
