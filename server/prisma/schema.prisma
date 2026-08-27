@@ -898,6 +898,18 @@ model Message {
   @@map("messages")
 }
 
+model InterviewSessionQuestion {
+  id          String    @id @default(uuid())
+  interviewId String
+  prompt      String
+  addedBy     String
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([interviewId, position])
+  @@map("interview_session_questions")
+}
+
 enum ConversationContextType {
   INTERVIEW
   APPLICATION
