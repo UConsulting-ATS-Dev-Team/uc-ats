@@ -61,6 +61,7 @@ const memberUser = {
 
 // Far enough out that the window stays open without freezing the clock.
 const openDeadline = `${new Date().getFullYear() + 5}-10-04`;
+const passedDeadline = `${new Date().getFullYear() - 1}-10-04`;
 
 const application = (overrides = {}) => ({
   id: 'app-1',
@@ -157,13 +158,37 @@ describe('replacement window', () => {
     expect(window.reason).toMatch(/deadline/i);
   });
 
-  it('closes for a cycle that is no longer active', () => {
+  it('stays open for a cycle that has closed', () => {
+    // The window protects an evaluation in progress. Once a cycle is closed
+    // there is nothing left to protect, and an applicant's resume goes stale
+    // while the Talent Partner Network keeps showing it to recruiters.
     const window = replacementWindow(
       application({ cycle: { id: 'c', name: 'Fall 2025', isActive: false, resumeDeadline: openDeadline } }),
       candidateUser
     );
+    expect(window.canReplace).toBe(true);
+  });
+
+  it('stays open for a closed cycle even past its old resume deadline', () => {
+    const window = replacementWindow(
+      application({ cycle: { id: 'c', name: 'Fall 2025', isActive: false, resumeDeadline: passedDeadline } }),
+      candidateUser
+    );
+    expect(window.canReplace).toBe(true);
+  });
+
+  it('stays open for an application attached to no cycle', () => {
+    const window = replacementWindow(application({ cycle: null }), candidateUser);
+    expect(window.canReplace).toBe(true);
+  });
+
+  it('still refuses someone who does not own the application', () => {
+    const window = replacementWindow(
+      application({ cycle: { id: 'c', name: 'Fall 2025', isActive: false, resumeDeadline: openDeadline } }),
+      otherCandidate
+    );
     expect(window.canReplace).toBe(false);
-    expect(window.reason).toMatch(/closed/i);
+    expect(window.reason).toMatch(/Only the applicant/i);
   });
 
   it('matches an applicant by student ID when the emails differ', () => {
