@@ -1,11 +1,10 @@
 import express from 'express';
 import multer from 'multer';
-import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import { putResume, getResume, removeResume } from '../services/resumeStorage.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -1817,8 +1816,6 @@ router.post('/flag-document', requireAuth, async (req, res) => {
 const __memberDirname = path.dirname(fileURLToPath(import.meta.url));
 // Same root cases.js uses. Deliberately NOT uploads/, which index.js serves
 // statically and unauthenticated - a resume there would be world-readable.
-const RESUME_STORAGE_DIR = path.join(__memberDirname, '../../storage');
-const MEMBER_RESUME_ROOT = path.join(RESUME_STORAGE_DIR, 'member-resumes');
 
 // In memory so the file can be named by the DB-generated row id, matching the
 // reasoning in cases.js.
@@ -1912,8 +1909,7 @@ router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, a
 
     const relPath = `member-resumes/${created.id}/resume.pdf`;
     try {
-      await fsPromises.mkdir(path.join(MEMBER_RESUME_ROOT, created.id), { recursive: true });
-      await fsPromises.writeFile(path.join(RESUME_STORAGE_DIR, relPath), req.file.buffer);
+      await putResume(relPath, req.file.buffer);
     } catch (writeError) {
       // Leaving a row pointing at a file that does not exist would make the
       // resume look uploaded and then 404 for whoever opens it.
@@ -1980,18 +1976,22 @@ router.get('/resume/pdf', requireAuth, requireMemberRole, async (req, res) => {
     const resume = await loadOwnResume(req.user.id);
     if (!resume) return res.status(404).json({ error: 'No resume on file' });
 
-    const absPath = path.join(RESUME_STORAGE_DIR, resume.storagePath);
-    if (!absPath.startsWith(MEMBER_RESUME_ROOT)) {
+    if (!resume.storagePath.startsWith('member-resumes/')) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-    if (!fs.existsSync(absPath)) {
-      return res.status(404).json({ error: 'No resume on file' });
+
+    const buffer = await getResume(resume.storagePath);
+    if (!buffer) {
+      // Distinct from the "no resume" above on purpose. A row with no file
+      // behind it is a storage fault, and reporting it as "you never uploaded
+      // one" is what made this take a production debugging session to find.
+      return res.status(404).json({ error: 'Your resume file could not be found. Please upload it again.' });
     }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'private, max-age=300');
-    fs.createReadStream(absPath).pipe(res);
+    res.send(buffer);
   } catch (error) {
     console.error('[GET /api/member/resume/pdf]', error);
     res.status(500).json({ error: 'Failed to load your resume' });
