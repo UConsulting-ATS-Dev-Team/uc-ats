@@ -5709,6 +5709,51 @@ router.get('/talent-pool/stats', async (req, res) => {
       })
     ]);
 
+    // Members are the second uploaded-resume pool, and until now the page said
+    // nothing about them at all - no count, no roster. Counted and listed the
+    // same way, off member_resumes, because "how many members have uploaded?"
+    // is the same question as "how many students have?" asked of the other
+    // table.
+    //
+    // The gate here is consent alone. A member is vouched for by having been
+    // recruited, so there is no email to verify - which is why this is not the
+    // same conjunction the external pool uses.
+    const memberPool = { isCurrent: true, member: { isActive: true } };
+    const [memberAccounts, memberShared, memberRows] = await Promise.all([
+      prisma.memberResume.count({ where: memberPool }),
+      prisma.memberResume.count({
+        where: { ...memberPool, shareConsent: true, consentRevokedAt: null }
+      }),
+      prisma.memberResume.findMany({
+        where: memberPool,
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          major1: true,
+          major2: true,
+          graduationYear: true,
+          gender: true,
+          shareConsent: true,
+          consentRevokedAt: true,
+          updatedAt: true,
+          member: { select: { id: true, fullName: true, email: true, graduationClass: true } }
+        }
+      })
+    ]);
+
+    const memberResumes = memberRows.map((r) => ({
+      id: r.id,
+      userId: r.member.id,
+      name: r.member.fullName,
+      email: r.member.email,
+      graduationYear: r.graduationYear,
+      major1: r.major1,
+      major2: r.major2,
+      gender: r.gender,
+      shared: Boolean(r.shareConsent) && !r.consentRevokedAt,
+      updatedAt: r.updatedAt
+    }));
+
     // The roster behind those counts. Without it the page can say how many
     // uploaded resumes exist but cannot show a single one of the people, which
     // is the only question an admin actually opens this page to answer.
@@ -5768,7 +5813,14 @@ router.get('/talent-pool/stats', async (req, res) => {
         verified: externalVerified,
         shareable: externalShared
       },
-      externals
+      externals,
+      // Cycle-independent for the same reason the external counts are: a member
+      // resume belongs to a person, not to a recruiting cycle.
+      memberTalent: {
+        accounts: memberAccounts,
+        shareable: memberShared
+      },
+      memberResumes
     });
   } catch (error) {
     console.error('Error fetching talent pool stats:', error);
