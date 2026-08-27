@@ -47,6 +47,24 @@ const request = (path, method, body) =>
   });
 
 const activeIds = () => rows.filter((row) => row.isActive).map((row) => row.id);
+const adminActiveIds = () => rows.filter((row) => row.isAdminActive).map((row) => row.id);
+
+// The real `where` for a two-audience activation is
+// `{ id: { not }, OR: [{ isActive: true }, { isAdminActive: true }] }`. Interpreting OR
+// here rather than special-casing one flag is what keeps this fake honest: a guard written
+// against `where.isActive` alone silently stops matching once the shape changes, and the
+// fake would start writing to every row while these assertions still passed.
+const matchesWhere = (row, where) => {
+  if (where.id?.not === row.id) return false;
+  if (Array.isArray(where.OR)) {
+    return where.OR.some((clause) =>
+      Object.entries(clause).every(([field, value]) => row[field] === value)
+    );
+  }
+  return Object.entries(where)
+    .filter(([field]) => field !== 'id')
+    .every(([field, value]) => row[field] === value);
+};
 
 beforeAll(async () => {
   const app = express();
@@ -79,20 +97,26 @@ beforeEach(() => {
         rows.push(row);
         return row;
       }),
+      findFirst: vi.fn(async ({ where }) => {
+        calls.push('find');
+        return rows.find((row) => matchesWhere(row, where)) ?? null;
+      }),
       updateMany: vi.fn(async ({ where, data }) => {
         calls.push('deactivate-others');
         let count = 0;
         rows.forEach((row, index) => {
-          if (where.id?.not === row.id) return;
-          if (where.isActive === true && !row.isActive) return;
+          if (!matchesWhere(row, where)) return;
           rows[index] = { ...row, ...data };
           count += 1;
         });
         return { count };
       }),
       update: vi.fn(async ({ where, data }) => {
-        calls.push(data.isActive === true ? 'activate' : 'update');
-        if (data.isActive === true && indexRejects) throw singleActiveViolation();
+        const activating = data.isActive === true || data.isAdminActive === true;
+        // A lone `isAdminActive: true` is the pin-before-split write, not an activation.
+        const pinning = data.isAdminActive === true && data.isActive === undefined && !data.name;
+        calls.push(activating ? (pinning ? 'pin-admin' : 'activate') : 'update');
+        if (activating && !pinning && indexRejects) throw singleActiveViolation();
         const index = rows.findIndex((row) => row.id === where.id);
         rows[index] = { ...rows[index], ...data };
         return rows[index];
@@ -130,6 +154,42 @@ describe('POST /api/admin/cycles/:id/activate', () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/activated at the same time/i);
     expect(activeIds()).toEqual(['current']);
+  });
+
+  it('claims both audiences when the body omits them', async () => {
+    const res = await request('/cycles/next/activate', 'POST');
+
+    expect(res.status).toBe(200);
+    expect(activeIds()).toEqual(['next']);
+    expect(adminActiveIds()).toEqual(['next']);
+  });
+
+  // The handover: members and candidates move, admins stay on the closing cycle.
+  it('pins admins to the outgoing cycle when activating for candidates alone', async () => {
+    const res = await request('/cycles/next/activate', 'POST', { audiences: ['CANDIDATE'] });
+
+    expect(res.status).toBe(200);
+    expect(activeIds()).toEqual(['next']);
+    expect(adminActiveIds()).toEqual(['current']);
+    expect(calls).toEqual(['find', 'find', 'pin-admin', 'deactivate-others', 'activate']);
+  });
+
+  it('sets the admin cycle without disturbing candidates', async () => {
+    const res = await request('/cycles/next/activate', 'POST', { audiences: ['ADMIN'] });
+
+    expect(res.status).toBe(200);
+    expect(activeIds()).toEqual(['current']);
+    expect(adminActiveIds()).toEqual(['next']);
+  });
+
+  it('rejects an empty or unknown audience instead of silently activating both', async () => {
+    for (const audiences of [[], ['EVERYONE'], 'CANDIDATE']) {
+      const res = await request('/cycles/next/activate', 'POST', { audiences });
+      expect(res.status).toBe(400);
+      // Nothing moved.
+      expect(activeIds()).toEqual(['current']);
+      expect(adminActiveIds()).toEqual([]);
+    }
   });
 });
 

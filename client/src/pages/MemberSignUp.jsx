@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 import {
   Box,
   TextField,
@@ -137,10 +138,9 @@ const MemberSignUp = () => {
                   label="Graduation Year"
                   onChange={(e) => setGraduationClass(e.target.value)}
                 >
-                  <MenuItem value="2026">2026</MenuItem>
-                  <MenuItem value="2027">2027</MenuItem>
-                  <MenuItem value="2028">2028</MenuItem>
-                  <MenuItem value="2029">2029</MenuItem>
+                  {GRADUATION_YEARS.map((year) => (
+                    <MenuItem key={year} value={year}>{year}</MenuItem>
+                  ))}
                 </Select>
               </FormControl>
 

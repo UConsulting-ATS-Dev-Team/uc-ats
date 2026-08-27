@@ -1,0 +1,43 @@
+{
+    "name": "Member Event Attendance Form",
+    "description": "Configuration for member event attendance Google Forms",
+    "database_mappings": {
+    },
+    "field_patterns": {
+        "fullName": {
+            "field": "fullName",
+            "type": "string",
+            "required": false,
+            "patterns": ["full name", "name", "your name", "first & last", "first and last"]
+        },
+        "email": {
+            "field": "email",
+            "type": "string",
+            "required": true,
+            "validation": "email",
+            "patterns": ["email", "e-mail", "email address"]
+        },
+        "firstName": {
+            "field": "firstName",
+            "type": "string",
+            "required": false,
+            "patterns": ["first name", "firstname", "first", "given name"]
+        },
+        "lastName": {
+            "field": "lastName",
+            "type": "string",
+            "required": false,
+            "patterns": ["last name", "lastname", "last", "surname", "family name"]
+        },
+        "studentId": {
+            "field": "studentId",
+            "type": "string",
+            "required": true,
+            "validation": "numeric",
+            "transform_regex": "\\D",
+            "transform_replace": "",
+            "patterns": ["student id", "studentid", "ucla student id", "id number", "student number"]
+        }
+    },
+    "prisma_model": "MemberEventAttendance"
+}

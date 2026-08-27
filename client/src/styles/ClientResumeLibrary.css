@@ -1,0 +1,33 @@
+/* Undoes, for this page only, the global MUI table overrides that Staging.css
+   and CandidateManagement.css declare on bare `.MuiTable-root` /
+   `.MuiTableContainer-root`. Those files are imported for their own pages but
+   nothing scopes their selectors, so every MUI table in the bundle inherits
+   them - including this one.
+
+   The three that break a spreadsheet view:
+
+     table-layout: fixed   - a column can no longer grow to fit its content, so
+                             a header like "Major GPA" is clipped and a long
+                             cell prints over its neighbour instead of widening
+                             or wrapping. It also makes `min-width` on a cell a
+                             no-op: under fixed layout only `width` counts.
+     min-width: 900px      - carries !important, so it beat the wider minimum
+                             this table sets and squeezed 13 columns into 900px.
+     overflow-y: visible   - defeats maxHeight on the container, which is what
+                             the sticky header scrolls inside.
+
+   Scoped to this page rather than fixed at the source: those selectors have
+   been styling the admin tables for as long as they have existed, and quietly
+   restyling every one of them is a much larger change than this branch is for.
+
+   !important is required here only because the rules being overridden use it. */
+
+.client-resume-library .MuiTable-root {
+  table-layout: auto !important;
+  min-width: 1080px !important;
+}
+
+.client-resume-library .MuiTableContainer-root {
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+}

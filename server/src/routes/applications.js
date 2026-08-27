@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/a
 import { getFormQuestions, getResponses } from '../services/google/forms.js';
 import { getGroupMemberUsers, groupMemberUserInclude } from '../utils/groupMembers.js';
 import config from '../config.js';
+import { resolveCycleForRequest } from '../services/activeCycle.js';
 
 const router = express.Router();
 
@@ -173,9 +174,7 @@ router.post('/manual', requireAdmin, async (req, res) => {
     }
 
     // Get the active recruiting cycle
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
 
     if (!activeCycle) {
       return res.status(400).json({ 
@@ -260,7 +259,7 @@ router.get('/', async (req, res) => {
     const { year, gender, firstGen, transfer, status: statusFilter, returning, eventAttendanceEventId } = req.query;
 
     // Optional: scope to active recruiting cycle if one exists
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     if (!activeCycle) {
       // When no active cycle, return empty list instead of all
       return res.json([]);

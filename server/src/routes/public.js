@@ -4,8 +4,40 @@ import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
+// Public routes are candidate-facing by definition: no token, so no role to key on.
+import { resolveCandidateCycle } from '../services/activeCycle.js';
 
 const router = express.Router();
+
+/**
+ * The cycle currently open to candidates.
+ *
+ * Exists so a candidate-facing screen can say "applications close on X" without
+ * inferring it from the applications that person happens to have. The dashboard
+ * used to derive its deadline from the candidate's own applications, which
+ * showed the deadline of a cycle they had already applied to and ignored the one
+ * actually open.
+ *
+ * Public because the answer already is: the application deadline is on the
+ * recruitment site. Only the fields a deadline needs are returned.
+ */
+router.get('/active-cycle', async (req, res) => {
+  try {
+    const cycle = await resolveCandidateCycle(prisma);
+    if (!cycle) return res.json({ cycle: null });
+    res.json({
+      cycle: {
+        id: cycle.id,
+        name: cycle.name,
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
+      },
+    });
+  } catch (error) {
+    console.error('[GET /api/active-cycle]', error);
+    res.status(500).json({ error: 'Failed to load the active cycle' });
+  }
+});
 
 // Public: list available meeting slots with remaining capacity and signups
 router.get('/meeting-slots', async (req, res) => {
@@ -71,9 +103,7 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
     }
 
     // Get the active recruiting cycle to check for cycle-specific signups
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCandidateCycle(prisma);
 
     // Check if user has already signed up for a meeting slot in the current cycle
     if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
@@ -283,8 +313,13 @@ router.get('/events', async (req, res) => {
   try {
     const userEmail = req.query.userEmail; // Get user email from query parameter
     
+    // Scope in SQL rather than loading every event ever created and filtering in JS.
+    const activeCycle = await resolveCandidateCycle(prisma);
+    if (!activeCycle) return res.json([]);
+
     const events = await prisma.events.findMany({
       where: {
+        cycleId: activeCycle.id,
         showToCandidates: true // Only show events that are meant to be visible to candidates
       },
       include: {
@@ -305,9 +340,6 @@ router.get('/events', async (req, res) => {
       }
     });
 
-    // Filter to only show events from active cycles
-    const activeEvents = events.filter(event => event.cycle?.isActive);
-
     // Find the user by email to get their studentId (if provided)
     let user = null;
     if (userEmail) {
@@ -317,7 +349,7 @@ router.get('/events', async (req, res) => {
     }
 
     // Add RSVP and attendance status for each event
-    const eventsWithStatus = activeEvents.map(event => {
+    const eventsWithStatus = events.map(event => {
       let hasRsvpd = false;
       let hasAttended = false;
       
@@ -353,7 +385,11 @@ router.get('/events', async (req, res) => {
 // Get all events from active cycle for member timeline (no candidate visibility filter)
 router.get('/member/events', async (req, res) => {
   try {
+    const activeCycle = await resolveCandidateCycle(prisma);
+    if (!activeCycle) return res.json([]);
+
     const events = await prisma.events.findMany({
+      where: { cycleId: activeCycle.id },
       include: {
         cycle: true
       },
@@ -362,11 +398,8 @@ router.get('/member/events', async (req, res) => {
       }
     });
 
-    // Filter to only show events from active cycles
-    const activeEvents = events.filter(event => event.cycle?.isActive);
-
     // Ensure memberRsvpUrl is included in the response
-    const eventsWithMemberRsvp = activeEvents.map(event => ({
+    const eventsWithMemberRsvp = events.map(event => ({
       ...event,
       memberRsvpUrl: event.memberRsvpUrl || null
     }));
@@ -381,9 +414,7 @@ router.get('/member/events', async (req, res) => {
 // Public: get active recruiting cycle (for filtering meeting slots by cycle)
 router.get('/active-cycle', async (req, res) => {
   try {
-    const active = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const active = await resolveCandidateCycle(prisma);
     res.json(active || null);
   } catch (error) {
     console.error('[GET /api/active-cycle]', error);

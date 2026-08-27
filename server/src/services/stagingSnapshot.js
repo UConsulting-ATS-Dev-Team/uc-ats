@@ -1,6 +1,8 @@
 import prisma from '../prismaClient.js';
 import { getGroupMemberUsers } from '../utils/groupMembers.js';
 import { readSnapshotVersion } from '../utils/snapshotVersion.js';
+// Staging is an admin console surface, so it follows the admin cycle pointer.
+import { resolveAdminCycle } from './activeCycle.js';
 
 // The Staging console renders six resources as a single screen, so each of them has
 // to be readable through the same database transaction: that is what makes one
@@ -15,15 +17,11 @@ const SNAPSHOT_MAX_WAIT_MS = 10 * 1000;
 const SNAPSHOT_TIMEOUT_MS = 30 * 1000;
 
 export async function loadActiveCycle(client) {
-  return (await client.recruitingCycle.findFirst({ where: { isActive: true } })) || null;
+  return resolveAdminCycle(client);
 }
 
-export async function loadEvents(client) {
-  // Get the active cycle to filter events
-  const activeCycle = await client.recruitingCycle.findFirst({
-    where: { isActive: true },
-    select: { id: true }
-  });
+export async function loadEvents(client, cycle) {
+  const activeCycle = cycle ?? (await resolveAdminCycle(client));
 
   // Only return events from the active cycle (or empty if no active cycle)
   return client.events.findMany({
@@ -37,8 +35,8 @@ export async function loadEvents(client) {
   });
 }
 
-export async function loadReviewTeams(client) {
-  const active = await client.recruitingCycle.findFirst({ where: { isActive: true } });
+export async function loadReviewTeams(client, cycle) {
+  const active = cycle ?? (await resolveAdminCycle(client));
   if (!active) return [];
 
   const reviewTeams = await client.groups.findMany({
@@ -77,8 +75,8 @@ export async function loadReviewTeams(client) {
   });
 }
 
-export async function loadExistingDecisions(client) {
-  const active = await client.recruitingCycle.findFirst({ where: { isActive: true } });
+export async function loadExistingDecisions(client, cycle) {
+  const active = cycle ?? (await resolveAdminCycle(client));
   if (!active) {
     return { decisions: {}, perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} } };
   }
@@ -129,14 +127,11 @@ export async function loadExistingDecisions(client) {
   return { decisions, perRoundDecisions };
 }
 
-export async function loadStagingCandidates(client, { page, limit } = {}) {
+export async function loadStagingCandidates(client, { page, limit, cycle } = {}) {
   const usePagination = Boolean(page && limit);
   const skip = usePagination ? (page - 1) * limit : 0;
 
-  const active = await client.recruitingCycle.findFirst({
-    where: { isActive: true },
-    select: { id: true, startDate: true, endDate: true }
-  });
+  const active = cycle ?? (await resolveAdminCycle(client));
   console.log('Active cycle:', active ? active.id : 'No active cycle found');
   if (!active) {
     return { candidates: [], total: 0, page: usePagination ? page : 1, totalPages: 0, hasNextPage: false, hasPrevPage: false };
@@ -458,13 +453,11 @@ export async function loadStagingCandidates(client, { page, limit } = {}) {
   };
 }
 
-export async function loadAdminApplications(client, { page, limit } = {}) {
+export async function loadAdminApplications(client, { page, limit, cycle } = {}) {
   const usePagination = Boolean(page && limit);
   const skip = usePagination ? (page - 1) * limit : 0;
 
-  const activeCycle = await client.recruitingCycle.findFirst({
-    where: { isActive: true }
-  });
+  const activeCycle = cycle ?? (await resolveAdminCycle(client));
 
   if (!activeCycle) {
     return { applications: [], total: 0, page: usePagination ? page : 1, totalPages: 0, hasNextPage: false, hasPrevPage: false };
@@ -732,12 +725,15 @@ export async function loadStagingSnapshot(client = prisma) {
       // the point in time the reads below are consistent as of.
       const snapshotVersion = await readSnapshotVersion(tx);
 
-      const candidates = await loadStagingCandidates(tx);
+      // Resolve the cycle once and thread it through: six independent lookups inside
+      // one transaction could not disagree, but they were six round trips for one answer.
       const activeCycle = await loadActiveCycle(tx);
-      const applications = await loadAdminApplications(tx);
-      const events = await loadEvents(tx);
-      const reviewTeams = await loadReviewTeams(tx);
-      const existingDecisions = await loadExistingDecisions(tx);
+
+      const candidates = await loadStagingCandidates(tx, { cycle: activeCycle });
+      const applications = await loadAdminApplications(tx, { cycle: activeCycle });
+      const events = await loadEvents(tx, activeCycle);
+      const reviewTeams = await loadReviewTeams(tx, activeCycle);
+      const existingDecisions = await loadExistingDecisions(tx, activeCycle);
 
       return {
         snapshotVersion,

@@ -79,6 +79,7 @@ describe('eventCopy service', () => {
       'rsvpForm',
       'attendanceForm',
       'memberRsvpUrl',
+      'memberAttendanceForm',
     ]);
   });
 

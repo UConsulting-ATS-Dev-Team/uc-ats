@@ -32,6 +32,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
+import { toSameOriginDocumentUrl } from '../utils/documentUrl';
 
 const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const { user, token } = useAuth();
@@ -251,15 +252,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
 
       setPreviewLoading(true);
 
-      // Normalize URL: strip any localhost or production prefixes to make it relative
-      let fileUrl = documentUrl;
-      const prefixesToStrip = ['http://localhost:3001', 'http://localhost:5173', 'https://uconsultingats.com', 'https://www.uconsultingats.com'];
-      for (const prefix of prefixesToStrip) {
-        if (fileUrl.startsWith(prefix)) {
-          fileUrl = fileUrl.replace(prefix, '');
-          break;
-        }
-      }
+      const fileUrl = toSameOriginDocumentUrl(documentUrl);
 
       try {
         const resp = await fetch(fileUrl, {

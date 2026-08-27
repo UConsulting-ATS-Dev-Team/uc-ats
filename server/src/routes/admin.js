@@ -1,8 +1,9 @@
 import express from 'express';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
+import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
-import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
+import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEventAttendance, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -49,7 +50,12 @@ import { resolveFormStatus } from '../services/eventFormStatus.js';
 import {
   activateCycleExclusively,
   isActiveCycleConflict,
-  ActiveCycleConflictError
+  ActiveCycleConflictError,
+  ALL_AUDIENCES,
+  isValidAudience,
+  resolveCycleForRequest,
+  resolveAdminCycle,
+  resolveCandidateCycle
 } from '../services/activeCycle.js';
 
 const router = express.Router();
@@ -96,7 +102,7 @@ router.get('/stats', async (req, res) => {
     // Wrap all database calls in try-catch blocks to handle individual failures
     let active = null;
     try {
-      active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+      active = await resolveCycleForRequest(prisma, req);
     } catch (error) {
       console.error('Error fetching active cycle:', error);
     }
@@ -199,7 +205,7 @@ router.get('/candidates', async (req, res) => {
     const { year, gender, firstGen, transfer, status: statusFilter, eventAttendanceEventId, eventRsvpEventId } = req.query;
 
     // Scope to active cycle if present
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.json([]);
     }
@@ -907,7 +913,7 @@ router.patch('/candidates/:id/approval', async (req, res) => {
 router.post('/advance-round', async (req, res) => {
   try {
     console.log('Starting bulk advance...');
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -970,7 +976,7 @@ router.post('/process-decisions', async (req, res) => {
     const sendEmails = req.body.sendEmails !== false;
     console.log('Send emails:', sendEmails);
     
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -1271,10 +1277,24 @@ router.get('/cycles', async (req, res) => {
   }
 });
 
-// Get active cycle
+// The admin console's own cycle. Additive extension: the body is still the admin
+// cycle row, so existing readers of .id/.name/deadlines are untouched, plus
+// `candidateCycle` and `audiencesSplit` so the UI can warn when admins are working in
+// a different cycle than members and candidates see.
 router.get('/cycles/active', async (req, res) => {
   try {
-    res.json(await loadActiveCycle(prisma));
+    const [adminCycle, candidateCycle] = await Promise.all([
+      resolveAdminCycle(prisma),
+      resolveCandidateCycle(prisma)
+    ]);
+    if (!adminCycle) return res.json(null);
+    res.json({
+      ...adminCycle,
+      candidateCycle: candidateCycle
+        ? { id: candidateCycle.id, name: candidateCycle.name }
+        : null,
+      audiencesSplit: Boolean(candidateCycle) && candidateCycle.id !== adminCycle.id
+    });
   } catch (error) {
     console.error('[GET /api/admin/cycles/active]', error);
     // Return null instead of error to prevent dashboard from breaking
@@ -1377,14 +1397,25 @@ router.post('/cycles/bootstrap-commit', async (req, res) => {
   }
 });
 
-// Set a cycle as active
+// Set a cycle as active, for one audience or both.
+//
+// `audiences` defaults to both, so an existing caller posting an empty body keeps
+// meaning "activate for everyone". Passing ['CANDIDATE'] alone is the handover case:
+// members and candidates move while admins stay on the closing cycle.
 router.post('/cycles/:id/activate', async (req, res) => {
   const { id } = req.params;
+  const { audiences = ALL_AUDIENCES } = req.body ?? {};
+
+  if (!Array.isArray(audiences) || audiences.length === 0 || !audiences.every(isValidAudience)) {
+    return res.status(400).json({
+      error: `audiences must be a non-empty array of ${ALL_AUDIENCES.join(' | ')}`
+    });
+  }
 
   try {
-    const updated = await prisma.$transaction((tx) => activateCycleExclusively(tx, id));
+    const updated = await prisma.$transaction((tx) => activateCycleExclusively(tx, id, audiences));
 
-    res.json({ message: 'Cycle activated', cycle: updated });
+    res.json({ message: 'Cycle activated', cycle: updated, audiences });
   } catch (error) {
     console.error('[POST /api/admin/cycles/:id/activate]', error);
     if (isActiveCycleConflict(error)) {
@@ -1474,7 +1505,7 @@ router.delete('/cycles/:id', async (req, res) => {
 router.post('/reset-all', async (req, res) => {
   try {
     console.log('Resetting candidates for active cycle...');
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -1573,6 +1604,7 @@ router.post('/events', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberAttendanceForm,
       cycleId
     } = req.body;
 
@@ -1600,6 +1632,7 @@ router.post('/events', async (req, res) => {
         attendanceForm: attendanceForm || null,
         showToCandidates: showToCandidates || false,
         memberRsvpUrl: memberRsvpUrl || null,
+        memberAttendanceForm: memberAttendanceForm || null,
         cycleId
       }
     });
@@ -1650,6 +1683,7 @@ router.patch('/events/:id', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberAttendanceForm,
       cycleId
     } = req.body;
 
@@ -1693,6 +1727,7 @@ router.patch('/events/:id', async (req, res) => {
         ...(attendanceForm !== undefined && { attendanceForm: attendanceForm || null }),
         ...(showToCandidates !== undefined && { showToCandidates }),
         ...(memberRsvpUrl !== undefined && { memberRsvpUrl: memberRsvpUrl || null }),
+        ...(memberAttendanceForm !== undefined && { memberAttendanceForm: memberAttendanceForm || null }),
         ...(cycleId !== undefined && { cycleId })
       }
     });
@@ -1788,12 +1823,29 @@ router.post('/events/:id/sync-member-rsvp', async (req, res) => {
   }
 });
 
+// Sync member attendance responses for a specific event
+router.post('/events/:id/sync-member-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Admin triggering member attendance sync for event ${id}...`);
+    
+    const result = await syncMemberEventAttendance(id);
+    res.json({ 
+      message: `Member attendance sync completed for event ${id}`,
+      result: result 
+    });
+  } catch (error) {
+    console.error(`[POST /api/admin/events/${req.params.id}/sync-member-attendance]`, error);
+    res.status(500).json({ error: 'Failed to sync member attendance responses' });
+  }
+});
+
 // Get event statistics (RSVP and attendance counts)
 router.get('/events/:id/stats', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [event, rsvpCount, attendanceCount, memberRsvpCount] = await Promise.all([
+    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount] = await Promise.all([
       prisma.events.findUnique({
         where: { id },
         select: { 
@@ -1802,12 +1854,14 @@ router.get('/events/:id/stats', async (req, res) => {
           eventEndDate: true,
           rsvpForm: true,
           attendanceForm: true,
-          memberRsvpUrl: true
+          memberRsvpUrl: true,
+          memberAttendanceForm: true
         }
       }),
       prisma.eventRsvp.count({ where: { eventId: id } }),
       prisma.eventAttendance.count({ where: { eventId: id } }),
-      prisma.memberEventRsvp.count({ where: { eventId: id } })
+      prisma.memberEventRsvp.count({ where: { eventId: id } }),
+      prisma.memberEventAttendance.count({ where: { eventId: id } })
     ]);
 
     if (!event) {
@@ -1820,9 +1874,11 @@ router.get('/events/:id/stats', async (req, res) => {
         rsvpCount: rsvpCount,
         attendanceCount: attendanceCount,
         memberRsvpCount: memberRsvpCount,
+        memberAttendanceCount: memberAttendanceCount,
         hasRsvpForm: !!event.rsvpForm,
         hasAttendanceForm: !!event.attendanceForm,
-        hasMemberRsvpForm: !!event.memberRsvpUrl
+        hasMemberRsvpForm: !!event.memberRsvpUrl,
+        hasMemberAttendanceForm: !!event.memberAttendanceForm
       }
     });
   } catch (error) {
@@ -1885,6 +1941,209 @@ router.get('/events/:id/attendance', async (req, res) => {
   }
 });
 
+// Accountability Tracker Routes
+
+async function getAccountabilityCycle(req) {
+  const cycleId = req.query.cycleId;
+  if (cycleId) {
+    return prisma.recruitingCycle.findUnique({
+      where: { id: cycleId },
+      select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+    });
+  }
+  return prisma.recruitingCycle.findFirst({
+    where: { isActive: true },
+    select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+  });
+}
+
+function makeTimeFilter(cycle) {
+  const filter = {};
+  if (cycle?.startDate) filter.gte = cycle.startDate;
+  if (cycle?.endDate) filter.lte = cycle.endDate;
+  return Object.keys(filter).length > 0 ? filter : null;
+}
+
+// Get accountability summary for a cycle: leaderboard and events
+router.get('/accountability', async (req, res) => {
+  try {
+    const cycle = await getAccountabilityCycle(req);
+    if (!cycle) {
+      return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
+    }
+
+    const members = await prisma.user.findMany({
+      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+      select: { id: true, fullName: true, email: true, studentId: true, role: true },
+      orderBy: { fullName: 'asc' }
+    });
+
+    const memberIds = members.map(m => m.id);
+
+    const [eventAttendances, gtkucSlots, events] = await Promise.all([
+      prisma.memberEventAttendance.findMany({
+        where: { event: { cycleId: cycle.id }, memberId: { in: memberIds } },
+        select: { memberId: true }
+      }),
+      prisma.meetingSlot.findMany({
+        where: {
+          memberId: { in: memberIds },
+          signups: { some: { attended: true } },
+          ...(makeTimeFilter(cycle) ? { startTime: makeTimeFilter(cycle) } : {})
+        },
+        select: { memberId: true }
+      }),
+      prisma.events.findMany({
+        where: { cycleId: cycle.id },
+        select: {
+          id: true,
+          eventName: true,
+          eventStartDate: true,
+          eventEndDate: true,
+          memberAttendanceForm: true,
+          _count: { select: { memberEventAttendance: true } }
+        },
+        orderBy: { eventStartDate: 'desc' }
+      })
+    ]);
+
+    const eventCounts = eventAttendances.reduce((acc, curr) => {
+      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
+      return acc;
+    }, {});
+
+    const gtkucCounts = gtkucSlots.reduce((acc, curr) => {
+      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
+      return acc;
+    }, {});
+
+    const leaderboard = members.map(member => {
+      const eventCount = eventCounts[member.id] || 0;
+      const gtkucCount = gtkucCounts[member.id] || 0;
+      return {
+        ...member,
+        eventCount,
+        gtkucCount,
+        total: eventCount + gtkucCount
+      };
+    }).sort((a, b) => b.total - a.total);
+
+    res.json({
+      cycle,
+      leaderboard,
+      events: events.map(e => ({
+        ...e,
+        memberAttendanceCount: e._count.memberEventAttendance
+      }))
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/accountability]', error);
+    res.status(500).json({ error: 'Failed to fetch accountability summary' });
+  }
+});
+
+// Get member attendance status for a specific event
+router.get('/accountability/events/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [event, members] = await Promise.all([
+      prisma.events.findUnique({
+        where: { id },
+        select: { id: true, eventName: true, memberAttendanceForm: true }
+      }),
+      prisma.user.findMany({
+        where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+        select: { id: true, fullName: true, email: true, studentId: true },
+        orderBy: { fullName: 'asc' }
+      })
+    ]);
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const memberIds = members.map(m => m.id);
+    const attendances = await prisma.memberEventAttendance.findMany({
+      where: { eventId: id, memberId: { in: memberIds } },
+      select: { memberId: true, source: true }
+    });
+
+    const attendanceByMember = Object.fromEntries(attendances.map(a => [a.memberId, a]));
+
+    res.json({
+      event,
+      members: members.map(member => ({
+        ...member,
+        attended: Boolean(attendanceByMember[member.id]),
+        source: attendanceByMember[member.id]?.source || null
+      }))
+    });
+  } catch (error) {
+    console.error(`[GET /api/admin/accountability/events/${req.params.id}/members]`, error);
+    res.status(500).json({ error: 'Failed to fetch event member attendance' });
+  }
+});
+
+// Toggle manual member attendance for an event
+router.post('/accountability/events/:id/member-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { memberId, attended } = req.body;
+
+    if (!memberId) {
+      return res.status(400).json({ error: 'memberId is required' });
+    }
+
+    const event = await prisma.events.findUnique({
+      where: { id },
+      select: { id: true, cycleId: true }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const existing = await prisma.memberEventAttendance.findUnique({
+      where: { eventId_memberId: { eventId: id, memberId } }
+    });
+
+    let result;
+    if (attended === false || (attended === undefined && existing)) {
+      if (existing) {
+        await prisma.memberEventAttendance.delete({
+          where: { eventId_memberId: { eventId: id, memberId } }
+        });
+      }
+      result = { attended: false, source: null };
+    } else {
+      result = await prisma.memberEventAttendance.upsert({
+        where: { eventId_memberId: { eventId: id, memberId } },
+        update: { source: 'MANUAL' },
+        create: { eventId: id, memberId, source: 'MANUAL' }
+      });
+      result = { attended: true, source: result.source };
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error(`[POST /api/admin/accountability/events/${req.params.id}/member-attendance]`, error);
+    res.status(500).json({ error: 'Failed to update member attendance' });
+  }
+});
+
+// Sync member attendance form for an event
+router.post('/accountability/events/:id/sync-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await syncMemberEventAttendance(id);
+    res.json({ message: `Member attendance sync completed for event ${id}`, result });
+  } catch (error) {
+    console.error(`[POST /api/admin/accountability/events/${req.params.id}/sync-attendance]`, error);
+    res.status(500).json({ error: 'Failed to sync member attendance' });
+  }
+});
+
 // Cycle-portable event copy routes
 
 // Preview events that would be copied from a source cycle to a target cycle
@@ -1930,9 +2189,7 @@ router.post('/events/copy-commit', async (req, res) => {
 router.get('/interviews', async (req, res) => {
   try {
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -2878,7 +3135,7 @@ router.post('/save-decision', async (req, res) => {
     }
 
     // Find the application for this candidate in the active cycle
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3613,7 +3870,7 @@ router.post('/process-coffee-decisions', async (req, res) => {
   try {
     console.log('Starting coffee chat decision processing...');
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3756,7 +4013,7 @@ router.post('/process-first-round-decisions', async (req, res) => {
     const sendEmails = req.body.sendEmails !== false;
     console.log('Send emails:', sendEmails);
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3936,7 +4193,7 @@ router.post('/process-final-decisions', async (req, res) => {
   try {
     console.log('Starting final round decision processing...');
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -4552,9 +4809,7 @@ router.get('/flagged-documents', async (req, res) => {
     const { resolved } = req.query;
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -5438,8 +5693,11 @@ router.post('/users/deactivate-preview', async (req, res) => {
       return res.status(400).json({ error: 'graduationClass is required' });
     }
 
+    // Union of both audience pointers on purpose: a member still staffed on the
+    // admin-facing cycle must not be deactivatable just because candidates have
+    // already moved on to the next one.
     const activeCycles = await prisma.recruitingCycle.findMany({
-      where: { isActive: true },
+      where: { OR: [{ isActive: true }, { isAdminActive: true }] },
       select: { id: true }
     });
     const activeCycleIds = new Set(activeCycles.map(c => c.id));
@@ -5484,8 +5742,11 @@ router.post('/users/deactivate', async (req, res) => {
       return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
     }
 
+    // Union of both audience pointers on purpose: a member still staffed on the
+    // admin-facing cycle must not be deactivatable just because candidates have
+    // already moved on to the next one.
     const activeCycles = await prisma.recruitingCycle.findMany({
-      where: { isActive: true },
+      where: { OR: [{ isActive: true }, { isAdminActive: true }] },
       select: { id: true }
     });
     const activeCycleIds = new Set(activeCycles.map(c => c.id));
@@ -5528,14 +5789,283 @@ router.post('/users/deactivate', async (req, res) => {
     // Cut existing sessions immediately rather than after the cache TTL
     invalidateUserCache(eligibleIds);
 
+    // Their resumes stop being assignable via the pool gates, but assignments
+    // already handed to a client are snapshots and would otherwise survive the
+    // deactivation. Failing here must not un-deactivate anyone, so it is
+    // reported rather than thrown.
+    let revoked = 0;
+    try {
+      ({ revoked } = await revokeTalentPoolAccess(eligibleIds, req.user.id));
+    } catch (error) {
+      console.error('[POST /api/admin/users/deactivate] talent pool revocation failed', error);
+    }
+
     res.json({
       ...preview,
       dryRun: false,
-      deactivatedCount: updateResult.count
+      deactivatedCount: updateResult.count,
+      talentPoolAssignmentsRevoked: revoked
     });
   } catch (error) {
     console.error('[POST /api/admin/users/deactivate]', error);
     res.status(500).json({ error: 'Failed to deactivate users' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Talent Partner Network (TPN)
+// ---------------------------------------------------------------------------
+// Opt-in is captured on the application form (see Application.talentPoolOptIn).
+// Requires auth + admin via router.use() at the top of this file.
+
+// Returns opt-in counts plus the roster of applicants who said yes.
+// `cycleId` is optional; omitted means the active cycle, `all` means every cycle.
+router.get('/talent-pool/stats', async (req, res) => {
+  try {
+    const cycles = await prisma.recruitingCycle.findMany({
+      select: { id: true, name: true, isActive: true, isAdminActive: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    // Omitted cycleId means "the cycle I am working in", which on an admin route is
+    // the admin pointer, not the one candidates see.
+    const defaultCycle = await resolveCycleForRequest(prisma, req);
+
+    const requested = req.query.cycleId;
+    let cycleFilter;
+    let selectedCycleId;
+
+    if (requested === 'all') {
+      cycleFilter = {};
+      selectedCycleId = 'all';
+    } else {
+      const target = requested
+        ? cycles.find((c) => c.id === requested)
+        : cycles.find((c) => c.id === defaultCycle?.id);
+      if (!target) {
+        return res.status(404).json({ error: 'Recruiting cycle not found' });
+      }
+      cycleFilter = { cycleId: target.id };
+      selectedCycleId = target.id;
+    }
+
+    const applications = await prisma.application.findMany({
+      where: cycleFilter,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        studentId: true,
+        candidateId: true,
+        major1: true,
+        graduationYear: true,
+        resumeUrl: true,
+        submittedAt: true,
+        talentPoolOptIn: true,
+        cycle: { select: { id: true, name: true } }
+      },
+      orderBy: { submittedAt: 'desc' }
+    });
+
+    // Across all cycles the same person appears once per cycle they applied in.
+    // Collapse those to one row each so the roster lists people rather than
+    // submissions. Rows arrive newest-first, so the first one seen for a person
+    // is their latest application - which carries their most recent resume and
+    // their most recent opt-in answer.
+    //
+    // Only done for the all-cycles view; within a single cycle each row is
+    // already a distinct applicant.
+    let applicants = applications;
+    let duplicatesCollapsed = 0;
+
+    if (selectedCycleId === 'all') {
+      const seen = new Map();
+      for (const app of applications) {
+        const key = app.candidateId
+          || (app.email ? `email:${app.email.trim().toLowerCase()}` : null)
+          || (app.studentId ? `student:${app.studentId.trim()}` : null)
+          || `app:${app.id}`;
+        const existing = seen.get(key);
+        if (!existing) {
+          seen.set(key, { ...app, priorApplications: 0 });
+        } else {
+          existing.priorApplications += 1;
+          duplicatesCollapsed += 1;
+        }
+      }
+      applicants = Array.from(seen.values());
+    }
+
+    const registeredClients = await prisma.talentPartnerClient.count({
+      where: { user: { isActive: true } }
+    });
+
+    // Self-registered UCLA students. Deliberately NOT folded into the opt-in
+    // breakdown above: that one counts applicants within a recruiting cycle,
+    // and an external account belongs to no cycle at all. Adding them would
+    // make the percentages answer a question nobody asked.
+    // Counted off external_resumes rather than off users.isExternalTalent.
+    //
+    // The two are no longer the same set. A resume reaches this pool by either
+    // route now: a self-registered student uploading one in the talent portal,
+    // or a candidate with no application answering yes to the sharing question
+    // during onboarding. The second is role USER with isExternalTalent false, so
+    // counting accounts by that flag while counting shareable resumes by the
+    // table produced "2 shareable of 0 verified of 0 self-registered" - three
+    // numbers that cannot all be true at once.
+    //
+    // One user has at most one isCurrent resume (uploading supersedes), so a row
+    // count here is a person count.
+    const inPool = { isCurrent: true, user: { isActive: true } };
+    const [externalAccounts, externalVerified, externalShared, externalRows] = await Promise.all([
+      prisma.externalResume.count({ where: inPool }),
+      prisma.externalResume.count({
+        where: { ...inPool, user: { isActive: true, emailVerifiedAt: { not: null } } }
+      }),
+      // The number that actually matters: how many are assignable right now.
+      prisma.externalResume.count({
+        where: {
+          ...inPool,
+          shareConsent: true,
+          consentRevokedAt: null,
+          user: { isActive: true, emailVerifiedAt: { not: null } }
+        }
+      }),
+      prisma.externalResume.findMany({
+        where: inPool,
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          major1: true,
+          major2: true,
+          graduationYear: true,
+          gender: true,
+          shareConsent: true,
+          consentRevokedAt: true,
+          updatedAt: true,
+          user: {
+            select: { id: true, fullName: true, email: true, emailVerifiedAt: true, isExternalTalent: true }
+          }
+        }
+      })
+    ]);
+
+    // Members are the second uploaded-resume pool, and until now the page said
+    // nothing about them at all - no count, no roster. Counted and listed the
+    // same way, off member_resumes, because "how many members have uploaded?"
+    // is the same question as "how many students have?" asked of the other
+    // table.
+    //
+    // The gate here is consent alone. A member is vouched for by having been
+    // recruited, so there is no email to verify - which is why this is not the
+    // same conjunction the external pool uses.
+    const memberPool = { isCurrent: true, member: { isActive: true } };
+    const [memberAccounts, memberShared, memberRows] = await Promise.all([
+      prisma.memberResume.count({ where: memberPool }),
+      prisma.memberResume.count({
+        where: { ...memberPool, shareConsent: true, consentRevokedAt: null }
+      }),
+      prisma.memberResume.findMany({
+        where: memberPool,
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          major1: true,
+          major2: true,
+          graduationYear: true,
+          gender: true,
+          shareConsent: true,
+          consentRevokedAt: true,
+          updatedAt: true,
+          member: { select: { id: true, fullName: true, email: true, graduationClass: true } }
+        }
+      })
+    ]);
+
+    const memberResumes = memberRows.map((r) => ({
+      id: r.id,
+      userId: r.member.id,
+      name: r.member.fullName,
+      email: r.member.email,
+      graduationYear: r.graduationYear,
+      major1: r.major1,
+      major2: r.major2,
+      gender: r.gender,
+      shared: Boolean(r.shareConsent) && !r.consentRevokedAt,
+      updatedAt: r.updatedAt
+    }));
+
+    // The roster behind those counts. Without it the page can say how many
+    // uploaded resumes exist but cannot show a single one of the people, which
+    // is the only question an admin actually opens this page to answer.
+    const externals = externalRows.map((r) => ({
+      id: r.id,
+      userId: r.user.id,
+      name: r.user.fullName,
+      email: r.user.email,
+      graduationYear: r.graduationYear,
+      major1: r.major1,
+      major2: r.major2,
+      gender: r.gender,
+      emailVerified: Boolean(r.user.emailVerifiedAt),
+      // How this person got into the pool. Worth showing: an onboarded
+      // applicant is someone recruitment already knows, a portal signup is not.
+      source: r.user.isExternalTalent ? 'PORTAL' : 'ONBOARDED',
+      shared: Boolean(r.shareConsent) && !r.consentRevokedAt,
+      // Assignable is the conjunction the pool query actually gates on, so this
+      // column and the shareable count can never disagree.
+      assignable: Boolean(r.shareConsent) && !r.consentRevokedAt && Boolean(r.user.emailVerifiedAt),
+      updatedAt: r.updatedAt
+    }));
+
+    // Counted off the same array the roster renders, so the breakdown always
+    // agrees with the rows behind it.
+    const optedIn = applicants.filter((a) => a.talentPoolOptIn === true).length;
+    const optedOut = applicants.filter((a) => a.talentPoolOptIn === false).length;
+    const noAnswer = applicants.filter((a) => a.talentPoolOptIn === null).length;
+
+    res.json({
+      cycles,
+      selectedCycleId,
+      optIn: {
+        total: applicants.length,
+        optedIn,
+        optedOut,
+        noAnswer
+      },
+      applicants,
+      // True when a row is a unique person rather than a single submission.
+      deduplicated: selectedCycleId === 'all',
+      duplicatesCollapsed,
+      totalApplications: applications.length,
+      // resumesUpdatedRecently still has no source of truth: applications store
+      // a resume at submission time only, with no "resume last updated"
+      // timestamp to count. Reported as null so the UI shows "not tracked yet"
+      // rather than a zero that reads like a real measurement.
+      resumesUpdatedRecently: null,
+      // registeredClients is now real - active CLIENT accounts with a partner
+      // row. Deactivated ones are excluded: the number is meant to answer "how
+      // many organizations can log in right now?".
+      registeredClients,
+      // The external talent portal, which is cycle-independent - these counts
+      // do not move when the cycle selector does.
+      externalTalent: {
+        accounts: externalAccounts,
+        verified: externalVerified,
+        shareable: externalShared
+      },
+      externals,
+      // Cycle-independent for the same reason the external counts are: a member
+      // resume belongs to a person, not to a recruiting cycle.
+      memberTalent: {
+        accounts: memberAccounts,
+        shareable: memberShared
+      },
+      memberResumes
+    });
+  } catch (error) {
+    console.error('Error fetching talent pool stats:', error);
+    res.status(500).json({ error: 'Failed to fetch talent pool stats' });
   }
 });
 

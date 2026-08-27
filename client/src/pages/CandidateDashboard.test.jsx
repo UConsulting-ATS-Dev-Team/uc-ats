@@ -34,6 +34,10 @@ describe('CandidateDashboard application deadline card', () => {
         },
       },
     ]);
+    // The card reads the open cycle now, not this candidate's applications.
+    apiClient.get.mockResolvedValue({
+      cycle: { id: 'cycle-1', name: 'Fall 2026', endDate: '2026-10-05T00:00:00.000Z' },
+    });
 
     renderWithRouter(<CandidateDashboard />);
 
@@ -99,5 +103,47 @@ describe('CandidateDashboard application deadline card', () => {
     await waitFor(() => {
       expect(screen.getByText(/No upcoming deadline posted/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe('which deadline the card shows', () => {
+  it('shows the cycle open to candidates, not one they already applied to', async () => {
+    // Regression: a candidate with a Winter 2026 application saw that cycle's
+    // deadline even after Fall 2026 was made the candidate-active cycle,
+    // because the card scanned their own applications.
+    apiClient.get.mockResolvedValue({
+      cycle: { id: 'fall', name: 'Fall 2026', endDate: '2026-10-10T00:00:00.000Z' },
+    });
+
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() => expect(screen.getByText(/Fall 2026/i)).toBeInTheDocument());
+    expect(screen.queryByText(/Winter 2026/i)).not.toBeInTheDocument();
+  });
+
+  it('asks for the open cycle rather than the applications list', async () => {
+    apiClient.get.mockResolvedValue({ cycle: null });
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/active-cycle'));
+    expect(apiClient.get.mock.calls.some(([url]) => url.includes('my-applications'))).toBe(false);
+  });
+
+  it('shows nothing when no cycle is open', async () => {
+    apiClient.get.mockResolvedValue({ cycle: null });
+    renderWithRouter(<CandidateDashboard />);
+    await waitFor(() =>
+      expect(screen.getByText(/No upcoming deadline posted/i)).toBeInTheDocument()
+    );
+  });
+
+  it('shows nothing when the open cycle deadline has passed', async () => {
+    apiClient.get.mockResolvedValue({
+      cycle: { id: 'old', name: 'Fall 2025', endDate: '2025-10-11T00:00:00.000Z' },
+    });
+    renderWithRouter(<CandidateDashboard />);
+    await waitFor(() =>
+      expect(screen.getByText(/No upcoming deadline posted/i)).toBeInTheDocument()
+    );
   });
 });
