@@ -11,6 +11,29 @@ router.use(requireAuth);
 // view any file referenced by an application; USER role may only view files
 // attached to their own application (matched via candidate email/studentId or
 // the application's own email field).
+/**
+ * Was this Drive file ever a resume on this application?
+ *
+ * Replacing a resume repoints Application.resumeUrl at the new upload, so the
+ * file the applicant originally submitted stops being referenced by any URL
+ * column - and the reference check below then refuses it. That is how a
+ * candidate came to get a 403 opening their *own* previous resume.
+ *
+ * ResumeUpload.sourceUrl is where that history is kept, so it is the second
+ * place worth asking. Scoped to applications the caller already owns, so this
+ * widens what an owner can reach and nothing else.
+ */
+const referencedByVersionHistory = async (fileId, applicationFilter) => {
+  const upload = await prisma.resumeUpload.findFirst({
+    where: {
+      sourceUrl: { contains: fileId },
+      ...(applicationFilter ? { application: applicationFilter } : {}),
+    },
+    select: { id: true },
+  });
+  return Boolean(upload);
+};
+
 async function authorizeFileAccess(fileId, user) {
   if (user.role === 'ADMIN' || user.role === 'MEMBER') {
     const referenced = await prisma.application.findFirst({
@@ -25,7 +48,10 @@ async function authorizeFileAccess(fileId, user) {
       },
       select: { id: true },
     });
-    return Boolean(referenced);
+    if (referenced) return true;
+    // Staff read the same version history, unscoped - they can already open any
+    // current application document.
+    return referencedByVersionHistory(fileId, null);
   }
 
   const ownerFilters = [];
@@ -56,7 +82,11 @@ async function authorizeFileAccess(fileId, user) {
     },
     select: { id: true },
   });
-  return Boolean(ownAndReferenced);
+  if (ownAndReferenced) return true;
+
+  // Not a current document, but it may be a superseded one. Restricted to
+  // applications this person owns.
+  return referencedByVersionHistory(fileId, { OR: ownerFilters });
 }
 
 router.get('/:fileId/image', async (req, res) => {
