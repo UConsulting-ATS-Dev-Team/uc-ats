@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
-import { putResume, getResume, removeResume } from '../services/resumeStorage.js';
+import { putResume, getResume, removeResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -1925,6 +1925,8 @@ router.post('/resume', requireAuth, requireMemberRole, resumeUploadMiddleware, a
     res.status(201).json({ resume: serializeMemberResume(resume, 0) });
   } catch (error) {
     console.error('[POST /api/member/resume]', error);
+    const configured = storageErrorResponse(error);
+    if (configured) return res.status(configured.status).json(configured.body);
     res.status(500).json({ error: 'Failed to upload your resume' });
   }
 });

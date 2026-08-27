@@ -76,7 +76,13 @@ export const putResume = async (key, buffer, contentType = 'application/pdf') =>
       '[resumeStorage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set. ' +
         'Uploads cannot be stored durably and are being refused.'
     );
-    throw new Error('File storage is not configured. Please contact the recruitment team.');
+    const error = new Error('File storage is not configured. Please contact the recruitment team.');
+    // Tagged so routes can report it as a configuration fault rather than
+    // letting it fall into a generic "something went wrong" 500, which is what
+    // hid it in production: the upload failed for a knowable reason and said
+    // nothing about it.
+    error.code = 'STORAGE_NOT_CONFIGURED';
+    throw error;
   }
 
   if (isSupabaseAvailable()) {
@@ -139,3 +145,14 @@ export const removeResume = async (key) => {
   const absolute = path.join(LOCAL_STORAGE_ROOT, key);
   await fsPromises.rm(absolute, { force: true }).catch(() => {});
 };
+
+/**
+ * Express-friendly shape for a storage misconfiguration.
+ *
+ * 503 rather than 500: the request was fine, the service is not, and retrying
+ * once someone sets the variables will work.
+ */
+export const storageErrorResponse = (error) =>
+  error?.code === 'STORAGE_NOT_CONFIGURED'
+    ? { status: 503, body: { error: error.message, code: error.code } }
+    : null;
