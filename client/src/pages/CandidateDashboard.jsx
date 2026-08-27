@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import apiClient from '../utils/api';
-import { formatDeadline, getNextDeadline } from '../utils/getNextDeadline';
+import { formatDeadline, getCycleDeadline } from '../utils/getNextDeadline';
 import '../styles/CandidateDashboard.css';
 
 export default function CandidateDashboard() {
@@ -39,9 +39,12 @@ export default function CandidateDashboard() {
     const fetchDeadline = async () => {
       try {
         setDeadlineLoading(true);
-        const applications = await apiClient.get('/applications/my-applications');
+        // The cycle open to candidates, not this candidate's own applications.
+        // Deriving it from their applications showed the deadline of a cycle
+        // they had already applied to and ignored the one actually open.
+        const data = await apiClient.get('/active-cycle');
         if (!cancelled) {
-          setDeadline(getNextDeadline(applications));
+          setDeadline(getCycleDeadline(data?.cycle));
         }
       } catch (error) {
         console.error('Error fetching next deadline:', error);

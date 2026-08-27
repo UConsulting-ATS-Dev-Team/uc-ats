@@ -9,6 +9,36 @@ import { resolveCandidateCycle } from '../services/activeCycle.js';
 
 const router = express.Router();
 
+/**
+ * The cycle currently open to candidates.
+ *
+ * Exists so a candidate-facing screen can say "applications close on X" without
+ * inferring it from the applications that person happens to have. The dashboard
+ * used to derive its deadline from the candidate's own applications, which
+ * showed the deadline of a cycle they had already applied to and ignored the one
+ * actually open.
+ *
+ * Public because the answer already is: the application deadline is on the
+ * recruitment site. Only the fields a deadline needs are returned.
+ */
+router.get('/active-cycle', async (req, res) => {
+  try {
+    const cycle = await resolveCandidateCycle(prisma);
+    if (!cycle) return res.json({ cycle: null });
+    res.json({
+      cycle: {
+        id: cycle.id,
+        name: cycle.name,
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
+      },
+    });
+  } catch (error) {
+    console.error('[GET /api/active-cycle]', error);
+    res.status(500).json({ error: 'Failed to load the active cycle' });
+  }
+});
+
 // Public: list available meeting slots with remaining capacity and signups
 router.get('/meeting-slots', async (req, res) => {
   try {
