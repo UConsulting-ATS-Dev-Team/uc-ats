@@ -1458,3 +1458,6 @@ export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName
     return { success: false, error: error.message };
   }
 };
+
+// Reused by the Master Communications service for raw, non-templated sends.
+export { sendEmail };

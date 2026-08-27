@@ -49,7 +49,12 @@ import { resolveFormStatus } from '../services/eventFormStatus.js';
 import {
   activateCycleExclusively,
   isActiveCycleConflict,
-  ActiveCycleConflictError
+  ActiveCycleConflictError,
+  ALL_AUDIENCES,
+  isValidAudience,
+  resolveCycleForRequest,
+  resolveAdminCycle,
+  resolveCandidateCycle
 } from '../services/activeCycle.js';
 
 const router = express.Router();
@@ -96,7 +101,7 @@ router.get('/stats', async (req, res) => {
     // Wrap all database calls in try-catch blocks to handle individual failures
     let active = null;
     try {
-      active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+      active = await resolveCycleForRequest(prisma, req);
     } catch (error) {
       console.error('Error fetching active cycle:', error);
     }
@@ -199,7 +204,7 @@ router.get('/candidates', async (req, res) => {
     const { year, gender, firstGen, transfer, status: statusFilter, eventAttendanceEventId, eventRsvpEventId } = req.query;
 
     // Scope to active cycle if present
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.json([]);
     }
@@ -907,7 +912,7 @@ router.patch('/candidates/:id/approval', async (req, res) => {
 router.post('/advance-round', async (req, res) => {
   try {
     console.log('Starting bulk advance...');
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -970,7 +975,7 @@ router.post('/process-decisions', async (req, res) => {
     const sendEmails = req.body.sendEmails !== false;
     console.log('Send emails:', sendEmails);
     
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -1271,10 +1276,24 @@ router.get('/cycles', async (req, res) => {
   }
 });
 
-// Get active cycle
+// The admin console's own cycle. Additive extension: the body is still the admin
+// cycle row, so existing readers of .id/.name/deadlines are untouched, plus
+// `candidateCycle` and `audiencesSplit` so the UI can warn when admins are working in
+// a different cycle than members and candidates see.
 router.get('/cycles/active', async (req, res) => {
   try {
-    res.json(await loadActiveCycle(prisma));
+    const [adminCycle, candidateCycle] = await Promise.all([
+      resolveAdminCycle(prisma),
+      resolveCandidateCycle(prisma)
+    ]);
+    if (!adminCycle) return res.json(null);
+    res.json({
+      ...adminCycle,
+      candidateCycle: candidateCycle
+        ? { id: candidateCycle.id, name: candidateCycle.name }
+        : null,
+      audiencesSplit: Boolean(candidateCycle) && candidateCycle.id !== adminCycle.id
+    });
   } catch (error) {
     console.error('[GET /api/admin/cycles/active]', error);
     // Return null instead of error to prevent dashboard from breaking
@@ -1377,14 +1396,25 @@ router.post('/cycles/bootstrap-commit', async (req, res) => {
   }
 });
 
-// Set a cycle as active
+// Set a cycle as active, for one audience or both.
+//
+// `audiences` defaults to both, so an existing caller posting an empty body keeps
+// meaning "activate for everyone". Passing ['CANDIDATE'] alone is the handover case:
+// members and candidates move while admins stay on the closing cycle.
 router.post('/cycles/:id/activate', async (req, res) => {
   const { id } = req.params;
+  const { audiences = ALL_AUDIENCES } = req.body ?? {};
+
+  if (!Array.isArray(audiences) || audiences.length === 0 || !audiences.every(isValidAudience)) {
+    return res.status(400).json({
+      error: `audiences must be a non-empty array of ${ALL_AUDIENCES.join(' | ')}`
+    });
+  }
 
   try {
-    const updated = await prisma.$transaction((tx) => activateCycleExclusively(tx, id));
+    const updated = await prisma.$transaction((tx) => activateCycleExclusively(tx, id, audiences));
 
-    res.json({ message: 'Cycle activated', cycle: updated });
+    res.json({ message: 'Cycle activated', cycle: updated, audiences });
   } catch (error) {
     console.error('[POST /api/admin/cycles/:id/activate]', error);
     if (isActiveCycleConflict(error)) {
@@ -1474,7 +1504,7 @@ router.delete('/cycles/:id', async (req, res) => {
 router.post('/reset-all', async (req, res) => {
   try {
     console.log('Resetting candidates for active cycle...');
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -1930,9 +1960,7 @@ router.post('/events/copy-commit', async (req, res) => {
 router.get('/interviews', async (req, res) => {
   try {
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -2878,7 +2906,7 @@ router.post('/save-decision', async (req, res) => {
     }
 
     // Find the application for this candidate in the active cycle
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3613,7 +3641,7 @@ router.post('/process-coffee-decisions', async (req, res) => {
   try {
     console.log('Starting coffee chat decision processing...');
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3756,7 +3784,7 @@ router.post('/process-first-round-decisions', async (req, res) => {
     const sendEmails = req.body.sendEmails !== false;
     console.log('Send emails:', sendEmails);
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -3936,7 +3964,7 @@ router.post('/process-final-decisions', async (req, res) => {
   try {
     console.log('Starting final round decision processing...');
 
-    const active = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
@@ -4552,9 +4580,7 @@ router.get('/flagged-documents', async (req, res) => {
     const { resolved } = req.query;
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -5438,8 +5464,11 @@ router.post('/users/deactivate-preview', async (req, res) => {
       return res.status(400).json({ error: 'graduationClass is required' });
     }
 
+    // Union of both audience pointers on purpose: a member still staffed on the
+    // admin-facing cycle must not be deactivatable just because candidates have
+    // already moved on to the next one.
     const activeCycles = await prisma.recruitingCycle.findMany({
-      where: { isActive: true },
+      where: { OR: [{ isActive: true }, { isAdminActive: true }] },
       select: { id: true }
     });
     const activeCycleIds = new Set(activeCycles.map(c => c.id));
@@ -5484,8 +5513,11 @@ router.post('/users/deactivate', async (req, res) => {
       return res.status(400).json({ error: 'Could not determine a graduation year from the class value' });
     }
 
+    // Union of both audience pointers on purpose: a member still staffed on the
+    // admin-facing cycle must not be deactivatable just because candidates have
+    // already moved on to the next one.
     const activeCycles = await prisma.recruitingCycle.findMany({
-      where: { isActive: true },
+      where: { OR: [{ isActive: true }, { isAdminActive: true }] },
       select: { id: true }
     });
     const activeCycleIds = new Set(activeCycles.map(c => c.id));
@@ -5536,6 +5568,130 @@ router.post('/users/deactivate', async (req, res) => {
   } catch (error) {
     console.error('[POST /api/admin/users/deactivate]', error);
     res.status(500).json({ error: 'Failed to deactivate users' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Talent Partner Network (TPN)
+// ---------------------------------------------------------------------------
+// Opt-in is captured on the application form (see Application.talentPoolOptIn).
+// Requires auth + admin via router.use() at the top of this file.
+
+// Returns opt-in counts plus the roster of applicants who said yes.
+// `cycleId` is optional; omitted means the active cycle, `all` means every cycle.
+router.get('/talent-pool/stats', async (req, res) => {
+  try {
+    const cycles = await prisma.recruitingCycle.findMany({
+      select: { id: true, name: true, isActive: true, isAdminActive: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    // Omitted cycleId means "the cycle I am working in", which on an admin route is
+    // the admin pointer, not the one candidates see.
+    const defaultCycle = await resolveCycleForRequest(prisma, req);
+
+    const requested = req.query.cycleId;
+    let cycleFilter;
+    let selectedCycleId;
+
+    if (requested === 'all') {
+      cycleFilter = {};
+      selectedCycleId = 'all';
+    } else {
+      const target = requested
+        ? cycles.find((c) => c.id === requested)
+        : cycles.find((c) => c.id === defaultCycle?.id);
+      if (!target) {
+        return res.status(404).json({ error: 'Recruiting cycle not found' });
+      }
+      cycleFilter = { cycleId: target.id };
+      selectedCycleId = target.id;
+    }
+
+    const applications = await prisma.application.findMany({
+      where: cycleFilter,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        studentId: true,
+        candidateId: true,
+        major1: true,
+        graduationYear: true,
+        resumeUrl: true,
+        submittedAt: true,
+        talentPoolOptIn: true,
+        cycle: { select: { id: true, name: true } }
+      },
+      orderBy: { submittedAt: 'desc' }
+    });
+
+    // Across all cycles the same person appears once per cycle they applied in.
+    // Collapse those to one row each so the roster lists people rather than
+    // submissions. Rows arrive newest-first, so the first one seen for a person
+    // is their latest application - which carries their most recent resume and
+    // their most recent opt-in answer.
+    //
+    // Only done for the all-cycles view; within a single cycle each row is
+    // already a distinct applicant.
+    let applicants = applications;
+    let duplicatesCollapsed = 0;
+
+    if (selectedCycleId === 'all') {
+      const seen = new Map();
+      for (const app of applications) {
+        const key = app.candidateId
+          || (app.email ? `email:${app.email.trim().toLowerCase()}` : null)
+          || (app.studentId ? `student:${app.studentId.trim()}` : null)
+          || `app:${app.id}`;
+        const existing = seen.get(key);
+        if (!existing) {
+          seen.set(key, { ...app, priorApplications: 0 });
+        } else {
+          existing.priorApplications += 1;
+          duplicatesCollapsed += 1;
+        }
+      }
+      applicants = Array.from(seen.values());
+    }
+
+    const registeredClients = await prisma.talentPartnerClient.count({
+      where: { user: { isActive: true } }
+    });
+
+    // Counted off the same array the roster renders, so the breakdown always
+    // agrees with the rows behind it.
+    const optedIn = applicants.filter((a) => a.talentPoolOptIn === true).length;
+    const optedOut = applicants.filter((a) => a.talentPoolOptIn === false).length;
+    const noAnswer = applicants.filter((a) => a.talentPoolOptIn === null).length;
+
+    res.json({
+      cycles,
+      selectedCycleId,
+      optIn: {
+        total: applicants.length,
+        optedIn,
+        optedOut,
+        noAnswer
+      },
+      applicants,
+      // True when a row is a unique person rather than a single submission.
+      deduplicated: selectedCycleId === 'all',
+      duplicatesCollapsed,
+      totalApplications: applications.length,
+      // resumesUpdatedRecently still has no source of truth: applications store
+      // a resume at submission time only, with no "resume last updated"
+      // timestamp to count. Reported as null so the UI shows "not tracked yet"
+      // rather than a zero that reads like a real measurement.
+      resumesUpdatedRecently: null,
+      // registeredClients is now real - active CLIENT accounts with a partner
+      // row. Deactivated ones are excluded: the number is meant to answer "how
+      // many organizations can log in right now?".
+      registeredClients
+    });
+  } catch (error) {
+    console.error('Error fetching talent pool stats:', error);
+    res.status(500).json({ error: 'Failed to fetch talent pool stats' });
   }
 });
 

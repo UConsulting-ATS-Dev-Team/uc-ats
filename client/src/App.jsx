@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Route, Routes, Navigate } from 'react-router-dom';
+import { Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import ApplicationList from './pages/ApplicationList';
 import ApplicationDetail from './pages/ApplicationDetail';
 import Login from './pages/Login';
@@ -7,6 +7,7 @@ import SignUp from './pages/SignUp';
 import MemberSignUp from './pages/MemberSignUp';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
+import ClientLayout from './components/ClientLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
@@ -27,6 +28,7 @@ import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
 import Cases from './pages/Cases';
+import TalentPoolPartnerNetwork from './pages/TalentPoolPartnerNetwork';
 import CaseTagging from './pages/CaseTagging';
 import CandidateDashboard from './pages/CandidateDashboard';
 import ReviewTeams from './pages/ReviewTeams';
@@ -45,14 +47,17 @@ import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import MasterCommunications from './pages/MasterCommunications';
 import Profile from './pages/Profile';
+import ClientResumeLibrary from './pages/ClientResumeLibrary';
 import NotFound from './pages/NotFound';
 import PausedLanding from './pages/PausedLanding';
 import './styles/variables.css';
 // Protected Route wrapper for admin/member users
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
-  
+  const location = useLocation();
+
   if (loading) {
     return <div>Loading...</div>;
   }
@@ -61,11 +66,21 @@ const ProtectedRoute = ({ children }) => {
     return <Navigate to="/login" />;
   }
   
+  // Talent Partner Network clients have exactly one page. Without this they
+  // fall through to the admin Layout below - not a data leak, since every API
+  // call 403s for them, but it would show them a sidebar full of staff tooling.
+  if (user.role === 'CLIENT') {
+    if (location.pathname !== '/partner/resumes') {
+      return <Navigate to="/partner/resumes" replace />;
+    }
+    return <ClientLayout>{children}</ClientLayout>;
+  }
+
   // Use different layouts based on user role
   if (user.role === 'USER') {
     return <CandidateLayout>{children}</CandidateLayout>;
   }
-  
+
   return <Layout>{children}</Layout>;
 };
 
@@ -75,6 +90,10 @@ const HomeRoute = () => {
 
   if (loading) {
     return <div>Loading...</div>;
+  }
+
+  if (user?.role === 'CLIENT') {
+    return <Navigate to="/partner/resumes" replace />;
   }
 
   if (user?.role === 'ADMIN' || user?.role === 'MEMBER') {
@@ -136,6 +155,15 @@ const AppRoutes = () => {
         }
       />
       
+      <Route
+        path="/talent-pool"
+        element={
+          <ProtectedRoute>
+            <TalentPoolPartnerNetwork />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/review-teams"
         element={
@@ -357,6 +385,16 @@ const AppRoutes = () => {
         }
       />
       
+      {/* Talent Partner Network client portal - one page, its own shell */}
+      <Route
+        path="/partner/resumes"
+        element={
+          <ProtectedRoute>
+            <ClientResumeLibrary />
+          </ProtectedRoute>
+        }
+      />
+
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       {/* Public meeting signup page */}
@@ -386,6 +424,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Master Communications */}
+      <Route
+        path="/master-communications"
+        element={
+          <ProtectedRoute>
+            <MasterCommunications />
           </ProtectedRoute>
         }
       />

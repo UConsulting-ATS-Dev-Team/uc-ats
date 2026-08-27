@@ -48,7 +48,9 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('token', data.token);
       setToken(data.token);
       setUser(data.user);
-      return { success: true };
+      // data.user is returned so the caller can route by role without waiting
+      // for context state to settle. Login.jsx is the only caller.
+      return { success: true, user: data.user };
 
     } catch (error) {
       return { success: false, error: error.message };

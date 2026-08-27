@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import CycleScopeBanner from './CycleScopeBanner';
 import {
   HomeIcon, 
   DocumentTextIcon, 
@@ -18,7 +19,9 @@ import {
   ChatBubbleOvalLeftEllipsisIcon,
   LightBulbIcon,
   PresentationChartBarIcon,
-  NewspaperIcon
+  NewspaperIcon,
+  EnvelopeIcon,
+  BriefcaseIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -63,11 +66,13 @@ const Layout = ({ children }) => {
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
+      { name: 'Talent Pool Partner Network', href: '/talent-pool', icon: BriefcaseIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
+      { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
       { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
       FEATURE_REQUEST_NAV,
     ] : [
@@ -205,6 +210,7 @@ const Layout = ({ children }) => {
         <div className="content-area">
           <main className="main-content">
             <div className="content-container">
+              <CycleScopeBanner />
               {children}
             </div>
           </main>

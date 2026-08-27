@@ -11,16 +11,14 @@ import {
   buildCreateGroupData,
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
+import { resolveCycleForRequest } from '../services/activeCycle.js';
 
 const router = express.Router();
 
 // Admin audit of each reviewer's grading contribution within their assigned team.
 router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const activeCycle = await prisma.recruitingCycle.findFirst({
-      where: { isActive: true },
-      select: { id: true }
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
 
     if (!activeCycle) {
       return res.json([]);
@@ -113,10 +111,7 @@ router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmi
   try {
     const { groupId, reviewerId } = req.params;
 
-    const activeCycle = await prisma.recruitingCycle.findFirst({
-      where: { isActive: true },
-      select: { id: true, name: true }
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
 
     if (!activeCycle) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
@@ -234,9 +229,7 @@ router.get('/', requireAuth, async (req, res) => {
     console.log('Review teams endpoint called');
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     console.log('Active cycle found:', activeCycle?.id);
     
@@ -891,9 +884,7 @@ router.delete('/:groupId/members/:memberId', requireAuth, async (req, res) => {
 router.get('/available-applications', requireAuth, async (req, res) => {
   try {
     // Get the active cycle
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -979,9 +970,7 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
     const { memberId } = req.params;
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.json([]);
@@ -1054,9 +1043,7 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
 router.post('/auto-distribute', requireAuth, async (req, res) => {
   try {
     // Get the active cycle
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     if (!activeCycle) {
       return res.status(400).json({ error: 'No active cycle found' });
@@ -1171,9 +1158,7 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
     console.log('Fetching applications for member:', memberId);
     
     // Get the active cycle first
-    const activeCycle = await prisma.recruitingCycle.findFirst({ 
-      where: { isActive: true } 
-    });
+    const activeCycle = await resolveCycleForRequest(prisma, req);
     
     console.log('Active cycle:', activeCycle?.id);
     
@@ -1582,9 +1567,7 @@ router.get('/resume-score/:candidateId', requireAuth, async (req, res) => {
 
     // If no cycleId provided, get the active cycle
     if (!cycleId) {
-      const activeCycle = await prisma.recruitingCycle.findFirst({
-        where: { isActive: true }
-      });
+      const activeCycle = await resolveCycleForRequest(prisma, req);
       if (activeCycle) {
         cycleId = activeCycle.id;
       }
@@ -1731,9 +1714,7 @@ router.get('/cover-letter-score/:candidateId', requireAuth, async (req, res) => 
 
     // If no cycleId provided, get the active cycle
     if (!cycleId) {
-      const activeCycle = await prisma.recruitingCycle.findFirst({
-        where: { isActive: true }
-      });
+      const activeCycle = await resolveCycleForRequest(prisma, req);
       if (activeCycle) {
         cycleId = activeCycle.id;
       }
@@ -1888,9 +1869,7 @@ router.get('/video-score/:candidateId', requireAuth, async (req, res) => {
 
     // If no cycleId provided, get the active cycle
     if (!cycleId) {
-      const activeCycle = await prisma.recruitingCycle.findFirst({
-        where: { isActive: true }
-      });
+      const activeCycle = await resolveCycleForRequest(prisma, req);
       if (activeCycle) {
         cycleId = activeCycle.id;
       }

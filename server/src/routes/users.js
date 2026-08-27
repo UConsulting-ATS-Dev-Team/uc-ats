@@ -157,6 +157,11 @@ router.patch('/:id/role', requireAuth, async (req, res) => {
     }
 
     // Validate role
+    // CLIENT is deliberately absent. A Talent Partner Network client must be
+    // created through POST /api/admin/talent-pool/clients, which makes the User
+    // and the TalentPartnerClient row in one transaction. Allowing the role to
+    // be set here would permit a CLIENT with no partner row - an account that
+    // can log in and then hit a confusing 403 on every portal request.
     const validRoles = ['USER', 'ADMIN', 'MEMBER'];
     if (!validRoles.includes(role)) {
       console.log('[PATCH /api/users/:id/role] Invalid role:', role);
@@ -390,6 +395,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // Validate role
+    // CLIENT is deliberately absent. A Talent Partner Network client must be
+    // created through POST /api/admin/talent-pool/clients, which makes the User
+    // and the TalentPartnerClient row in one transaction. Allowing the role to
+    // be set here would permit a CLIENT with no partner row - an account that
+    // can log in and then hit a confusing 403 on every portal request.
     const validRoles = ['USER', 'ADMIN', 'MEMBER'];
     if (role && !validRoles.includes(role)) {
       return res.status(400).json({ error: 'Invalid role' });

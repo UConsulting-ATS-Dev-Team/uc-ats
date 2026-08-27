@@ -364,8 +364,11 @@ export async function commitCycleBootstrap({
       data: {
         name: name.trim(),
         // Activation is a separate, ordered step below; creating the row already
-        // active would trip the single-active index before others are cleared.
+        // active would trip the single-active indexes before others are cleared.
+        // A bootstrapped cycle is the new season for everyone, so it activates for
+        // both audiences — that is activateCycleExclusively's default.
         isActive: false,
+        isAdminActive: false,
         startDate: stages.applications_open ? stages.applications_open.start : null,
         endDate: stages.offers_released
           ? stages.offers_released.start
