@@ -237,7 +237,11 @@ export async function resolveRecipients({ audience, filters = {} }) {
   if (audience === 'members' || audience === 'users') {
     const roles = filters.roles?.length ? filters.roles : ['MEMBER'];
     const users = await prisma.user.findMany({
-      where: { role: { in: roles } },
+      // Deactivated accounts are excluded. They are people who have left -
+      // graduated members, removed admins - and without this a send to
+      // "members" reached all 55 accounts rather than the 45 active ones,
+      // putting org mail in the inboxes of ten people who are no longer here.
+      where: { role: { in: roles }, isActive: true },
       select: { id: true, email: true, fullName: true, role: true },
     });
     return users.map((u) => ({
@@ -251,7 +255,8 @@ export async function resolveRecipients({ audience, filters = {} }) {
 
   if (audience === 'admins') {
     const users = await prisma.user.findMany({
-      where: { role: 'ADMIN' },
+      // Same rule as the members branch above.
+      where: { role: 'ADMIN', isActive: true },
       select: { id: true, email: true, fullName: true, role: true },
     });
     return users.map((u) => ({
