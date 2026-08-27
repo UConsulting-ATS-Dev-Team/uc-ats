@@ -163,6 +163,7 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/applications` - Application CRUD and review
 - `/api/review-teams` - Review team management and scoring
 - `/api/files` - File upload/download via Google Drive
+- `/api/resume-uploads` - Candidate self-service resume replacement + version history
 - `/api/interview-resources` - Interview prep materials
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 

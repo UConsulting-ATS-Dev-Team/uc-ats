@@ -272,6 +272,8 @@ export default function CandidateApplications() {
     setSelectedApplication(null);
   };
 
+  // The upload response carries the new URL, so repoint the open modal and the
+  // cached list rather than refetching everything.
   useEffect(() => {
     fetchApplications();
   }, []);

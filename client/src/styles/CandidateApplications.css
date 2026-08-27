@@ -338,7 +338,15 @@
   background-color: var(--primary-color);
   color: var(--text-white);}
 
+.document-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
+.document-link:disabled:hover {
+  background-color: transparent;
+  color: var(--primary-color);
+}
 
 /* Responsive Design */
 @media (max-width: 768px) {

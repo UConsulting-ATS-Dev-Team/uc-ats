@@ -49,9 +49,10 @@ model User {
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
-  createdMessageTemplates    MessageTemplate[]              @relation("MessageTemplateCreator")
-  sentMessageLogs            MessageLog[]                   @relation("MessageLogSender")
-  scheduledMessages          MessageSchedule[]              @relation("ScheduleSender")
+  resumeUploads              ResumeUpload[]                  @relation("ResumeUploader")
+  createdMessageTemplates    MessageTemplate[]               @relation("MessageTemplateCreator")
+  sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
+  scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
   talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
   createdTalentPartners      TalentPartnerClient[]           @relation("TalentPartnerClientCreator")
   memberResumes              MemberResume[]
@@ -132,9 +133,38 @@ model Application {
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
+  resumeUploads         ResumeUpload[]
   clientAssignments     ClientResumeAssignment[]
 
   @@map("applications")
+}
+
+// One row per version of an application's resume, newest last. Candidates may
+// replace their own resume until the cycle's `resumeDeadline` passes, and
+// reviewers grade whatever `Application.resumeUrl` pointed at, so the version
+// that was actually scored has to stay recoverable.
+//
+// `storagePath` is null for the resume the application arrived with: that file
+// lives in Google Drive (uploaded through the application form), not in our
+// storage directory. `sourceUrl` records what `Application.resumeUrl` held for
+// this version, which is what the client fetches to view it either way.
+model ResumeUpload {
+  id            String      @id @default(uuid())
+  applicationId String
+  storagePath   String?
+  sourceUrl     String
+  originalName  String?
+  sizeBytes     Int?
+  uploadedById  String?
+  uploadedAt    DateTime    @default(now())
+  // Set when a newer upload takes over. Exactly one row per application should
+  // have this null — the version `Application.resumeUrl` currently points at.
+  supersededAt  DateTime?
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  uploadedBy    User?       @relation("ResumeUploader", fields: [uploadedById], references: [id])
+
+  @@index([applicationId, uploadedAt])
+  @@map("resume_uploads")
 }
 
 model RecruitingCycle {
@@ -921,37 +951,37 @@ enum MeetingCommunicationType {
 }
 
 model MessageTemplate {
-  id          String            @id @default(uuid())
-  name        String
-  subject     String
-  body        String
-  channel     String
-  cycleId     String
-  createdBy   String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  cycle       RecruitingCycle   @relation("CycleTemplates", fields: [cycleId], references: [id], onDelete: Cascade)
-  creator     User              @relation("MessageTemplateCreator", fields: [createdBy], references: [id])
-  logs        MessageLog[]
-  schedules   MessageSchedule[]
+  id        String            @id @default(uuid())
+  name      String
+  subject   String
+  body      String
+  channel   String
+  cycleId   String
+  createdBy String
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  cycle     RecruitingCycle   @relation("CycleTemplates", fields: [cycleId], references: [id], onDelete: Cascade)
+  creator   User              @relation("MessageTemplateCreator", fields: [createdBy], references: [id])
+  logs      MessageLog[]
+  schedules MessageSchedule[]
 
   @@index([cycleId])
   @@map("message_templates")
 }
 
 model MessageLog {
-  id             String             @id @default(uuid())
+  id             String            @id @default(uuid())
   templateId     String?
   channel        String
   recipientCount Int
   subject        String?
   body           String?
-  sentAt         DateTime           @default(now())
+  sentAt         DateTime          @default(now())
   sentBy         String
   cycleId        String?
-  template       MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  cycle          RecruitingCycle?   @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
-  sender         User               @relation("MessageLogSender", fields: [sentBy], references: [id])
+  template       MessageTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle          RecruitingCycle?  @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender         User              @relation("MessageLogSender", fields: [sentBy], references: [id])
   schedules      MessageSchedule[]
 
   @@index([cycleId])
@@ -960,31 +990,30 @@ model MessageLog {
 }
 
 model MessageSchedule {
-  id           String             @id @default(uuid())
+  id           String           @id @default(uuid())
   channel      String
   audience     String
-  filters      Json               @default("{}")
+  filters      Json             @default("{}")
   subject      String?
   body         String
   cycleId      String?
   templateId   String?
   sentBy       String
   scheduledAt  DateTime
-  status       String             @default("PENDING")
+  status       String           @default("PENDING")
   messageLogId String?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  template     MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  cycle        RecruitingCycle?   @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
-  sender       User               @relation("ScheduleSender", fields: [sentBy], references: [id])
-  messageLog   MessageLog?        @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  template     MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle        RecruitingCycle? @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender       User             @relation("ScheduleSender", fields: [sentBy], references: [id])
+  messageLog   MessageLog?      @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
 
   @@index([scheduledAt])
   @@index([status])
   @@index([cycleId])
   @@map("message_schedules")
 }
-
 
 // ---------------------------------------------------------------------------
 // Talent Partner Network - client resume portal

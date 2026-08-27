@@ -20,6 +20,8 @@ import interviewResourcesRoutes from './routes/interviewResources.js';
 import memberRoutes from './routes/member.js';
 import candidateRoutes from './routes/candidate.js';
 import casesRoutes from './routes/cases.js';
+import resumeUploadsRoutes from './routes/resumeUploads.js';
+import applicantInfoRoutes from './routes/applicantInfo.js';
 import conversationsRoutes from './routes/conversations.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
@@ -90,6 +92,8 @@ app.use('/api/conversations', conversationsRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
+app.use('/api/resume-uploads', resumeUploadsRoutes);
+app.use('/api/applicant-info', applicantInfoRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
