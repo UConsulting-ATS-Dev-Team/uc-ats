@@ -2027,4 +2027,34 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
   }
 });
 
+// List published interview questions for the current cycle (ATS-23 / ATS-68)
+router.get('/interview-questions', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { cycleId, round, category } = req.query || {};
+    const activeCycle = await resolveCycleForRequest(prisma, req);
+    const targetCycleId = cycleId || activeCycle?.id;
+
+    if (!targetCycleId) {
+      return res.json([]);
+    }
+
+    const where = {
+      cycleId: targetCycleId,
+      status: 'PUBLISHED'
+    };
+    if (round) where.round = String(round);
+    if (category) where.category = String(category);
+
+    const questions = await prisma.interviewQuestion.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(questions);
+  } catch (error) {
+    console.error('[GET /api/member/interview-questions]', error);
+    res.status(500).json({ error: 'Failed to fetch interview questions' });
+  }
+});
+
 export default router;
