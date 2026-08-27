@@ -1,6 +1,10 @@
 import express from 'express';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import {
+  listDrafts,
+  createDraft,
+  updateDraft,
+  deleteDraft,
   listTemplates,
   createTemplate,
   listLogs,
@@ -40,6 +44,65 @@ router.post('/templates', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[POST /api/master-communications/templates]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to create template' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Drafts
+// ---------------------------------------------------------------------------
+// Shared across admins on purpose: comms here are written by one person and
+// often finished by another, so there is no per-author scoping on these.
+
+router.get('/drafts', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const drafts = await listDrafts({ cycleId: req.query.cycleId });
+    res.json({ drafts });
+  } catch (error) {
+    console.error('[GET /api/master-communications/drafts]', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to load drafts' });
+  }
+});
+
+router.post('/drafts', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, channel, audience, filters, subject, body, cycleId } = req.body || {};
+    const draft = await createDraft({
+      name,
+      channel,
+      audience,
+      filters,
+      subject,
+      body,
+      cycleId,
+      createdById: req.user.id,
+    });
+    res.status(201).json({ draft });
+  } catch (error) {
+    console.error('[POST /api/master-communications/drafts]', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to save draft' });
+  }
+});
+
+router.patch('/drafts/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const draft = await updateDraft({
+      id: req.params.id,
+      updatedById: req.user.id,
+      ...(req.body || {}),
+    });
+    res.json({ draft });
+  } catch (error) {
+    console.error('[PATCH /api/master-communications/drafts/:id]', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update draft' });
+  }
+});
+
+router.delete('/drafts/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json(await deleteDraft({ id: req.params.id }));
+  } catch (error) {
+    console.error('[DELETE /api/master-communications/drafts/:id]', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to delete draft' });
   }
 });
 

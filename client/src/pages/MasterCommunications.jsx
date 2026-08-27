@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Paper,
@@ -47,6 +47,7 @@ const CHANNELS = [
   { key: 'email', label: 'Email' },
   { key: 'slack', label: 'Slack' },
   { key: 'imessage', label: 'iMessage' },
+  { key: 'drafts', label: 'Drafts' },
   { key: 'templates', label: 'Templates' },
   { key: 'logs', label: 'Logs' },
   { key: 'scheduled', label: 'Scheduled' },
@@ -106,6 +107,11 @@ const MasterCommunications = () => {
   const [templateName, setTemplateName] = useState('');
   const [templateChannel, setTemplateChannel] = useState('email');
   const [scheduledAt, setScheduledAt] = useState('');
+  const [drafts, setDrafts] = useState([]);
+  const [draftName, setDraftName] = useState('');
+  // The draft currently open in the composer. Saving with this set updates that
+  // draft rather than creating a second copy of the same message.
+  const [openDraftId, setOpenDraftId] = useState(null);
 
   const [preview, setPreview] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -129,13 +135,16 @@ const MasterCommunications = () => {
       fetchTemplates(primaryCycle);
       fetchLogs(primaryCycle);
     }
-  }, [primaryCycle]);
+    // Not gated on a cycle: a draft can be saved before one is chosen, and
+    // those would otherwise be invisible until you picked a cycle.
+    fetchDrafts(primaryCycle);
+  }, [primaryCycle, fetchDrafts]);
 
   useEffect(() => {
-    if (tab === 5 && primaryCycle) {
+    if (channel === 'scheduled' && primaryCycle) {
       fetchScheduled(primaryCycle);
     }
-  }, [tab, primaryCycle]);
+  }, [channel, primaryCycle]);
 
   const fetchCycles = async () => {
     try {
@@ -189,6 +198,88 @@ const MasterCommunications = () => {
   const clearMessages = () => {
     setError('');
     setSuccess('');
+  };
+
+  const fetchDrafts = useCallback(async (cycleId) => {
+    try {
+      const query = cycleId ? `?cycleId=${cycleId}` : '';
+      const data = await apiClient.get(`/master-communications/drafts${query}`);
+      setDrafts(data.drafts || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load drafts');
+    }
+  }, []);
+
+  const saveDraft = async () => {
+    clearMessages();
+    if (!draftName.trim()) {
+      setError('Give the draft a name so you can find it again');
+      return;
+    }
+    // Body is deliberately not required. Saving is for work in progress, and
+    // refusing an empty one would throw away the audience and filters that were
+    // just assembled.
+    const payload = {
+      name: draftName.trim(),
+      channel,
+      audience,
+      filters: buildFilters(),
+      subject: channel === 'email' ? subject : '',
+      body,
+      cycleId: primaryCycle || null,
+    };
+
+    try {
+      if (openDraftId) {
+        await apiClient.patch(`/master-communications/drafts/${openDraftId}`, payload);
+        setSuccess('Draft updated');
+      } else {
+        const data = await apiClient.post('/master-communications/drafts', payload);
+        setOpenDraftId(data.draft?.id ?? null);
+        setSuccess('Draft saved');
+      }
+      fetchDrafts(primaryCycle);
+    } catch (e) {
+      setError(e.message || 'Failed to save draft');
+    }
+  };
+
+  /** Put the composer back exactly as the draft was left. */
+  const openDraft = (draft) => {
+    clearMessages();
+    setOpenDraftId(draft.id);
+    setDraftName(draft.name);
+    setAudience(draft.audience);
+    setSubject(draft.subject || '');
+    setBody(draft.body || '');
+
+    const filters = draft.filters || {};
+    setRoles(filters.roles || ['MEMBER']);
+    setApplicationStatus(filters.applicationStatus || '');
+    setInterviewRound(filters.interviewRound || '');
+    setDecision(filters.decision || '');
+    setEventRsvpId(filters.eventRsvpId || '');
+    setEventAttendedId(filters.eventAttendedId || '');
+    if (filters.cycleIds?.length) setSelectedCycles(filters.cycleIds);
+
+    const channelTab = CHANNELS.findIndex((c) => c.key === draft.channel);
+    if (channelTab >= 0) setTab(channelTab);
+    setSuccess(`Opened draft "${draft.name}"`);
+  };
+
+  const removeDraft = async (id) => {
+    clearMessages();
+    try {
+      await apiClient.delete(`/master-communications/drafts/${id}`);
+      if (openDraftId === id) {
+        setOpenDraftId(null);
+        setDraftName('');
+      }
+      setSuccess('Draft deleted');
+      fetchDrafts(primaryCycle);
+    } catch (e) {
+      setError(e.message || 'Failed to delete draft');
+    }
   };
 
   const buildFilters = () => {
@@ -319,7 +410,7 @@ const MasterCommunications = () => {
       await apiClient.post('/master-communications/schedule', payload);
       setSuccess(`Message scheduled for ${new Date(scheduledAt).toLocaleString()}`);
       setScheduledAt('');
-      if (tab === 5) fetchScheduled(primaryCycle);
+      if (channel === 'scheduled') fetchScheduled(primaryCycle);
     } catch (e) {
       setError(e.message || 'Failed to schedule');
     } finally {
@@ -684,6 +775,37 @@ const MasterCommunications = () => {
           {loading ? <CircularProgress size={20} /> : 'Preview Recipients'}
         </Button>
 
+        {/* Available on every channel, including iMessage: assembling an
+            audience is the slow part, and it is worth keeping regardless of how
+            the message eventually goes out. */}
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', mb: 1 }}>
+          <TextField
+            size="small"
+            label="Draft name"
+            placeholder="TPN launch"
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            sx={{ maxWidth: 260 }}
+          />
+          <Button variant="outlined" onClick={saveDraft} disabled={!draftName.trim()}>
+            {openDraftId ? 'Update draft' : 'Save draft'}
+          </Button>
+          {openDraftId && (
+            <Button
+              size="small"
+              onClick={() => {
+                // Leaves the composer as it is and stops further saves from
+                // overwriting the draft that was opened.
+                setOpenDraftId(null);
+                setDraftName('');
+                setSuccess('Detached from draft — saving now creates a new one');
+              }}
+            >
+              Detach
+            </Button>
+          )}
+        </Stack>
+
         {channel !== 'imessage' && (
           <>
             <Button
@@ -775,6 +897,60 @@ const MasterCommunications = () => {
           )}
         </Paper>
       )}
+    </Box>
+  );
+
+  const renderDraftsTab = () => (
+    <Box>
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>Saved Drafts</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          A draft keeps the whole message — channel, audience, filters, subject and body — so
+          opening one puts the composer back as it was left. Drafts are shared, so anyone on the
+          team can finish one.
+        </Typography>
+
+        {drafts.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            No drafts yet. Compose a message and use “Save draft” to keep it.
+          </Typography>
+        ) : (
+          <List dense>
+            {drafts.map((draft) => (
+              <ListItem
+                key={draft.id}
+                divider
+                secondaryAction={
+                  <Stack direction="row" spacing={1}>
+                    <Button size="small" onClick={() => openDraft(draft)}>Open</Button>
+                    <Button size="small" color="error" onClick={() => removeDraft(draft.id)}>
+                      Delete
+                    </Button>
+                  </Stack>
+                }
+              >
+                <ListItemText
+                  primary={
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <span>{draft.name}</span>
+                      <Chip size="small" variant="outlined" label={draft.channel} />
+                      <Chip size="small" variant="outlined" label={draft.audience} />
+                      {openDraftId === draft.id && <Chip size="small" color="primary" label="Open" />}
+                    </Stack>
+                  }
+                  secondary={
+                    /* Who last touched it, because these are shared and you
+                       want to know that before sending someone else's work. */
+                    `${draft.editor?.fullName || draft.creator?.fullName || 'Unknown'} · ${
+                      draft.updatedAt ? new Date(draft.updatedAt).toLocaleString() : ''
+                    }${draft.body ? '' : ' · empty body'}`
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        )}
+      </Paper>
     </Box>
   );
 
@@ -962,9 +1138,10 @@ const MasterCommunications = () => {
           <TabPanel value={tab} index={0}>{renderSendTab()}</TabPanel>
           <TabPanel value={tab} index={1}>{renderSendTab()}</TabPanel>
           <TabPanel value={tab} index={2}>{renderSendTab()}</TabPanel>
-          <TabPanel value={tab} index={3}>{renderTemplatesTab()}</TabPanel>
-          <TabPanel value={tab} index={4}>{renderLogsTab()}</TabPanel>
-          <TabPanel value={tab} index={5}>{renderScheduledTab()}</TabPanel>
+          <TabPanel value={tab} index={3}>{renderDraftsTab()}</TabPanel>
+          <TabPanel value={tab} index={4}>{renderTemplatesTab()}</TabPanel>
+          <TabPanel value={tab} index={5}>{renderLogsTab()}</TabPanel>
+          <TabPanel value={tab} index={6}>{renderScheduledTab()}</TabPanel>
         </Paper>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>
