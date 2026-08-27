@@ -23,7 +23,8 @@ import {
   CheckCircleIcon,
   ChevronRightIcon,
   EnvelopeIcon,
-  BriefcaseIcon
+  BriefcaseIcon,
+  QuestionMarkCircleIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -159,11 +160,13 @@ const Layout = ({ children }) => {
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },
+      { name: 'Help', href: '/help', icon: QuestionMarkCircleIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
       ...ADMIN_NAV_SECTIONS,
       { divider: true },
       { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
+      { name: 'Help Management', href: '/admin/help', icon: QuestionMarkCircleIcon },
       FEATURE_REQUEST_NAV,
     ] : [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },

@@ -47,6 +47,8 @@ import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import MemberTalentNetwork from './pages/MemberTalentNetwork';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
+import MemberHelp from './pages/MemberHelp';
+import AdminHelpManagement from './pages/AdminHelpManagement';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import MasterCommunications from './pages/MasterCommunications';
@@ -558,6 +560,26 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <ReleaseNotes />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Member Help page */}
+      <Route
+        path="/help"
+        element={
+          <ProtectedRoute>
+            <MemberHelp />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin Help Management */}
+      <Route
+        path="/admin/help"
+        element={
+          <ProtectedRoute>
+            <AdminHelpManagement />
           </ProtectedRoute>
         }
       />

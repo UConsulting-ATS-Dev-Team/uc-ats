@@ -33,6 +33,8 @@ import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
 import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
+import memberHelpRoutes from './routes/memberHelp.js';
+import adminHelpRoutes from './routes/adminHelp.js';
 
 const app = express();
 
@@ -84,11 +86,13 @@ app.use('/api/files', filesRoutes);
 app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
 // Ahead of the catch-all /api/admin mount, same as release-notes above.
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
+app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
 app.use('/api/member', memberRoutes);
+app.use('/api/member/help', requireAuth, memberHelpRoutes);
 app.use('/api/client', clientRoutes);
 app.use('/api/talent', talentRoutes);
 app.use('/api/candidate/onboarding', candidateOnboardingRoutes);
