@@ -610,15 +610,22 @@ model RoundTwo {
 }
 
 model Referral {
-  id           String           @id @default(uuid())
-  referrerName String
-  relationship String
-  candidateId  String
-  createdAt    DateTime         @default(now())
-  cycleId      String?
-  candidate    Candidate        @relation(fields: [candidateId], references: [id])
-  cycle        RecruitingCycle? @relation(fields: [cycleId], references: [id])
+  id                String           @id @default(uuid())
+  referrerName      String
+  relationship      String
+  candidateId       String?
+  cycleId           String?
+  referredFirstName String?
+  referredLastName  String?
+  referredEmail     String?
+  referredByUserId  String
+  createdAt         DateTime         @default(now())
+  candidate         Candidate?       @relation(fields: [candidateId], references: [id])
+  cycle             RecruitingCycle? @relation(fields: [cycleId], references: [id])
 
+  @@index([cycleId])
+  @@index([candidateId])
+  @@index([referredByUserId])
   @@map("referrals")
 }
 

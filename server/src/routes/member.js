@@ -2027,4 +2027,44 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
   }
 });
 
+// Member referral submissions (ATS-56)
+router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { cycleId, candidateId, referrerName, relationship, referredFirstName, referredLastName, referredEmail } = req.body || {};
+
+    if (!cycleId) {
+      return res.status(400).json({ error: 'cycleId is required' });
+    }
+
+    if (!candidateId && (!referredFirstName || !referredLastName)) {
+      return res.status(400).json({ error: 'Either candidateId or referred first and last name are required' });
+    }
+
+    if (candidateId) {
+      const candidate = await prisma.candidate.findUnique({ where: { id: candidateId } });
+      if (!candidate) {
+        return res.status(404).json({ error: 'Candidate not found' });
+      }
+    }
+
+    const referral = await prisma.referral.create({
+      data: {
+        cycleId,
+        candidateId: candidateId || null,
+        referrerName: referrerName || req.user.fullName || 'Unknown',
+        relationship: relationship || '',
+        referredFirstName: referredFirstName || null,
+        referredLastName: referredLastName || null,
+        referredEmail: referredEmail || null,
+        referredByUserId: req.user.id
+      }
+    });
+
+    res.status(201).json(referral);
+  } catch (error) {
+    console.error('[POST /api/member/referrals]', error);
+    res.status(500).json({ error: 'Failed to create referral' });
+  }
+});
+
 export default router;
