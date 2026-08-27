@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 
 export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
   const [formData, setFormData] = useState({
@@ -200,11 +201,9 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
                   required
                 >
                   <option value="">Select Year</option>
-                  <option value="2026">2026</option>
-                  <option value="2027">2027</option>
-                  <option value="2028">2028</option>
-                  <option value="2029">2029</option>
-                  <option value="2030">2030</option>
+                  {GRADUATION_YEARS.map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
                 </select>
               </div>
             </div>

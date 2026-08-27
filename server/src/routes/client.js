@@ -41,7 +41,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Same root cases.js uses, and deliberately not the statically-served uploads/
 // directory - see the comment in routes/cases.js.
 const STORAGE_DIR = path.join(__dirname, '../../storage');
-const MEMBER_RESUME_ROOT = path.join(STORAGE_DIR, 'member-resumes');
+// The two directories an uploaded resume can legitimately live in. A resolved
+// path must sit under one of them: `storagePath` comes out of the database, and
+// this is the check that keeps a malformed or tampered value from reading its
+// way out of the storage tree.
+const UPLOADED_RESUME_ROOTS = [
+  path.join(STORAGE_DIR, 'member-resumes'),
+  path.join(STORAGE_DIR, 'external-resumes')
+];
 
 const router = express.Router();
 
@@ -76,6 +83,17 @@ const ASSIGNMENT_INCLUDE = {
       major2: true,
       gender: true,
       member: { select: { fullName: true, email: true } }
+    }
+  },
+  externalResume: {
+    select: {
+      id: true,
+      storagePath: true,
+      graduationYear: true,
+      major1: true,
+      major2: true,
+      gender: true,
+      user: { select: { fullName: true, email: true } }
     }
   }
 };
@@ -335,7 +353,7 @@ router.get('/resumes/:assignmentId/pdf', async (req, res) => {
     }
 
     const absPath = path.join(STORAGE_DIR, source.storagePath);
-    if (!absPath.startsWith(MEMBER_RESUME_ROOT)) {
+    if (!UPLOADED_RESUME_ROOTS.some((root) => absPath.startsWith(root))) {
       return res.status(400).json({ error: 'Invalid path' });
     }
     if (!fs.existsSync(absPath)) {

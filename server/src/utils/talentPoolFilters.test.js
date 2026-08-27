@@ -3,6 +3,7 @@ import {
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
+  buildExternalResumeWhere,
   parseAssignmentKey,
   buildAssignmentKey,
   PREVIEW_CAP
@@ -242,5 +243,171 @@ describe('assignment keys', () => {
 describe('caps', () => {
   it('bounds preview and commit size', () => {
     expect(PREVIEW_CAP).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The external pool: self-registered UCLA students
+// ---------------------------------------------------------------------------
+
+describe('buildExternalResumeWhere', () => {
+  const rows = [{ field: 'graduationYear', values: ['2027'] }];
+
+  it('gates on verified ownership as well as consent', () => {
+    // The gate members do not have. A member is vouched for by having been
+    // recruited; an external account is vouched for by nothing else.
+    const { where } = buildExternalResumeWhere({ pool: 'EXTERNALS', rows }, { visibility: 'BASIC' });
+    expect(where.AND).toEqual(
+      expect.arrayContaining([
+        { shareConsent: true },
+        { consentRevokedAt: null },
+        { user: { emailVerifiedAt: { not: null }, isActive: true } }
+      ])
+    );
+  });
+
+  it('leaves the verification gate out of filterOnlyWhere, which is diagnostics only', () => {
+    const { filterOnlyWhere } = buildExternalResumeWhere(
+      { pool: 'EXTERNALS', rows },
+      { visibility: 'BASIC' }
+    );
+    expect(JSON.stringify(filterOnlyWhere)).not.toMatch(/emailVerifiedAt/);
+    expect(JSON.stringify(filterOnlyWhere)).not.toMatch(/shareConsent/);
+  });
+
+  it('matches nothing for a blind client, and says why', () => {
+    const { where, notes } = buildExternalResumeWhere(
+      { pool: 'EXTERNALS', rows },
+      { visibility: 'BLIND' }
+    );
+    expect(where).toBeNull();
+    expect(notes.join(' ')).toMatch(/redacted/);
+  });
+
+  it('matches nothing when the pool excludes it', () => {
+    expect(buildExternalResumeWhere({ pool: 'APPLICANTS', rows }, { visibility: 'FULL' }).where).toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'MEMBERS', rows }, { visibility: 'FULL' }).where).toBeNull();
+  });
+
+  it('names the applicant-only field rather than returning a silent zero', () => {
+    const { where, notes } = buildExternalResumeWhere(
+      { pool: 'BOTH', rows: [{ field: 'cumulativeGpa', op: 'gte', value: '3.50' }] },
+      { visibility: 'FULL' }
+    );
+    expect(where).toBeNull();
+    expect(notes.join(' ')).toMatch(/Cumulative GPA/);
+  });
+});
+
+describe('pool widening', () => {
+  const rows = [{ field: 'graduationYear', values: ['2027'] }];
+
+  it("'BOTH' now reaches all three pools", () => {
+    // Safe to widen the PREVIEW: a commit only ever assigns the explicit keys
+    // the admin left checked, so nothing is assigned by this alone.
+    const opts = { visibility: 'FULL' };
+    expect(buildApplicantWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+    expect(buildMemberResumeWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+  });
+
+  it('selecting one pool excludes the other two', () => {
+    const opts = { visibility: 'FULL' };
+    expect(buildApplicantWhere({ pool: 'EXTERNALS', rows }, opts).where).toBeNull();
+    expect(buildMemberResumeWhere({ pool: 'EXTERNALS', rows }, opts).where).toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'EXTERNALS', rows }, opts).where).not.toBeNull();
+  });
+});
+
+describe('EXTERNAL_RESUME assignment keys', () => {
+  it('round-trips', () => {
+    const key = buildAssignmentKey('EXTERNAL_RESUME', 'er-1');
+    expect(parseAssignmentKey(key)).toEqual({ kind: 'EXTERNAL_RESUME', id: 'er-1' });
+  });
+
+  it('still rejects an unknown kind', () => {
+    expect(parseAssignmentKey('SOMETHING_ELSE:er-1')).toBeNull();
+  });
+});
+
+describe('choosing several pools at once', () => {
+  const rows = [{ field: 'graduationYear', values: ['2028'] }];
+  // IDENTIFIED throughout: both uploaded-resume pools are withheld from a
+  // blind client regardless of pool selection, which is a different rule and
+  // has its own tests.
+  const seen = { visibility: 'IDENTIFIED' };
+  const covers = (dsl) => ({
+    applicants: buildApplicantWhere(dsl, seen).where !== null,
+    members: buildMemberResumeWhere(dsl, seen).where !== null,
+    externals: buildExternalResumeWhere(dsl, seen).where !== null,
+  });
+
+  it('covers exactly the pools named, and no others', () => {
+    expect(covers({ pools: ['APPLICANTS', 'EXTERNALS'], rows }))
+      .toEqual({ applicants: true, members: false, externals: true });
+  });
+
+  it('supports a combination the old single-select could not express', () => {
+    // Applicants plus students but not members had no spelling before: `pool`
+    // could say one pool or all of them, never two of three.
+    expect(covers({ pools: ['MEMBERS', 'EXTERNALS'], rows }))
+      .toEqual({ applicants: false, members: true, externals: true });
+  });
+
+  it('behaves like the single-select when only one pool is named', () => {
+    expect(covers({ pools: ['MEMBERS'], rows })).toEqual(covers({ pool: 'MEMBERS', rows }));
+  });
+
+  it('still honours the legacy single `pool`, which saved batches carry', () => {
+    expect(covers({ pool: 'APPLICANTS', rows }))
+      .toEqual({ applicants: true, members: false, externals: false });
+  });
+
+  it('treats legacy BOTH as every pool', () => {
+    expect(covers({ pool: 'BOTH', rows }))
+      .toEqual({ applicants: true, members: true, externals: true });
+  });
+
+  it.each([
+    ['an absent selection', { rows }],
+    ['an empty list', { pools: [], rows }],
+    ['a list of nonsense', { pools: ['NOPE'], rows }],
+  ])('widens to every pool rather than narrowing on %s', (_label, dsl) => {
+    // Narrowing on a malformed value would hide candidates from a client with
+    // nothing on screen to say why.
+    expect(covers(dsl)).toEqual({ applicants: true, members: true, externals: true });
+  });
+
+  it('ignores unrecognized entries but keeps the valid ones', () => {
+    expect(covers({ pools: ['APPLICANTS', 'NOPE'], rows }))
+      .toEqual({ applicants: true, members: false, externals: false });
+  });
+});
+
+describe('sanitizeFilterDsl and pools', () => {
+  const rows = [{ field: 'graduationYear', values: ['2028'] }];
+
+  it('normalizes a selection to an explicit list', () => {
+    const { value } = sanitizeFilterDsl({ pools: ['EXTERNALS', 'APPLICANTS'], rows });
+    // Emitted in canonical order, not the order they were clicked.
+    expect(value.pools).toEqual(['APPLICANTS', 'EXTERNALS']);
+  });
+
+  it('collapses `pool` to the single value when exactly one is chosen', () => {
+    expect(sanitizeFilterDsl({ pools: ['MEMBERS'], rows }).value.pool).toBe('MEMBERS');
+  });
+
+  it('reports BOTH in `pool` when several are chosen, so old readers still work', () => {
+    expect(sanitizeFilterDsl({ pools: ['MEMBERS', 'EXTERNALS'], rows }).value.pool).toBe('BOTH');
+  });
+
+  it('rejects an explicitly empty selection rather than silently widening it', () => {
+    const { errors } = sanitizeFilterDsl({ pools: [], rows });
+    expect(errors.join(' ')).toMatch(/at least one pool/i);
+  });
+
+  it('expands a legacy BOTH into the full list', () => {
+    expect(sanitizeFilterDsl({ pool: 'BOTH', rows }).value.pools)
+      .toEqual(['APPLICANTS', 'MEMBERS', 'EXTERNALS']);
   });
 });

@@ -26,7 +26,10 @@ export const sanitizeMemberResumeInput = (input = {}) => {
 
   const major1 = trimmed(input.major1, MAJOR_MAX_LENGTH);
   const major2 = trimmed(input.major2, MAJOR_MAX_LENGTH);
-  const graduationYear = trimmed(input.graduationYear, 4);
+  // Bounded well above four so YEAR_PATTERN below is what rejects a bad year.
+  // Slicing to 4 first silently turned a typo'd "20277" into a valid-looking
+  // "2027", filing the person in the wrong class with no error to notice.
+  const graduationYear = trimmed(input.graduationYear, 16);
   const genderRaw = trimmed(input.gender, 40);
 
   if (!major1) {
