@@ -117,8 +117,6 @@ export default function ResumeReuploadSection({ applicationId, onPreview, onRepl
 
   return (
     <div className="resume-reupload">
-      <h5 className="resume-reupload-title">Replace your resume</h5>
-
       {state.canReplace ? (
         <>
           <p className="resume-reupload-note">

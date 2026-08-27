@@ -3,11 +3,10 @@ import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
-import ResumeReuploadSection from '../components/ResumeReuploadSection';
 import '../styles/CandidateApplications.css';
 
 // Application Detail Modal Component
-function ApplicationDetailModal({ application, isOpen, onClose, onResumeReplaced }) {
+function ApplicationDetailModal({ application, isOpen, onClose }) {
   const [preview, setPreview] = useState({ open: false, src: '', kind: 'pdf', title: '' });
 
   if (!isOpen || !application) return null;
@@ -216,17 +215,6 @@ function ApplicationDetailModal({ application, isOpen, onClose, onResumeReplaced
                   </div>
                 )}
               </div>
-
-              <ResumeReuploadSection
-                applicationId={application.id}
-                onPreview={(src, title) => setPreview({
-                  open: true,
-                  src,
-                  kind: 'pdf',
-                  title: `${application.firstName} ${application.lastName} – ${title}`,
-                })}
-                onReplaced={onResumeReplaced}
-              />
             </div>
 
 
@@ -286,15 +274,6 @@ export default function CandidateApplications() {
 
   // The upload response carries the new URL, so repoint the open modal and the
   // cached list rather than refetching everything.
-  const handleResumeReplaced = (resumeUrl) => {
-    setSelectedApplication((current) => (current ? { ...current, resumeUrl } : current));
-    setApplications((current) =>
-      current.map((application) =>
-        application.id === selectedApplication?.id ? { ...application, resumeUrl } : application
-      )
-    );
-  };
-
   useEffect(() => {
     fetchApplications();
   }, []);
@@ -377,7 +356,6 @@ export default function CandidateApplications() {
         application={selectedApplication}
         isOpen={isModalOpen}
         onClose={closeModal}
-        onResumeReplaced={handleResumeReplaced}
       />
     </div>
     </AccessControl>

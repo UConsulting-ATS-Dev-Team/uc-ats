@@ -11,6 +11,7 @@ import {
   AcademicCapIcon,
   LightBulbIcon,
   UserGroupIcon,
+  PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import FeatureRequestModal from './FeatureRequestModal';
@@ -38,6 +39,7 @@ const CandidateLayout = ({ children }) => {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: HomeIcon },
     { name: 'Applications', href: '/applications', icon: DocumentTextIcon },
+    { name: 'Applicant Information', href: '/applicant-information', icon: PencilSquareIcon },
     { name: 'Events', href: '/events', icon: CalendarDaysIcon },
     { name: 'Get to Know UC', href: '/get-to-know-uc', icon: UserGroupIcon },
     { name: 'Recruitment Resources', href: '/interview-prep', icon: AcademicCapIcon },

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isOwnedBy, isStaff } from '../utils/applicationOwnership.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,28 +43,6 @@ const applicationWithOwnership = {
   candidate: { select: { email: true, studentId: true } },
   cycle: { select: { id: true, name: true, isActive: true, resumeDeadline: true } },
 };
-
-// A candidate owns an application when it carries their student ID or email, or
-// hangs off a Candidate record matching either. Mirrors the ownership test in
-// files.js — applications predate the User account that later claims them, so
-// there is no foreign key to lean on.
-function isOwnedBy(application, user) {
-  if (!user) return false;
-
-  const emails = [application.email, application.candidate?.email]
-    .filter(Boolean)
-    .map((value) => value.toLowerCase());
-  if (user.email && emails.includes(user.email.toLowerCase())) return true;
-
-  const studentIds = [application.studentId, application.candidate?.studentId]
-    .filter(Boolean)
-    .map(String);
-  if (user.studentId && studentIds.includes(String(user.studentId))) return true;
-
-  return false;
-}
-
-const isStaff = (user) => user?.role === 'ADMIN' || user?.role === 'MEMBER';
 
 // `RecruitingCycle.resumeDeadline` is a free-text column. Cycles created through
 // the timeline bootstrap store an ISO date (YYYY-MM-DD); older rows can hold

@@ -858,6 +858,15 @@ enum UserRole {
   USER
   ADMIN
   MEMBER
+  // Added to the shared database by the client resume portal work
+  // (migration 20260825130100_add_client_resume_portal), whose migration file
+  // lives on that branch and arrives here at merge — which is why there is no
+  // migration for this value on this branch. It is declared anyway because
+  // Prisma refuses to deserialize a row carrying an enum value the schema does
+  // not know, so reading ANY user fails outright once a single CLIENT row
+  // exists ("Value 'CLIENT' not found in enum 'UserRole'"), not just that row.
+  // Nothing on this branch grants or acts on the role.
+  CLIENT
 }
 
 enum ApplicationStatus {

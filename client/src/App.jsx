@@ -36,6 +36,7 @@ import CandidateEvents from './pages/CandidateEvents';
 import MemberEvents from './pages/MemberEvents';
 import CandidateApplications from './pages/CandidateApplications';
 import CandidateGTKUC from './pages/CandidateGTKUC';
+import ApplicantInformation from './pages/ApplicantInformation';
 import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
@@ -329,6 +330,15 @@ const AppRoutes = () => {
         }
       />
       
+      <Route
+        path="/applicant-information"
+        element={
+          <ProtectedRoute>
+            <ApplicantInformation />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/interview-prep"
         element={

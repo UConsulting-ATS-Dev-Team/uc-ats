@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
-import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
+import { toSameOriginDocumentUrl } from '../utils/documentUrl';
 
 const overlayStyle = {
   position: 'fixed',
@@ -43,8 +43,6 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
   const { token } = useAuth();
   const isMobile = useIsMobile();
   
-  console.log('DocumentPreviewModal props:', { src, kind, title, onClose });
-
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
@@ -57,21 +55,18 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
     let localUrl;
     const load = async () => {
       try {
-        console.log('Loading document from:', src);
-        console.log('Using token:', token ? 'Present' : 'Missing');
-        const resp = await fetch(src, {
+        const fetchUrl = toSameOriginDocumentUrl(src);
+        const resp = await fetch(fetchUrl, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
-        console.log('Fetch response:', resp.status, resp.statusText);
         if (!resp.ok) {
           const txt = await resp.text();
           console.error('Fetch error:', txt);
           throw new Error(`${resp.status} ${resp.statusText} - ${txt}`);
         }
         const blob = await resp.blob();
-        console.log('Blob created:', blob.size, 'bytes', 'type:', blob.type);
 
         localUrl = URL.createObjectURL(blob);
         setBlobUrl(localUrl);
