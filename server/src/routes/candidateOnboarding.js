@@ -28,7 +28,11 @@ import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { putResume, getResume } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
-import { sanitizeOnboardingInput, serializeOnboarding } from '../utils/candidateOnboarding.js';
+import {
+  sanitizeOnboardingInput,
+  sanitizeOnboardingUpdate,
+  serializeOnboarding
+} from '../utils/candidateOnboarding.js';
 
 const router = express.Router();
 
@@ -354,6 +358,118 @@ router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
   } catch (error) {
     console.error('[POST /api/candidate/onboarding]', error);
     res.status(500).json({ error: 'Failed to save your information' });
+  }
+});
+
+/**
+ * PATCH /api/candidate/onboarding
+ *
+ * Correct the details without re-uploading the resume.
+ *
+ * A candidate with no application has nowhere else to maintain this: the
+ * Applicant Information page is built on Application rows, so before this the
+ * only way to fix a typo in a major was to submit the whole module again, PDF
+ * and all. Their information should stay theirs to keep current whether or not
+ * they ever applied.
+ */
+router.patch('/', requireVerifiedEmail, async (req, res) => {
+  try {
+    const { value, errors } = sanitizeOnboardingUpdate(req.body || {});
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0], errors });
+    }
+
+    const candidate = await loadOwnCandidate(req.user);
+    if (!candidate?.onboarding) {
+      return res.status(404).json({ error: 'Complete onboarding first' });
+    }
+
+    const record = await prisma.candidateOnboarding.update({
+      where: { candidateId: candidate.id },
+      data: value
+    });
+
+    // Carry the corrections onto the pooled copy. The partner network filters on
+    // major and graduation year, so leaving the ExternalResume behind would mean
+    // a client searching "class of 2029" still misses someone who just fixed
+    // their year - the correction would be visible to them and to nobody else.
+    const pooled = await prisma.externalResume.findFirst({
+      where: { userId: req.user.id, isCurrent: true },
+      select: { id: true }
+    });
+    if (pooled) {
+      await prisma.externalResume.update({
+        where: { id: pooled.id },
+        data: {
+          major1: value.major1,
+          major2: value.major2,
+          graduationYear: value.graduationYear,
+          gender: value.gender
+        }
+      });
+    }
+
+    res.json({ onboarding: serializeOnboarding(record), message: 'Your information has been updated.' });
+  } catch (error) {
+    console.error('[PATCH /api/candidate/onboarding]', error);
+    res.status(500).json({ error: 'Failed to update your information' });
+  }
+});
+
+/**
+ * PUT /api/candidate/onboarding/resume
+ *
+ * Replace the PDF without re-answering the form.
+ *
+ * The application version of this lives in routes/resumeUploads.js and is keyed
+ * to an applicationId, which a candidate who never applied does not have - so
+ * the Applicant Information page asked for one and got "Application not found".
+ */
+router.put('/resume', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
+  try {
+    const resumeFile = req.files?.resume?.[0];
+    if (!resumeFile) {
+      return res.status(400).json({ error: 'Attach a PDF resume' });
+    }
+
+    const candidate = await loadOwnCandidate(req.user);
+    if (!candidate?.onboarding) {
+      return res.status(404).json({ error: 'Complete onboarding first' });
+    }
+
+    const relPath = `candidate-onboarding/${candidate.id}/resume.pdf`;
+    await putResume(relPath, resumeFile.buffer);
+
+    const record = await prisma.candidateOnboarding.update({
+      where: { candidateId: candidate.id },
+      data: {
+        resumeStoragePath: relPath,
+        resumeOriginalName: (resumeFile.originalname || 'resume.pdf').slice(0, 255),
+        resumeFileSize: resumeFile.size
+      }
+    });
+
+    // If they are sharing, the pooled copy has to be the new file too -
+    // otherwise a partner keeps reading the resume they replaced. Superseded
+    // rather than overwritten, for the same reason it is everywhere else: an
+    // assignment already handed to a client keeps pointing at the exact file
+    // that was assigned.
+    const pooled = await prisma.externalResume.findFirst({
+      where: { userId: req.user.id, isCurrent: true }
+    });
+    if (pooled?.shareConsent && !pooled.consentRevokedAt) {
+      await applyTalentPoolConsent({
+        user: req.user,
+        optIn: true,
+        resumeFile,
+        metadata: record
+      });
+    }
+
+    res.json({ onboarding: serializeOnboarding(record), message: 'Your resume has been replaced.' });
+  } catch (error) {
+    console.error('[PUT /api/candidate/onboarding/resume]', error);
+    res.status(500).json({ error: 'Failed to replace your resume' });
   }
 });
 

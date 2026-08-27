@@ -25,7 +25,7 @@ vi.mock('../prismaClient.js', () => {
       user: { findUnique: vi.fn() },
       candidate: { findFirst: vi.fn() },
       application: { count: vi.fn() },
-      candidateOnboarding: { upsert: vi.fn() },
+      candidateOnboarding: { upsert: vi.fn(), update: vi.fn() },
       externalResume: { findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
       clientResumeAssignment: { updateMany: vi.fn() },
       $transaction: vi.fn((fn) => fn(tx))
@@ -184,6 +184,9 @@ beforeEach(() => {
   prisma.__tx.externalResume.updateMany.mockResolvedValue({ count: 0 });
   prisma.__tx.clientResumeAssignment.updateMany.mockResolvedValue({ count: 0 });
   prisma.externalResume.update.mockResolvedValue(externalResumeRow());
+  prisma.candidateOnboarding.update.mockImplementation(({ data }) =>
+    Promise.resolve(onboardingRow(data))
+  );
 });
 
 describe('access gating', () => {
@@ -426,5 +429,74 @@ describe('finding a past application', () => {
 
     const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
     expect(body).toMatchObject({ required: true, hasApplication: false });
+  });
+});
+
+describe('editing details without re-uploading', () => {
+  const patch = (user, body) =>
+    fetch(`http://localhost:${port}/api/candidate/onboarding`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${tokenFor(user)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+  const details = {
+    phoneNumber: '3105550134',
+    graduationYear: '2029',
+    cumulativeGpa: '3.90',
+    major1: 'Social Sciences',
+    isTransferStudent: 'false',
+    isFirstGeneration: 'true'
+  };
+
+  beforeEach(() => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ onboarding: onboardingRow() }));
+  });
+
+  it('updates the record without asking for a file', async () => {
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+    expect((await res.json()).onboarding).toMatchObject({ major1: 'Social Sciences', graduationYear: '2029' });
+  });
+
+  it('does not require a sharing answer - that was settled at submission', async () => {
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+  });
+
+  it('carries corrections onto the pooled resume, which partners filter on', async () => {
+    prisma.externalResume.findFirst.mockResolvedValue(externalResumeRow());
+    await patch(verifiedCandidate, details);
+
+    expect(prisma.externalResume.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ major1: 'Social Sciences', graduationYear: '2029' })
+      })
+    );
+  });
+
+  it('is fine when there is no pooled resume to carry them to', async () => {
+    prisma.externalResume.findFirst.mockResolvedValue(null);
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(200);
+    expect(prisma.externalResume.update).not.toHaveBeenCalled();
+  });
+
+  it('validates the same way the submission does', async () => {
+    const res = await patch(verifiedCandidate, { ...details, cumulativeGpa: '3.456' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/two decimal places/);
+    expect(prisma.candidateOnboarding.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unverified account', async () => {
+    const res = await patch(unverifiedCandidate, details);
+    expect(res.status).toBe(403);
+  });
+
+  it('404s for someone who has not onboarded', async () => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ onboarding: null }));
+    const res = await patch(verifiedCandidate, details);
+    expect(res.status).toBe(404);
   });
 });

@@ -147,8 +147,75 @@ describe('ApplicantInformation', () => {
   });
 
   it('shows an empty state when the candidate has no application', async () => {
-    apiClient.get = vi.fn(() => Promise.reject(new Error('User not found or no studentId associated')));
+    apiClient.get = vi.fn((url) =>
+      url.includes('onboarding')
+        ? Promise.resolve({ onboarding: null })
+        : Promise.reject(new Error('User not found or no studentId associated'))
+    );
     renderPage();
     await waitFor(() => expect(screen.getByText(/do not have an application yet/)).toBeInTheDocument());
+  });
+});
+
+describe('a candidate who onboarded instead of applying', () => {
+  const onboarding = {
+    id: 'onb-1',
+    phoneNumber: '3105550134',
+    graduationYear: '2029',
+    cumulativeGpa: '3.85',
+    major1: 'Life Sciences',
+    major2: null,
+    gender: 'Female',
+    isTransferStudent: false,
+    isFirstGeneration: true,
+  };
+
+  const mockOnboarded = () => {
+    apiClient.get = vi.fn((url) =>
+      url.includes('onboarding')
+        ? Promise.resolve({ required: false, completed: true, onboarding })
+        : Promise.reject(new Error('User not found or no studentId associated'))
+    );
+  };
+
+  beforeEach(mockOnboarded);
+
+  it('shows what they entered instead of telling them they have nothing', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText(/Primary major/)).toHaveValue('Life Sciences'));
+    expect(screen.queryByText(/do not have an application yet/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Graduation year/)).toHaveValue('2029');
+  });
+
+  it('hides the fields onboarding does not collect, so no edit goes nowhere', async () => {
+    renderPage();
+    await screen.findByLabelText(/Primary major/);
+    // Major GPA, prior college years and the name fields live on an
+    // application, not on the onboarding record.
+    expect(screen.queryByLabelText(/Major GPA/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/First name/)).not.toBeInTheDocument();
+  });
+
+  it('hides the identity block, which reads application-only fields', async () => {
+    renderPage();
+    await screen.findByLabelText(/Primary major/);
+    expect(screen.queryByText('Identity')).not.toBeInTheDocument();
+  });
+
+  it('saves an edit to the onboarding record, not to an application', async () => {
+    const patch = vi.fn(() =>
+      Promise.resolve({ onboarding: { ...onboarding, major1: 'Social Sciences' }, message: 'Saved.' })
+    );
+    apiClient.patch = patch;
+
+    renderPage();
+    const major = await screen.findByLabelText(/Primary major/);
+    fireEvent.change(major, { target: { value: 'Social Sciences' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0][0]).toBe('/candidate/onboarding');
+    // Sent whole rather than as a diff - the endpoint validates every field.
+    expect(patch.mock.calls[0][1]).toMatchObject({ major1: 'Social Sciences', graduationYear: '2029' });
   });
 });
