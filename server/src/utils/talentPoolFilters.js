@@ -23,12 +23,36 @@
 // PREVIEW to three pools, which is safe because a commit only ever assigns the
 // explicit keys the admin left checked - see the snapshot note in
 // routes/talentPoolAdmin.js.
-export const POOLS = ['APPLICANTS', 'MEMBERS', 'EXTERNALS', 'BOTH'];
+// The pools a resume can actually come from. `BOTH` is not one of them - it is
+// the legacy way of saying "all of these".
+export const CONCRETE_POOLS = ['APPLICANTS', 'MEMBERS', 'EXTERNALS'];
 
-// Pool membership is expressed as exclusion rather than an allowlist so an
-// absent or unrecognized `pool` keeps its historical meaning - every pool -
-// instead of silently collapsing to one.
-const excludedFrom = (dsl, ...pools) => pools.includes(dsl?.pool);
+export const POOLS = [...CONCRETE_POOLS, 'BOTH'];
+
+/**
+ * Which pools this filter covers.
+ *
+ * Two spellings, one meaning. `pools: [...]` is what the builder sends now, so
+ * an admin can pick any combination - applicants and students but not members,
+ * say, which the old single `pool` could not express at all. `pool: 'X'` is the
+ * old single-select, kept because saved filterJson on historical batches still
+ * carries it and those records must keep reading the way they were written.
+ *
+ * Anything unrecognized - absent, empty, misspelled, or the legacy 'BOTH' -
+ * means every pool. That is deliberate: this value decides what a client is
+ * shown, and a filter that quietly narrowed itself because of a typo would hide
+ * candidates with nothing to indicate it had happened.
+ */
+const selectedPools = (dsl) => {
+  if (Array.isArray(dsl?.pools)) {
+    const picked = CONCRETE_POOLS.filter((p) => dsl.pools.includes(p));
+    if (picked.length > 0) return picked;
+  }
+  if (CONCRETE_POOLS.includes(dsl?.pool)) return [dsl.pool];
+  return CONCRETE_POOLS;
+};
+
+const includesPool = (dsl, pool) => selectedPools(dsl).includes(pool);
 
 export const APPLICATION_STATUSES = [
   'SUBMITTED',
@@ -101,7 +125,25 @@ export const sanitizeFilterDsl = (input) => {
   const errors = [];
   const raw = isPlainObject(input) ? input : {};
 
-  const pool = POOLS.includes(raw.pool) ? raw.pool : 'APPLICANTS';
+  // Normalized to an explicit list so everything downstream - the builders, the
+  // saved filterJson, the preview - reads one shape. `pool` is still emitted
+  // alongside it so a reader written against the old single-select keeps
+  // working: it collapses to the one pool when exactly one is chosen, and to
+  // the historical 'BOTH' otherwise.
+  const requestedPools = Array.isArray(raw.pools)
+    ? CONCRETE_POOLS.filter((p) => raw.pools.includes(p))
+    : CONCRETE_POOLS.includes(raw.pool)
+      ? [raw.pool]
+      : raw.pool === 'BOTH'
+        ? [...CONCRETE_POOLS]
+        : [];
+
+  if (Array.isArray(raw.pools) && requestedPools.length === 0) {
+    errors.push('Choose at least one pool.');
+  }
+
+  const pools = requestedPools.length > 0 ? requestedPools : [...CONCRETE_POOLS];
+  const pool = pools.length === 1 ? pools[0] : 'BOTH';
 
   const rawRows = Array.isArray(raw.rows) ? raw.rows : [];
   const rows = [];
@@ -168,7 +210,7 @@ export const sanitizeFilterDsl = (input) => {
     errors.push('Add at least one filter before previewing.');
   }
 
-  return { value: { pool, rows }, errors };
+  return { value: { pool, pools, rows }, errors };
 };
 
 // Prisma's `in` has no case-insensitive mode, and both gender and major are
@@ -195,7 +237,7 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   const notes = [];
   const rows = dsl?.rows ?? [];
 
-  if (excludedFrom(dsl, 'MEMBERS', 'EXTERNALS')) {
+  if (!includesPool(dsl, 'APPLICANTS')) {
     return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
@@ -280,7 +322,7 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
-  if (excludedFrom(dsl, 'APPLICANTS', 'EXTERNALS')) {
+  if (!includesPool(dsl, 'MEMBERS')) {
     return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
@@ -354,7 +396,7 @@ export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => 
   const notes = [];
   const rows = dsl?.rows ?? [];
 
-  if (excludedFrom(dsl, 'APPLICANTS', 'MEMBERS')) {
+  if (!includesPool(dsl, 'EXTERNALS')) {
     return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 

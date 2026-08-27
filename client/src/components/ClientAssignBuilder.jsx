@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   Checkbox,
+  ListItemText,
   Chip,
   CircularProgress,
   FormControl,
@@ -40,13 +41,13 @@ import apiClient from '../utils/api';
 // `contains` sweep over free-text major columns on every keystroke is a bad
 // idea on a table this size.
 
-// 'BOTH' is the every-pool value. The name predates the external pool and is
-// kept because it is what the server still accepts - only the label changed.
+// The three real pools. There is no "All pools" entry any more - selecting all
+// three says the same thing, and an explicit list is what the server now takes.
+// It still accepts the old single `pool`, which saved batches carry.
 const POOLS = [
   { value: 'APPLICANTS', label: 'Applicants' },
   { value: 'MEMBERS', label: 'Members' },
   { value: 'EXTERNALS', label: 'UCLA students' },
-  { value: 'BOTH', label: 'All pools' },
 ];
 
 // What an admin sees in the Type column. "UCLA student" rather than "external":
@@ -68,7 +69,7 @@ const emptyRow = () => ({ field: '', values: [], op: 'gte', value: '', boolValue
 const ClientAssignBuilder = ({ client, onDone }) => {
   const [fields, setFields] = useState([]);
   const [options, setOptions] = useState({});
-  const [pool, setPool] = useState('APPLICANTS');
+  const [pools, setPools] = useState(['APPLICANTS']);
   const [rows, setRows] = useState([emptyRow()]);
   const [preview, setPreview] = useState(null);
   const [checked, setChecked] = useState(() => new Set());
@@ -90,7 +91,7 @@ const ClientAssignBuilder = ({ client, onDone }) => {
 
   const buildFilter = useCallback(
     () => ({
-      pool,
+      pools,
       rows: rows
         .filter((r) => r.field)
         .map((r) => {
@@ -102,7 +103,7 @@ const ClientAssignBuilder = ({ client, onDone }) => {
         })
         .filter(Boolean),
     }),
-    [pool, rows, fieldByKey]
+    [pools, rows, fieldByKey]
   );
 
   const runPreview = async () => {
@@ -182,17 +183,33 @@ const ClientAssignBuilder = ({ client, onDone }) => {
 
       <Paper sx={{ p: 2, mb: 3 }}>
         <Stack spacing={2}>
-          <FormControl size="small" sx={{ maxWidth: 280 }}>
-            <InputLabel id="assign-pool-label">Pool</InputLabel>
+          <FormControl size="small" sx={{ maxWidth: 360 }}>
+            <InputLabel id="assign-pool-label">Pools</InputLabel>
             <Select
               labelId="assign-pool-label"
-              value={pool}
-              label="Pool"
-              onChange={(e) => setPool(e.target.value)}
+              id="assign-pools"
+              multiple
+              value={pools}
+              label="Pools"
+              onChange={(e) => {
+                const next = typeof e.target.value === 'string'
+                  ? e.target.value.split(',')
+                  : e.target.value;
+                // Clearing every box would send an empty list, which the server
+                // rejects. Refusing the last uncheck keeps the control honest
+                // rather than letting it reach a state that cannot be previewed.
+                if (next.length > 0) setPools(next);
+              }}
+              renderValue={(picked) =>
+                picked.length === POOLS.length
+                  ? 'All pools'
+                  : POOLS.filter((p) => picked.includes(p.value)).map((p) => p.label).join(', ')
+              }
             >
               {POOLS.map((p) => (
                 <MenuItem key={p.value} value={p.value}>
-                  {p.label}
+                  <Checkbox size="small" checked={pools.includes(p.value)} />
+                  <ListItemText primary={p.label} />
                 </MenuItem>
               ))}
             </Select>
