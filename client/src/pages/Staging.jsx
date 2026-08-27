@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 import {
   Box,
   Typography,
@@ -1422,12 +1423,9 @@ export default function Staging() {
   // first render's data apply, which a const in this position would not have
   // initialised yet.
   function calculateDemographics(data, isApplicationData = false) {
-    const graduationYearBreakdown = {
-      '2026': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
-      '2027': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
-      '2028': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
-      '2029': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 }
-    };
+    const graduationYearBreakdown = Object.fromEntries(
+      GRADUATION_YEARS.map((year) => [year, { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 }])
+    );
     
     const genderBreakdown = {
       'Male': { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 },
@@ -1456,7 +1454,7 @@ export default function Staging() {
         hasReferral = candidate.hasReferral;
       }
       
-      if (!year || !['2026', '2027', '2028', '2029'].includes(year)) {
+      if (!year || !GRADUATION_YEARS.includes(year)) {
         year = 'Other';
       }
       if (!graduationYearBreakdown[year]) {
@@ -2036,10 +2034,9 @@ export default function Staging() {
                         onChange={(e) => setFilters({ ...filters, graduationYear: e.target.value })}
                       >
                         <MenuItem value="all">All Years</MenuItem>
-                        <MenuItem value="2026">2026</MenuItem>
-                        <MenuItem value="2027">2027</MenuItem>
-                        <MenuItem value="2028">2028</MenuItem>
-                        <MenuItem value="2029">2029</MenuItem>
+                        {GRADUATION_YEARS.map((year) => (
+                          <MenuItem key={year} value={year}>{year}</MenuItem>
+                        ))}
                       </Select>
                     </FormControl>
                   </Grid>

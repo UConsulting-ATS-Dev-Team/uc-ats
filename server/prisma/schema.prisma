@@ -21,6 +21,19 @@ model User {
   createdAt                  DateTime                        @default(now())
   resetToken                 String?
   resetTokenExpiry           DateTime?
+  // Email ownership, proved by clicking a link. Null means unproven, which for
+  // a self-registered external account is the difference between "someone typed
+  // this address" and "this person reads it". Staff accounts are created by an
+  // admin and are never gated on it.
+  emailVerifiedAt            DateTime?
+  emailVerificationToken     String?                         @unique
+  emailVerificationExpiry    DateTime?
+  // True only for accounts created through the public talent portal
+  // (POST /api/auth/register-external). Distinguishes a self-registered UCLA
+  // student from an applicant who signed up to track their application: both
+  // are role USER, but only the former has no Candidate row and lands on the
+  // talent profile instead of the application list.
+  isExternalTalent           Boolean                         @default(false)
   profileImage               String?
   studentId                  String?                         @unique
   createdBehavioralQuestions BehavioralQuestion[]
@@ -55,6 +68,7 @@ model User {
   talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
   createdTalentPartners      TalentPartnerClient[]           @relation("TalentPartnerClientCreator")
   memberResumes              MemberResume[]
+  externalResumes            ExternalResume[]
   createdClientBatches       ClientAssignmentBatch[]         @relation("ClientBatchCreator")
   assignedClientResumes      ClientResumeAssignment[]        @relation("ClientAssignmentAssigner")
   revokedClientResumes       ClientResumeAssignment[]        @relation("ClientAssignmentRevoker")
@@ -83,8 +97,49 @@ model Candidate {
   roundOne          RoundOne[]
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
+  onboarding        CandidateOnboarding?
 
   @@map("candidates")
+}
+
+// Applicant information a candidate supplies themselves, at signup, when we
+// have no application to read it from.
+//
+// Deliberately NOT columns on Candidate. Everything on Candidate arrives from
+// the Google Forms sync and is corroborated by a submitted application; this is
+// self-reported by someone who has done nothing but verify an email address.
+// Keeping the two apart means no screen can mistake one for the other, and the
+// row can be dropped wholesale once a real application lands.
+//
+// There is no cover letter or video here on purpose - the module asks for a
+// resume and nothing else file-wise. The headshot is optional, which is why it
+// is nullable while the resume columns are not.
+model CandidateOnboarding {
+  id                  String   @id @default(uuid())
+  candidateId         String   @unique
+  phoneNumber         String
+  // Four bare digits, matching Application.graduationYear rather than the free
+  // text User.graduationClass holds, so the two filter alike.
+  graduationYear      String
+  cumulativeGpa       Decimal  @db.Decimal(3, 2)
+  major1              String
+  major2              String?
+  gender              String?
+  isTransferStudent   Boolean
+  isFirstGeneration   Boolean
+  // Relative to server/storage, the same private root external resumes use -
+  // never uploads/, which index.js serves unauthenticated.
+  resumeStoragePath   String
+  resumeOriginalName  String
+  resumeFileSize      Int
+  headshotStoragePath String?
+  headshotOriginalName String?
+  headshotFileSize    Int?
+  completedAt         DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  candidate           Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@map("candidate_onboarding")
 }
 
 model Application {
@@ -1050,6 +1105,48 @@ model MemberResume {
   @@map("member_resumes")
 }
 
+/// Resume uploaded by a UCLA student who is neither an applicant nor a member -
+/// someone who found the talent portal and signed up for it directly. The third
+/// and last source of assignable resumes.
+///
+/// Deliberately a separate table from MemberResume rather than a nullable-member
+/// variant of it. The two differ in the gate that makes them assignable:
+/// a member is vouched for by having been recruited, whereas an external account
+/// is vouched for by nothing but a verified @ucla.edu address. Keeping them
+/// apart means a query can never accidentally treat one as the other, and the
+/// `ownerVerified` requirement below has exactly one place to live.
+///
+/// Same supersede-on-re-upload design as MemberResume, for the same reason: an
+/// assignment already committed to a client must keep pointing at the exact file
+/// that was assigned. The partial unique index enforcing one isCurrent row per
+/// user lives in migration.sql - Prisma cannot express filtered unique indexes.
+model ExternalResume {
+  id               String                   @id @default(uuid())
+  userId           String
+  isCurrent        Boolean                  @default(true)
+  storagePath      String
+  originalName     String
+  fileSize         Int
+  major1           String
+  major2           String?
+  // Normalized 4-digit year, collected at upload for the same reason
+  // MemberResume collects it: User.graduationClass is free text ("Spring 2027")
+  // and would not filter alike with Application.graduationYear ("2029").
+  graduationYear   String
+  gender           String?
+  shareConsent     Boolean                  @default(false)
+  consentAt        DateTime?
+  consentRevokedAt DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments      ClientResumeAssignment[]
+
+  @@index([userId, isCurrent])
+  @@index([shareConsent, isCurrent])
+  @@map("external_resumes")
+}
+
 /// One admin "assign" action. filterJson records the filter that produced the
 /// batch purely as documentation - the assignments are a snapshot and are never
 /// re-derived from it.
@@ -1069,8 +1166,9 @@ model ClientAssignmentBatch {
   @@map("client_assignment_batches")
 }
 
-/// SNAPSHOT. Exactly one of applicationId / memberResumeId is non-null, enforced
-/// by a CHECK constraint in migration.sql (Prisma cannot express CHECK).
+/// SNAPSHOT. Exactly one of applicationId / memberResumeId / externalResumeId is
+/// non-null, enforced by a CHECK constraint in migration.sql (Prisma cannot
+/// express CHECK).
 /// Revocation is soft, matching the deactivatedAt / CaseAssignment.overriddenAt
 /// convention, so history and the access log keep valid foreign keys.
 ///
@@ -1083,6 +1181,7 @@ model ClientResumeAssignment {
   batchId        String
   applicationId  String?
   memberResumeId String?
+  externalResumeId String?
   assignedById   String
   assignedAt     DateTime                @default(now())
   revokedAt      DateTime?
@@ -1091,6 +1190,7 @@ model ClientResumeAssignment {
   batch          ClientAssignmentBatch   @relation(fields: [batchId], references: [id])
   application    Application?            @relation(fields: [applicationId], references: [id])
   memberResume   MemberResume?           @relation(fields: [memberResumeId], references: [id])
+  externalResume ExternalResume?         @relation(fields: [externalResumeId], references: [id])
   assigner       User                    @relation("ClientAssignmentAssigner", fields: [assignedById], references: [id])
   revoker        User?                   @relation("ClientAssignmentRevoker", fields: [revokedById], references: [id])
   accessLogs     ClientResumeAccessLog[]
@@ -1102,6 +1202,7 @@ model ClientResumeAssignment {
   // "already assigned?" check filters on these.
   @@index([applicationId])
   @@index([memberResumeId])
+  @@index([externalResumeId])
   @@map("client_resume_assignments")
 }
 
