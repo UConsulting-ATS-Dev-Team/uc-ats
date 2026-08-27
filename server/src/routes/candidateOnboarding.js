@@ -22,26 +22,17 @@
 // The gate is emailVerifiedAt, matching routes/talent.js. Reading the status is
 // open so the app can render the "check your email" state; submitting is not.
 import express from 'express';
-import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
+import { putResume, getResume } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sanitizeOnboardingInput, serializeOnboarding } from '../utils/candidateOnboarding.js';
 
 const router = express.Router();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Same private root talent.js, member.js and cases.js use, and deliberately NOT
-// uploads/, which index.js serves statically and unauthenticated.
-const STORAGE_DIR = path.join(__dirname, '../../storage');
-const ONBOARDING_ROOT = path.join(STORAGE_DIR, 'candidate-onboarding');
-// The TPN copy lives where every other pooled resume lives. routes/client.js
-// only serves files under member-resumes/ and external-resumes/, so a resume
-// left in candidate-onboarding/ would be invisible to the client portal that is
-// the whole point of opting in.
-const EXTERNAL_RESUME_ROOT = path.join(STORAGE_DIR, 'external-resumes');
 
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 const MAX_HEADSHOT_BYTES = 5 * 1024 * 1024;
@@ -236,8 +227,7 @@ const applyTalentPoolConsent = async ({ user, optIn, resumeFile, metadata }) => 
 
   const relPath = `external-resumes/${created.id}/resume.pdf`;
   try {
-    await fsPromises.mkdir(path.join(EXTERNAL_RESUME_ROOT, created.id), { recursive: true });
-    await fsPromises.writeFile(path.join(STORAGE_DIR, relPath), resumeFile.buffer);
+    await putResume(relPath, resumeFile.buffer);
   } catch (writeError) {
     // Leaving a row pointing at a file that does not exist would put a resume in
     // the pool that 404s for the first client who opens it.
@@ -297,10 +287,9 @@ router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
     // Files first, row second. The opposite order can leave a completed-looking
     // profile pointing at a resume that does not exist, and a failed write here
     // just leaves an orphan file that the next successful submit overwrites.
-    await fsPromises.mkdir(path.join(ONBOARDING_ROOT, candidate.id), { recursive: true });
-    await fsPromises.writeFile(path.join(STORAGE_DIR, resumeRel), resumeFile.buffer);
+    await putResume(resumeRel, resumeFile.buffer);
     if (headshotFile) {
-      await fsPromises.writeFile(path.join(STORAGE_DIR, headshotRel), headshotFile.buffer);
+      await putResume(headshotRel, headshotFile.buffer, headshotFile.mimetype);
     }
 
     const data = {
@@ -365,7 +354,7 @@ router.patch('/talent-pool', requireVerifiedEmail, async (req, res) => {
     // Re-opting-in re-reads the stored resume rather than asking for it again,
     // so the pooled copy is the file this person actually submitted.
     const buffer = optIn
-      ? await fsPromises.readFile(path.join(STORAGE_DIR, record.resumeStoragePath))
+      ? await getResume(record.resumeStoragePath)
       : null;
 
     const talentPool = await applyTalentPoolConsent({
@@ -399,8 +388,10 @@ router.get('/resume', async (req, res) => {
       return res.status(404).json({ error: 'No resume on file' });
     }
 
-    const absolute = path.join(STORAGE_DIR, record.resumeStoragePath);
-    const buffer = await fsPromises.readFile(absolute);
+    const buffer = await getResume(record.resumeStoragePath);
+    if (!buffer) {
+      return res.status(404).json({ error: 'Your resume file could not be found. Please upload it again.' });
+    }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(record.resumeOriginalName)}"`);
