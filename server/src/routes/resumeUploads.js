@@ -79,23 +79,27 @@ export function replacementWindow(application, user, now = new Date()) {
   if (!isOwnedBy(application, user)) {
     return { ...base, canReplace: false, reason: 'Only the applicant can replace this resume.' };
   }
-  if (!application.cycle) {
-    return { ...base, canReplace: false, reason: 'This application is not attached to a recruiting cycle.' };
-  }
-  if (!application.cycle.isActive) {
-    return {
-      ...base,
-      canReplace: false,
-      reason: `${application.cycle.name} has closed, so its documents can no longer be changed.`,
-    };
-  }
-  if (deadline && now.getTime() > deadline.getTime()) {
+
+  // What this window protects is an evaluation in progress: a resume must not
+  // change under a review team part-way through scoring it. That is a property
+  // of an OPEN cycle past its document deadline, and of nothing else.
+  //
+  // It used to also refuse a closed cycle, and a cycle-less application, which
+  // locked every past applicant out permanently. There is nothing left to
+  // protect once a cycle has closed, and plenty of reason to allow it: an
+  // applicant's resume goes stale, and the Talent Partner Network shows it to
+  // recruiters long after the cycle it arrived in. Replacement is also
+  // non-destructive - the file a reviewer scored is captured as a version
+  // before it is superseded - so the record of what was evaluated survives.
+  const cycleIsOpen = Boolean(application.cycle?.isActive);
+  if (cycleIsOpen && deadline && now.getTime() > deadline.getTime()) {
     return {
       ...base,
       canReplace: false,
       reason: `The resume deadline for ${application.cycle.name} has passed.`,
     };
   }
+
   return { ...base, canReplace: true, reason: null };
 }
 
