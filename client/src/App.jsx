@@ -43,6 +43,7 @@ import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
+import MemberTalentNetwork from './pages/MemberTalentNetwork';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import CandidateList from './pages/CandidateList';
@@ -514,6 +515,15 @@ const AppRoutes = () => {
       {/* Public meeting signup page */}
       <Route path="/meet" element={<CoffeeChatsPublic />} />
       {/* Member meeting slots management */}
+      <Route
+        path="/member/talent-network"
+        element={
+          <ProtectedRoute>
+            <MemberTalentNetwork />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/member/meeting-slots"
         element={

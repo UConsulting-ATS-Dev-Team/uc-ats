@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import MemberResumeCard from '../components/MemberResumeCard';
 import {
   Box,
   Typography,
@@ -219,8 +218,6 @@ export default function MemberDashboard() {
           Welcome, {user?.fullName}.
         </Typography>
       </Box>
-
-      <MemberResumeCard />
 
       {/* Tasks and Resources Container */}
       <Grid container spacing={3}>

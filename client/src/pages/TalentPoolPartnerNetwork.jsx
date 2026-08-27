@@ -171,6 +171,14 @@ const TalentPoolPartnerNetwork = () => {
       .some((f) => String(f).toLowerCase().includes(q));
   });
 
+  const memberRows = (data?.memberResumes || []).filter((r) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return [r.name, r.email, r.major1, r.graduationYear]
+      .filter(Boolean)
+      .some((f) => String(f).toLowerCase().includes(q));
+  });
+
   const showCycle = data?.deduplicated;
 
   return (
@@ -261,6 +269,15 @@ const TalentPoolPartnerNetwork = () => {
             caption={
               data?.externalTalent
                 ? `${data.externalTalent.verified} verified of ${data.externalTalent.accounts} on file — all cycles`
+                : undefined
+            }
+          />
+          <StatCard
+            label="Members shareable"
+            value={data ? data.memberTalent?.shareable : undefined}
+            caption={
+              data?.memberTalent
+                ? `of ${data.memberTalent.accounts} member resumes on file — all cycles`
                 : undefined
             }
           />
@@ -457,6 +474,73 @@ const TalentPoolPartnerNetwork = () => {
                           <Tooltip title="Opted in, but the email address is not verified yet.">
                             <Chip size="small" color="warning" variant="outlined" label="Pending" />
                           </Tooltip>
+                        ) : (
+                          <Chip size="small" variant="outlined" label="Opted out" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Paper>
+
+        {/* Members who have uploaded a resume. A second uploaded-resume pool,
+            separate from the one above because a member is vouched for by
+            having been recruited rather than by a verified address - and
+            because "which members are in?" is its own question. */}
+        <Paper sx={{ p: { xs: 2, sm: 3 }, mt: 3 }}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            justifyContent="space-between"
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            spacing={2}
+            mb={2}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Members{data ? ` (${memberRows.length})` : ''}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              All cycles
+            </Typography>
+          </Stack>
+
+          {memberRows.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+              {(data?.memberResumes || []).length
+                ? 'No members match that search.'
+                : 'No member has uploaded a resume yet.'}
+            </Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Email</TableCell>
+                    <TableCell>Major</TableCell>
+                    <TableCell>Grad year</TableCell>
+                    <TableCell>TPN</TableCell>
+                    <TableCell>Updated</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {memberRows.map((r) => (
+                    <TableRow key={r.id} hover>
+                      <TableCell>{r.name || '—'}</TableCell>
+                      <TableCell>{r.email}</TableCell>
+                      <TableCell>{r.major1 || '—'}</TableCell>
+                      <TableCell>{r.graduationYear || '—'}</TableCell>
+                      <TableCell>
+                        {/* Consent is the whole gate for a member - there is no
+                            email to verify - so there is no "pending" state
+                            here, unlike the pool above. */}
+                        {r.shared ? (
+                          <Chip size="small" color="success" label="Shareable" />
                         ) : (
                           <Chip size="small" variant="outlined" label="Opted out" />
                         )}

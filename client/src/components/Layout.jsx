@@ -26,6 +26,7 @@ import {
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
+import MemberTalentNetworkPrompt from './MemberTalentNetworkPrompt';
 import MemberAvatar from './MemberAvatar';
 import ThemeToggle from './ThemeToggle';
 import '../styles/Layout.css';
@@ -57,6 +58,7 @@ const Layout = ({ children }) => {
       { name: 'Assigned Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
+      { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
@@ -226,6 +228,9 @@ const Layout = ({ children }) => {
         open={featureRequestOpen}
         onClose={() => setFeatureRequestOpen(false)}
       />
+      {/* Decides for itself whether to show - it is a no-op for anyone who is
+          not a member, and for a member who already has a resume. */}
+      <MemberTalentNetworkPrompt />
     </div>
   );
 };
