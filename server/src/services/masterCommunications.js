@@ -540,3 +540,96 @@ export async function sendTestCommunication({ audience, filters, subject, body, 
     usedFallback: !sample,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Drafts
+// ---------------------------------------------------------------------------
+// An unsent message, kept whole: channel, audience, filters, subject and body,
+// so reopening one puts the composer back exactly as it was left. Shared across
+// admins, so every read carries who wrote it and who touched it last - the
+// thing you want to know before sending someone else's work.
+
+const DRAFT_SELECT = {
+  id: true,
+  name: true,
+  channel: true,
+  audience: true,
+  filters: true,
+  subject: true,
+  body: true,
+  cycleId: true,
+  createdAt: true,
+  updatedAt: true,
+  creator: { select: { id: true, fullName: true, email: true } },
+  editor: { select: { id: true, fullName: true, email: true } },
+};
+
+export async function listDrafts({ cycleId, limit = 100 }) {
+  // Most recently touched first: a draft list is a to-finish list.
+  return prisma.messageDraft.findMany({
+    where: cycleId ? { cycleId } : {},
+    orderBy: { updatedAt: 'desc' },
+    take: limit,
+    select: DRAFT_SELECT,
+  });
+}
+
+export async function createDraft({ name, channel, audience, filters, subject, body, cycleId, createdById }) {
+  if (!name || !channel || !audience || !createdById) {
+    const err = new Error('name, channel, and audience are required');
+    err.status = 400;
+    throw err;
+  }
+
+  return prisma.messageDraft.create({
+    // A body is deliberately not required. The point of a draft is to save
+    // something unfinished, and refusing an empty one would mean losing the
+    // audience and filters somebody just spent time assembling.
+    data: {
+      name,
+      channel,
+      audience,
+      filters: filters ?? undefined,
+      subject: subject || '',
+      body: body || '',
+      cycleId: cycleId || null,
+      createdById,
+    },
+    select: DRAFT_SELECT,
+  });
+}
+
+export async function updateDraft({ id, updatedById, ...fields }) {
+  if (!id || !updatedById) {
+    const err = new Error('id and updatedById are required');
+    err.status = 400;
+    throw err;
+  }
+
+  const existing = await prisma.messageDraft.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) {
+    const err = new Error('Draft not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const data = { updatedById };
+  for (const key of ['name', 'channel', 'audience', 'subject', 'body']) {
+    if (fields[key] !== undefined) data[key] = fields[key];
+  }
+  if (fields.filters !== undefined) data.filters = fields.filters ?? undefined;
+  if (fields.cycleId !== undefined) data.cycleId = fields.cycleId || null;
+
+  return prisma.messageDraft.update({ where: { id }, data, select: DRAFT_SELECT });
+}
+
+export async function deleteDraft({ id }) {
+  const existing = await prisma.messageDraft.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) {
+    const err = new Error('Draft not found');
+    err.status = 404;
+    throw err;
+  }
+  await prisma.messageDraft.delete({ where: { id } });
+  return { id };
+}

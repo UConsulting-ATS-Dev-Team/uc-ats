@@ -64,6 +64,8 @@ model User {
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
   resumeUploads              ResumeUpload[]                  @relation("ResumeUploader")
   createdMessageTemplates    MessageTemplate[]               @relation("MessageTemplateCreator")
+  createdMessageDrafts       MessageDraft[]                  @relation("MessageDraftCreator")
+  editedMessageDrafts        MessageDraft[]                  @relation("MessageDraftEditor")
   sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
   scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
   talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
@@ -271,6 +273,7 @@ model RecruitingCycle {
   cases                     Case[]
   gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
   messageTemplates          MessageTemplate[]                @relation("CycleTemplates")
+  messageDrafts             MessageDraft[]                   @relation("CycleDrafts")
   messageLogs               MessageLog[]                     @relation("CycleLogs")
   scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
 
@@ -1003,6 +1006,44 @@ enum MeetingCommunicationType {
   HOST_NOTIFICATION
   CANCELLATION
   REMINDER
+}
+
+/// A message someone started writing and has not sent.
+///
+/// Deliberately separate from MessageTemplate. A template is reusable
+/// boilerplate - a name, a subject and a body meant to be applied to many
+/// sends. A draft is one specific unsent message, so it also carries the
+/// audience and the filters that decide who it goes to; reopening it puts the
+/// composer back exactly as it was left. Folding the two together would make
+/// the template list a mix of "ready to reuse" and "half-written", with nothing
+/// to tell them apart.
+///
+/// Shared across admins rather than private, so comms can be written by one
+/// person and finished by another. updatedById records who touched it last,
+/// which is the thing you want to know before sending someone else's draft.
+model MessageDraft {
+  id          String           @id @default(uuid())
+  name        String
+  channel     String
+  audience    String
+  /// The composer's filter object, stored whole. Its shape is owned by
+  /// resolveRecipients and changes as audiences gain filters, so pinning it to
+  /// columns here would mean a migration every time one is added.
+  filters     Json?
+  subject     String           @default("")
+  body        String
+  cycleId     String?
+  createdById String
+  updatedById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  cycle       RecruitingCycle? @relation("CycleDrafts", fields: [cycleId], references: [id], onDelete: SetNull)
+  creator     User             @relation("MessageDraftCreator", fields: [createdById], references: [id])
+  editor      User?            @relation("MessageDraftEditor", fields: [updatedById], references: [id])
+
+  @@index([cycleId])
+  @@index([updatedAt])
+  @@map("message_drafts")
 }
 
 model MessageTemplate {
