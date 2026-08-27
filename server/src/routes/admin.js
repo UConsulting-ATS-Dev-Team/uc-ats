@@ -5812,9 +5812,55 @@ router.post('/users/deactivate', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Talent Partner Network (TPN)
-// ---------------------------------------------------------------------------
+// -------------------- Auto thank-you emails after events (ATS-57) --------------------
+
+// Bulk send attendance thank-you emails to all candidates recorded for an event
+router.post('/events/:id/send-thank-you', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const event = await prisma.events.findUnique({
+      where: { id },
+      include: {
+        eventAttendance: { include: { candidate: true } }
+      }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const attendances = event.eventAttendance || [];
+    const results = [];
+
+    for (const att of attendances) {
+      const candidate = att.candidate;
+      if (!candidate?.email) continue;
+
+      const fullName = `${candidate.firstName} ${candidate.lastName}`.trim();
+      const emailResult = await sendAttendanceConfirmation(
+        candidate.email,
+        fullName,
+        event.eventName,
+        event.eventStartDate,
+        event.eventLocation
+      );
+
+      results.push({
+        candidateId: candidate.id,
+        email: candidate.email,
+        success: emailResult.success
+      });
+    }
+
+    res.json({ sent: results.length, results });
+  } catch (error) {
+    console.error('[POST /api/admin/events/:id/send-thank-you]', error);
+    res.status(500).json({ error: 'Failed to send thank-you emails' });
+  }
+});
+
+// -------------------------------------------------------
 // Opt-in is captured on the application form (see Application.talentPoolOptIn).
 // Requires auth + admin via router.use() at the top of this file.
 
