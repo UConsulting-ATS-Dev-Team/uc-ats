@@ -130,6 +130,16 @@ const MasterCommunications = () => {
     fetchEvents();
   }, []);
 
+  const fetchDrafts = useCallback(async (cycleId) => {
+    try {
+      const query = cycleId ? `?cycleId=${cycleId}` : '';
+      const data = await apiClient.get(`/master-communications/drafts${query}`);
+      setDrafts(data.drafts || []);
+    } catch (e) {
+      setError(e.message || 'Failed to load drafts');
+    }
+  }, []);
+
   useEffect(() => {
     if (primaryCycle) {
       fetchTemplates(primaryCycle);
@@ -199,16 +209,6 @@ const MasterCommunications = () => {
     setError('');
     setSuccess('');
   };
-
-  const fetchDrafts = useCallback(async (cycleId) => {
-    try {
-      const query = cycleId ? `?cycleId=${cycleId}` : '';
-      const data = await apiClient.get(`/master-communications/drafts${query}`);
-      setDrafts(data.drafts || []);
-    } catch (e) {
-      setError(e.message || 'Failed to load drafts');
-    }
-  }, []);
 
   const saveDraft = async () => {
     clearMessages();
