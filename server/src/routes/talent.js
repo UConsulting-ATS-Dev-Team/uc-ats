@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { putResume, getResume } from '../services/resumeStorage.js';
+import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import {
   EXTERNAL_GENDERS,
@@ -213,6 +213,8 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
     res.status(201).json({ resume: serializeExternalResume(resume, 0) });
   } catch (error) {
     console.error('[POST /api/talent/resume]', error);
+    const configured = storageErrorResponse(error);
+    if (configured) return res.status(configured.status).json(configured.body);
     res.status(500).json({ error: 'Failed to upload your resume' });
   }
 });
