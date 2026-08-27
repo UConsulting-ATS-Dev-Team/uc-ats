@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import prisma from '../prismaClient.js';
+import { putResume, getResume, removeResume } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
 import { isOwnedBy, isStaff } from '../utils/applicationOwnership.js';
 
@@ -211,12 +212,10 @@ router.post(
 
       const uploadId = crypto.randomUUID();
       const relativePath = path.posix.join('resumes', application.id, `${uploadId}.pdf`);
-      const absolutePath = path.join(STORAGE_DIR, relativePath);
       const servedUrl = `/api/resume-uploads/${uploadId}/file`;
 
-      await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fsPromises.writeFile(absolutePath, req.file.buffer);
-      writtenPath = absolutePath;
+      await putResume(relativePath, req.file.buffer);
+      writtenPath = relativePath;
 
       const existing = await versionRows(application.id);
       const now = new Date();
@@ -271,7 +270,7 @@ router.post(
       });
     } catch (error) {
       // Don't leave an orphaned file behind if the database write failed.
-      if (writtenPath) await fsPromises.unlink(writtenPath).catch(() => {});
+      if (writtenPath) await removeResume(writtenPath).catch(() => {});
       console.error('[POST /api/resume-uploads/applications/:applicationId]', error);
       res.status(500).json({ error: 'Failed to upload resume' });
     }
@@ -296,18 +295,21 @@ router.get('/:uploadId/file', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const absolutePath = path.join(STORAGE_DIR, upload.storagePath);
     // Defensive: the path comes from the database, but a traversal in it would
     // otherwise hand out arbitrary files.
-    if (!absolutePath.startsWith(RESUME_ROOT + path.sep)) {
+    if (!upload.storagePath.startsWith('resumes/')) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-    if (!fs.existsSync(absolutePath)) return res.status(404).json({ error: 'Resume file not found' });
+
+    const buffer = await getResume(upload.storagePath);
+    if (!buffer) {
+      return res.status(404).json({ error: 'Resume file not found' });
+    }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    fs.createReadStream(absolutePath).pipe(res);
+    res.send(buffer);
   } catch (error) {
     console.error('[GET /api/resume-uploads/:uploadId/file]', error);
     res.status(500).json({ error: 'Failed to serve resume' });
