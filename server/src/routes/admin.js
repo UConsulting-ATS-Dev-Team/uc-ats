@@ -5695,4 +5695,45 @@ router.get('/talent-pool/stats', async (req, res) => {
   }
 });
 
+// Set an applicant's Talent Partner Network opt-in by hand.
+//
+// The applicant answers this on the application form, but the answer arrives
+// wrong or not at all often enough to need a correction path: someone says yes
+// in person or over email, or applied in a cycle that predates the question.
+//
+// Three states, matching the column: true (opted in), false (opted out), and
+// null (no answer on record). Null is a real value here, not a missing field -
+// setting it back to null is how an admin undoes a mistaken entry rather than
+// guessing at an answer the applicant never gave.
+//
+// The value is written in place with no record of who set it, so an
+// admin-entered yes is indistinguishable from one the applicant gave.
+router.patch('/talent-pool/applicants/:applicationId/opt-in', async (req, res) => {
+  try {
+    const value = req.body?.talentPoolOptIn;
+    if (value !== true && value !== false && value !== null) {
+      return res.status(400).json({
+        error: 'talentPoolOptIn must be true, false, or null'
+      });
+    }
+
+    const application = await prisma.application.findUnique({
+      where: { id: req.params.applicationId },
+      select: { id: true }
+    });
+    if (!application) return res.status(404).json({ error: 'Application not found' });
+
+    const updated = await prisma.application.update({
+      where: { id: application.id },
+      data: { talentPoolOptIn: value },
+      select: { id: true, talentPoolOptIn: true }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/talent-pool/applicants/:applicationId/opt-in]', error);
+    res.status(500).json({ error: 'Failed to update opt-in' });
+  }
+});
+
 export default router;

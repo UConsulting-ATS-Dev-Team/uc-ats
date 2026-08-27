@@ -286,20 +286,50 @@ describe('assign - the snapshot guarantee', () => {
 });
 
 describe('assign - consent gates cannot be bypassed by posting keys directly', () => {
-  it('skips an applicant who has not opted in', async () => {
+  const assignApplicant = (optIn, extra = {}) => {
     prisma.application.findMany.mockResolvedValue([
-      { id: 'app-1', talentPoolOptIn: false, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
+      { id: 'app-1', talentPoolOptIn: optIn, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
     ]);
-
-    const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
+    return request('/api/admin/talent-pool/clients/partner-1/assign', {
       user: adminUser,
       method: 'POST',
-      body: { keys: ['APPLICATION:app-1'] }
+      body: { keys: ['APPLICATION:app-1'], ...extra }
     });
+  };
+
+  it('skips an applicant who opted out', async () => {
+    const res = await assignApplicant(false);
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.skipped[0].reason).toMatch(/opted out/i);
+    expect(prisma.__tx.clientResumeAssignment.createMany).not.toHaveBeenCalled();
+  });
+
+  it('skips an applicant with no answer on record by default', async () => {
+    const res = await assignApplicant(null);
 
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.skipped[0].reason).toMatch(/opted in/i);
+    expect(prisma.__tx.clientResumeAssignment.createMany).not.toHaveBeenCalled();
+  });
+
+  it('assigns an applicant with no answer when includeNoAnswer is set', async () => {
+    const res = await assignApplicant(null, { includeNoAnswer: true });
+
+    expect(res.status).toBe(201);
+    expect(prisma.__tx.clientResumeAssignment.createMany).toHaveBeenCalled();
+  });
+
+  // The one case the widening must never reach, checked on the live row rather
+  // than on whatever the preview claimed.
+  it('still refuses an explicit opt-out even when includeNoAnswer is set', async () => {
+    const res = await assignApplicant(false, { includeNoAnswer: true });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.skipped[0].reason).toMatch(/opted out/i);
     expect(prisma.__tx.clientResumeAssignment.createMany).not.toHaveBeenCalled();
   });
 

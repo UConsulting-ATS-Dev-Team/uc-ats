@@ -177,7 +177,10 @@ const majorAnyOf = (values) => ({
  * @returns {{ where: object|null, notes: string[] }} where is null when the
  * filter cannot match any applicant.
  */
-export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId = null } = {}) => {
+export const buildApplicantWhere = (
+  dsl,
+  { visibility = 'BLIND', activeCycleId = null, includeNoAnswer = false } = {}
+) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
@@ -191,12 +194,25 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   // exists to answer "how many did consent remove?" and nothing else.
   const filterClauses = [{ resumeUrl: { not: '' } }];
 
-  // Non-negotiable gates. Not admin-controllable.
+  // The consent gate. An applicant who answered No is never assignable, and
+  // that is not admin-controllable.
+  //
+  // `includeNoAnswer` widens the gate to applicants who never answered at all
+  // (null) — Fall 2025 applicants who were never asked, and anyone who skipped
+  // the question. It does NOT reach an explicit false: overriding a stated no
+  // is a different act from filling a silence, and only the second one is
+  // offered. The admin turns this on per assignment, never globally.
   const gateClauses = [
-    // The consent record. An applicant who answered No, and every Fall 2025
-    // applicant who was never asked (null), is never assignable.
-    { talentPoolOptIn: true }
+    includeNoAnswer
+      ? { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] }
+      : { talentPoolOptIn: true }
   ];
+
+  if (includeNoAnswer) {
+    notes.push(
+      'Including applicants who never answered the opt-in question. Applicants who opted out are still excluded.'
+    );
+  }
 
   if (visibility === 'BLIND') {
     // A BLIND client is only ever served blindResumeUrl, so an application
@@ -262,7 +278,10 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
  * filter cannot match any member resume - which the caller must surface rather
  * than rendering an empty result as "nothing matched".
  */
-export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
+export const buildMemberResumeWhere = (
+  dsl,
+  { visibility = 'BLIND', includeNoAnswer = false } = {}
+) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
@@ -279,7 +298,21 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   }
 
   const filterClauses = [{ isCurrent: true }];
-  const gateClauses = [{ shareConsent: true }, { consentRevokedAt: null }];
+
+  // `consentRevokedAt: null` holds in both modes: a member who granted sharing
+  // and then took it back has answered, and taken it back. `includeNoAnswer`
+  // reaches only the member who has never answered either way — shareConsent
+  // still false from the upload default, with no consentAt ever recorded.
+  const gateClauses = [
+    { consentRevokedAt: null },
+    includeNoAnswer ? { OR: [{ shareConsent: true }, { consentAt: null }] } : { shareConsent: true }
+  ];
+
+  if (includeNoAnswer) {
+    notes.push(
+      'Including members who never answered the sharing question. Members who declined or revoked sharing are still excluded.'
+    );
+  }
 
   const AND = filterClauses;
   const unsupported = [];

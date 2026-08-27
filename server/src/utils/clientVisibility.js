@@ -40,6 +40,19 @@ const showsContact = (visibility) => visibility === 'FULL';
  * caller turns that into "not available", which is the honest answer and keeps
  * an unparsed string from reaching the Drive API.
  */
+/**
+ * Pull the ResumeUpload id out of a locally-stored applicant resume URL.
+ *
+ * An applicant who replaces their resume gets `/api/resume-uploads/<id>/file`
+ * written to Application.resumeUrl - the file lives in our own storage, not in
+ * Drive, so extractDriveFileId() cannot resolve it and must not try.
+ */
+export const extractResumeUploadId = (value) => {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/\/api\/resume-uploads\/([^/?#]+)\/file/);
+  return match ? decodeURIComponent(match[1]) : null;
+};
+
 export const extractDriveFileId = (value) => {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -66,6 +79,15 @@ export const extractDriveFileId = (value) => {
  * the `available` flag so the UI can say "not available" instead of handing the
  * viewer a PDF pane that 404s.
  */
+// The storage path behind a locally-stored applicant resume, or null when the
+// URL is not one of ours / the row was not included / the row has no file.
+const localApplicantStoragePath = (application, stored) => {
+  const uploadId = extractResumeUploadId(stored);
+  if (!uploadId) return null;
+  const upload = (application?.resumeUploads || []).find((u) => u.id === uploadId);
+  return upload?.storagePath || null;
+};
+
 export const isViewable = (assignment, visibility) => {
   if (assignment?.application) {
     // Deliberately the same predicate the stream handler uses: a row whose
@@ -75,6 +97,7 @@ export const isViewable = (assignment, visibility) => {
       visibility === 'BLIND'
         ? assignment.application.blindResumeUrl
         : assignment.application.resumeUrl;
+    if (localApplicantStoragePath(assignment.application, stored)) return true;
     return Boolean(extractDriveFileId(stored));
   }
   if (assignment?.memberResume) {
@@ -95,6 +118,16 @@ export const resolveResumeSource = (assignment, visibility) => {
   if (assignment?.application) {
     const app = assignment.application;
     const stored = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
+
+    // A replaced resume lives in our storage. Checked first: its URL is not a
+    // Drive reference and never resolves to a file id.
+    //
+    // Note this can only ever match the FULL/BASIC branch. Replacing a resume
+    // nulls blindResumeUrl (there is no redacted variant of the new file), so a
+    // BLIND client still correctly gets nothing.
+    const storagePath = localApplicantStoragePath(app, stored);
+    if (storagePath) return { kind: 'local', storagePath };
+
     const fileId = extractDriveFileId(stored);
     if (!fileId) return null;
     return { kind: 'drive', fileId };

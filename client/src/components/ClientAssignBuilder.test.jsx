@@ -122,3 +122,89 @@ describe('ClientAssignBuilder', () => {
     expect(screen.getByText(/do not record Cumulative GPA/i)).toBeInTheDocument();
   });
 });
+
+
+describe('ClientAssignBuilder - including people who never answered', () => {
+  const toggle = () =>
+    screen.getByRole('checkbox', { name: /never answered the opt-in question/i });
+
+  it('is off by default, and previews under the strict gate', async () => {
+    mockApi();
+    const user = await setUpPreview();
+
+    expect(toggle()).not.toBeChecked();
+    const call = apiClient.post.mock.calls.find(([url]) => url.includes('/preview'));
+    expect(call[1].includeNoAnswer).toBe(false);
+    expect(user).toBeTruthy();
+  });
+
+  it('sends includeNoAnswer once the admin turns it on', async () => {
+    mockApi();
+    const user = await setUpPreview();
+
+    await user.click(toggle());
+    await user.click(screen.getByRole('button', { name: /preview matches/i }));
+
+    await waitFor(() => {
+      const calls = apiClient.post.mock.calls.filter(([url]) => url.includes('/preview'));
+      expect(calls[calls.length - 1][1].includeNoAnswer).toBe(true);
+    });
+  });
+
+  // The rows on screen were matched under the previous gate, so leaving them up
+  // would let an admin assign from a stale, narrower result set.
+  it('clears the previous preview when the gate changes', async () => {
+    mockApi();
+    const user = await setUpPreview();
+
+    expect(screen.getByText('Jane Doe')).toBeInTheDocument();
+    await user.click(toggle());
+    expect(screen.queryByText('Jane Doe')).not.toBeInTheDocument();
+  });
+
+  it('carries the flag through to the assign call', async () => {
+    mockApi();
+    const user = await setUpPreview();
+
+    await user.click(toggle());
+    await user.click(screen.getByRole('button', { name: /preview matches/i }));
+    await screen.findByText(/3 matches/i);
+
+    await user.click(screen.getByRole('button', { name: /assign \d+ resume/i }));
+
+    await waitFor(() => {
+      const call = apiClient.post.mock.calls.find(([url]) => url.includes('/assign'));
+      expect(call[1].includeNoAnswer).toBe(true);
+    });
+  });
+
+  it('flags which rows are only there because the gate was widened', async () => {
+    mockApi({
+      rows: [
+        { ...previewRows[0], consent: 'OPTED_IN' },
+        { ...previewRows[1], consent: 'NO_ANSWER' },
+      ],
+      total: 2,
+      includeNoAnswer: true,
+    });
+    const user = userEvent.setup();
+    render(<ClientAssignBuilder client={client} onDone={vi.fn()} />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
+    await user.click(screen.getByLabelText('Field'));
+    await user.click(await screen.findByRole('option', { name: /Graduation year/ }));
+    await user.click(screen.getByRole('button', { name: /preview matches/i }));
+
+    const adaRow = (await screen.findByText('Ada Lovelace')).closest('tr');
+    expect(within(adaRow).getByText('No answer')).toBeInTheDocument();
+
+    const janeRow = screen.getByText('Jane Doe').closest('tr');
+    expect(within(janeRow).queryByText('No answer')).not.toBeInTheDocument();
+  });
+
+  it('describes the remaining exclusions as opt-outs once the gate is widened', async () => {
+    mockApi({ includeNoAnswer: true, excluded: { noOptIn: 4, noBlindResume: 0, memberNoConsent: 0 } });
+    await setUpPreview();
+
+    expect(screen.getByText(/4 opted out of the Talent Partner Network/i)).toBeInTheDocument();
+  });
+});

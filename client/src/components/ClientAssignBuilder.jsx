@@ -7,6 +7,8 @@ import {
   Button,
   Checkbox,
   Chip,
+  FormControlLabel,
+  Tooltip,
   CircularProgress,
   FormControl,
   IconButton,
@@ -59,6 +61,9 @@ const ClientAssignBuilder = ({ client, onDone }) => {
   const [pool, setPool] = useState('APPLICANTS');
   const [rows, setRows] = useState([emptyRow()]);
   const [preview, setPreview] = useState(null);
+  // Widens the consent gate to people who never answered the opt-in question.
+  // Off by default, and it never reaches anyone who answered No.
+  const [includeNoAnswer, setIncludeNoAnswer] = useState(false);
   const [checked, setChecked] = useState(() => new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -99,6 +104,7 @@ const ClientAssignBuilder = ({ client, onDone }) => {
     try {
       const data = await apiClient.post(`/admin/talent-pool/clients/${client.id}/preview`, {
         filter: buildFilter(),
+        includeNoAnswer,
       });
       setPreview(data);
       // Everything eligible starts checked; the admin trims down rather than up.
@@ -120,6 +126,9 @@ const ClientAssignBuilder = ({ client, onDone }) => {
       const data = await apiClient.post(`/admin/talent-pool/clients/${client.id}/assign`, {
         keys: [...checked],
         filter: buildFilter(),
+        // Sent again so the server re-decides consent on the live rows rather
+        // than trusting the preview these keys came from.
+        includeNoAnswer,
         note: note || null,
       });
       const skippedNote = data.skipped?.length ? ` ${data.skipped.length} skipped.` : '';
@@ -290,6 +299,29 @@ const ClientAssignBuilder = ({ client, onDone }) => {
             </Button>
           </Stack>
 
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={includeNoAnswer}
+                onChange={(e) => {
+                  setIncludeNoAnswer(e.target.checked);
+                  // The rows on screen were matched under the old gate.
+                  setPreview(null);
+                  setChecked(new Set());
+                }}
+              />
+            }
+            label={
+              <Typography variant="body2">
+                Include people who never answered the opt-in question
+                <Typography component="span" variant="body2" color="text.secondary">
+                  {' '}— anyone who opted out stays excluded.
+                </Typography>
+              </Typography>
+            }
+          />
+
           <Typography variant="caption" color="text.secondary">
             Filters combine with AND. Multiple values in one filter combine with OR.
           </Typography>
@@ -322,7 +354,12 @@ const ClientAssignBuilder = ({ client, onDone }) => {
               <Stack spacing={0.5}>
                 {preview.excluded.noOptIn > 0 && (
                   <Typography variant="body2">
-                    {preview.excluded.noOptIn} did not opt in to the Talent Partner Network.
+                    {preview.excluded.noOptIn}{' '}
+                    {preview.includeNoAnswer
+                      // With the gate widened, the only applicants consent still
+                      // removes are the ones who actively said no.
+                      ? 'opted out of the Talent Partner Network.'
+                      : 'did not opt in to the Talent Partner Network.'}
                   </Typography>
                 )}
                 {preview.excluded.noBlindResume > 0 && (
@@ -389,6 +426,17 @@ const ClientAssignBuilder = ({ client, onDone }) => {
                       {row.name}
                       {row.alreadyAssigned && (
                         <Chip size="small" label="Already shared" sx={{ ml: 1 }} variant="outlined" />
+                      )}
+                      {row.consent === 'NO_ANSWER' && (
+                        <Tooltip title="This person never answered the opt-in question. They are here because the widened gate is on.">
+                          <Chip
+                            size="small"
+                            color="warning"
+                            variant="outlined"
+                            label="No answer"
+                            sx={{ ml: 1 }}
+                          />
+                        </Tooltip>
                       )}
                     </TableCell>
                     <TableCell>{row.kind === 'MEMBER' ? 'Member' : 'Applicant'}</TableCell>

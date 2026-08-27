@@ -309,9 +309,16 @@ router.post('/clients/:id/preview', async (req, res) => {
       return res.status(400).json({ error: errors[0], errors });
     }
 
+    // Opt-in widening is a per-preview choice, never stored on the client.
+    const includeNoAnswer = req.body?.includeNoAnswer === true;
+
     const cycleId = await activeCycleId();
-    const applicant = buildApplicantWhere(dsl, { visibility: client.visibility, activeCycleId: cycleId });
-    const member = buildMemberResumeWhere(dsl, { visibility: client.visibility });
+    const applicant = buildApplicantWhere(dsl, {
+      visibility: client.visibility,
+      activeCycleId: cycleId,
+      includeNoAnswer
+    });
+    const member = buildMemberResumeWhere(dsl, { visibility: client.visibility, includeNoAnswer });
 
     const notes = [...errors, ...applicant.notes, ...member.notes];
     const excluded = { noOptIn: 0, noBlindResume: 0, memberNoConsent: 0, alreadyAssigned: 0 };
@@ -322,15 +329,19 @@ router.post('/clients/:id/preview', async (req, res) => {
     if (applicant.where) {
       // Diagnostics: how many the consent gate and the blind gate each removed.
       // filterOnlyWhere is never used to select rows for assignment.
-      const [matched, filterOnly, optedIn] = await Promise.all([
+      // `consented` counts against whichever gate is actually in force, so
+      // noOptIn always means "removed by consent" rather than "removed by the
+      // strict gate we are not using".
+      const consentGate = applicant.gateClauses[0];
+      const [matched, filterOnly, consented] = await Promise.all([
         prisma.application.count({ where: applicant.where }),
         prisma.application.count({ where: applicant.filterOnlyWhere }),
         prisma.application.count({
-          where: { AND: [...applicant.filterOnlyWhere.AND, { talentPoolOptIn: true }] }
+          where: { AND: [...applicant.filterOnlyWhere.AND, consentGate] }
         })
       ]);
-      excluded.noOptIn = Math.max(filterOnly - optedIn, 0);
-      excluded.noBlindResume = Math.max(optedIn - matched, 0);
+      excluded.noOptIn = Math.max(filterOnly - consented, 0);
+      excluded.noBlindResume = Math.max(consented - matched, 0);
       total += matched;
 
       const applications = await prisma.application.findMany({
@@ -343,7 +354,8 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: true,
           major2: true,
           gender: true,
-          cumulativeGpa: true
+          cumulativeGpa: true,
+          talentPoolOptIn: true
         },
         orderBy: { submittedAt: 'desc' },
         take: PREVIEW_CAP
@@ -358,7 +370,8 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: a.major1,
           major2: a.major2,
           gender: a.gender,
-          cumulativeGpa: a.cumulativeGpa != null ? String(a.cumulativeGpa) : null
+          cumulativeGpa: a.cumulativeGpa != null ? String(a.cumulativeGpa) : null,
+          consent: a.talentPoolOptIn === true ? 'OPTED_IN' : 'NO_ANSWER'
         }))
       );
     }
@@ -379,6 +392,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: true,
           major2: true,
           gender: true,
+          shareConsent: true,
           member: { select: { fullName: true } }
         },
         orderBy: { createdAt: 'desc' },
@@ -394,7 +408,8 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: m.major1,
           major2: m.major2,
           gender: m.gender,
-          cumulativeGpa: null
+          cumulativeGpa: null,
+          consent: m.shareConsent === true ? 'OPTED_IN' : 'NO_ANSWER'
         }))
       );
     }
@@ -438,6 +453,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       cap: PREVIEW_CAP,
       excluded,
       notes,
+      includeNoAnswer,
       visibility: client.visibility
     });
   } catch (error) {
@@ -455,6 +471,10 @@ router.post('/clients/:id/assign', async (req, res) => {
     if (keys.length === 0) {
       return res.status(400).json({ error: 'Select at least one resume to assign' });
     }
+
+    // Re-read from this request rather than trusting the preview that produced
+    // the keys: the consent decision is re-made here, on the live rows.
+    const includeNoAnswer = req.body?.includeNoAnswer === true;
     if (keys.length > PREVIEW_CAP) {
       return res.status(400).json({ error: `Assign at most ${PREVIEW_CAP} resumes at a time` });
     }
@@ -494,6 +514,7 @@ router.post('/clients/:id/assign', async (req, res) => {
               id: true,
               isCurrent: true,
               shareConsent: true,
+              consentAt: true,
               consentRevokedAt: true
             }
           })
@@ -523,7 +544,10 @@ router.post('/clients/:id/assign', async (req, res) => {
         const app = appById.get(p.id);
         if (!app) {
           skipped.push({ key: p.key, reason: 'Application no longer exists' });
-        } else if (app.talentPoolOptIn !== true) {
+        } else if (app.talentPoolOptIn === false) {
+          // An explicit no is never overridable, whatever the preview asked for.
+          skipped.push({ key: p.key, reason: 'Applicant opted out of the Talent Partner Network' });
+        } else if (app.talentPoolOptIn !== true && !includeNoAnswer) {
           skipped.push({ key: p.key, reason: 'Applicant has not opted in to the Talent Partner Network' });
         } else if (!app.resumeUrl) {
           skipped.push({ key: p.key, reason: 'No resume on file' });
@@ -542,7 +566,9 @@ router.post('/clients/:id/assign', async (req, res) => {
         skipped.push({ key: p.key, reason: 'Member resume no longer exists' });
       } else if (!mr.isCurrent) {
         skipped.push({ key: p.key, reason: 'Member has replaced this resume' });
-      } else if (!mr.shareConsent || mr.consentRevokedAt) {
+      } else if (mr.consentRevokedAt) {
+        skipped.push({ key: p.key, reason: 'Member revoked sharing consent' });
+      } else if (!mr.shareConsent && !(includeNoAnswer && mr.consentAt === null)) {
         skipped.push({ key: p.key, reason: 'Member has not consented to sharing' });
       } else if (client.visibility === 'BLIND') {
         skipped.push({ key: p.key, reason: 'Member resumes have no redacted version' });

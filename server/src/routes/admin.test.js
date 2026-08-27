@@ -12,7 +12,7 @@ vi.mock('../prismaClient.js', () => {
       updateMany: vi.fn(),
     },
     recruitingCycle: { findFirst: vi.fn(), findMany: vi.fn() },
-    application: { findMany: vi.fn(), count: vi.fn() },
+    application: { findMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     resumeScore: { findMany: vi.fn() },
     coverLetterScore: { findMany: vi.fn() },
     videoScore: { findMany: vi.fn() },
@@ -580,5 +580,92 @@ describe('GET /api/admin/users', () => {
       expect(body.snapshotVersion).toBeUndefined();
       expect(body.candidates).toBeUndefined();
     });
+  });
+});
+
+
+describe('PATCH /api/admin/talent-pool/applicants/:applicationId/opt-in', () => {
+  let app;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/admin', adminRoutes);
+    server = app.listen(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.user.findUnique.mockImplementation(({ where: { id } }) => {
+      if (id === adminUser.id) return adminUser;
+      if (id === memberUser.id) return memberUser;
+      return null;
+    });
+    prisma.application.findUnique.mockResolvedValue({ id: 'app-1' });
+    prisma.application.update.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 'app-1', talentPoolOptIn: data.talentPoolOptIn })
+    );
+  });
+
+  const patch = (body, token = tokenFor(adminUser)) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(`http://localhost:${port}/api/admin/talent-pool/applicants/app-1/opt-in`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(body)
+    });
+  };
+
+  it.each([[true], [false], [null]])('accepts %s as an opt-in value', async (value) => {
+    const res = await patch({ talentPoolOptIn: value });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'app-1', talentPoolOptIn: value });
+    expect(prisma.application.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { talentPoolOptIn: value } })
+    );
+  });
+
+  // null is a real state here ("no answer"), so it must not be treated as a
+  // missing field and silently ignored.
+  it('writes null rather than skipping the update', async () => {
+    await patch({ talentPoolOptIn: null });
+    expect(prisma.application.update.mock.calls[0][0].data).toEqual({ talentPoolOptIn: null });
+  });
+
+  it('rejects a value that is not true, false, or null', async () => {
+    for (const value of ['yes', 1, 'true', undefined, {}]) {
+      const res = await patch({ talentPoolOptIn: value });
+      expect(res.status).toBe(400);
+    }
+    expect(prisma.application.update).not.toHaveBeenCalled();
+  });
+
+  it('404s an application that does not exist', async () => {
+    prisma.application.findUnique.mockResolvedValue(null);
+    const res = await patch({ talentPoolOptIn: true });
+    expect(res.status).toBe(404);
+    expect(prisma.application.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a member', async () => {
+    const res = await patch({ talentPoolOptIn: true }, tokenFor(memberUser));
+    expect(res.status).toBe(403);
+    expect(prisma.application.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unauthenticated request', async () => {
+    const res = await patch({ talentPoolOptIn: true }, null);
+    expect(res.status).toBe(401);
+    expect(prisma.application.update).not.toHaveBeenCalled();
   });
 });

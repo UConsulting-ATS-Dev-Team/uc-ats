@@ -42,6 +42,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // directory - see the comment in routes/cases.js.
 const STORAGE_DIR = path.join(__dirname, '../../storage');
 const MEMBER_RESUME_ROOT = path.join(STORAGE_DIR, 'member-resumes');
+// Applicant resumes replaced by the candidate themselves (routes/resumeUploads.js).
+const APPLICANT_RESUME_ROOT = path.join(STORAGE_DIR, 'resumes');
+
+// The path comes from the database, but a traversal in it would otherwise hand
+// out arbitrary files. The trailing separator matters: a bare startsWith would
+// also accept a sibling directory whose name merely begins with one of these.
+const isUnderAllowedRoot = (absPath) =>
+  [MEMBER_RESUME_ROOT, APPLICANT_RESUME_ROOT].some(
+    (root) => absPath.startsWith(root + path.sep)
+  );
 
 const router = express.Router();
 
@@ -64,7 +74,10 @@ const ASSIGNMENT_INCLUDE = {
       cumulativeGpa: true,
       majorGpa: true,
       resumeUrl: true,
-      blindResumeUrl: true
+      blindResumeUrl: true,
+      // Server-side only, for resolving a replaced resume to its stored file.
+      // projectAssignment() never reads these.
+      resumeUploads: { select: { id: true, storagePath: true } }
     }
   },
   memberResume: {
@@ -335,7 +348,7 @@ router.get('/resumes/:assignmentId/pdf', async (req, res) => {
     }
 
     const absPath = path.join(STORAGE_DIR, source.storagePath);
-    if (!absPath.startsWith(MEMBER_RESUME_ROOT)) {
+    if (!isUnderAllowedRoot(absPath)) {
       return res.status(400).json({ error: 'Invalid path' });
     }
     if (!fs.existsSync(absPath)) {

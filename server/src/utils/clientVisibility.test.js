@@ -3,6 +3,7 @@ import {
   projectAssignment,
   resolveResumeSource,
   extractDriveFileId,
+  extractResumeUploadId,
   isViewable,
   searchableFields,
   pdfUrlForAssignment,
@@ -229,6 +230,99 @@ describe('searchableFields', () => {
   it('includes names once identity is already visible', () => {
     for (const visibility of ['BASIC', 'FULL']) {
       expect(searchableFields(visibility)).toContain('firstName');
+    }
+  });
+});
+
+
+// Regression: an applicant who replaces their own resume gets a storage-backed
+// URL on Application.resumeUrl instead of a Drive one. resolveResumeSource used
+// to run only extractDriveFileId(), which returns null for that shape, so the
+// portal answered "This resume is not available." for a resume that was on disk
+// the whole time.
+describe('resolveResumeSource - candidate-replaced resumes', () => {
+  const UPLOAD_ID = '34ac2c69-3f3d-48b4-a75e-92b90296735d';
+  const STORAGE_PATH = `resumes/app-1/${UPLOAD_ID}.pdf`;
+
+  const replaced = (overrides = {}) =>
+    applicantAssignment({
+      resumeUrl: `/api/resume-uploads/${UPLOAD_ID}/file`,
+      // Replacing a resume nulls the redacted copy - it was derived from the
+      // file just replaced.
+      blindResumeUrl: null,
+      resumeUploads: [{ id: UPLOAD_ID, storagePath: STORAGE_PATH }],
+      ...overrides
+    });
+
+  it('resolves to the stored file at BASIC and FULL', () => {
+    for (const visibility of ['BASIC', 'FULL']) {
+      expect(resolveResumeSource(replaced(), visibility)).toEqual({
+        kind: 'local',
+        storagePath: STORAGE_PATH
+      });
+    }
+  });
+
+  it('reports it as viewable, so the card does not say unavailable', () => {
+    expect(isViewable(replaced(), 'FULL')).toBe(true);
+  });
+
+  // The replacement has no redacted variant, so a BLIND client still gets
+  // nothing - and specifically not the unredacted file.
+  it('still refuses a BLIND client', () => {
+    expect(resolveResumeSource(replaced(), 'BLIND')).toBeNull();
+    expect(isViewable(replaced(), 'BLIND')).toBe(false);
+  });
+
+  it('does not invent a source when the upload row is missing', () => {
+    expect(resolveResumeSource(replaced({ resumeUploads: [] }), 'FULL')).toBeNull();
+    expect(isViewable(replaced({ resumeUploads: [] }), 'FULL')).toBe(false);
+  });
+
+  it('does not match an upload row belonging to a different version', () => {
+    const other = replaced({ resumeUploads: [{ id: 'some-other-id', storagePath: 'resumes/app-1/other.pdf' }] });
+    expect(resolveResumeSource(other, 'FULL')).toBeNull();
+  });
+
+  it('ignores a row whose file was never stored locally', () => {
+    // storagePath is null for the version that arrived from the form - that one
+    // lives in Drive and has no file of ours behind it.
+    const driveBacked = replaced({ resumeUploads: [{ id: UPLOAD_ID, storagePath: null }] });
+    expect(resolveResumeSource(driveBacked, 'FULL')).toBeNull();
+  });
+
+  it('leaves ordinary Drive-backed applications alone', () => {
+    expect(resolveResumeSource(applicantAssignment(), 'FULL')).toEqual({
+      kind: 'drive',
+      fileId: DRIVE_REAL
+    });
+  });
+
+  it('never serializes the storage path into the client DTO', () => {
+    const dto = projectAssignment(replaced(), 'FULL');
+    expect(JSON.stringify(dto)).not.toContain(STORAGE_PATH);
+    expect(JSON.stringify(dto)).not.toContain(UPLOAD_ID);
+    expect(dto.available).toBe(true);
+  });
+});
+
+describe('extractResumeUploadId', () => {
+  it('pulls the id out of a resume-uploads URL', () => {
+    expect(extractResumeUploadId('/api/resume-uploads/abc-123/file')).toBe('abc-123');
+  });
+
+  it('works on an absolute URL', () => {
+    expect(extractResumeUploadId('https://uconsultingats.com/api/resume-uploads/abc-123/file'))
+      .toBe('abc-123');
+  });
+
+  it('returns null for a Drive proxy URL, so the two never cross', () => {
+    expect(extractResumeUploadId('/api/files/drive-id/pdf')).toBeNull();
+  });
+
+  it('returns null for junk', () => {
+    for (const value of ['', '   ', null, undefined, 42, '/api/resume-uploads//file']) {
+      expect(extractResumeUploadId(value)).toBeNull();
     }
   });
 });

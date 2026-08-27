@@ -75,10 +75,40 @@ function StatCard({ label, value, caption, untrackedReason }) {
   );
 }
 
-function OptInCell({ value }) {
-  if (value === true) return <Chip size="small" label="Opted in" color="success" />;
-  if (value === false) return <Chip size="small" label="Opted out" />;
-  return <Chip size="small" label="No answer" variant="outlined" />;
+// The three values talentPoolOptIn actually holds. `null` is a real state -
+// "no answer on record" - and is selectable so an admin can undo a mistaken
+// entry rather than having to guess at an answer the applicant never gave.
+const OPT_IN_CHOICES = [
+  { value: 'true', label: 'Opted in' },
+  { value: 'false', label: 'Opted out' },
+  { value: 'null', label: 'No answer' },
+];
+
+const toOptInValue = (raw) => (raw === 'true' ? true : raw === 'false' ? false : null);
+const toOptInRaw = (value) => (value === true ? 'true' : value === false ? 'false' : 'null');
+
+function OptInCell({ value, onChange, saving, disabled }) {
+  return (
+    <Select
+      size="small"
+      value={toOptInRaw(value)}
+      onChange={(e) => onChange(toOptInValue(e.target.value))}
+      disabled={saving || disabled}
+      variant="standard"
+      disableUnderline
+      renderValue={(raw) => {
+        if (raw === 'true') return <Chip size="small" label="Opted in" color="success" />;
+        if (raw === 'false') return <Chip size="small" label="Opted out" />;
+        return <Chip size="small" label="No answer" variant="outlined" />;
+      }}
+      sx={{ '& .MuiSelect-select': { p: 0, pr: 3 } }}
+      inputProps={{ 'aria-label': 'Talent Partner Network opt-in' }}
+    >
+      {OPT_IN_CHOICES.map((choice) => (
+        <MenuItem key={choice.value} value={choice.value}>{choice.label}</MenuItem>
+      ))}
+    </Select>
+  );
 }
 
 const TalentPoolPartnerNetwork = () => {
@@ -90,8 +120,50 @@ const TalentPoolPartnerNetwork = () => {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [openingResumeId, setOpeningResumeId] = useState(null);
+  const [savingOptInId, setSavingOptInId] = useState(null);
+  const [optInNotice, setOptInNotice] = useState('');
   // Overview is the original opt-in roster; Clients is the portal side.
   const [tab, setTab] = useState('overview');
+
+  // Write a new opt-in value, then patch it into the loaded roster rather than
+  // refetching: the segment chips are counted off `applicants`, so updating that
+  // array in place keeps the counts, the chips and the table in step.
+  const setOptIn = useCallback(async (applicant, value) => {
+    setSavingOptInId(applicant.id);
+    setError('');
+    setOptInNotice('');
+    try {
+      await apiClient.patch(
+        `/admin/talent-pool/applicants/${applicant.id}/opt-in`,
+        { talentPoolOptIn: value }
+      );
+
+      setData((current) => {
+        if (!current) return current;
+        const applicants = current.applicants.map((a) =>
+          a.id === applicant.id ? { ...a, talentPoolOptIn: value } : a
+        );
+        return {
+          ...current,
+          applicants,
+          optIn: {
+            total: applicants.length,
+            optedIn: applicants.filter((a) => a.talentPoolOptIn === true).length,
+            optedOut: applicants.filter((a) => a.talentPoolOptIn === false).length,
+            noAnswer: applicants.filter((a) => a.talentPoolOptIn === null).length,
+          },
+        };
+      });
+
+      const label = OPT_IN_CHOICES.find((c) => c.value === toOptInRaw(value))?.label;
+      const name = `${applicant.firstName} ${applicant.lastName}`.trim();
+      setOptInNotice(`${name} set to "${label}".`);
+    } catch (e) {
+      setError(e.message || 'Failed to update opt-in');
+    } finally {
+      setSavingOptInId(null);
+    }
+  }, []);
 
   const load = useCallback(async (targetCycleId) => {
     setLoading(true);
@@ -215,6 +287,11 @@ const TalentPoolPartnerNetwork = () => {
         {tab === 'overview' && (
         <>
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
+        {optInNotice && (
+          <Alert severity="success" sx={{ mb: 2 }} onClose={() => setOptInNotice('')}>
+            {optInNotice}
+          </Alert>
+        )}
         {loading && <LinearProgress sx={{ mb: 2 }} />}
 
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} mb={4}>
@@ -319,7 +396,7 @@ const TalentPoolPartnerNetwork = () => {
                     <TableCell>Email</TableCell>
                     <TableCell>Major</TableCell>
                     <TableCell>Grad year</TableCell>
-                    {activeSegment.key === 'all' && <TableCell>TPN</TableCell>}
+                    <TableCell>TPN opt-in</TableCell>
                     {showCycle && <TableCell>Latest cycle</TableCell>}
                     <TableCell>Submitted</TableCell>
                     <TableCell align="right">Resume</TableCell>
@@ -332,9 +409,13 @@ const TalentPoolPartnerNetwork = () => {
                       <TableCell>{a.email}</TableCell>
                       <TableCell>{a.major1 || '—'}</TableCell>
                       <TableCell>{a.graduationYear || '—'}</TableCell>
-                      {activeSegment.key === 'all' && (
-                        <TableCell><OptInCell value={a.talentPoolOptIn} /></TableCell>
-                      )}
+                      <TableCell>
+                        <OptInCell
+                          value={a.talentPoolOptIn}
+                          saving={savingOptInId === a.id}
+                          onChange={(value) => setOptIn(a, value)}
+                        />
+                      </TableCell>
                       {showCycle && (
                         <TableCell>
                           <Stack direction="row" spacing={0.5} alignItems="center">

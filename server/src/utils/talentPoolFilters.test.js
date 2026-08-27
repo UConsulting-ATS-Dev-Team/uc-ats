@@ -111,6 +111,78 @@ describe('buildApplicantWhere - consent is not optional', () => {
   });
 });
 
+describe('buildApplicantWhere - includeNoAnswer widens consent, but only to silence', () => {
+  const filter = () => dsl([{ field: 'gender', values: ['Female'] }]);
+
+  it('admits applicants who never answered when asked to', () => {
+    const { where } = buildApplicantWhere(filter(), { includeNoAnswer: true });
+    expect(where.AND).toContainEqual({
+      OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }]
+    });
+  });
+
+  // The whole point of the option: silence can be filled, a stated no cannot.
+  it('never admits an explicit opt-out', () => {
+    const { where } = buildApplicantWhere(filter(), { includeNoAnswer: true });
+    const gate = where.AND.find((c) => c.OR && c.OR.some((o) => 'talentPoolOptIn' in o));
+    expect(gate.OR).not.toContainEqual({ talentPoolOptIn: false });
+    expect(gate.OR).toHaveLength(2);
+  });
+
+  it('stays strict by default', () => {
+    const { where } = buildApplicantWhere(filter());
+    expect(where.AND).toContainEqual({ talentPoolOptIn: true });
+    // Other clauses legitimately use OR (a multi-value field filter does);
+    // what must not exist is an OR that widens the consent gate.
+    const consentOr = where.AND.find(
+      (c) => c.OR && c.OR.some((o) => 'talentPoolOptIn' in o)
+    );
+    expect(consentOr).toBeUndefined();
+  });
+
+  it('says so in the notes, so the widening is never silent', () => {
+    const { notes } = buildApplicantWhere(filter(), { includeNoAnswer: true });
+    expect(notes.some((n) => /never answered/i.test(n))).toBe(true);
+    expect(notes.some((n) => /opted out are still excluded/i.test(n))).toBe(true);
+  });
+
+  it('keeps the blind-resume gate independent of consent widening', () => {
+    const { where } = buildApplicantWhere(filter(), {
+      includeNoAnswer: true,
+      visibility: 'BLIND'
+    });
+    expect(where.AND).toContainEqual({ blindResumeUrl: { not: null } });
+  });
+});
+
+describe('buildMemberResumeWhere - includeNoAnswer', () => {
+  const filter = () => dsl([{ field: 'gender', values: ['Female'] }], 'MEMBERS');
+
+  it('requires explicit consent by default', () => {
+    const { where } = buildMemberResumeWhere(filter(), { visibility: 'FULL' });
+    expect(where.AND).toContainEqual({ shareConsent: true });
+  });
+
+  it('admits members who never answered when asked to', () => {
+    const { where } = buildMemberResumeWhere(filter(), {
+      visibility: 'FULL',
+      includeNoAnswer: true
+    });
+    expect(where.AND).toContainEqual({ OR: [{ shareConsent: true }, { consentAt: null }] });
+  });
+
+  // Revoking is an answer. It survives the widening in both modes.
+  it('still excludes a member who revoked consent', () => {
+    for (const includeNoAnswer of [false, true]) {
+      const { where } = buildMemberResumeWhere(filter(), {
+        visibility: 'FULL',
+        includeNoAnswer
+      });
+      expect(where.AND).toContainEqual({ consentRevokedAt: null });
+    }
+  });
+});
+
 describe('buildApplicantWhere - field mapping', () => {
   it('ORs values within a row, case-insensitively, because gender is free-form form text', () => {
     const { where } = buildApplicantWhere(dsl([{ field: 'gender', values: ['Female', 'Other'] }]));
