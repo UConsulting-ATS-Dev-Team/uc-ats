@@ -219,3 +219,50 @@ describe('a candidate who onboarded instead of applying', () => {
     expect(patch.mock.calls[0][1]).toMatchObject({ major1: 'Social Sciences', graduationYear: '2029' });
   });
 });
+
+describe('an applicant changing their Talent Partner Network answer', () => {
+  it('shows the answer already on file', async () => {
+    renderPage();
+    await screen.findByLabelText(/Primary major/);
+    expect(screen.getByText('Current answer')).toBeInTheDocument();
+  });
+
+  it('sends the change and says what turning it off does', async () => {
+    const patch = vi.fn(() =>
+      Promise.resolve({ talentPoolOptIn: false, message: 'Sharing stopped, and your resume has been withdrawn.' })
+    );
+    apiClient.patch = patch;
+
+    renderPage();
+    await screen.findByLabelText(/Primary major/);
+    fireEvent.click(screen.getByRole('button', { name: /No, do not share/ }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0][0]).toBe('/applicant-info/talent-pool');
+    expect(patch.mock.calls[0][1]).toEqual({ talentPoolOptIn: false });
+    expect(await screen.findByText(/withdrawn/i)).toBeInTheDocument();
+  });
+
+  it('is not shown to a candidate who onboarded - they have their own control', async () => {
+    apiClient.get = vi.fn((url) =>
+      url.includes('onboarding')
+        ? Promise.resolve({
+            required: false,
+            completed: true,
+            onboarding: {
+              phoneNumber: '3105550134', graduationYear: '2029', cumulativeGpa: '3.85',
+              major1: 'Life Sciences', major2: null, gender: null,
+              isTransferStudent: false, isFirstGeneration: true,
+            },
+          })
+        : Promise.reject(new Error('User not found or no studentId associated'))
+    );
+
+    renderPage();
+    await screen.findByLabelText(/Primary major/);
+    // Both modes show a Talent Partner Network section, but an onboarded
+    // candidate gets the one in OnboardingResumeSection, which saves through a
+    // different endpoint. "Current answer" belongs only to the applicant one.
+    expect(screen.queryByText('Current answer')).not.toBeInTheDocument();
+  });
+});

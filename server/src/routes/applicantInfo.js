@@ -33,7 +33,17 @@ export const EDITABLE_FIELDS = [
 
 // Identity and process fields the page shows so a candidate can confirm what we
 // have, but cannot change.
-const READ_ONLY_FIELDS = ['id', 'email', 'studentId', 'status', 'currentRound', 'submittedAt'];
+const READ_ONLY_FIELDS = [
+  'id',
+  'email',
+  'studentId',
+  'status',
+  'currentRound',
+  'submittedAt',
+  // Shown so the page can render the current answer, but changed through its
+  // own endpoint rather than the general PATCH - see the note there.
+  'talentPoolOptIn',
+];
 
 const applicationSelect = {
   ...Object.fromEntries([...EDITABLE_FIELDS, ...READ_ONLY_FIELDS].map((field) => [field, true])),
@@ -134,6 +144,87 @@ async function loadOwned(req, res) {
   }
   return application;
 }
+
+/**
+ * PATCH /api/applicant-info/talent-pool
+ *
+ * Change the Talent Partner Network answer.
+ *
+ * Deliberately not a member of EDITABLE_FIELDS. Every other field on that list
+ * is a fact about the applicant that they are correcting; this is a permission,
+ * and turning it off has to reach further than the row - it withdraws the
+ * resume from companies that already have it. A field in a general PATCH cannot
+ * carry that.
+ *
+ * Applied to every application this person owns rather than the one on screen.
+ * Consent belongs to the person, not to a cycle: someone who has applied twice
+ * and says no means no, and leaving last year's application shared would be a
+ * consent record nobody would think to check.
+ */
+router.patch('/talent-pool', requireAuth, async (req, res) => {
+  try {
+    const optIn = req.body?.talentPoolOptIn;
+    if (optIn !== true && optIn !== false) {
+      return res.status(400).json({ error: 'Choose whether to share your resume with partner organizations.' });
+    }
+
+    // Same identifiers isOwnedBy matches on, asked of the table directly so it
+    // covers every application rather than one already in hand.
+    const ownerFilters = [];
+    if (req.user.email) {
+      ownerFilters.push({ email: req.user.email });
+      ownerFilters.push({ candidate: { email: req.user.email } });
+    }
+    if (req.user.studentId) {
+      ownerFilters.push({ studentId: String(req.user.studentId) });
+      ownerFilters.push({ candidate: { studentId: String(req.user.studentId) } });
+    }
+    if (ownerFilters.length === 0) {
+      return res.status(404).json({ error: 'No application found for this account' });
+    }
+
+    const owned = await prisma.application.findMany({
+      where: { OR: ownerFilters },
+      select: { id: true },
+    });
+    if (owned.length === 0) {
+      return res.status(404).json({ error: 'No application found for this account' });
+    }
+
+    const ids = owned.map((a) => a.id);
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.application.updateMany({
+        where: { id: { in: ids } },
+        data: { talentPoolOptIn: optIn },
+      });
+
+      if (!optIn) {
+        // Assignments are snapshots and are otherwise never re-derived, so
+        // without this an applicant could opt out and stay in front of every
+        // client who already had them. This is the one place that rule yields,
+        // and it yields to the person whose resume it is - the same exception
+        // the member and talent portals make.
+        await tx.clientResumeAssignment.updateMany({
+          where: { applicationId: { in: ids }, revokedAt: null },
+          data: { revokedAt: now, revokedById: req.user.id },
+        });
+      }
+    });
+
+    res.json({
+      talentPoolOptIn: optIn,
+      applicationsUpdated: ids.length,
+      message: optIn
+        ? 'Your resume is now shared with partner organizations.'
+        : 'Sharing stopped, and your resume has been withdrawn from any company that had it.',
+    });
+  } catch (error) {
+    console.error('[PATCH /api/applicant-info/talent-pool]', error);
+    res.status(500).json({ error: 'Failed to update your sharing preference' });
+  }
+});
 
 // GET /api/applicant-info/applications/:applicationId
 router.get('/applications/:applicationId', requireAuth, async (req, res) => {
