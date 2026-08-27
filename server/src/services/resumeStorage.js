@@ -14,6 +14,11 @@
 // previews and local development can run without Supabase credentials, and a
 // storage layer that throws on boot in those environments would be worse than
 // one that writes to a disk nobody is relying on to persist.
+//
+// In production that fallback is refused outright. Writing to the local disk
+// there is not a degraded mode, it is the original bug: the file is accepted,
+// the row is written, and the PDF is gone at the next deploy with nothing to
+// indicate it happened. Better to fail the upload and say why.
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -61,7 +66,19 @@ const ensureBucket = async () => {
  * @param {Buffer} buffer
  * @param {string} contentType
  */
+const isProduction = () => process.env.NODE_ENV === 'production';
+
 export const putResume = async (key, buffer, contentType = 'application/pdf') => {
+  if (!isSupabaseAvailable() && isProduction()) {
+    // Loud on purpose. A silent local write here is indistinguishable from
+    // success right up until the file is needed.
+    console.error(
+      '[resumeStorage] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set. ' +
+        'Uploads cannot be stored durably and are being refused.'
+    );
+    throw new Error('File storage is not configured. Please contact the recruitment team.');
+  }
+
   if (isSupabaseAvailable()) {
     await ensureBucket();
     const { error } = await supabase.storage

@@ -14,6 +14,17 @@ import resumeUploadRoutes, { resumeDeadlineAt, replacementWindow } from './resum
 // leave real files behind, so this is torn down at the end of the run.
 const STORAGE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../storage');
 
+// Storage is mocked, not exercised. These tests are about the route's rules -
+// ownership, deadlines, version history - and letting them reach the real
+// Supabase bucket both slows them down and leaves fixture-named objects
+// ("app-1") sitting in production storage.
+const stored = new Map();
+vi.mock('../services/resumeStorage.js', () => ({
+  putResume: vi.fn(async (key, buffer) => { stored.set(key, buffer); }),
+  getResume: vi.fn(async (key) => stored.get(key) ?? null),
+  removeResume: vi.fn(async (key) => { stored.delete(key); }),
+}));
+
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
@@ -94,7 +105,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
-  fs.rmSync(path.join(STORAGE_DIR, 'resumes', 'app-1'), { recursive: true, force: true });
+  stored.clear();
 });
 
 beforeEach(() => {
@@ -240,7 +251,8 @@ describe('POST /api/resume-uploads/applications/:applicationId', () => {
     expect(body.currentResumeUrl).toBe(created.sourceUrl);
 
     // The bytes really landed where the row says they did.
-    expect(fs.existsSync(path.join(STORAGE_DIR, created.storagePath))).toBe(true);
+    const { getResume } = await import('../services/resumeStorage.js');
+    expect(await getResume(created.storagePath)).not.toBeNull();
   });
 
   it('does not re-capture the original once a version history exists', async () => {

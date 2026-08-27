@@ -14,6 +14,16 @@ import fsPromises from 'node:fs/promises';
 import prisma from '../prismaClient.js';
 import onboardingRoutes from './candidateOnboarding.js';
 
+// Storage is mocked so the suite never writes to the real Supabase bucket. It
+// previously did, leaving objects named after fixtures ("er-1", "cand-1") in
+// production storage.
+const stored = new Map();
+vi.mock('../services/resumeStorage.js', () => ({
+  putResume: vi.fn(async (key, buffer) => { stored.set(key, buffer); }),
+  getResume: vi.fn(async (key) => stored.get(key) ?? null),
+  removeResume: vi.fn(async (key) => { stored.delete(key); }),
+}));
+
 vi.mock('../prismaClient.js', () => {
   const tx = {
     externalResume: { updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -171,6 +181,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  stored.clear();
   prisma.user.findUnique.mockImplementation(({ where: { id } }) =>
     ALL_USERS.find((u) => u.id === id) || null
   );
