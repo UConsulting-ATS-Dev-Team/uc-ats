@@ -23,7 +23,7 @@
 }
 
 .applicant-card {
-  background-color: var(--surface-color, #fff);
+  background-color: var(--bg-white);
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 1.5rem;
@@ -63,7 +63,7 @@
 }
 
 .applicant-required {
-  color: #b91c1c;
+  color: var(--status-error-text);
 }
 
 .applicant-hint {
@@ -75,7 +75,7 @@
   padding: 0.5rem 0.625rem;
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
-  background-color: var(--surface-color, #fff);
+  background-color: var(--bg-white);
   color: var(--text-primary);
   font-size: 0.9375rem;
   font-family: inherit;
@@ -160,13 +160,13 @@
 .applicant-error {
   margin: 1rem 0 0 0;
   font-size: 0.875rem;
-  color: #991b1b;
+  color: var(--status-error-text);
 }
 
 .applicant-success {
   margin: 1rem 0 0 0;
   font-size: 0.875rem;
-  color: #065f46;
+  color: var(--status-success-text);
 }
 
 /* Resume replacement. These moved here with the ResumeReuploadSection when it
@@ -181,13 +181,13 @@
 .resume-reupload-error {
   margin: 0.5rem 0 0 0;
   font-size: 0.875rem;
-  color: #991b1b;
+  color: var(--status-error-text);
 }
 
 .resume-reupload-success {
   margin: 0.5rem 0 0 0;
   font-size: 0.875rem;
-  color: #065f46;
+  color: var(--status-success-text);
 }
 
 .resume-reupload-controls {
@@ -234,8 +234,8 @@
   margin-left: 0.5rem;
   padding: 0.125rem 0.5rem;
   border-radius: 999px;
-  background-color: #d1fae5;
-  color: #065f46;
+  background-color: var(--status-success-bg);
+  color: var(--status-success-text);
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
