@@ -19,6 +19,7 @@ import {
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
+  buildExternalResumeWhere,
   buildAssignmentKey,
   parseAssignmentKey
 } from '../utils/talentPoolFilters.js';
@@ -151,6 +152,16 @@ router.get('/clients/:id', async (req, res) => {
             member: { select: { fullName: true } }
           }
         },
+        externalResume: {
+          select: {
+            id: true,
+            graduationYear: true,
+            major1: true,
+            shareConsent: true,
+            consentRevokedAt: true,
+            user: { select: { fullName: true, emailVerifiedAt: true } }
+          }
+        },
         batch: { select: { id: true, createdAt: true, note: true } }
       }
     });
@@ -158,22 +169,33 @@ router.get('/clients/:id', async (req, res) => {
     res.json({
       client,
       // Real names here - this is the admin console, not the portal.
-      assignments: assignments.map((a) => ({
-        id: a.id,
-        kind: a.application ? 'APPLICANT' : 'MEMBER',
-        name: a.application
-          ? `${a.application.firstName} ${a.application.lastName}`.trim()
-          : a.memberResume?.member?.fullName || 'Unknown member',
-        graduationYear: a.application?.graduationYear ?? a.memberResume?.graduationYear ?? null,
-        major1: a.application?.major1 ?? a.memberResume?.major1 ?? null,
-        assignedAt: a.assignedAt,
-        batchId: a.batchId,
-        // Surfaced so an admin can see a member who withdrew after assignment.
-        // Withdrawal auto-revokes, so this should normally be false.
-        consentWithdrawn: Boolean(
-          a.memberResume && (!a.memberResume.shareConsent || a.memberResume.consentRevokedAt)
-        )
-      }))
+      assignments: assignments.map((a) => {
+        // The two uploaded-resume pools carry the same fields in the same
+        // shape; only the relation holding the owner's name differs.
+        const uploaded = a.memberResume || a.externalResume;
+        const ownerName = a.memberResume?.member?.fullName || a.externalResume?.user?.fullName;
+
+        return {
+          id: a.id,
+          kind: a.application ? 'APPLICANT' : a.externalResume ? 'EXTERNAL' : 'MEMBER',
+          name: a.application
+            ? `${a.application.firstName} ${a.application.lastName}`.trim()
+            : ownerName || 'Unknown',
+          graduationYear: a.application?.graduationYear ?? uploaded?.graduationYear ?? null,
+          major1: a.application?.major1 ?? uploaded?.major1 ?? null,
+          assignedAt: a.assignedAt,
+          batchId: a.batchId,
+          // Surfaced so an admin can see someone who withdrew after assignment.
+          // Withdrawal auto-revokes, so this should normally be false.
+          consentWithdrawn: Boolean(
+            uploaded && (!uploaded.shareConsent || uploaded.consentRevokedAt)
+          ),
+          // An external owner can be deactivated or have their verification
+          // cleared after the fact. Neither auto-revokes, so unlike consent this
+          // one really can be true on a live row.
+          ownerUnverified: Boolean(a.externalResume && !a.externalResume.user?.emailVerifiedAt)
+        };
+      })
     });
   } catch (error) {
     console.error('[GET /api/admin/talent-pool/clients/:id]', error);
@@ -211,7 +233,10 @@ router.patch('/clients/:id', async (req, res) => {
           clientId: client.id,
           revokedAt: null,
           OR: [
+            // Neither uploaded-resume pool has a redacted variant, so every one
+            // of those rows is stranded by a tightening to BLIND.
             { memberResumeId: { not: null } },
+            { externalResumeId: { not: null } },
             { application: { OR: [{ blindResumeUrl: null }, { blindResumeUrl: '' }] } }
           ]
         }
@@ -312,9 +337,16 @@ router.post('/clients/:id/preview', async (req, res) => {
     const cycleId = await activeCycleId();
     const applicant = buildApplicantWhere(dsl, { visibility: client.visibility, activeCycleId: cycleId });
     const member = buildMemberResumeWhere(dsl, { visibility: client.visibility });
+    const external = buildExternalResumeWhere(dsl, { visibility: client.visibility });
 
-    const notes = [...errors, ...applicant.notes, ...member.notes];
-    const excluded = { noOptIn: 0, noBlindResume: 0, memberNoConsent: 0, alreadyAssigned: 0 };
+    const notes = [...errors, ...applicant.notes, ...member.notes, ...external.notes];
+    const excluded = {
+      noOptIn: 0,
+      noBlindResume: 0,
+      memberNoConsent: 0,
+      externalNotAssignable: 0,
+      alreadyAssigned: 0
+    };
 
     const rows = [];
     let total = 0;
@@ -399,15 +431,56 @@ router.post('/clients/:id/preview', async (req, res) => {
       );
     }
 
+    if (external.where) {
+      // filterOnlyWhere drops the consent AND verification gates together, so
+      // this one diagnostic covers both reasons a student resume is not
+      // assignable. They are not worth separating: the admin's next action is
+      // the same either way, which is to leave that person alone.
+      const [matched, filterOnly] = await Promise.all([
+        prisma.externalResume.count({ where: external.where }),
+        prisma.externalResume.count({ where: external.filterOnlyWhere })
+      ]);
+      excluded.externalNotAssignable = Math.max(filterOnly - matched, 0);
+      total += matched;
+
+      const externalResumes = await prisma.externalResume.findMany({
+        where: external.where,
+        select: {
+          id: true,
+          graduationYear: true,
+          major1: true,
+          major2: true,
+          gender: true,
+          user: { select: { fullName: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: PREVIEW_CAP
+      });
+
+      rows.push(
+        ...externalResumes.map((e) => ({
+          key: buildAssignmentKey('EXTERNAL_RESUME', e.id),
+          kind: 'EXTERNAL',
+          name: e.user?.fullName || 'Unknown student',
+          graduationYear: e.graduationYear,
+          major1: e.major1,
+          major2: e.major2,
+          gender: e.gender,
+          cumulativeGpa: null
+        }))
+      );
+    }
+
     // Flag rows this client already has so the admin is not re-assigning blind.
-    const applicationIds = rows
-      .map((r) => parseAssignmentKey(r.key))
-      .filter((p) => p?.kind === 'APPLICATION')
-      .map((p) => p.id);
-    const memberResumeIds = rows
-      .map((r) => parseAssignmentKey(r.key))
-      .filter((p) => p?.kind === 'MEMBER_RESUME')
-      .map((p) => p.id);
+    const idsOfKind = (kind) =>
+      rows
+        .map((r) => parseAssignmentKey(r.key))
+        .filter((p) => p?.kind === kind)
+        .map((p) => p.id);
+
+    const applicationIds = idsOfKind('APPLICATION');
+    const memberResumeIds = idsOfKind('MEMBER_RESUME');
+    const externalResumeIds = idsOfKind('EXTERNAL_RESUME');
 
     const live = await prisma.clientResumeAssignment.findMany({
       where: {
@@ -415,15 +488,19 @@ router.post('/clients/:id/preview', async (req, res) => {
         revokedAt: null,
         OR: [
           { applicationId: { in: applicationIds } },
-          { memberResumeId: { in: memberResumeIds } }
+          { memberResumeId: { in: memberResumeIds } },
+          { externalResumeId: { in: externalResumeIds } }
         ]
       },
-      select: { applicationId: true, memberResumeId: true }
+      select: { applicationId: true, memberResumeId: true, externalResumeId: true }
     });
 
     const liveKeys = new Set([
       ...live.filter((l) => l.applicationId).map((l) => buildAssignmentKey('APPLICATION', l.applicationId)),
-      ...live.filter((l) => l.memberResumeId).map((l) => buildAssignmentKey('MEMBER_RESUME', l.memberResumeId))
+      ...live.filter((l) => l.memberResumeId).map((l) => buildAssignmentKey('MEMBER_RESUME', l.memberResumeId)),
+      ...live
+        .filter((l) => l.externalResumeId)
+        .map((l) => buildAssignmentKey('EXTERNAL_RESUME', l.externalResumeId))
     ]);
 
     for (const row of rows) {
@@ -476,11 +553,12 @@ router.post('/clients/:id/assign', async (req, res) => {
 
     const applicationIds = parsed.filter((p) => p.kind === 'APPLICATION').map((p) => p.id);
     const memberResumeIds = parsed.filter((p) => p.kind === 'MEMBER_RESUME').map((p) => p.id);
+    const externalResumeIds = parsed.filter((p) => p.kind === 'EXTERNAL_RESUME').map((p) => p.id);
 
     // Re-validate every key independently of the filter that produced it. The
     // commit never re-runs the filter - these lookups are what make the
     // snapshot safe rather than trusting whatever the browser sent.
-    const [applications, memberResumes, live] = await Promise.all([
+    const [applications, memberResumes, externalResumes, live] = await Promise.all([
       applicationIds.length
         ? prisma.application.findMany({
             where: { id: { in: applicationIds } },
@@ -498,23 +576,41 @@ router.post('/clients/:id/assign', async (req, res) => {
             }
           })
         : [],
+      externalResumeIds.length
+        ? prisma.externalResume.findMany({
+            where: { id: { in: externalResumeIds } },
+            select: {
+              id: true,
+              isCurrent: true,
+              shareConsent: true,
+              consentRevokedAt: true,
+              // The gate members do not have. Read here as well as in the
+              // filter so a student who was verified at preview time and is not
+              // any more cannot slip through on a stale key.
+              user: { select: { emailVerifiedAt: true, isActive: true } }
+            }
+          })
+        : [],
       prisma.clientResumeAssignment.findMany({
         where: {
           clientId: client.id,
           revokedAt: null,
           OR: [
             { applicationId: { in: applicationIds } },
-            { memberResumeId: { in: memberResumeIds } }
+            { memberResumeId: { in: memberResumeIds } },
+            { externalResumeId: { in: externalResumeIds } }
           ]
         },
-        select: { applicationId: true, memberResumeId: true }
+        select: { applicationId: true, memberResumeId: true, externalResumeId: true }
       })
     ]);
 
     const appById = new Map(applications.map((a) => [a.id, a]));
     const memberById = new Map(memberResumes.map((m) => [m.id, m]));
+    const externalById = new Map(externalResumes.map((e) => [e.id, e]));
     const liveApps = new Set(live.map((l) => l.applicationId).filter(Boolean));
     const liveMembers = new Set(live.map((l) => l.memberResumeId).filter(Boolean));
+    const liveExternals = new Set(live.map((l) => l.externalResumeId).filter(Boolean));
 
     const toCreate = [];
 
@@ -532,24 +628,44 @@ router.post('/clients/:id/assign', async (req, res) => {
         } else if (liveApps.has(p.id)) {
           skipped.push({ key: p.key, reason: 'Already assigned to this client' });
         } else {
-          toCreate.push({ applicationId: p.id, memberResumeId: null });
+          toCreate.push({ applicationId: p.id, memberResumeId: null, externalResumeId: null });
         }
         continue;
       }
 
-      const mr = memberById.get(p.id);
-      if (!mr) {
-        skipped.push({ key: p.key, reason: 'Member resume no longer exists' });
-      } else if (!mr.isCurrent) {
-        skipped.push({ key: p.key, reason: 'Member has replaced this resume' });
-      } else if (!mr.shareConsent || mr.consentRevokedAt) {
-        skipped.push({ key: p.key, reason: 'Member has not consented to sharing' });
+      if (p.kind === 'MEMBER_RESUME') {
+        const mr = memberById.get(p.id);
+        if (!mr) {
+          skipped.push({ key: p.key, reason: 'Member resume no longer exists' });
+        } else if (!mr.isCurrent) {
+          skipped.push({ key: p.key, reason: 'Member has replaced this resume' });
+        } else if (!mr.shareConsent || mr.consentRevokedAt) {
+          skipped.push({ key: p.key, reason: 'Member has not consented to sharing' });
+        } else if (client.visibility === 'BLIND') {
+          skipped.push({ key: p.key, reason: 'Member resumes have no redacted version' });
+        } else if (liveMembers.has(p.id)) {
+          skipped.push({ key: p.key, reason: 'Already assigned to this client' });
+        } else {
+          toCreate.push({ applicationId: null, memberResumeId: p.id, externalResumeId: null });
+        }
+        continue;
+      }
+
+      const er = externalById.get(p.id);
+      if (!er) {
+        skipped.push({ key: p.key, reason: 'Student resume no longer exists' });
+      } else if (!er.isCurrent) {
+        skipped.push({ key: p.key, reason: 'Student has replaced this resume' });
+      } else if (!er.shareConsent || er.consentRevokedAt) {
+        skipped.push({ key: p.key, reason: 'Student has not consented to sharing' });
+      } else if (!er.user?.emailVerifiedAt || er.user?.isActive === false) {
+        skipped.push({ key: p.key, reason: 'Student has not verified their UCLA email' });
       } else if (client.visibility === 'BLIND') {
-        skipped.push({ key: p.key, reason: 'Member resumes have no redacted version' });
-      } else if (liveMembers.has(p.id)) {
+        skipped.push({ key: p.key, reason: 'Student resumes have no redacted version' });
+      } else if (liveExternals.has(p.id)) {
         skipped.push({ key: p.key, reason: 'Already assigned to this client' });
       } else {
-        toCreate.push({ applicationId: null, memberResumeId: p.id });
+        toCreate.push({ applicationId: null, memberResumeId: null, externalResumeId: p.id });
       }
     }
 
@@ -576,6 +692,7 @@ router.post('/clients/:id/assign', async (req, res) => {
           batchId: created.id,
           applicationId: t.applicationId,
           memberResumeId: t.memberResumeId,
+          externalResumeId: t.externalResumeId,
           assignedById: req.user.id
         }))
       });

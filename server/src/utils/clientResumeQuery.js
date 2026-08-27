@@ -31,7 +31,24 @@ export const MAX_EXPORT = 1000;
 const showsIdentity = (visibility) => visibility === 'BASIC' || visibility === 'FULL';
 const showsContact = (visibility) => visibility === 'FULL';
 
-export const KINDS = ['APPLICANT', 'MEMBER'];
+export const KINDS = ['APPLICANT', 'MEMBER', 'EXTERNAL'];
+
+// Which assignment column backs each kind. One map so the filter clause and any
+// future kind stay in step with KINDS rather than drifting into a switch.
+const KIND_COLUMN = {
+  APPLICANT: 'applicationId',
+  MEMBER: 'memberResumeId',
+  EXTERNAL: 'externalResumeId'
+};
+
+// What a client sees in the Type column and the kind facet. "UCLA Student" and
+// not "External": the word describes the person's relationship to UConsulting,
+// which is internal vocabulary and means nothing to the buyer reading the CSV.
+export const KIND_LABELS = {
+  APPLICANT: 'Applicant',
+  MEMBER: 'Member',
+  EXTERNAL: 'UCLA Student'
+};
 
 /**
  * Which filters the UI may offer, and the server may honour, at a given level.
@@ -196,10 +213,12 @@ const majorAnyOf = (values) => ({
   ])
 });
 
-// A filter names a field on the underlying row, which lives on one of two
-// relations. Matching either is what makes "class of 2030" mean the same thing
-// for an applicant and for a member.
-const eitherPool = (clause) => ({ OR: [{ application: clause }, { memberResume: clause }] });
+// A filter names a field on the underlying row, which lives on one of three
+// relations. Matching any of them is what makes "class of 2030" mean the same
+// thing for an applicant, a member and a self-registered student.
+const anyPool = (clause) => ({
+  OR: [{ application: clause }, { memberResume: clause }, { externalResume: clause }]
+});
 
 /**
  * Translate a sanitized filter set into the Prisma `AND` fragments that narrow
@@ -212,29 +231,29 @@ export const buildAssignmentFilters = (filters = {}) => {
   const and = [];
   const notes = [];
 
-  if (filters.kind === 'APPLICANT') and.push({ applicationId: { not: null } });
-  if (filters.kind === 'MEMBER') and.push({ memberResumeId: { not: null } });
+  const kindColumn = KIND_COLUMN[filters.kind];
+  if (kindColumn) and.push({ [kindColumn]: { not: null } });
 
   if (filters.graduationYear?.length) {
-    and.push(eitherPool(anyOfInsensitive('graduationYear', filters.graduationYear)));
+    and.push(anyPool(anyOfInsensitive('graduationYear', filters.graduationYear)));
   }
   if (filters.gender?.length) {
-    and.push(eitherPool(anyOfInsensitive('gender', filters.gender)));
+    and.push(anyPool(anyOfInsensitive('gender', filters.gender)));
   }
   if (filters.major?.length) {
-    and.push(eitherPool(majorAnyOf(filters.major)));
+    and.push(anyPool(majorAnyOf(filters.major)));
   }
 
   const gpa = {};
   if (filters.gpaMin) gpa.gte = filters.gpaMin;
   if (filters.gpaMax) gpa.lte = filters.gpaMax;
   if (Object.keys(gpa).length > 0) {
-    // Member-uploaded resumes carry no GPA, so a GPA filter necessarily drops
-    // every member row. Saying so beats letting the client read the empty
-    // member half as "no members matched".
+    // Uploaded resumes - member and student alike - carry no GPA, so a GPA
+    // filter necessarily drops every one of those rows. Saying so beats letting
+    // the client read the empty half as "no members matched".
     and.push({ application: { cumulativeGpa: gpa } });
     if (filters.kind !== 'APPLICANT') {
-      notes.push('Member resumes do not record a GPA, so a GPA filter shows applicants only.');
+      notes.push('Uploaded resumes do not record a GPA, so a GPA filter shows applicants only.');
     }
   }
 
@@ -252,21 +271,23 @@ export const buildAssignmentFilters = (filters = {}) => {
 export const buildSearchClause = (q, visibility) => {
   const contains = { contains: q, mode: 'insensitive' };
   const or = [];
-  let memberNameAdded = false;
+  let uploadedNameAdded = false;
 
   for (const field of searchableFields(visibility)) {
     if (field === 'firstName' || field === 'lastName') {
       or.push({ application: { [field]: contains } });
-      // A member's name lives on the related User, not on the resume row, so
-      // one clause covers both name fields.
-      if (!memberNameAdded) {
+      // The name behind an uploaded resume lives on the related User, not on
+      // the resume row, so one clause per pool covers both name fields.
+      if (!uploadedNameAdded) {
         or.push({ memberResume: { member: { fullName: contains } } });
-        memberNameAdded = true;
+        or.push({ externalResume: { user: { fullName: contains } } });
+        uploadedNameAdded = true;
       }
       continue;
     }
     or.push({ application: { [field]: contains } });
     or.push({ memberResume: { [field]: contains } });
+    or.push({ externalResume: { [field]: contains } });
   }
 
   return { OR: or };
@@ -397,7 +418,7 @@ export const escapeCsvCell = (value) => {
 const csvRowValues = (dto) => ({
   ...dto,
   reference: referenceFor(dto.assignmentId),
-  kindLabel: dto.kind === 'MEMBER' ? 'Member' : 'Applicant',
+  kindLabel: KIND_LABELS[dto.kind] || 'Applicant',
   availableLabel: dto.available ? 'Yes' : 'No',
   assignedAtDate: dto.assignedAt ? new Date(dto.assignedAt).toISOString().slice(0, 10) : ''
 });

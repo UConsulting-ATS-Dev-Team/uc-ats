@@ -3,6 +3,7 @@ import {
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
+  buildExternalResumeWhere,
   parseAssignmentKey,
   buildAssignmentKey,
   PREVIEW_CAP
@@ -242,5 +243,89 @@ describe('assignment keys', () => {
 describe('caps', () => {
   it('bounds preview and commit size', () => {
     expect(PREVIEW_CAP).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The external pool: self-registered UCLA students
+// ---------------------------------------------------------------------------
+
+describe('buildExternalResumeWhere', () => {
+  const rows = [{ field: 'graduationYear', values: ['2027'] }];
+
+  it('gates on verified ownership as well as consent', () => {
+    // The gate members do not have. A member is vouched for by having been
+    // recruited; an external account is vouched for by nothing else.
+    const { where } = buildExternalResumeWhere({ pool: 'EXTERNALS', rows }, { visibility: 'BASIC' });
+    expect(where.AND).toEqual(
+      expect.arrayContaining([
+        { shareConsent: true },
+        { consentRevokedAt: null },
+        { user: { emailVerifiedAt: { not: null }, isActive: true } }
+      ])
+    );
+  });
+
+  it('leaves the verification gate out of filterOnlyWhere, which is diagnostics only', () => {
+    const { filterOnlyWhere } = buildExternalResumeWhere(
+      { pool: 'EXTERNALS', rows },
+      { visibility: 'BASIC' }
+    );
+    expect(JSON.stringify(filterOnlyWhere)).not.toMatch(/emailVerifiedAt/);
+    expect(JSON.stringify(filterOnlyWhere)).not.toMatch(/shareConsent/);
+  });
+
+  it('matches nothing for a blind client, and says why', () => {
+    const { where, notes } = buildExternalResumeWhere(
+      { pool: 'EXTERNALS', rows },
+      { visibility: 'BLIND' }
+    );
+    expect(where).toBeNull();
+    expect(notes.join(' ')).toMatch(/redacted/);
+  });
+
+  it('matches nothing when the pool excludes it', () => {
+    expect(buildExternalResumeWhere({ pool: 'APPLICANTS', rows }, { visibility: 'FULL' }).where).toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'MEMBERS', rows }, { visibility: 'FULL' }).where).toBeNull();
+  });
+
+  it('names the applicant-only field rather than returning a silent zero', () => {
+    const { where, notes } = buildExternalResumeWhere(
+      { pool: 'BOTH', rows: [{ field: 'cumulativeGpa', op: 'gte', value: '3.50' }] },
+      { visibility: 'FULL' }
+    );
+    expect(where).toBeNull();
+    expect(notes.join(' ')).toMatch(/Cumulative GPA/);
+  });
+});
+
+describe('pool widening', () => {
+  const rows = [{ field: 'graduationYear', values: ['2027'] }];
+
+  it("'BOTH' now reaches all three pools", () => {
+    // Safe to widen the PREVIEW: a commit only ever assigns the explicit keys
+    // the admin left checked, so nothing is assigned by this alone.
+    const opts = { visibility: 'FULL' };
+    expect(buildApplicantWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+    expect(buildMemberResumeWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'BOTH', rows }, opts).where).not.toBeNull();
+  });
+
+  it('selecting one pool excludes the other two', () => {
+    const opts = { visibility: 'FULL' };
+    expect(buildApplicantWhere({ pool: 'EXTERNALS', rows }, opts).where).toBeNull();
+    expect(buildMemberResumeWhere({ pool: 'EXTERNALS', rows }, opts).where).toBeNull();
+    expect(buildExternalResumeWhere({ pool: 'EXTERNALS', rows }, opts).where).not.toBeNull();
+  });
+});
+
+describe('EXTERNAL_RESUME assignment keys', () => {
+  it('round-trips', () => {
+    const key = buildAssignmentKey('EXTERNAL_RESUME', 'er-1');
+    expect(parseAssignmentKey(key)).toEqual({ kind: 'EXTERNAL_RESUME', id: 'er-1' });
+  });
+
+  it('still rejects an unknown kind', () => {
+    expect(parseAssignmentKey('SOMETHING_ELSE:er-1')).toBeNull();
   });
 });

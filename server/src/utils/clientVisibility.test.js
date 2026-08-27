@@ -232,3 +232,85 @@ describe('searchableFields', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// External resumes - the third pool
+// ---------------------------------------------------------------------------
+
+describe('projectAssignment for a self-registered student', () => {
+  const assignment = (overrides = {}) => ({
+    id: 'a-ext-1',
+    assignedAt: new Date('2026-08-26'),
+    externalResume: {
+      id: 'er-1',
+      storagePath: 'external-resumes/er-1/resume.pdf',
+      graduationYear: '2027',
+      major1: 'Economics',
+      major2: null,
+      gender: 'Female',
+      user: { fullName: 'Joski Bruin', email: 'joski@g.ucla.edu' }
+    },
+    ...overrides
+  });
+
+  it('is labelled EXTERNAL, distinct from a member', () => {
+    expect(projectAssignment(assignment(), 'BASIC').kind).toBe('EXTERNAL');
+  });
+
+  it('never carries a storage path at any visibility', () => {
+    for (const level of ['BLIND', 'BASIC', 'FULL']) {
+      const dto = projectAssignment(assignment(), level);
+      expect(JSON.stringify(dto)).not.toMatch(/external-resumes/);
+      expect(dto).not.toHaveProperty('storagePath');
+    }
+  });
+
+  it('omits the name entirely under BLIND', () => {
+    const dto = projectAssignment(assignment(), 'BLIND');
+    expect(dto).not.toHaveProperty('firstName');
+    expect(dto).not.toHaveProperty('lastName');
+    expect(dto).not.toHaveProperty('gender');
+  });
+
+  it('reads the name off the related User, which is where it lives', () => {
+    const dto = projectAssignment(assignment(), 'BASIC');
+    expect(dto.firstName).toBe('Joski');
+    expect(dto.lastName).toBe('Bruin');
+  });
+
+  it('emits the contact keys at FULL so one component renders all three kinds', () => {
+    const dto = projectAssignment(assignment(), 'FULL');
+    expect(dto.email).toBe('joski@g.ucla.edu');
+    // A student supplies no phone or GPA with an upload, but the keys are
+    // present rather than absent.
+    expect(dto).toHaveProperty('phoneNumber', null);
+    expect(dto).toHaveProperty('cumulativeGpa', null);
+  });
+
+  it('is not viewable by a blind client - there is no redacted variant', () => {
+    expect(isViewable(assignment(), 'BLIND')).toBe(false);
+    expect(isViewable(assignment(), 'BASIC')).toBe(true);
+  });
+});
+
+describe('resolveResumeSource for a self-registered student', () => {
+  const assignment = {
+    id: 'a-ext-1',
+    externalResume: { id: 'er-1', storagePath: 'external-resumes/er-1/resume.pdf' }
+  };
+
+  it('resolves to the local file above BLIND', () => {
+    expect(resolveResumeSource(assignment, 'BASIC')).toEqual({
+      kind: 'local',
+      storagePath: 'external-resumes/er-1/resume.pdf'
+    });
+  });
+
+  it('refuses to fall back to the unredacted file for a blind client', () => {
+    expect(resolveResumeSource(assignment, 'BLIND')).toBeNull();
+  });
+
+  it('returns null rather than a half-built source when the path is missing', () => {
+    expect(resolveResumeSource({ id: 'a', externalResume: { id: 'er-1' } }, 'FULL')).toBeNull();
+  });
+});

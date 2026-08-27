@@ -122,10 +122,18 @@ describe('filter translation', () => {
     ]);
   });
 
-  it('says a GPA filter excludes members rather than showing an empty member half', () => {
+  it('narrows to student resumes through their own foreign key', () => {
+    expect(buildAssignmentFilters({ kind: 'EXTERNAL' }).and).toEqual([
+      { externalResumeId: { not: null } }
+    ]);
+  });
+
+  it('says a GPA filter excludes uploaded resumes rather than showing an empty half', () => {
     const { and, notes } = buildAssignmentFilters({ gpaMin: '3.50' });
     expect(and).toEqual([{ application: { cumulativeGpa: { gte: '3.50' } } }]);
-    expect(notes.join(' ')).toMatch(/Member resumes do not record a GPA/);
+    // Wording covers members and self-registered students alike - neither pool
+    // records a GPA, so a GPA filter drops both.
+    expect(notes.join(' ')).toMatch(/Uploaded resumes do not record a GPA/);
   });
 
   it('stays quiet about members when the filter already excluded them', () => {
