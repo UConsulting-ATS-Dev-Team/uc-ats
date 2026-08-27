@@ -97,8 +97,49 @@ model Candidate {
   roundOne          RoundOne[]
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
+  onboarding        CandidateOnboarding?
 
   @@map("candidates")
+}
+
+// Applicant information a candidate supplies themselves, at signup, when we
+// have no application to read it from.
+//
+// Deliberately NOT columns on Candidate. Everything on Candidate arrives from
+// the Google Forms sync and is corroborated by a submitted application; this is
+// self-reported by someone who has done nothing but verify an email address.
+// Keeping the two apart means no screen can mistake one for the other, and the
+// row can be dropped wholesale once a real application lands.
+//
+// There is no cover letter or video here on purpose - the module asks for a
+// resume and nothing else file-wise. The headshot is optional, which is why it
+// is nullable while the resume columns are not.
+model CandidateOnboarding {
+  id                  String   @id @default(uuid())
+  candidateId         String   @unique
+  phoneNumber         String
+  // Four bare digits, matching Application.graduationYear rather than the free
+  // text User.graduationClass holds, so the two filter alike.
+  graduationYear      String
+  cumulativeGpa       Decimal  @db.Decimal(3, 2)
+  major1              String
+  major2              String?
+  gender              String?
+  isTransferStudent   Boolean
+  isFirstGeneration   Boolean
+  // Relative to server/storage, the same private root external resumes use -
+  // never uploads/, which index.js serves unauthenticated.
+  resumeStoragePath   String
+  resumeOriginalName  String
+  resumeFileSize      Int
+  headshotStoragePath String?
+  headshotOriginalName String?
+  headshotFileSize    Int?
+  completedAt         DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  candidate           Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@map("candidate_onboarding")
 }
 
 model Application {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import ApplicationList from './pages/ApplicationList';
 import ApplicationDetail from './pages/ApplicationDetail';
@@ -50,11 +50,63 @@ import MasterCommunications from './pages/MasterCommunications';
 import Profile from './pages/Profile';
 import ClientResumeLibrary from './pages/ClientResumeLibrary';
 import TalentSignUp from './pages/TalentSignUp';
-import TalentVerifyEmail from './pages/TalentVerifyEmail';
+import VerifyEmail from './pages/VerifyEmail';
+import CandidateOnboarding from './pages/CandidateOnboarding';
 import TalentProfile from './pages/TalentProfile';
 import NotFound from './pages/NotFound';
-import PausedLanding from './pages/PausedLanding';
+import apiClient from './utils/api';
+import { readOnboardingRequired, cacheOnboardingRequired } from './utils/onboardingStatus';
 import './styles/variables.css';
+/**
+ * Sends a candidate with no application on file to the onboarding module.
+ *
+ * Wraps candidate pages rather than living inside each one: the module exists
+ * precisely because we know nothing about this person, so there is no candidate
+ * page that has anything useful to show until it is done.
+ */
+const CandidateOnboardingGate = ({ children }) => {
+  const { user } = useAuth();
+  const location = useLocation();
+  // Read fresh on every render rather than mirrored into state. Mirroring is
+  // what made submitting the form loop: the page marks onboarding done and
+  // navigates away, and a gate holding its own stale "required" would redirect
+  // straight back. State here exists only to re-render once the fetch lands.
+  const required = readOnboardingRequired(user?.id);
+  const [, setResolved] = useState(0);
+
+  useEffect(() => {
+    if (!user?.id || readOnboardingRequired(user.id) !== null) return;
+
+    let cancelled = false;
+    apiClient
+      .get('/candidate/onboarding/status')
+      .then((data) => {
+        if (cancelled) return;
+        cacheOnboardingRequired(user.id, data.required);
+        setResolved((n) => n + 1);
+      })
+      .catch(() => {
+        // A failed check must not lock a candidate out of their own dashboard.
+        // Erring towards "not required" costs an un-onboarded profile; erring
+        // the other way strands everyone behind a form whenever the call fails.
+        if (cancelled) return;
+        cacheOnboardingRequired(user.id, false);
+        setResolved((n) => n + 1);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, location.pathname]);
+
+  // The module itself is never gated on its own answer.
+  if (location.pathname === '/onboarding') return children;
+
+  if (required === null) return <div>Loading...</div>;
+  if (required) return <Navigate to="/onboarding" replace />;
+  return children;
+};
+
 // Protected Route wrapper for admin/member users
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -92,13 +144,17 @@ const ProtectedRoute = ({ children }) => {
 
   // Use different layouts based on user role
   if (user.role === 'USER') {
-    return <CandidateLayout>{children}</CandidateLayout>;
+    return (
+      <CandidateOnboardingGate>
+        <CandidateLayout>{children}</CandidateLayout>
+      </CandidateOnboardingGate>
+    );
   }
 
   return <Layout>{children}</Layout>;
 };
 
-/** Paused landing for public & candidates; admins/members see their dashboard at /. */
+/** Role-appropriate landing at /; signed-out visitors go to the login page. */
 const HomeRoute = () => {
   const { user, loading } = useAuth();
 
@@ -124,7 +180,17 @@ const HomeRoute = () => {
     );
   }
 
-  return <PausedLanding />;
+  // Recruitment is open, so there is no paused landing to show: a candidate
+  // lands on their dashboard and a signed-out visitor on the login page.
+  if (user) {
+    return (
+      <ProtectedRoute>
+        <CandidateDashboard />
+      </ProtectedRoute>
+    );
+  }
+
+  return <Navigate to="/login" replace />;
 };
 
 const AppRoutes = () => {
@@ -139,7 +205,10 @@ const AppRoutes = () => {
           page is public too: the emailed link usually opens in whichever
           browser the mail client hands it to, not the one that signed up. */}
       <Route path="/talent/signup" element={<TalentSignUp />} />
-      <Route path="/talent/verify" element={<TalentVerifyEmail />} />
+      <Route path="/talent/verify" element={<VerifyEmail audience="talent" />} />
+      {/* The candidate half of the same link. Public for the same reason: the
+          email is usually opened in a browser that has no session. */}
+      <Route path="/verify-email" element={<VerifyEmail audience="candidate" />} />
       
       <Route path="/" element={<HomeRoute />} />
       
@@ -148,6 +217,14 @@ const AppRoutes = () => {
         <ProtectedRoute>
           {user?.role === 'USER' ? <CandidateDashboard /> : 
            user?.role === 'MEMBER' ? <MemberDashboard /> : <Dashboard />}
+        </ProtectedRoute>
+      } />
+
+      {/* Onboarding for a candidate with no application on file. Inside
+          ProtectedRoute so the gate above can let it through unchallenged. */}
+      <Route path="/onboarding" element={
+        <ProtectedRoute>
+          <CandidateOnboarding />
         </ProtectedRoute>
       } />
 

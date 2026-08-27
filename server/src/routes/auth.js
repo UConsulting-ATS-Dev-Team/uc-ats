@@ -85,7 +85,12 @@ router.post('/register', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
     
-    // Create user
+    // Create user, unverified. The address has been typed, not proved - the
+    // same standing a talent-portal signup starts from, and for the same
+    // reason: everything we later show or send this person is keyed to a
+    // mailbox nobody has demonstrated they can read.
+    const { token: verificationToken, expiresAt } = createVerificationToken();
+
     const user = await prisma.user.create({
       data: {
         email,
@@ -93,6 +98,8 @@ router.post('/register', async (req, res) => {
         fullName,
         graduationClass,
         studentId: studentId,
+        emailVerificationToken: verificationToken,
+        emailVerificationExpiry: expiresAt
       }
     });
     
@@ -120,6 +127,10 @@ router.post('/register', async (req, res) => {
       }
     }
     
+    // A send failure must not fail the signup - the account exists either way
+    // and the app offers a resend. Same rule as register-external.
+    await sendEmailVerification(user.email, user.fullName, verificationLink(verificationToken, user));
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
@@ -130,9 +141,14 @@ router.post('/register', async (req, res) => {
     // Return user info and token. resetToken/resetTokenExpiry are stripped
     // alongside the password - this payload now goes to Talent Partner Network
     // clients too, and a live reset token is an account takeover primitive.
+    //
+    // A session is issued before verification on purpose, matching
+    // register-external: it lets the app render a real "check your email" state
+    // with a working resend instead of a dead end. It grants nothing that
+    // matters - onboarding checks emailVerifiedAt, not the session.
     const userWithoutPassword = publicUser(user);
     res.status(201).json({
-      message: 'User created successfully',
+      message: 'Account created. Check your email for a verification link.',
       user: userWithoutPassword,
       token
     });
@@ -409,7 +425,13 @@ router.post('/register-member', async (req, res) => {
 // for each of them would put strangers in the recruiting pipeline. Two
 // endpoints, two meanings, and neither has to branch on the other's case.
 
-const verificationLink = (token) => `${config.clientUrl}/talent/verify?token=${token}`;
+// Two landing pages, one token. A talent-portal account verifies into the
+// portal it signed up for; a candidate has no portal and lands on a page that
+// sends them on to their dashboard. Same POST /verify-email behind both.
+const verificationLink = (token, user) =>
+  user?.isExternalTalent
+    ? `${config.clientUrl}/talent/verify?token=${token}`
+    : `${config.clientUrl}/verify-email?token=${token}`;
 
 // A resend is a mail send triggered by an unauthenticated caller, so it needs a
 // floor. Derived from the stored expiry rather than a separate issuedAt column:
@@ -450,7 +472,7 @@ router.post('/register-external', async (req, res) => {
 
       // A send failure must not fail the signup - the account exists either way
       // and the portal offers a resend.
-      await sendEmailVerification(user.email, user.fullName, verificationLink(token));
+      await sendEmailVerification(user.email, user.fullName, verificationLink(token, user));
 
       return res.status(201).json({
         message: 'Account created. Check your UCLA email for a verification link.',
@@ -485,7 +507,7 @@ router.post('/register-external', async (req, res) => {
       }
     });
 
-    await sendEmailVerification(user.email, user.fullName, verificationLink(token));
+    await sendEmailVerification(user.email, user.fullName, verificationLink(token, user));
 
     // A session is issued before verification on purpose: it lets the portal
     // render a real "verify your email" state and a working resend button
@@ -554,12 +576,16 @@ router.post('/resend-verification', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     if (!email) {
-      return res.status(400).json({ error: 'Enter your UCLA email address.' });
+      return res.status(400).json({ error: 'Enter your email address.' });
     }
 
     const user = await prisma.user.findUnique({ where: { email } });
 
-    if (!user || user.emailVerifiedAt || !user.isExternalTalent) {
+    // Both self-signup paths issue verification links, so both can resend. A
+    // staff account cannot: those are created by an admin and never gated on
+    // emailVerifiedAt, so there is no link to reissue.
+    const selfRegistered = user?.isExternalTalent === true || user?.role === 'USER';
+    if (!user || user.emailVerifiedAt || !selfRegistered) {
       return res.json(generic);
     }
 
@@ -576,7 +602,7 @@ router.post('/resend-verification', async (req, res) => {
       data: { emailVerificationToken: token, emailVerificationExpiry: expiresAt }
     });
 
-    await sendEmailVerification(user.email, user.fullName, verificationLink(token));
+    await sendEmailVerification(user.email, user.fullName, verificationLink(token, user));
 
     res.json(generic);
   } catch (error) {

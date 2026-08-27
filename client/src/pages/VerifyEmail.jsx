@@ -21,8 +21,37 @@ import UConsultingLogo from '../components/UConsultingLogo';
 // mail client hands it to, which is often not the one the person signed up in.
 // The endpoint returns a fresh session on success, so clicking the link both
 // verifies the address and signs them in wherever they opened it.
+//
+// One page, two audiences. A talent-portal signup and a candidate signup verify
+// against the same endpoint with the same token; all that differs is where they
+// are sent afterwards and what is waiting for them there, which is what
+// `audience` selects. Splitting this into two near-identical pages would mean
+// fixing every future verification bug twice.
 
-const TalentVerifyEmail = () => {
+const AUDIENCES = {
+  talent: {
+    verifiedMessage: 'Your UCLA email is verified.',
+    nextStep:
+      'You can now upload your resume and choose whether to share it with partner organizations.',
+    buttonLabel: 'Go to my profile',
+    destination: '/talent/profile',
+    emailPlaceholder: 'you@g.ucla.edu',
+    resendPrompt:
+      'Links expire after 24 hours and can only be used once. Enter your UCLA email to get a new one.'
+  },
+  candidate: {
+    verifiedMessage: 'Your email is verified.',
+    nextStep: 'You can now finish setting up your applicant profile.',
+    buttonLabel: 'Continue',
+    destination: '/',
+    emailPlaceholder: 'you@example.com',
+    resendPrompt:
+      'Links expire after 24 hours and can only be used once. Enter your email to get a new one.'
+  }
+};
+
+const VerifyEmail = ({ audience = 'talent' }) => {
+  const copy = AUDIENCES[audience] ?? AUDIENCES.talent;
   const [params] = useSearchParams();
   const token = params.get('token');
   const navigate = useNavigate();
@@ -96,14 +125,13 @@ const TalentVerifyEmail = () => {
             {state === 'done' && (
               <>
                 <Alert severity="success" sx={{ width: '100%' }}>
-                  Your UCLA email is verified.
+                  {copy.verifiedMessage}
                 </Alert>
                 <Typography variant="body2" color="text.secondary" align="center">
-                  You can now upload your resume and choose whether to share it with partner
-                  organizations.
+                  {copy.nextStep}
                 </Typography>
-                <Button variant="contained" onClick={() => navigate('/talent/profile')}>
-                  Go to my profile
+                <Button variant="contained" onClick={() => navigate(copy.destination)}>
+                  {copy.buttonLabel}
                 </Button>
               </>
             )}
@@ -123,14 +151,13 @@ const TalentVerifyEmail = () => {
                 ) : (
                   <>
                     <Typography variant="body2" color="text.secondary" align="center">
-                      Links expire after 24 hours and can only be used once. Enter your UCLA email
-                      to get a new one.
+                      {copy.resendPrompt}
                     </Typography>
                     <Stack direction="row" spacing={1} sx={{ width: '100%' }}>
                       <input
                         style={{ flex: 1, padding: '8px' }}
                         type="email"
-                        placeholder="you@g.ucla.edu"
+                        placeholder={copy.emailPlaceholder}
                         value={resendEmail}
                         onChange={(e) => setResendEmail(e.target.value)}
                       />
@@ -153,4 +180,4 @@ const TalentVerifyEmail = () => {
   );
 };
 
-export default TalentVerifyEmail;
+export default VerifyEmail;
