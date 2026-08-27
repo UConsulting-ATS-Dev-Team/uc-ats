@@ -6069,4 +6069,27 @@ router.get('/talent-pool/stats', async (req, res) => {
   }
 });
 
+// -------------------- Admin Referral List (ATS-56) --------------------
+
+// List referrals scoped by cycle/candidate; includes not-yet-applied candidates
+router.get('/referrals', async (req, res) => {
+  try {
+    const { cycleId, candidateId } = req.query || {};
+    const where = {};
+    if (cycleId) where.cycleId = String(cycleId);
+    if (candidateId) where.candidateId = String(candidateId);
+
+    const referrals = await prisma.referral.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: { candidate: true }
+    });
+
+    res.json(referrals);
+  } catch (error) {
+    console.error('[GET /api/admin/referrals]', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
+  }
+});
+
 export default router;
