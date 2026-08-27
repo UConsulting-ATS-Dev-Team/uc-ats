@@ -335,7 +335,15 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   }
 
   const filterClauses = [{ isCurrent: true }];
-  const gateClauses = [{ shareConsent: true }, { consentRevokedAt: null }];
+  const gateClauses = [
+    { shareConsent: true },
+    { consentRevokedAt: null },
+    // A deactivated account is how this app records that someone has left, and
+    // their resume should stop going to recruiters. The external pool below has
+    // always required this; the member pool did not, so a graduated member
+    // stayed assignable indefinitely.
+    { member: { isActive: true } },
+  ];
 
   const AND = filterClauses;
   const unsupported = [];

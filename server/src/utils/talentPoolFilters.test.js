@@ -411,3 +411,26 @@ describe('sanitizeFilterDsl and pools', () => {
       .toEqual(['APPLICANTS', 'MEMBERS', 'EXTERNALS']);
   });
 });
+
+describe('deactivated accounts', () => {
+  const rows = [{ field: 'graduationYear', values: ['2028'] }];
+  const seen = { visibility: 'IDENTIFIED' };
+
+  it('are excluded from the member pool', () => {
+    // A deactivated account is how this app records that someone has left.
+    // The member pool used to check only consent, so a graduated member stayed
+    // assignable to new clients indefinitely.
+    const { gateClauses } = buildMemberResumeWhere({ pools: ['MEMBERS'], rows }, seen);
+    expect(gateClauses).toContainEqual({ member: { isActive: true } });
+  });
+
+  it('are excluded from the external pool, as they always were', () => {
+    const { gateClauses } = buildExternalResumeWhere({ pools: ['EXTERNALS'], rows }, seen);
+    expect(gateClauses).toContainEqual({ user: { emailVerifiedAt: { not: null }, isActive: true } });
+  });
+
+  it('keeps the member gate non-negotiable, not something a filter can drop', () => {
+    const { where } = buildMemberResumeWhere({ pools: ['MEMBERS'], rows }, seen);
+    expect(where.AND).toContainEqual({ member: { isActive: true } });
+  });
+});

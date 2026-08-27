@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
+import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
 import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
@@ -5560,10 +5561,22 @@ router.post('/users/deactivate', async (req, res) => {
     // Cut existing sessions immediately rather than after the cache TTL
     invalidateUserCache(eligibleIds);
 
+    // Their resumes stop being assignable via the pool gates, but assignments
+    // already handed to a client are snapshots and would otherwise survive the
+    // deactivation. Failing here must not un-deactivate anyone, so it is
+    // reported rather than thrown.
+    let revoked = 0;
+    try {
+      ({ revoked } = await revokeTalentPoolAccess(eligibleIds, req.user.id));
+    } catch (error) {
+      console.error('[POST /api/admin/users/deactivate] talent pool revocation failed', error);
+    }
+
     res.json({
       ...preview,
       dryRun: false,
-      deactivatedCount: updateResult.count
+      deactivatedCount: updateResult.count,
+      talentPoolAssignmentsRevoked: revoked
     });
   } catch (error) {
     console.error('[POST /api/admin/users/deactivate]', error);

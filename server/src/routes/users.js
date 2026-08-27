@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -324,7 +325,22 @@ router.patch('/:id/deactivate', requireAuth, async (req, res) => {
     // Cut the existing session immediately rather than after the cache TTL
     invalidateUserCache(id);
 
-    res.json({ message: 'User deactivated successfully', user: updatedUser });
+    // Their resume stops being assignable via the pool gates, but assignments
+    // already handed to a client are snapshots and would otherwise outlive the
+    // deactivation. Reported rather than thrown: a revocation failure must not
+    // leave the account half-deactivated.
+    let talentPoolAssignmentsRevoked = 0;
+    try {
+      ({ revoked: talentPoolAssignmentsRevoked } = await revokeTalentPoolAccess([id], req.user.id));
+    } catch (error) {
+      console.error('[deactivate user] talent pool revocation failed', error);
+    }
+
+    res.json({
+      message: 'User deactivated successfully',
+      user: updatedUser,
+      talentPoolAssignmentsRevoked,
+    });
   } catch (error) {
     console.error('Error deactivating user:', error);
     res.status(500).json({ error: 'Failed to deactivate user' });
