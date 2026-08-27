@@ -5663,21 +5663,74 @@ router.get('/talent-pool/stats', async (req, res) => {
     // breakdown above: that one counts applicants within a recruiting cycle,
     // and an external account belongs to no cycle at all. Adding them would
     // make the percentages answer a question nobody asked.
-    const [externalAccounts, externalVerified, externalShared] = await Promise.all([
-      prisma.user.count({ where: { isExternalTalent: true, isActive: true } }),
-      prisma.user.count({
-        where: { isExternalTalent: true, isActive: true, emailVerifiedAt: { not: null } }
+    // Counted off external_resumes rather than off users.isExternalTalent.
+    //
+    // The two are no longer the same set. A resume reaches this pool by either
+    // route now: a self-registered student uploading one in the talent portal,
+    // or a candidate with no application answering yes to the sharing question
+    // during onboarding. The second is role USER with isExternalTalent false, so
+    // counting accounts by that flag while counting shareable resumes by the
+    // table produced "2 shareable of 0 verified of 0 self-registered" - three
+    // numbers that cannot all be true at once.
+    //
+    // One user has at most one isCurrent resume (uploading supersedes), so a row
+    // count here is a person count.
+    const inPool = { isCurrent: true, user: { isActive: true } };
+    const [externalAccounts, externalVerified, externalShared, externalRows] = await Promise.all([
+      prisma.externalResume.count({ where: inPool }),
+      prisma.externalResume.count({
+        where: { ...inPool, user: { isActive: true, emailVerifiedAt: { not: null } } }
       }),
       // The number that actually matters: how many are assignable right now.
       prisma.externalResume.count({
         where: {
-          isCurrent: true,
+          ...inPool,
           shareConsent: true,
           consentRevokedAt: null,
-          user: { emailVerifiedAt: { not: null }, isActive: true }
+          user: { isActive: true, emailVerifiedAt: { not: null } }
+        }
+      }),
+      prisma.externalResume.findMany({
+        where: inPool,
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          major1: true,
+          major2: true,
+          graduationYear: true,
+          gender: true,
+          shareConsent: true,
+          consentRevokedAt: true,
+          updatedAt: true,
+          user: {
+            select: { id: true, fullName: true, email: true, emailVerifiedAt: true, isExternalTalent: true }
+          }
         }
       })
     ]);
+
+    // The roster behind those counts. Without it the page can say how many
+    // uploaded resumes exist but cannot show a single one of the people, which
+    // is the only question an admin actually opens this page to answer.
+    const externals = externalRows.map((r) => ({
+      id: r.id,
+      userId: r.user.id,
+      name: r.user.fullName,
+      email: r.user.email,
+      graduationYear: r.graduationYear,
+      major1: r.major1,
+      major2: r.major2,
+      gender: r.gender,
+      emailVerified: Boolean(r.user.emailVerifiedAt),
+      // How this person got into the pool. Worth showing: an onboarded
+      // applicant is someone recruitment already knows, a portal signup is not.
+      source: r.user.isExternalTalent ? 'PORTAL' : 'ONBOARDED',
+      shared: Boolean(r.shareConsent) && !r.consentRevokedAt,
+      // Assignable is the conjunction the pool query actually gates on, so this
+      // column and the shareable count can never disagree.
+      assignable: Boolean(r.shareConsent) && !r.consentRevokedAt && Boolean(r.user.emailVerifiedAt),
+      updatedAt: r.updatedAt
+    }));
 
     // Counted off the same array the roster renders, so the breakdown always
     // agrees with the rows behind it.
@@ -5714,7 +5767,8 @@ router.get('/talent-pool/stats', async (req, res) => {
         accounts: externalAccounts,
         verified: externalVerified,
         shareable: externalShared
-      }
+      },
+      externals
     });
   } catch (error) {
     console.error('Error fetching talent pool stats:', error);

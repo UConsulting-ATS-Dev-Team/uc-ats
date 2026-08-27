@@ -161,6 +161,16 @@ const TalentPoolPartnerNetwork = () => {
       .some((f) => String(f).toLowerCase().includes(q));
   });
 
+  // Filtered by the same search box as the applicant roster, so one query
+  // narrows both tables rather than silently applying to only the top one.
+  const externalRows = (data?.externals || []).filter((r) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return [r.name, r.email, r.major1, r.graduationYear]
+      .filter(Boolean)
+      .some((f) => String(f).toLowerCase().includes(q));
+  });
+
   const showCycle = data?.deduplicated;
 
   return (
@@ -242,15 +252,15 @@ const TalentPoolPartnerNetwork = () => {
               'There is no client user role yet — accounts are USER, MEMBER, or ADMIN.'
             }
           />
-          {/* Cycle-independent, unlike every other card here: a self-registered
-              student belongs to no recruiting cycle, so this number does not
-              move when the cycle selector does. */}
+          {/* Cycle-independent, unlike every other card here: nobody counted
+              in it belongs to a recruiting cycle, so this number does not move
+              when the cycle selector does. */}
           <StatCard
-            label="UCLA students shareable"
+            label="Non-previous applicants shareable"
             value={data ? data.externalTalent?.shareable : undefined}
             caption={
               data?.externalTalent
-                ? `${data.externalTalent.verified} verified of ${data.externalTalent.accounts} self-registered — all cycles`
+                ? `${data.externalTalent.verified} verified of ${data.externalTalent.accounts} on file — all cycles`
                 : undefined
             }
           />
@@ -374,6 +384,85 @@ const TalentPoolPartnerNetwork = () => {
                             {openingResumeId === a.id ? 'Opening…' : 'View'}
                           </Button>
                         ) : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Paper>
+
+        {/* Everyone in the uploaded-resume pool: people with no application in
+            any cycle, so the applicant roster above can never show them.
+            Cycle-independent for the same reason - they belong to no cycle. */}
+        <Paper sx={{ p: { xs: 2, sm: 3 }, mt: 3 }}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            justifyContent="space-between"
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            spacing={2}
+            mb={2}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Non-previous applicants{data ? ` (${externalRows.length})` : ''}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              All cycles
+            </Typography>
+          </Stack>
+
+          {externalRows.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+              {(data?.externals || []).length
+                ? 'Nobody here matches that search.'
+                : 'Nobody has uploaded a resume outside of an application yet.'}
+            </Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Email</TableCell>
+                    <TableCell>Major</TableCell>
+                    <TableCell>Grad year</TableCell>
+                    <TableCell>Source</TableCell>
+                    <TableCell>TPN</TableCell>
+                    <TableCell>Updated</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {externalRows.map((r) => (
+                    <TableRow key={r.id} hover>
+                      <TableCell>{r.name || '—'}</TableCell>
+                      <TableCell>{r.email}</TableCell>
+                      <TableCell>{r.major1 || '—'}</TableCell>
+                      <TableCell>{r.graduationYear || '—'}</TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={r.source === 'PORTAL' ? 'Portal signup' : 'Onboarded'}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {/* Consent alone is not enough to be assignable - the
+                            pool query also requires a verified email, so an
+                            opted-in but unverified person is shown as pending
+                            rather than as shareable. */}
+                        {r.assignable ? (
+                          <Chip size="small" color="success" label="Shareable" />
+                        ) : r.shared ? (
+                          <Tooltip title="Opted in, but the email address is not verified yet.">
+                            <Chip size="small" color="warning" variant="outlined" label="Pending" />
+                          </Tooltip>
+                        ) : (
+                          <Chip size="small" variant="outlined" label="Opted out" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : '—'}
                       </TableCell>
                     </TableRow>
                   ))}
