@@ -378,6 +378,108 @@ export async function syncMemberEventRSVP(eventId) {
   }
 }
 
+// Sync member attendance responses for a specific event
+export async function syncMemberEventAttendance(eventId) {
+  try {
+    console.log(`Syncing member attendance for event ${eventId}...`);
+
+    const event = await prisma.events.findUnique({
+      where: { id: eventId }
+    });
+
+    if (!event) {
+      throw new Error(`Event not found: ${eventId}`);
+    }
+
+    if (!event.memberAttendanceForm) {
+      console.warn(`Event ${eventId} has no member attendance form URL. Skipping sync.`);
+      return { processed: 0, errors: 0 };
+    }
+
+    const formId = extractFormIdFromUrl(event.memberAttendanceForm);
+    if (!formId) {
+      console.warn(`Invalid member attendance form URL for event ${eventId}: ${event.memberAttendanceForm}`);
+      return { processed: 0, errors: 0 };
+    }
+
+    console.log(`Fetching responses from member attendance form: ${formId}`);
+    const responses = await getResponses(formId);
+
+    const existingResponseIds = new Set(
+      (await prisma.memberEventAttendance.findMany({
+        where: { eventId },
+        select: { responseId: true }
+      })).map(r => r.responseId).filter(Boolean)
+    );
+
+    const newResponses = responses.filter(response => !existingResponseIds.has(response.responseId));
+    console.log(`Found ${newResponses.length} new member attendance responses to process`);
+
+    let successCount = 0;
+    let errorCount = 0;
+    let totalProcessed = 0;
+
+    for (const response of newResponses) {
+      totalProcessed++;
+
+      try {
+        const transformedData = transformEventResponse(response, eventId, 'member-attendance');
+        console.log(`Transformed data for member attendance response:`, JSON.stringify(transformedData, null, 2));
+
+        let member = null;
+        if (transformedData.studentId) {
+          member = await prisma.user.findUnique({
+            where: { studentId: transformedData.studentId }
+          });
+        }
+
+        if (!member && transformedData.email) {
+          member = await prisma.user.findUnique({
+            where: { email: transformedData.email }
+          });
+        }
+
+        if (!member) {
+          console.warn(`Member not found for attendance response: studentId=${transformedData.studentId}, email=${transformedData.email}`);
+          errorCount++;
+          continue;
+        }
+
+        await prisma.memberEventAttendance.upsert({
+          where: {
+            eventId_memberId: {
+              eventId,
+              memberId: member.id
+            }
+          },
+          update: {
+            responseId: transformedData.responseId,
+            source: 'GOOGLE_FORM'
+          },
+          create: {
+            responseId: transformedData.responseId,
+            eventId,
+            memberId: member.id,
+            source: 'GOOGLE_FORM'
+          }
+        });
+
+        successCount++;
+        console.log(`Successfully processed member attendance response ${transformedData.responseId} for member ${member.id}`);
+      } catch (error) {
+        console.error(`Error processing member attendance response ${response.responseId}:`, error);
+        errorCount++;
+      }
+    }
+
+    console.log(`Member attendance sync completed for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
+    return { processed: totalProcessed, errors: errorCount };
+  } catch (error) {
+    console.error(`Error syncing member attendance for event ${eventId}:`, error);
+    throw error;
+  }
+}
+
 // Sync all event forms (both RSVP and attendance) for all active events
 export async function syncAllEventForms() {
   try {
@@ -389,7 +491,8 @@ export async function syncAllEventForms() {
         OR: [
           { rsvpForm: { not: null } },
           { attendanceForm: { not: null } },
-          { memberRsvpUrl: { not: null } }
+          { memberRsvpUrl: { not: null } },
+          { memberAttendanceForm: { not: null } }
         ]
       }
     });
@@ -405,7 +508,8 @@ export async function syncAllEventForms() {
           eventName: event.eventName,
           rsvp: { processed: 0, errors: 0 },
           attendance: { processed: 0, errors: 0 },
-          memberRsvp: { processed: 0, errors: 0 }
+          memberRsvp: { processed: 0, errors: 0 },
+          memberAttendance: { processed: 0, errors: 0 }
         };
 
         // Sync RSVP if form URL exists
@@ -421,6 +525,11 @@ export async function syncAllEventForms() {
         // Sync member RSVP if form URL exists
         if (event.memberRsvpUrl) {
           eventResult.memberRsvp = await syncMemberEventRSVP(event.id);
+        }
+
+        // Sync member attendance if form URL exists
+        if (event.memberAttendanceForm) {
+          eventResult.memberAttendance = await syncMemberEventAttendance(event.id);
         }
 
         results.push(eventResult);

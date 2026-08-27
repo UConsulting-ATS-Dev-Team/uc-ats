@@ -3,7 +3,7 @@ import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 import { requireAuth, requireAdmin, invalidateUserCache } from '../middleware/auth.js';
-import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncAllEventForms } from '../services/syncEventResponses.js';
+import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEventAttendance, syncAllEventForms } from '../services/syncEventResponses.js';
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -1604,6 +1604,7 @@ router.post('/events', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberAttendanceForm,
       cycleId
     } = req.body;
 
@@ -1631,6 +1632,7 @@ router.post('/events', async (req, res) => {
         attendanceForm: attendanceForm || null,
         showToCandidates: showToCandidates || false,
         memberRsvpUrl: memberRsvpUrl || null,
+        memberAttendanceForm: memberAttendanceForm || null,
         cycleId
       }
     });
@@ -1681,6 +1683,7 @@ router.patch('/events/:id', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberAttendanceForm,
       cycleId
     } = req.body;
 
@@ -1724,6 +1727,7 @@ router.patch('/events/:id', async (req, res) => {
         ...(attendanceForm !== undefined && { attendanceForm: attendanceForm || null }),
         ...(showToCandidates !== undefined && { showToCandidates }),
         ...(memberRsvpUrl !== undefined && { memberRsvpUrl: memberRsvpUrl || null }),
+        ...(memberAttendanceForm !== undefined && { memberAttendanceForm: memberAttendanceForm || null }),
         ...(cycleId !== undefined && { cycleId })
       }
     });
@@ -1819,12 +1823,29 @@ router.post('/events/:id/sync-member-rsvp', async (req, res) => {
   }
 });
 
+// Sync member attendance responses for a specific event
+router.post('/events/:id/sync-member-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Admin triggering member attendance sync for event ${id}...`);
+    
+    const result = await syncMemberEventAttendance(id);
+    res.json({ 
+      message: `Member attendance sync completed for event ${id}`,
+      result: result 
+    });
+  } catch (error) {
+    console.error(`[POST /api/admin/events/${req.params.id}/sync-member-attendance]`, error);
+    res.status(500).json({ error: 'Failed to sync member attendance responses' });
+  }
+});
+
 // Get event statistics (RSVP and attendance counts)
 router.get('/events/:id/stats', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [event, rsvpCount, attendanceCount, memberRsvpCount] = await Promise.all([
+    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount] = await Promise.all([
       prisma.events.findUnique({
         where: { id },
         select: { 
@@ -1833,12 +1854,14 @@ router.get('/events/:id/stats', async (req, res) => {
           eventEndDate: true,
           rsvpForm: true,
           attendanceForm: true,
-          memberRsvpUrl: true
+          memberRsvpUrl: true,
+          memberAttendanceForm: true
         }
       }),
       prisma.eventRsvp.count({ where: { eventId: id } }),
       prisma.eventAttendance.count({ where: { eventId: id } }),
-      prisma.memberEventRsvp.count({ where: { eventId: id } })
+      prisma.memberEventRsvp.count({ where: { eventId: id } }),
+      prisma.memberEventAttendance.count({ where: { eventId: id } })
     ]);
 
     if (!event) {
@@ -1851,9 +1874,11 @@ router.get('/events/:id/stats', async (req, res) => {
         rsvpCount: rsvpCount,
         attendanceCount: attendanceCount,
         memberRsvpCount: memberRsvpCount,
+        memberAttendanceCount: memberAttendanceCount,
         hasRsvpForm: !!event.rsvpForm,
         hasAttendanceForm: !!event.attendanceForm,
-        hasMemberRsvpForm: !!event.memberRsvpUrl
+        hasMemberRsvpForm: !!event.memberRsvpUrl,
+        hasMemberAttendanceForm: !!event.memberAttendanceForm
       }
     });
   } catch (error) {
@@ -1913,6 +1938,268 @@ router.get('/events/:id/attendance', async (req, res) => {
   } catch (error) {
     console.error(`[GET /api/admin/events/${req.params.id}/attendance]`, error);
     res.status(500).json({ error: 'Failed to fetch event attendance' });
+  }
+});
+
+// Accountability Tracker Routes
+
+async function getAccountabilityCycle(req) {
+  const cycleId = req.query.cycleId;
+  if (cycleId) {
+    return prisma.recruitingCycle.findUnique({
+      where: { id: cycleId },
+      select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+    });
+  }
+  return prisma.recruitingCycle.findFirst({
+    where: { isActive: true },
+    select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+  });
+}
+
+function makeTimeFilter(cycle) {
+  const filter = {};
+  if (cycle?.startDate) filter.gte = cycle.startDate;
+  if (cycle?.endDate) filter.lte = cycle.endDate;
+  return Object.keys(filter).length > 0 ? filter : null;
+}
+
+// Get accountability summary for a cycle: leaderboard, events, and interviews
+router.get('/accountability', async (req, res) => {
+  try {
+    const cycle = await getAccountabilityCycle(req);
+    if (!cycle) {
+      return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
+    }
+
+    const members = await prisma.user.findMany({
+      where: { role: { in: ['MEMBER', 'ADMIN'] } },
+      select: { id: true, fullName: true, email: true, studentId: true, role: true },
+      orderBy: { fullName: 'asc' }
+    });
+
+    const memberIds = members.map(m => m.id);
+
+    const [eventAttendances, gtkucSlots, interviewAssignments, events, interviews] = await Promise.all([
+      prisma.memberEventAttendance.findMany({
+        where: { event: { cycleId: cycle.id }, memberId: { in: memberIds } },
+        select: { memberId: true }
+      }),
+      prisma.meetingSlot.findMany({
+        where: {
+          memberId: { in: memberIds },
+          signups: { some: { attended: true } },
+          ...(makeTimeFilter(cycle) ? { startTime: makeTimeFilter(cycle) } : {})
+        },
+        select: { memberId: true }
+      }),
+      prisma.interviewAssignment.findMany({
+        where: { userId: { in: memberIds }, attended: true, interview: { cycleId: cycle.id } },
+        select: { userId: true }
+      }),
+      prisma.events.findMany({
+        where: { cycleId: cycle.id },
+        select: {
+          id: true,
+          eventName: true,
+          eventStartDate: true,
+          eventEndDate: true,
+          memberAttendanceForm: true,
+          _count: { select: { memberEventAttendance: true } }
+        },
+        orderBy: { eventStartDate: 'desc' }
+      }),
+      prisma.interview.findMany({
+        where: { cycleId: cycle.id },
+        select: {
+          id: true,
+          title: true,
+          interviewType: true,
+          startDate: true,
+          assignments: {
+            select: {
+              id: true,
+              attended: true,
+              role: true,
+              user: { select: { id: true, fullName: true, email: true } }
+            }
+          }
+        },
+        orderBy: { startDate: 'desc' }
+      })
+    ]);
+
+    const eventCounts = eventAttendances.reduce((acc, curr) => {
+      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
+      return acc;
+    }, {});
+
+    const gtkucCounts = gtkucSlots.reduce((acc, curr) => {
+      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
+      return acc;
+    }, {});
+
+    const interviewCounts = interviewAssignments.reduce((acc, curr) => {
+      acc[curr.userId] = (acc[curr.userId] || 0) + 1;
+      return acc;
+    }, {});
+
+    const leaderboard = members.map(member => {
+      const eventCount = eventCounts[member.id] || 0;
+      const gtkucCount = gtkucCounts[member.id] || 0;
+      const interviewCount = interviewCounts[member.id] || 0;
+      return {
+        ...member,
+        eventCount,
+        gtkucCount,
+        interviewCount,
+        total: eventCount + gtkucCount + interviewCount
+      };
+    }).sort((a, b) => b.total - a.total);
+
+    res.json({
+      cycle,
+      leaderboard,
+      events: events.map(e => ({
+        ...e,
+        memberAttendanceCount: e._count.memberEventAttendance
+      })),
+      interviews
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/accountability]', error);
+    res.status(500).json({ error: 'Failed to fetch accountability summary' });
+  }
+});
+
+// Get member attendance status for a specific event
+router.get('/accountability/events/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [event, members] = await Promise.all([
+      prisma.events.findUnique({
+        where: { id },
+        select: { id: true, eventName: true, memberAttendanceForm: true }
+      }),
+      prisma.user.findMany({
+        where: { role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true, fullName: true, email: true, studentId: true },
+        orderBy: { fullName: 'asc' }
+      })
+    ]);
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const memberIds = members.map(m => m.id);
+    const attendances = await prisma.memberEventAttendance.findMany({
+      where: { eventId: id, memberId: { in: memberIds } },
+      select: { memberId: true, source: true }
+    });
+
+    const attendanceByMember = Object.fromEntries(attendances.map(a => [a.memberId, a]));
+
+    res.json({
+      event,
+      members: members.map(member => ({
+        ...member,
+        attended: Boolean(attendanceByMember[member.id]),
+        source: attendanceByMember[member.id]?.source || null
+      }))
+    });
+  } catch (error) {
+    console.error(`[GET /api/admin/accountability/events/${req.params.id}/members]`, error);
+    res.status(500).json({ error: 'Failed to fetch event member attendance' });
+  }
+});
+
+// Toggle manual member attendance for an event
+router.post('/accountability/events/:id/member-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { memberId, attended } = req.body;
+
+    if (!memberId) {
+      return res.status(400).json({ error: 'memberId is required' });
+    }
+
+    const event = await prisma.events.findUnique({
+      where: { id },
+      select: { id: true, cycleId: true }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const existing = await prisma.memberEventAttendance.findUnique({
+      where: { eventId_memberId: { eventId: id, memberId } }
+    });
+
+    let result;
+    if (attended === false || (attended === undefined && existing)) {
+      if (existing) {
+        await prisma.memberEventAttendance.delete({
+          where: { eventId_memberId: { eventId: id, memberId } }
+        });
+      }
+      result = { attended: false, source: null };
+    } else {
+      result = await prisma.memberEventAttendance.upsert({
+        where: { eventId_memberId: { eventId: id, memberId } },
+        update: { source: 'MANUAL' },
+        create: { eventId: id, memberId, source: 'MANUAL' }
+      });
+      result = { attended: true, source: result.source };
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error(`[POST /api/admin/accountability/events/${req.params.id}/member-attendance]`, error);
+    res.status(500).json({ error: 'Failed to update member attendance' });
+  }
+});
+
+// Sync member attendance form for an event
+router.post('/accountability/events/:id/sync-attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await syncMemberEventAttendance(id);
+    res.json({ message: `Member attendance sync completed for event ${id}`, result });
+  } catch (error) {
+    console.error(`[POST /api/admin/accountability/events/${req.params.id}/sync-attendance]`, error);
+    res.status(500).json({ error: 'Failed to sync member attendance' });
+  }
+});
+
+// Toggle interview assignment attendance
+router.post('/accountability/interview-assignments/:id/attendance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { attended } = req.body;
+
+    if (attended === undefined || attended === null) {
+      return res.status(400).json({ error: 'attended is required' });
+    }
+
+    const updated = await prisma.interviewAssignment.update({
+      where: { id },
+      data: { attended: Boolean(attended) },
+      select: {
+        id: true,
+        attended: true,
+        role: true,
+        user: { select: { id: true, fullName: true, email: true } },
+        interview: { select: { id: true, title: true } }
+      }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error(`[POST /api/admin/accountability/interview-assignments/${req.params.id}/attendance]`, error);
+    res.status(500).json({ error: 'Failed to update interview attendance' });
   }
 });
 

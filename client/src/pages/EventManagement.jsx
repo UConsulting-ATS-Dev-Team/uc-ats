@@ -53,6 +53,7 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
+    memberAttendanceForm: '',
     cycleId: ''
   });
   const [editForm, setEditForm] = useState({
@@ -64,6 +65,7 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
+    memberAttendanceForm: '',
     cycleId: ''
   });
 
@@ -117,7 +119,7 @@ export default function EventManagement() {
           stats[event.id] = eventStats.stats;
         } catch (e) {
           console.warn(`Failed to fetch stats for event ${event.id}:`, e);
-          stats[event.id] = { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false };
+          stats[event.id] = { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false };
         }
       }
       setEventStats(stats);
@@ -238,7 +240,7 @@ export default function EventManagement() {
       if (startUTC && endUTC && startUTC >= endUTC) {
         errors.push(`Row ${i + 1}: End date must be after start date`);
       }
-      const urlFields = ['rsvpForm', 'attendanceForm', 'memberRsvpUrl'];
+      const urlFields = ['rsvpForm', 'attendanceForm', 'memberRsvpUrl', 'memberAttendanceForm'];
       for (const field of urlFields) {
         if (evt[field] && !isValidCopyUrl(evt[field])) {
           errors.push(`Row ${i + 1}: ${field} must be a valid URL`);
@@ -326,6 +328,7 @@ export default function EventManagement() {
         attendanceForm: '',
         showToCandidates: false,
         memberRsvpUrl: '',
+        memberAttendanceForm: '',
         cycleId: ''
       });
       
@@ -360,6 +363,7 @@ export default function EventManagement() {
       attendanceForm: event.attendanceForm || '',
       showToCandidates: event.showToCandidates,
       memberRsvpUrl: event.memberRsvpUrl || '',
+      memberAttendanceForm: event.memberAttendanceForm || '',
       cycleId: event.cycleId
     });
     setEditOpen(true);
@@ -448,6 +452,24 @@ export default function EventManagement() {
     }
   };
 
+  const syncMemberAttendance = async (eventId) => {
+    try {
+      setSyncLoading(prev => ({ ...prev, [`${eventId}-member-attendance`]: true }));
+      setError('');
+      setSuccessMessage('');
+      
+      const result = await apiClient.post(`/admin/events/${eventId}/sync-member-attendance`);
+      setSuccessMessage(`Member attendance sync completed: ${result.result.processed} responses processed, ${result.result.errors} errors`);
+      
+      // Refresh event stats
+      await fetchEvents();
+    } catch (e) {
+      setError(e.message || 'Failed to sync member attendance responses');
+    } finally {
+      setSyncLoading(prev => ({ ...prev, [`${eventId}-member-attendance`]: false }));
+    }
+  };
+
   const syncAllEvents = async () => {
     try {
       setSyncLoading(prev => ({ ...prev, 'all': true }));
@@ -466,6 +488,14 @@ export default function EventManagement() {
         if (eventResult.attendance) {
           totalProcessed += eventResult.attendance.processed;
           totalErrors += eventResult.attendance.errors;
+        }
+        if (eventResult.memberRsvp) {
+          totalProcessed += eventResult.memberRsvp.processed;
+          totalErrors += eventResult.memberRsvp.errors;
+        }
+        if (eventResult.memberAttendance) {
+          totalProcessed += eventResult.memberAttendance.processed;
+          totalErrors += eventResult.memberAttendance.errors;
         }
       });
       
@@ -662,6 +692,7 @@ export default function EventManagement() {
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>RSVP</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Attendance</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member RSVP</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member Attendance</TableCell>
               <TableCell align="right" sx={{ minWidth: { xs: 'auto', md: 120 } }}>Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -678,7 +709,7 @@ export default function EventManagement() {
               </TableRow>
             ) : (
               filteredEvents.map((event) => {
-                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false };
+                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false };
               
                 return (
                   <TableRow key={event.id}>
@@ -798,6 +829,39 @@ export default function EventManagement() {
                             onClick={() => syncMemberRSVP(event.id)}
                           >
                             {syncLoading[`${event.id}-member-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                          </Button>
+                        </>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">No Form</Typography>
+                      )}
+                    </Stack>
+                  </TableCell>
+                  <TableCell data-label="Member Attendance">
+                    <Stack spacing={1} alignItems="flex-start">
+                      {event.memberAttendanceForm ? (
+                        <>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Chip
+                              label={`${stats.memberAttendanceCount} Attended`}
+                              size="small"
+                              color="success"
+                              variant="outlined"
+                            />
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() => window.open(event.memberAttendanceForm, '_blank')}
+                            >
+                              View Form
+                            </Button>
+                          </Stack>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            disabled={syncLoading[`${event.id}-member-attendance`]}
+                            onClick={() => syncMemberAttendance(event.id)}
+                          >
+                            {syncLoading[`${event.id}-member-attendance`] ? <CircularProgress size={16} /> : 'Sync'}
                           </Button>
                         </>
                       ) : (
@@ -932,6 +996,15 @@ export default function EventManagement() {
             />
 
             <TextField
+              label="Member Attendance Google Form URL"
+              value={form.memberAttendanceForm}
+              onChange={(e) => setForm({ ...form, memberAttendanceForm: e.target.value })}
+              fullWidth
+              placeholder="https://forms.gle/..."
+              helperText="Paste the Google Form URL for UC member attendance tracking"
+            />
+
+            <TextField
               label="Show to Candidates"
               select
               value={form.showToCandidates ? 'true' : 'false'}
@@ -1033,6 +1106,15 @@ export default function EventManagement() {
               fullWidth
               placeholder="https://forms.gle/..."
               helperText="Paste the Google Form URL for UC member RSVPs"
+            />
+
+            <TextField
+              label="Member Attendance Google Form URL"
+              value={editForm.memberAttendanceForm}
+              onChange={(e) => setEditForm({ ...editForm, memberAttendanceForm: e.target.value })}
+              fullWidth
+              placeholder="https://forms.gle/..."
+              helperText="Paste the Google Form URL for UC member attendance tracking"
             />
 
             <TextField
@@ -1143,6 +1225,7 @@ export default function EventManagement() {
                           <TableCell>RSVP Form</TableCell>
                           <TableCell>Attendance Form</TableCell>
                           <TableCell>Member RSVP</TableCell>
+                          <TableCell>Member Attendance Form</TableCell>
                           <TableCell>Status</TableCell>
                         </TableRow>
                       </TableHead>
@@ -1238,6 +1321,16 @@ export default function EventManagement() {
                                 onChange={(e) => updateCopyEvent(index, 'memberRsvpUrl', e.target.value)}
                                 placeholder="https://forms.gle/..."
                                 aria-label={`Member RSVP URL for ${evt.eventName}`}
+                                fullWidth
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TextField
+                                size="small"
+                                value={evt.memberAttendanceForm}
+                                onChange={(e) => updateCopyEvent(index, 'memberAttendanceForm', e.target.value)}
+                                placeholder="https://forms.gle/..."
+                                aria-label={`Member attendance URL for ${evt.eventName}`}
                                 fullWidth
                               />
                             </TableCell>

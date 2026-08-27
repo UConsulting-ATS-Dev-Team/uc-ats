@@ -20,6 +20,7 @@ import {
   LightBulbIcon,
   PresentationChartBarIcon,
   NewspaperIcon,
+  CheckCircleIcon,
   EnvelopeIcon,
   BriefcaseIcon
 } from '@heroicons/react/24/outline';
@@ -71,6 +72,7 @@ const Layout = ({ children }) => {
       { name: 'Talent Pool Partner Network', href: '/talent-pool', icon: BriefcaseIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
+      { name: 'Accountability', href: '/accountability', icon: CheckCircleIcon },
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
