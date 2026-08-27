@@ -4,6 +4,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import ResumeReuploadSection from '../components/ResumeReuploadSection';
 import OnboardingResumeSection from '../components/OnboardingResumeSection';
+import ApplicantTalentPoolSection from '../components/ApplicantTalentPoolSection';
 import '../styles/ApplicantInformation.css';
 
 // The fields a candidate may correct themselves, in the order they are shown.
@@ -397,6 +398,13 @@ export default function ApplicantInformation() {
                   </div>
                 </div>
               </section>
+              )}
+
+              {mode !== 'onboarding' && (
+                <ApplicantTalentPoolSection
+                  optedIn={record.talentPoolOptIn ?? null}
+                  onChanged={(next) => setRecord((r) => ({ ...r, talentPoolOptIn: next }))}
+                />
               )}
 
               {(mode === 'onboarding' ? onboardingSections() : SECTIONS).map((section) => (

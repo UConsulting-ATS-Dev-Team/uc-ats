@@ -9,9 +9,17 @@ import applicantInfoRoutes, { EDITABLE_FIELDS } from './applicantInfo.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
-    application: { findUnique: vi.fn(), update: vi.fn() },
+    application: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+    clientResumeAssignment: { updateMany: vi.fn() },
+    $transaction: vi.fn((fn) => fn(txMock)),
   },
 }));
+
+// The transaction body runs against these, so assertions read from them.
+const txMock = {
+  application: { updateMany: vi.fn() },
+  clientResumeAssignment: { updateMany: vi.fn() },
+};
 
 const candidateUser = {
   id: 'user-1',
@@ -103,6 +111,9 @@ beforeEach(() => {
   prisma.application.update.mockImplementation(({ data }) =>
     Promise.resolve(application(data))
   );
+  prisma.application.findMany.mockResolvedValue([{ id: 'app-1' }]);
+  txMock.application.updateMany.mockResolvedValue({ count: 1 });
+  txMock.clientResumeAssignment.updateMany.mockResolvedValue({ count: 0 });
 });
 
 describe('GET /api/applicant-info/applications/:applicationId', () => {
@@ -250,5 +261,80 @@ describe('PATCH /api/applicant-info/applications/:applicationId', () => {
     expect(EDITABLE_FIELDS).not.toContain('email');
     expect(EDITABLE_FIELDS).not.toContain('studentId');
     expect(EDITABLE_FIELDS).toContain('phoneNumber');
+  });
+});
+
+describe('PATCH /api/applicant-info/talent-pool', () => {
+  const setConsent = (talentPoolOptIn, user = candidateUser) =>
+    request('/api/applicant-info/talent-pool', { user, method: 'PATCH', body: { talentPoolOptIn } });
+
+  it('lets an applicant opt in', async () => {
+    const res = await setConsent(true);
+    expect(res.status).toBe(200);
+    expect(txMock.application.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { talentPoolOptIn: true } })
+    );
+  });
+
+  it('applies the answer to every application they own, not just one', async () => {
+    // Consent belongs to the person, not to a cycle. Leaving last year's
+    // application shared would be a consent record nobody thinks to check.
+    prisma.application.findMany.mockResolvedValue([{ id: 'app-1' }, { id: 'app-2' }]);
+    const body = await (await setConsent(false)).json();
+
+    expect(body.applicationsUpdated).toBe(2);
+    expect(txMock.application.updateMany.mock.calls[0][0].where).toEqual({
+      id: { in: ['app-1', 'app-2'] },
+    });
+  });
+
+  it('withdraws the resume from clients that already have it', async () => {
+    prisma.application.findMany.mockResolvedValue([{ id: 'app-1' }, { id: 'app-2' }]);
+    await setConsent(false);
+
+    // Assignments are snapshots and are never re-derived, so without this an
+    // applicant could opt out and stay in front of every client who had them.
+    expect(txMock.clientResumeAssignment.updateMany).toHaveBeenCalledWith({
+      where: { applicationId: { in: ['app-1', 'app-2'] }, revokedAt: null },
+      data: { revokedAt: expect.any(Date), revokedById: candidateUser.id },
+    });
+  });
+
+  it('does not revoke anything when opting in', async () => {
+    await setConsent(true);
+    expect(txMock.clientResumeAssignment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('matches applications on email and student ID, like ownership does', async () => {
+    await setConsent(true);
+    const or = prisma.application.findMany.mock.calls[0][0].where.OR;
+    expect(or).toEqual(
+      expect.arrayContaining([
+        { email: candidateUser.email },
+        { studentId: candidateUser.studentId },
+        { candidate: { email: candidateUser.email } },
+        { candidate: { studentId: candidateUser.studentId } },
+      ])
+    );
+  });
+
+  it('requires an explicit answer rather than treating a blank as no', async () => {
+    const res = await request('/api/applicant-info/talent-pool', {
+      user: candidateUser,
+      method: 'PATCH',
+      body: {},
+    });
+    expect(res.status).toBe(400);
+    expect(txMock.application.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('404s for an account with no application', async () => {
+    prisma.application.findMany.mockResolvedValue([]);
+    expect((await setConsent(true)).status).toBe(404);
+  });
+
+  it('refuses an unauthenticated request', async () => {
+    const res = await request('/api/applicant-info/talent-pool', { method: 'PATCH', body: { talentPoolOptIn: true } });
+    expect(res.status).toBe(401);
   });
 });
