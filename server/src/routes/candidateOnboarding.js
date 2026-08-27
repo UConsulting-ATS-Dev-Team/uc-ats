@@ -26,7 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
-import { putResume, getResume } from '../services/resumeStorage.js';
+import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
   sanitizeOnboardingInput,
@@ -357,6 +357,8 @@ router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
     res.status(201).json({ onboarding: serializeOnboarding(record), talentPool });
   } catch (error) {
     console.error('[POST /api/candidate/onboarding]', error);
+    const configured = storageErrorResponse(error);
+    if (configured) return res.status(configured.status).json(configured.body);
     res.status(500).json({ error: 'Failed to save your information' });
   }
 });
@@ -469,6 +471,8 @@ router.put('/resume', requireVerifiedEmail, uploadMiddleware, async (req, res) =
     res.json({ onboarding: serializeOnboarding(record), message: 'Your resume has been replaced.' });
   } catch (error) {
     console.error('[PUT /api/candidate/onboarding/resume]', error);
+    const configured = storageErrorResponse(error);
+    if (configured) return res.status(configured.status).json(configured.body);
     res.status(500).json({ error: 'Failed to replace your resume' });
   }
 });
