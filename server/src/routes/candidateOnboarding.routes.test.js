@@ -24,6 +24,7 @@ vi.mock('../prismaClient.js', () => {
       __tx: tx,
       user: { findUnique: vi.fn() },
       candidate: { findFirst: vi.fn() },
+      application: { count: vi.fn() },
       candidateOnboarding: { upsert: vi.fn() },
       externalResume: { findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
       clientResumeAssignment: { updateMany: vi.fn() },
@@ -174,6 +175,7 @@ beforeEach(() => {
     ALL_USERS.find((u) => u.id === id) || null
   );
   prisma.candidate.findFirst.mockResolvedValue(candidateRow());
+  prisma.application.count.mockResolvedValue(0);
   prisma.candidateOnboarding.upsert.mockImplementation(({ create, update }) =>
     Promise.resolve(onboardingRow({ ...create, ...update }))
   );
@@ -223,7 +225,7 @@ describe('whether onboarding is required', () => {
   });
 
   it('is not required once an application exists - it carries everything this asks', async () => {
-    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [{ id: 'app-1' }] }));
+    prisma.application.count.mockResolvedValue(1);
     const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
     expect(body).toMatchObject({ required: false, hasApplication: true });
   });
@@ -294,7 +296,7 @@ describe('submitting', () => {
   });
 
   it('refuses a candidate who already has an application', async () => {
-    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [{ id: 'app-1' }] }));
+    prisma.application.count.mockResolvedValue(1);
     const res = await submit({ user: verifiedCandidate });
     expect(res.status).toBe(409);
   });
@@ -394,5 +396,35 @@ describe('talent partner network opt-in', () => {
     );
     const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
     expect(body.talentPool.shared).toBe(false);
+  });
+});
+
+describe('finding a past application', () => {
+  it('looks in the applications table, not through the candidate relation', async () => {
+    // Regression. Signup creates its own Candidate row, so an applicant who
+    // signed up with a different address than they applied with has two: the
+    // new empty one, and the one their application hangs off. Reading the
+    // relation found the empty one and told four real past applicants to
+    // complete onboarding and verify an email they never had a link for.
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [] }));
+    prisma.application.count.mockResolvedValue(2);
+
+    const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
+    expect(body).toMatchObject({ required: false, hasApplication: true });
+  });
+
+  it('matches on student ID as well as email, like the Forms sync', async () => {
+    await request('/api/candidate/onboarding/status', { user: verifiedCandidate });
+    expect(prisma.application.count).toHaveBeenCalledWith({
+      where: { OR: [{ studentId: '123456789' }, { email: 'bruin@g.ucla.edu' }] }
+    });
+  });
+
+  it('still onboards someone with genuinely no application anywhere', async () => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ applications: [] }));
+    prisma.application.count.mockResolvedValue(0);
+
+    const body = await (await request('/api/candidate/onboarding/status', { user: verifiedCandidate })).json();
+    expect(body).toMatchObject({ required: true, hasApplication: false });
   });
 });

@@ -118,6 +118,29 @@ const loadOwnCandidate = async (user) => {
 };
 
 /**
+ * Whether this person has ever applied.
+ *
+ * Asked of the applications table directly rather than through
+ * Candidate.applications, which is what this used to do and which was wrong.
+ * Signup creates its own Candidate row, so an applicant who signed up with a
+ * different address than they applied with ends up with two candidate rows: the
+ * new empty one, and the one their application is attached to. Reading the
+ * relation off whichever row matched found the empty one and concluded they had
+ * never applied - which sent four real past applicants into the onboarding
+ * module and told them to verify an email they never had a link for.
+ *
+ * Student ID first and email second, the same identifiers the Forms sync
+ * matches on.
+ */
+const hasAnyApplication = async (user) => {
+  const or = [];
+  if (user.studentId) or.push({ studentId: user.studentId });
+  if (user.email) or.push({ email: user.email });
+  if (or.length === 0) return false;
+  return (await prisma.application.count({ where: { OR: or } })) > 0;
+};
+
+/**
  * GET /api/candidate/onboarding/status
  *
  * Whether this account needs to be taken through the module, and what it has
@@ -136,7 +159,7 @@ router.get('/status', async (req, res) => {
       return res.status(404).json({ error: 'No candidate record for this account' });
     }
 
-    const hasApplication = candidate.applications.length > 0;
+    const hasApplication = await hasAnyApplication(req.user);
     const completed = Boolean(candidate.onboarding);
 
     const pooled = await prisma.externalResume.findFirst({
@@ -273,7 +296,7 @@ router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'No candidate record for this account' });
     }
 
-    if (candidate.applications.length > 0) {
+    if (await hasAnyApplication(req.user)) {
       return res.status(409).json({
         error: 'You already have an application on file, so there is nothing to onboard.'
       });

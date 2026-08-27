@@ -195,3 +195,23 @@ export const serializeOnboarding = (record) => {
     updatedAt: record.updatedAt
   };
 };
+
+/**
+ * Validate an edit to onboarding details, with no file and no consent answer.
+ *
+ * Split from sanitizeOnboardingInput because that one is the *submission*: it
+ * requires a resume and an explicit sharing answer, both of which are already
+ * settled by the time someone is correcting a typo in their major. Requiring
+ * them again would mean re-uploading a PDF to fix a GPA.
+ */
+export const sanitizeOnboardingUpdate = (input = {}) => {
+  const { value, errors } = sanitizeOnboardingInput({
+    ...input,
+    // Satisfies the two checks that do not apply to an edit. Neither value is
+    // returned to the caller below.
+    talentPoolOptIn: 'false'
+  });
+
+  const { talentPoolOptIn: _ignored, ...details } = value;
+  return { value: details, errors };
+};
