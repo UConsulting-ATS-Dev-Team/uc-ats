@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -157,6 +158,11 @@ router.patch('/:id/role', requireAuth, async (req, res) => {
     }
 
     // Validate role
+    // CLIENT is deliberately absent. A Talent Partner Network client must be
+    // created through POST /api/admin/talent-pool/clients, which makes the User
+    // and the TalentPartnerClient row in one transaction. Allowing the role to
+    // be set here would permit a CLIENT with no partner row - an account that
+    // can log in and then hit a confusing 403 on every portal request.
     const validRoles = ['USER', 'ADMIN', 'MEMBER'];
     if (!validRoles.includes(role)) {
       console.log('[PATCH /api/users/:id/role] Invalid role:', role);
@@ -319,7 +325,22 @@ router.patch('/:id/deactivate', requireAuth, async (req, res) => {
     // Cut the existing session immediately rather than after the cache TTL
     invalidateUserCache(id);
 
-    res.json({ message: 'User deactivated successfully', user: updatedUser });
+    // Their resume stops being assignable via the pool gates, but assignments
+    // already handed to a client are snapshots and would otherwise outlive the
+    // deactivation. Reported rather than thrown: a revocation failure must not
+    // leave the account half-deactivated.
+    let talentPoolAssignmentsRevoked = 0;
+    try {
+      ({ revoked: talentPoolAssignmentsRevoked } = await revokeTalentPoolAccess([id], req.user.id));
+    } catch (error) {
+      console.error('[deactivate user] talent pool revocation failed', error);
+    }
+
+    res.json({
+      message: 'User deactivated successfully',
+      user: updatedUser,
+      talentPoolAssignmentsRevoked,
+    });
   } catch (error) {
     console.error('Error deactivating user:', error);
     res.status(500).json({ error: 'Failed to deactivate user' });
@@ -390,6 +411,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // Validate role
+    // CLIENT is deliberately absent. A Talent Partner Network client must be
+    // created through POST /api/admin/talent-pool/clients, which makes the User
+    // and the TalentPartnerClient row in one transaction. Allowing the role to
+    // be set here would permit a CLIENT with no partner row - an account that
+    // can log in and then hit a confusing 403 on every portal request.
     const validRoles = ['USER', 'ADMIN', 'MEMBER'];
     if (role && !validRoles.includes(role)) {
       return res.status(400).json({ error: 'Invalid role' });

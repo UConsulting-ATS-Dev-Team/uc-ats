@@ -66,6 +66,14 @@
                 "No": false
             }
         },
+        "6656e3a3": {
+            "field": "talentPoolOptIn",
+            "type": "boolean",
+            "transform": {
+                "Yes": true,
+                "No": false
+            }
+        },
         "761cade1": {
             "field": "cumulativeGpa",
             "type": "decimal",

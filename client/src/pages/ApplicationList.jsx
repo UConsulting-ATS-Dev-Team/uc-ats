@@ -10,6 +10,7 @@ import EditApplicationModal from '../components/EditApplicationModal';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import { useApplications } from '../hooks/useApplications';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
 import '../styles/ApplicationList.css';
@@ -251,11 +252,9 @@ export default function ApplicationList() {
           onChange={(e) => handleFilterChange('year', e.target.value)}
         >
           <option value="">Year: All</option>
-          <option value="2026">Year: 2026</option>
-          <option value="2027">Year: 2027</option>
-          <option value="2028">Year: 2028</option>
-          <option value="2029">Year: 2029</option>
-          <option value="2030">Year: 2030</option>
+          {GRADUATION_YEARS.map((year) => (
+            <option key={year} value={year}>Year: {year}</option>
+          ))}
         </select>
         
         <select 

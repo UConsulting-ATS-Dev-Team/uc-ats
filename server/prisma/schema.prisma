@@ -21,6 +21,19 @@ model User {
   createdAt                  DateTime                        @default(now())
   resetToken                 String?
   resetTokenExpiry           DateTime?
+  // Email ownership, proved by clicking a link. Null means unproven, which for
+  // a self-registered external account is the difference between "someone typed
+  // this address" and "this person reads it". Staff accounts are created by an
+  // admin and are never gated on it.
+  emailVerifiedAt            DateTime?
+  emailVerificationToken     String?                         @unique
+  emailVerificationExpiry    DateTime?
+  // True only for accounts created through the public talent portal
+  // (POST /api/auth/register-external). Distinguishes a self-registered UCLA
+  // student from an applicant who signed up to track their application: both
+  // are role USER, but only the former has no Candidate row and lands on the
+  // talent profile instead of the application list.
+  isExternalTalent           Boolean                         @default(false)
   profileImage               String?
   studentId                  String?                         @unique
   createdBehavioralQuestions BehavioralQuestion[]
@@ -50,21 +63,35 @@ model User {
   gtkucProfile               MemberGtkucProfile?
   createdCycles              RecruitingCycle[]               @relation("RecruitingCycleCreator")
   memberEventAttendances     MemberEventAttendance[]
+  resumeUploads              ResumeUpload[]                  @relation("ResumeUploader")
+  createdMessageTemplates    MessageTemplate[]               @relation("MessageTemplateCreator")
+  createdMessageDrafts       MessageDraft[]                  @relation("MessageDraftCreator")
+  editedMessageDrafts        MessageDraft[]                  @relation("MessageDraftEditor")
+  sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
+  scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
+  talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
+  createdTalentPartners      TalentPartnerClient[]           @relation("TalentPartnerClientCreator")
+  memberResumes              MemberResume[]
+  externalResumes            ExternalResume[]
+  createdClientBatches       ClientAssignmentBatch[]         @relation("ClientBatchCreator")
+  assignedClientResumes      ClientResumeAssignment[]        @relation("ClientAssignmentAssigner")
+  revokedClientResumes       ClientResumeAssignment[]        @relation("ClientAssignmentRevoker")
+  clientAccessLogs           ClientResumeAccessLog[]         @relation("ClientAccessLogUser")
 
   @@map("users")
 }
 
 model Candidate {
-  id                String             @id @default(uuid())
-  studentId         String             @unique
+  id                String               @id @default(uuid())
+  studentId         String               @unique
   firstName         String
   lastName          String
-  email             String             @unique
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  email             String               @unique
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
   assignedGroupId   String?
   applications      Application[]
-  assignedGroup     Groups?            @relation(fields: [assignedGroupId], references: [id])
+  assignedGroup     Groups?              @relation(fields: [assignedGroupId], references: [id])
   coffeeChat        CoffeeChat[]
   coverLetterScores CoverLetterScore[]
   eventAttendance   EventAttendance[]
@@ -74,8 +101,49 @@ model Candidate {
   roundOne          RoundOne[]
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
+  onboarding        CandidateOnboarding?
 
   @@map("candidates")
+}
+
+// Applicant information a candidate supplies themselves, at signup, when we
+// have no application to read it from.
+//
+// Deliberately NOT columns on Candidate. Everything on Candidate arrives from
+// the Google Forms sync and is corroborated by a submitted application; this is
+// self-reported by someone who has done nothing but verify an email address.
+// Keeping the two apart means no screen can mistake one for the other, and the
+// row can be dropped wholesale once a real application lands.
+//
+// There is no cover letter or video here on purpose - the module asks for a
+// resume and nothing else file-wise. The headshot is optional, which is why it
+// is nullable while the resume columns are not.
+model CandidateOnboarding {
+  id                   String    @id @default(uuid())
+  candidateId          String    @unique
+  phoneNumber          String
+  // Four bare digits, matching Application.graduationYear rather than the free
+  // text User.graduationClass holds, so the two filter alike.
+  graduationYear       String
+  cumulativeGpa        Decimal   @db.Decimal(3, 2)
+  major1               String
+  major2               String?
+  gender               String?
+  isTransferStudent    Boolean
+  isFirstGeneration    Boolean
+  // Relative to server/storage, the same private root external resumes use -
+  // never uploads/, which index.js serves unauthenticated.
+  resumeStoragePath    String
+  resumeOriginalName   String
+  resumeFileSize       Int
+  headshotStoragePath  String?
+  headshotOriginalName String?
+  headshotFileSize     Int?
+  completedAt          DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  candidate            Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@map("candidate_onboarding")
 }
 
 model Application {
@@ -97,6 +165,10 @@ model Application {
   major2                String?
   gender                String?
   isFirstGeneration     Boolean
+  // Talent Partner Network opt-in, added to the application form for the
+  // Winter 2026 cycle. Nullable because every Fall 2025 application predates
+  // the question, and Winter 2026 applications that skipped it have no answer.
+  talentPoolOptIn       Boolean?
   resumeUrl             String
   blindResumeUrl        String?
   headshotUrl           String
@@ -119,8 +191,38 @@ model Application {
   flaggedDocuments      FlaggedDocument[]
   interviewEvaluations  InterviewEvaluation[]
   caseAssignments       CaseAssignment[]
+  resumeUploads         ResumeUpload[]
+  clientAssignments     ClientResumeAssignment[]
 
   @@map("applications")
+}
+
+// One row per version of an application's resume, newest last. Candidates may
+// replace their own resume until the cycle's `resumeDeadline` passes, and
+// reviewers grade whatever `Application.resumeUrl` pointed at, so the version
+// that was actually scored has to stay recoverable.
+//
+// `storagePath` is null for the resume the application arrived with: that file
+// lives in Google Drive (uploaded through the application form), not in our
+// storage directory. `sourceUrl` records what `Application.resumeUrl` held for
+// this version, which is what the client fetches to view it either way.
+model ResumeUpload {
+  id            String      @id @default(uuid())
+  applicationId String
+  storagePath   String?
+  sourceUrl     String
+  originalName  String?
+  sizeBytes     Int?
+  uploadedById  String?
+  uploadedAt    DateTime    @default(now())
+  // Set when a newer upload takes over. Exactly one row per application should
+  // have this null — the version `Application.resumeUrl` currently points at.
+  supersededAt  DateTime?
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  uploadedBy    User?       @relation("ResumeUploader", fields: [uploadedById], references: [id])
+
+  @@index([applicationId, uploadedAt])
+  @@map("resume_uploads")
 }
 
 model RecruitingCycle {
@@ -128,11 +230,21 @@ model RecruitingCycle {
   // Unique so an exact retry of a bootstrap commit recovers the cycle it
   // already created instead of making a second one.
   name                      String                           @unique
-  // At most one cycle may be active. Enforced by the partial unique index
-  // `recruiting_cycles_single_active`, which Prisma's schema cannot express, so it
-  // is created in SQL by the migration and must be re-added by hand if this table
-  // is ever recreated from scratch.
+  // Activation is audience-scoped. `isActive` is the cycle members, candidates and
+  // the public pages see; `isAdminActive` is the cycle admins see. They are normally
+  // the same row and differ only during a handover, where admins finish out the
+  // closing cycle while the next one opens to candidates.
+  //
+  // At most one cycle may carry each flag. Enforced by the partial unique indexes
+  // `recruiting_cycles_single_active` and `recruiting_cycles_single_admin_active`,
+  // which Prisma's schema cannot express, so they are created in SQL by the
+  // migrations and must be re-added by hand if this table is ever recreated.
+  //
+  // Never read either column directly: go through resolveCycle()/resolveCycleForRequest()
+  // in services/activeCycle.js, which maps the caller's role to the right pointer and
+  // falls back to `isActive` when no admin cycle is pinned.
   isActive                  Boolean                          @default(false)
+  isAdminActive             Boolean                          @default(false)
   startDate                 DateTime?
   endDate                   DateTime?
   createdAt                 DateTime                         @default(now())
@@ -161,6 +273,10 @@ model RecruitingCycle {
   videoScores               VideoScore[]
   cases                     Case[]
   gtkucProfileConfirmations MemberGtkucProfileConfirmation[]
+  messageTemplates          MessageTemplate[]                @relation("CycleTemplates")
+  messageDrafts             MessageDraft[]                   @relation("CycleDrafts")
+  messageLogs               MessageLog[]                     @relation("CycleLogs")
+  scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
 
   @@map("recruiting_cycles")
 }
@@ -846,6 +962,10 @@ enum UserRole {
   USER
   ADMIN
   MEMBER
+  // Talent Partner Network buyer. Reaches only /api/client/* - see
+  // src/middleware/externalContainment.js. Created exclusively through
+  // POST /api/admin/talent-pool/clients so a TalentPartnerClient row always exists.
+  CLIENT
 }
 
 enum ApplicationStatus {
@@ -904,4 +1024,317 @@ enum MeetingCommunicationType {
   HOST_NOTIFICATION
   CANCELLATION
   REMINDER
+}
+
+/// A message someone started writing and has not sent.
+///
+/// Deliberately separate from MessageTemplate. A template is reusable
+/// boilerplate - a name, a subject and a body meant to be applied to many
+/// sends. A draft is one specific unsent message, so it also carries the
+/// audience and the filters that decide who it goes to; reopening it puts the
+/// composer back exactly as it was left. Folding the two together would make
+/// the template list a mix of "ready to reuse" and "half-written", with nothing
+/// to tell them apart.
+///
+/// Shared across admins rather than private, so comms can be written by one
+/// person and finished by another. updatedById records who touched it last,
+/// which is the thing you want to know before sending someone else's draft.
+model MessageDraft {
+  id          String           @id @default(uuid())
+  name        String
+  channel     String
+  audience    String
+  /// The composer's filter object, stored whole. Its shape is owned by
+  /// resolveRecipients and changes as audiences gain filters, so pinning it to
+  /// columns here would mean a migration every time one is added.
+  filters     Json?
+  subject     String           @default("")
+  body        String
+  cycleId     String?
+  createdById String
+  updatedById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  cycle       RecruitingCycle? @relation("CycleDrafts", fields: [cycleId], references: [id], onDelete: SetNull)
+  creator     User             @relation("MessageDraftCreator", fields: [createdById], references: [id])
+  editor      User?            @relation("MessageDraftEditor", fields: [updatedById], references: [id])
+
+  @@index([cycleId])
+  @@index([updatedAt])
+  @@map("message_drafts")
+}
+
+model MessageTemplate {
+  id        String            @id @default(uuid())
+  name      String
+  subject   String
+  body      String
+  channel   String
+  cycleId   String
+  createdBy String
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  cycle     RecruitingCycle   @relation("CycleTemplates", fields: [cycleId], references: [id], onDelete: Cascade)
+  creator   User              @relation("MessageTemplateCreator", fields: [createdBy], references: [id])
+  logs      MessageLog[]
+  schedules MessageSchedule[]
+
+  @@index([cycleId])
+  @@map("message_templates")
+}
+
+model MessageLog {
+  id             String            @id @default(uuid())
+  templateId     String?
+  channel        String
+  recipientCount Int
+  subject        String?
+  body           String?
+  sentAt         DateTime          @default(now())
+  sentBy         String
+  cycleId        String?
+  template       MessageTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle          RecruitingCycle?  @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender         User              @relation("MessageLogSender", fields: [sentBy], references: [id])
+  schedules      MessageSchedule[]
+
+  @@index([cycleId])
+  @@index([sentAt])
+  @@map("message_logs")
+}
+
+model MessageSchedule {
+  id           String           @id @default(uuid())
+  channel      String
+  audience     String
+  filters      Json             @default("{}")
+  subject      String?
+  body         String
+  cycleId      String?
+  templateId   String?
+  sentBy       String
+  scheduledAt  DateTime
+  status       String           @default("PENDING")
+  messageLogId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  template     MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  cycle        RecruitingCycle? @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
+  sender       User             @relation("ScheduleSender", fields: [sentBy], references: [id])
+  messageLog   MessageLog?      @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([cycleId])
+  @@map("message_schedules")
+}
+
+// ---------------------------------------------------------------------------
+// Talent Partner Network - client resume portal
+// ---------------------------------------------------------------------------
+// Applicant consent lives on Application.talentPoolOptIn (added by the TPN
+// commit); member consent lives on MemberResume.shareConsent. Nothing in this
+// section is assignable without one of those recording an explicit yes.
+
+enum ResumeVisibility {
+  BLIND
+  BASIC
+  FULL
+}
+
+/// One outside organization that bought resume-database access. 1:1 with a User
+/// of role CLIENT, which owns email/password/isActive - so the existing
+/// PATCH /api/users/:id/deactivate and invalidateUserCache apply unchanged and
+/// this table deliberately has no isActive of its own.
+model TalentPartnerClient {
+  id           String                   @id @default(uuid())
+  userId       String                   @unique
+  organization String
+  visibility   ResumeVisibility         @default(BLIND)
+  notes        String?
+  createdById  String
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  user         User                     @relation("TalentPartnerClientUser", fields: [userId], references: [id], onDelete: Cascade)
+  creator      User                     @relation("TalentPartnerClientCreator", fields: [createdById], references: [id])
+  assignments  ClientResumeAssignment[]
+  batches      ClientAssignmentBatch[]
+  accessLogs   ClientResumeAccessLog[]
+
+  @@index([organization])
+  @@map("talent_partner_clients")
+}
+
+/// Member-uploaded resume. Deliberately NOT unique on memberId: re-uploading
+/// creates a new row and demotes the old one (isCurrent = false), so an
+/// already-committed assignment keeps pointing at the exact file that was
+/// assigned. With a unique memberId the snapshot guarantee would be false for
+/// members - a re-upload would silently swap the PDF under a client.
+///
+/// NOTE: a partial unique index enforces one isCurrent row per member. It lives
+/// in migration.sql only - Prisma cannot express filtered unique indexes, and
+/// `prisma migrate dev` will want to drop it.
+model MemberResume {
+  id               String                   @id @default(uuid())
+  memberId         String
+  isCurrent        Boolean                  @default(true)
+  storagePath      String
+  originalName     String
+  fileSize         Int
+  major1           String
+  major2           String?
+  // Normalized 4-digit year collected at upload. NOT derived from
+  // User.graduationClass, which is free text like "Spring 2027" and therefore
+  // does not filter alike with Application.graduationYear ("2029").
+  graduationYear   String
+  gender           String?
+  shareConsent     Boolean                  @default(false)
+  consentAt        DateTime?
+  consentRevokedAt DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  member           User                     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  assignments      ClientResumeAssignment[]
+
+  @@index([memberId, isCurrent])
+  @@index([shareConsent, isCurrent])
+  @@map("member_resumes")
+}
+
+/// Resume uploaded by a UCLA student who is neither an applicant nor a member -
+/// someone who found the talent portal and signed up for it directly. The third
+/// and last source of assignable resumes.
+///
+/// Deliberately a separate table from MemberResume rather than a nullable-member
+/// variant of it. The two differ in the gate that makes them assignable:
+/// a member is vouched for by having been recruited, whereas an external account
+/// is vouched for by nothing but a verified @ucla.edu address. Keeping them
+/// apart means a query can never accidentally treat one as the other, and the
+/// `ownerVerified` requirement below has exactly one place to live.
+///
+/// Same supersede-on-re-upload design as MemberResume, for the same reason: an
+/// assignment already committed to a client must keep pointing at the exact file
+/// that was assigned. The partial unique index enforcing one isCurrent row per
+/// user lives in migration.sql - Prisma cannot express filtered unique indexes.
+model ExternalResume {
+  id               String                   @id @default(uuid())
+  userId           String
+  isCurrent        Boolean                  @default(true)
+  storagePath      String
+  originalName     String
+  fileSize         Int
+  major1           String
+  major2           String?
+  // Normalized 4-digit year, collected at upload for the same reason
+  // MemberResume collects it: User.graduationClass is free text ("Spring 2027")
+  // and would not filter alike with Application.graduationYear ("2029").
+  graduationYear   String
+  gender           String?
+  shareConsent     Boolean                  @default(false)
+  consentAt        DateTime?
+  consentRevokedAt DateTime?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments      ClientResumeAssignment[]
+
+  @@index([userId, isCurrent])
+  @@index([shareConsent, isCurrent])
+  @@map("external_resumes")
+}
+
+/// One admin "assign" action. filterJson records the filter that produced the
+/// batch purely as documentation - the assignments are a snapshot and are never
+/// re-derived from it.
+model ClientAssignmentBatch {
+  id           String                   @id @default(uuid())
+  clientId     String
+  createdById  String
+  filterJson   Json?
+  matchedCount Int                      @default(0)
+  note         String?
+  createdAt    DateTime                 @default(now())
+  client       TalentPartnerClient      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  creator      User                     @relation("ClientBatchCreator", fields: [createdById], references: [id])
+  assignments  ClientResumeAssignment[]
+
+  @@index([clientId, createdAt])
+  @@map("client_assignment_batches")
+}
+
+/// SNAPSHOT. Exactly one of applicationId / memberResumeId / externalResumeId is
+/// non-null, enforced by a CHECK constraint in migration.sql (Prisma cannot
+/// express CHECK).
+/// Revocation is soft, matching the deactivatedAt / CaseAssignment.overriddenAt
+/// convention, so history and the access log keep valid foreign keys.
+///
+/// NOTE: duplicate assignment is prevented by two partial unique indexes in
+/// migration.sql. A plain @@unique would not work - Postgres treats NULLs as
+/// distinct, so every row with a null target would count as unique.
+model ClientResumeAssignment {
+  id               String                  @id @default(uuid())
+  clientId         String
+  batchId          String
+  applicationId    String?
+  memberResumeId   String?
+  externalResumeId String?
+  assignedById     String
+  assignedAt       DateTime                @default(now())
+  revokedAt        DateTime?
+  revokedById      String?
+  client           TalentPartnerClient     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  batch            ClientAssignmentBatch   @relation(fields: [batchId], references: [id])
+  application      Application?            @relation(fields: [applicationId], references: [id])
+  memberResume     MemberResume?           @relation(fields: [memberResumeId], references: [id])
+  externalResume   ExternalResume?         @relation(fields: [externalResumeId], references: [id])
+  assigner         User                    @relation("ClientAssignmentAssigner", fields: [assignedById], references: [id])
+  revoker          User?                   @relation("ClientAssignmentRevoker", fields: [revokedById], references: [id])
+  accessLogs       ClientResumeAccessLog[]
+
+  // Covers the portal's only list query (filter + sort) in one index.
+  @@index([clientId, revokedAt, assignedAt])
+  @@index([batchId])
+  // Postgres does not auto-index foreign key columns, and the preview's
+  // "already assigned?" check filters on these.
+  @@index([applicationId])
+  @@index([memberResumeId])
+  @@index([externalResumeId])
+  @@map("client_resume_assignments")
+}
+
+/// The first access-log table in this schema. House style is attribution columns
+/// on the row (User.deactivatedBy, CaseAssignment.overriddenBy), but an
+/// attribution column cannot express a repeated event, and a resume view is
+/// exactly that. Written on every PDF fetch, including denied ones.
+model ClientResumeAccessLog {
+  id           String                  @id @default(uuid())
+  clientId     String
+  userId       String
+  assignmentId String?
+  // What the client did. Defaults to VIEW so every row written before the
+  // action column existed keeps its original meaning - they were all PDF
+  // fetches. An EXPORT writes one row per resume in the CSV, so the count of
+  // rows a partner has pulled out stays readable off this table alone.
+  action       ClientAccessAction      @default(VIEW)
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime                @default(now())
+  client       TalentPartnerClient     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user         User                    @relation("ClientAccessLogUser", fields: [userId], references: [id])
+  assignment   ClientResumeAssignment? @relation(fields: [assignmentId], references: [id])
+
+  @@index([clientId, createdAt])
+  @@index([clientId, action, createdAt])
+  @@index([assignmentId])
+  @@map("client_resume_access_logs")
+}
+
+/// VIEW_DENIED is written when a client asks for an assignment id that is not
+/// theirs, was revoked, or has no file their visibility permits - the half of
+/// the record worth keeping, and previously indistinguishable from a VIEW with
+/// a null assignmentId.
+enum ClientAccessAction {
+  VIEW
+  VIEW_DENIED
+  EXPORT
 }

@@ -121,3 +121,29 @@ export function getNextDeadline(applications, now = new Date()) {
   candidates.sort((a, b) => a.cutoff.getTime() - b.cutoff.getTime());
   return candidates[0];
 }
+
+/**
+ * The application deadline for one cycle.
+ *
+ * Separate from getNextDeadline, which answers a different question: that one
+ * scans the applications a candidate already submitted and returns the soonest
+ * of their deadlines. On a dashboard that is the wrong question. "Application
+ * deadline" means when applications close, which is a property of the cycle
+ * currently open, not of a cycle this person applied to last time.
+ *
+ * Returns null when there is no open cycle or its date is unusable, so a caller
+ * can render nothing rather than a wrong date.
+ */
+export function getCycleDeadline(cycle, now = new Date()) {
+  if (!cycle) return null;
+
+  const parsed = parseApplicationDeadline(cycle.endDate);
+  if (!parsed || parsed.cutoff.getTime() <= now.getTime()) return null;
+
+  return {
+    ...parsed,
+    label: 'Application deadline',
+    cycleName: cycle.name,
+    cycleId: cycle.id,
+  };
+}

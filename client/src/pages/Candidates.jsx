@@ -10,6 +10,7 @@ import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import { isPointEligibleEvent } from '../utils/pointEvents';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 import '../styles/ApplicationList.css';
 
 export default function Candidates() {
@@ -216,11 +217,9 @@ export default function Candidates() {
         </select>
         <select className="filter-select" value={filters.year} onChange={(e) => onFilterChange('year', e.target.value)}>
           <option value="">Year: All</option>
-          <option value="2024">Year: 2024</option>
-          <option value="2025">Year: 2025</option>
-          <option value="2026">Year: 2026</option>
-          <option value="2027">Year: 2027</option>
-          <option value="2028">Year: 2028</option>
+          {GRADUATION_YEARS.map((year) => (
+            <option key={year} value={year}>Year: {year}</option>
+          ))}
         </select>
         <select className="filter-select" value={filters.gender} onChange={(e) => onFilterChange('gender', e.target.value)}>
           <option value="">Gender: All</option>

@@ -17,8 +17,13 @@ import {
   DialogContent,
   DialogActions,
   Checkbox,
+  Chip,
   IconButton,
   Tooltip,
+  Radio,
+  RadioGroup,
+  FormControlLabel,
+  Alert,
 } from '@mui/material';
 import { Edit as EditIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
@@ -40,6 +45,14 @@ export default function CycleManagement() {
   const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
   const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
   const [submitting, setSubmitting] = useState(false);
+  // Which cycle the audience dialog is open for, and the audience chosen in it.
+  const [activating, setActivating] = useState(null);
+  const [activateAudiences, setActivateAudiences] = useState('BOTH');
+
+  const candidateCycle = cycles.find((c) => c.isActive) || null;
+  // No pinned admin cycle means admins are still following the candidate one.
+  const adminCycle = cycles.find((c) => c.isAdminActive) || candidateCycle;
+  const audiencesSplit = Boolean(candidateCycle && adminCycle && candidateCycle.id !== adminCycle.id);
 
   const fetchCycles = async () => {
     try {
@@ -135,12 +148,35 @@ export default function CycleManagement() {
     setError('');
   };
 
-  const activateCycle = async (id) => {
-    await apiClient.post(`/admin/cycles/${id}/activate`, {});
+  // 'BOTH' is the historical behaviour. The split options exist for a handover, where
+  // admins finish out the closing cycle while the next one opens to candidates.
+  const AUDIENCE_CHOICES = {
+    BOTH: ['CANDIDATE', 'ADMIN'],
+    CANDIDATE: ['CANDIDATE'],
+    ADMIN: ['ADMIN']
+  };
+
+  const activateCycle = async (id, choice = 'BOTH') => {
+    const audiences = AUDIENCE_CHOICES[choice];
+    await apiClient.post(`/admin/cycles/${id}/activate`, { audiences });
     await fetchCycles();
-    
-    // Dispatch event to notify other components (like EventManagement) that a cycle was activated
-    window.dispatchEvent(new CustomEvent('cycleActivated', { detail: { cycleId: id } }));
+
+    // Listeners refetch on this regardless of audience: an extra refetch is harmless,
+    // a skipped one leaves a stale screen. The audience is carried for those that care.
+    window.dispatchEvent(new CustomEvent('cycleActivated', { detail: { cycleId: id, audiences } }));
+  };
+
+  const submitActivation = async () => {
+    if (!activating) return;
+    try {
+      setSubmitting(true);
+      await activateCycle(activating.id, activateAudiences);
+      setActivating(null);
+    } catch (e) {
+      setError(e.message || 'Failed to activate cycle');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const deleteCycle = async (id) => {
@@ -169,6 +205,17 @@ export default function CycleManagement() {
         <Paper sx={{ p: 2, mb: 2, color: 'error.main' }}>{error}</Paper>
       )}
 
+      <Paper sx={{ p: 1.5, mb: 2 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={{ xs: 1, sm: 3 }} alignItems={{ sm: 'center' }}>
+          <Typography variant="body2" color="text.secondary">
+            Members &amp; candidates: <strong>{candidateCycle?.name || 'None'}</strong>
+          </Typography>
+          <Typography variant="body2" color={audiencesSplit ? 'warning.main' : 'text.secondary'}>
+            Admins: <strong>{adminCycle?.name || 'None'}</strong>
+          </Typography>
+        </Stack>
+      </Paper>
+
       <TableContainer component={Paper} className="responsive-table">
         <Table>
           <TableHead>
@@ -177,7 +224,8 @@ export default function CycleManagement() {
               <TableCell>Form URL</TableCell>
               <TableCell>Start</TableCell>
               <TableCell>End</TableCell>
-              <TableCell>Active</TableCell>
+              <TableCell>Members &amp; Candidates</TableCell>
+              <TableCell>Admins</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
@@ -188,7 +236,12 @@ export default function CycleManagement() {
                 <TableCell data-label="Form URL" sx={{ maxWidth: { xs: 'none', md: 320 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: { xs: 'normal', md: 'nowrap' }, wordBreak: 'break-all' }}>{c.formUrl || '-'}</TableCell>
                 <TableCell data-label="Start">{c.startDate ? new Date(c.startDate).toLocaleDateString() : '-'}</TableCell>
                 <TableCell data-label="End">{c.endDate ? new Date(c.endDate).toLocaleDateString() : '-'}</TableCell>
-                <TableCell data-label="Active">{c.isActive ? 'Yes' : 'No'}</TableCell>
+                <TableCell data-label="Members & Candidates">
+                  {c.isActive ? <Chip size="small" color="primary" label="Active" /> : '—'}
+                </TableCell>
+                <TableCell data-label="Admins">
+                  {c.isAdminActive ? <Chip size="small" color="warning" label="Active" /> : '—'}
+                </TableCell>
                 <TableCell data-label="Actions" align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
                     <Tooltip title="Edit cycle">
@@ -199,8 +252,14 @@ export default function CycleManagement() {
                     <Button size="small" variant="outlined" onClick={() => setOfferLetterCycleId(c.id)}>
                       Offer Letters
                     </Button>
-                    {!c.isActive && (
-                      <Button size="small" variant="outlined" onClick={() => activateCycle(c.id)}>Activate</Button>
+                    {!(c.isActive && c.isAdminActive) && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => { setActivateAudiences('BOTH'); setActivating(c); }}
+                      >
+                        Activate…
+                      </Button>
                     )}
                     <Button size="small" color="error" variant="outlined" onClick={() => deleteCycle(c.id)}>Delete</Button>
                   </Stack>
@@ -210,6 +269,49 @@ export default function CycleManagement() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Activation Dialog: which audiences this cycle becomes active for */}
+      <Dialog open={Boolean(activating)} onClose={() => !submitting && setActivating(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Activate {activating?.name}</DialogTitle>
+        <DialogContent>
+          <RadioGroup
+            value={activateAudiences}
+            onChange={(e) => setActivateAudiences(e.target.value)}
+          >
+            <FormControlLabel
+              value="BOTH"
+              control={<Radio />}
+              disabled={submitting}
+              label="Everyone — members, candidates and admins"
+            />
+            <FormControlLabel
+              value="CANDIDATE"
+              control={<Radio />}
+              disabled={submitting}
+              label={`Members & candidates only — admins stay on ${adminCycle?.name || 'their current cycle'}`}
+            />
+            <FormControlLabel
+              value="ADMIN"
+              control={<Radio />}
+              disabled={submitting}
+              label={`Admins only — members & candidates stay on ${candidateCycle?.name || 'their current cycle'}`}
+            />
+          </RadioGroup>
+          {activateAudiences !== 'BOTH' && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Admins and members will be working in different cycles. Events, interviews and
+              review teams an admin creates are stamped with the admin cycle, so members on the
+              other cycle will not see them.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setActivating(null)} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" onClick={submitActivation} disabled={submitting}>
+            {submitting ? 'Activating…' : 'Activate'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Create Dialog */}
       <Dialog open={createOpen} onClose={() => !submitting && setCreateOpen(false)} fullWidth maxWidth="sm">
@@ -256,7 +358,7 @@ export default function CycleManagement() {
                 onChange={(e) => setForm({ ...form, isActive: e.target.checked })} 
                 disabled={submitting}
               />
-              <Typography>Set as active</Typography>
+              <Typography>Set as active for everyone</Typography>
             </Stack>
           </Stack>
         </DialogContent>
@@ -313,7 +415,7 @@ export default function CycleManagement() {
                 onChange={(e) => setForm({ ...form, isActive: e.target.checked })} 
                 disabled={submitting}
               />
-              <Typography>Set as active</Typography>
+              <Typography>Set as active for everyone</Typography>
             </Stack>
           </Stack>
         </DialogContent>

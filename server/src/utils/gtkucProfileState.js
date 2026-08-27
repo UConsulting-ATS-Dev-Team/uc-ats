@@ -3,6 +3,7 @@
 // admin console open timeslots and must apply the same per-cycle gate.
 import prisma from '../prismaClient.js';
 import { needsCycleConfirmation } from './gtkucProfile.js';
+import { resolveCandidateCycle } from '../services/activeCycle.js';
 
 export const loadGtkucProfileState = async (userId) => {
   const [user, activeCycle] = await Promise.all([
@@ -10,7 +11,10 @@ export const loadGtkucProfileState = async (userId) => {
       where: { id: userId },
       select: { id: true, fullName: true, profileImage: true, graduationClass: true }
     }),
-    prisma.recruitingCycle.findFirst({ where: { isActive: true } })
+    // Candidate pointer even for admin callers: GTKUC is a candidate-facing
+    // obligation, and MemberGtkucProfileConfirmation is unique per (profile, cycle),
+    // so a confirmation written against the admin cycle would never clear the gate.
+    resolveCandidateCycle(prisma)
   ]);
 
   const profile = await prisma.memberGtkucProfile.findUnique({

@@ -9,6 +9,7 @@ const ROUTE_CSS_FILES = [
   'CandidateApplications.css',
   'CandidateEvents.css',
   'CandidateList.css',
+  'ClientLayout.css',
 ];
 
 const INTERVIEW_JSX_FILES = [

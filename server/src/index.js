@@ -20,12 +20,26 @@ import interviewResourcesRoutes from './routes/interviewResources.js';
 import memberRoutes from './routes/member.js';
 import candidateRoutes from './routes/candidate.js';
 import casesRoutes from './routes/cases.js';
+import resumeUploadsRoutes from './routes/resumeUploads.js';
+import applicantInfoRoutes from './routes/applicantInfo.js';
 import conversationsRoutes from './routes/conversations.js';
+import masterCommunicationsRoutes from './routes/masterCommunications.js';
+import { processScheduledMessages } from './services/masterCommunications.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
+import externalContainment from './middleware/externalContainment.js';
+import clientRoutes from './routes/client.js';
+import talentRoutes from './routes/talent.js';
+import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
+import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
 
 const app = express();
+
+// Render (and any single-hop proxy) sits in front of this service. Without
+// this, req.ip is the proxy's address and every access-log row records it
+// instead of the caller.
+app.set('trust proxy', 1);
 
 // Single-service deploys (Render staging) build the SPA into client/dist and
 // serve it from here. Locally that directory doesn't exist — the Vite dev
@@ -58,19 +72,32 @@ app.use('/api/uploads', express.static('uploads', {
   }
 }));
 
+// Talent Partner Network clients reach only /api/client/*. Mounted ahead of
+// every route so a route file that forgets its own role gate is still covered.
+// Transparent to every other role and to unauthenticated requests.
+app.use(externalContainment);
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
+// Ahead of the catch-all /api/admin mount, same as release-notes above.
+app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
 app.use('/api/member', memberRoutes);
+app.use('/api/client', clientRoutes);
+app.use('/api/talent', talentRoutes);
+app.use('/api/candidate/onboarding', candidateOnboardingRoutes);
 app.use('/api/conversations', conversationsRoutes);
+app.use('/api/master-communications', masterCommunicationsRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
+app.use('/api/resume-uploads', resumeUploadsRoutes);
+app.use('/api/applicant-info', applicantInfoRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
@@ -146,6 +173,14 @@ await syncFormResponses();
 cron.schedule('*/5 * * * *', () => {
   console.log('Running scheduled response sync...');
   syncFormResponses();
+});
+
+// Check for and send scheduled messages every minute
+cron.schedule('* * * * *', async () => {
+  const count = await processScheduledMessages();
+  if (count > 0) {
+    console.log(`Processed ${count} scheduled master communication(s)`);
+  }
 });
 
 app.listen(config.port, () => {

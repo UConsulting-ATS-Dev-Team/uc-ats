@@ -179,13 +179,19 @@ describe('commitCycleBootstrap', () => {
     });
 
     expect(result.cycle.isActive).toBe(true);
+    // A bootstrapped cycle is the new season for everyone, so it clears and claims
+    // both audience pointers rather than only the candidate-facing one.
     expect(prisma.tx.recruitingCycle.updateMany).toHaveBeenCalledWith({
-      where: { id: { not: 'cycle-1' }, isActive: true },
-      data: { isActive: false }
+      where: {
+        id: { not: 'cycle-1' },
+        OR: [{ isActive: true }, { isAdminActive: true }]
+      },
+      data: { isActive: false, isAdminActive: false }
     });
     // The row is created inactive and activated last: the reverse order would
-    // trip the single-active index against the cycle still marked active.
+    // trip the single-active indexes against the cycle still marked active.
     expect(prisma.tx.recruitingCycle.create.mock.calls[0][0].data.isActive).toBe(false);
+    expect(prisma.tx.recruitingCycle.create.mock.calls[0][0].data.isAdminActive).toBe(false);
     expect(prisma.tx.recruitingCycle.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
       prisma.tx.recruitingCycle.update.mock.invocationCallOrder[0]
     );

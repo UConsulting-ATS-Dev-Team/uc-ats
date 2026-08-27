@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import CycleScopeBanner from './CycleScopeBanner';
 import {
   HomeIcon, 
   DocumentTextIcon, 
@@ -19,11 +20,14 @@ import {
   LightBulbIcon,
   PresentationChartBarIcon,
   NewspaperIcon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  EnvelopeIcon,
+  BriefcaseIcon
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
 import FeatureRequestModal from './FeatureRequestModal';
+import MemberTalentNetworkPrompt from './MemberTalentNetworkPrompt';
 import MemberAvatar from './MemberAvatar';
 import ThemeToggle from './ThemeToggle';
 import '../styles/Layout.css';
@@ -55,6 +59,7 @@ const Layout = ({ children }) => {
       { name: 'Assigned Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
+      { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
       { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
@@ -64,12 +69,14 @@ const Layout = ({ children }) => {
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
+      { name: 'Talent Pool Partner Network', href: '/talent-pool', icon: BriefcaseIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
       { name: 'Accountability', href: '/accountability', icon: CheckCircleIcon },
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
+      { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
       { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
       FEATURE_REQUEST_NAV,
     ] : [
@@ -207,6 +214,7 @@ const Layout = ({ children }) => {
         <div className="content-area">
           <main className="main-content">
             <div className="content-container">
+              <CycleScopeBanner />
               {children}
             </div>
           </main>
@@ -222,6 +230,9 @@ const Layout = ({ children }) => {
         open={featureRequestOpen}
         onClose={() => setFeatureRequestOpen(false)}
       />
+      {/* Decides for itself whether to show - it is a no-op for anyone who is
+          not a member, and for a member who already has a resume. */}
+      <MemberTalentNetworkPrompt />
     </div>
   );
 };

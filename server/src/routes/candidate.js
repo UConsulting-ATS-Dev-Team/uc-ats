@@ -8,6 +8,8 @@ import {
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
+// Candidate-facing: always the candidate pointer, never the caller's role.
+import { resolveCandidateCycle } from '../services/activeCycle.js';
 
 const router = express.Router();
 
@@ -78,7 +80,7 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
     }
 
     // Enforce one signup per active recruiting cycle (mirrors public signup route).
-    const activeCycle = await prisma.recruitingCycle.findFirst({ where: { isActive: true } });
+    const activeCycle = await resolveCandidateCycle(prisma);
 
     if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
       const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
