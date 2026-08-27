@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CycleScopeBanner from './CycleScopeBanner';
@@ -21,6 +21,7 @@ import {
   PresentationChartBarIcon,
   NewspaperIcon,
   CheckCircleIcon,
+  ChevronRightIcon,
   EnvelopeIcon,
   BriefcaseIcon
 } from '@heroicons/react/24/outline';
@@ -38,6 +39,64 @@ const FEATURE_REQUEST_NAV = {
   isFeatureRequest: true,
 };
 
+// Admin nav is grouped by recruiting workflow stage. Sections collapse independently and
+// the collapsed set is persisted, so the sidebar stays scoped to whatever is being worked on.
+const ADMIN_NAV_SECTIONS = [
+  {
+    section: 'Pipeline',
+    items: [
+      { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
+      { name: 'Candidates', href: '/candidate-list', icon: UserGroupIcon },
+      { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
+      { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
+      { name: 'Staging', href: '/staging', icon: UserGroupIcon },
+    ],
+  },
+  {
+    section: 'Interviews',
+    items: [
+      { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
+      { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
+      { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
+    ],
+  },
+  {
+    section: 'Engagement',
+    items: [
+      { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
+      { name: 'Accountability', href: '/accountability', icon: CheckCircleIcon },
+    ],
+  },
+  {
+    section: 'Talent Network',
+    items: [
+      { name: 'Talent Pool Partner Network', href: '/talent-pool', icon: BriefcaseIcon },
+    ],
+  },
+  {
+    section: 'Administration',
+    items: [
+      { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
+      { name: 'User Management', href: '/user-management', icon: UserIcon },
+      { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
+    ],
+  },
+];
+
+const COLLAPSED_SECTIONS_KEY = 'uc-ats:nav-collapsed-sections';
+
+// Storing the *collapsed* set (rather than the expanded one) means any section added later
+// defaults to visible instead of silently hiding behind a stale stored value.
+const readCollapsedSections = () => {
+  try {
+    const stored = window.localStorage.getItem(COLLAPSED_SECTIONS_KEY);
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  } catch {
+    return new Set();
+  }
+};
+
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
   const location = useLocation();
@@ -45,6 +104,46 @@ const Layout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [messageModalOpen, setMessageModalOpen] = useState(false);
   const [featureRequestOpen, setFeatureRequestOpen] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState(readCollapsedSections);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COLLAPSED_SECTIONS_KEY,
+        JSON.stringify([...collapsedSections])
+      );
+    } catch {
+      // Storage unavailable (private browsing, blocked cookies) - collapse still works
+      // for this session, it just will not survive a reload.
+    }
+  }, [collapsedSections]);
+
+  // Navigating into a collapsed section reveals it, so the active page is never hidden.
+  // Keyed on pathname only, so manually collapsing the current section still sticks.
+  useEffect(() => {
+    const owning = ADMIN_NAV_SECTIONS.find((group) =>
+      group.items.some((item) => item.href === location.pathname)
+    );
+    if (!owning) return;
+    setCollapsedSections((prev) => {
+      if (!prev.has(owning.section)) return prev;
+      const next = new Set(prev);
+      next.delete(owning.section);
+      return next;
+    });
+  }, [location.pathname]);
+
+  const toggleSection = useCallback((section) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) {
+        next.delete(section);
+      } else {
+        next.add(section);
+      }
+      return next;
+    });
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -62,21 +161,8 @@ const Layout = ({ children }) => {
       { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },
     ] : user?.role === 'ADMIN' ? [
-      { name: 'Applications', href: '/application-list', icon: DocumentTextIcon },
-      { name: 'Candidates', href: '/candidate-list', icon: UserGroupIcon },
-      { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
-      { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
-      { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
-      { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
-      { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
-      { name: 'Talent Pool Partner Network', href: '/talent-pool', icon: BriefcaseIcon },
-      { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
-      { name: 'Event Management', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Accountability', href: '/accountability', icon: CheckCircleIcon },
-      { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
-      { name: 'Staging', href: '/staging', icon: UserGroupIcon },
-      { name: 'User Management', href: '/user-management', icon: UserIcon },
-      { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
+      ...ADMIN_NAV_SECTIONS,
+      { divider: true },
       { name: "What's new", href: '/admin/release-notes', icon: NewspaperIcon },
       FEATURE_REQUEST_NAV,
     ] : [
@@ -87,6 +173,57 @@ const Layout = ({ children }) => {
   ];
 
   const isCurrentPath = (path) => location.pathname === path;
+
+  const renderNavItem = (item) => {
+    const Icon = item.icon;
+    const current = isCurrentPath(item.href);
+
+    if (item.isFeatureRequest) {
+      return (
+        <button
+          key={item.name}
+          type="button"
+          onClick={() => {
+            setFeatureRequestOpen(true);
+            setSidebarOpen(false);
+          }}
+          className="nav-item"
+        >
+          <Icon className="nav-icon" />
+          {item.name}
+        </button>
+      );
+    }
+
+    if (item.isAction) {
+      return (
+        <button
+          key={item.name}
+          type="button"
+          onClick={() => {
+            setMessageModalOpen(true);
+            setSidebarOpen(false);
+          }}
+          className="nav-item"
+        >
+          <Icon className="nav-icon" />
+          {item.name}
+        </button>
+      );
+    }
+
+    return (
+      <Link
+        key={item.name}
+        to={item.href}
+        className={`nav-item ${current ? 'active' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      >
+        <Icon className="nav-icon" />
+        {item.name}
+      </Link>
+    );
+  };
 
   return (
     <div className="layout-container">
@@ -148,55 +285,38 @@ const Layout = ({ children }) => {
             
             
             <nav className="sidebar-nav">
-              {navigation.map((item) => {
-                const Icon = item.icon;
-                const current = isCurrentPath(item.href);
-                
-                if (item.isFeatureRequest) {
+              {navigation.map((entry, index) => {
+                if (entry.divider) {
+                  return <hr key={`nav-divider-${index}`} className="nav-divider" />;
+                }
+
+                if (entry.section) {
+                  const collapsed = collapsedSections.has(entry.section);
+                  const sectionId = `nav-section-${entry.section.replace(/\s+/g, '-').toLowerCase()}`;
                   return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      onClick={() => {
-                        setFeatureRequestOpen(true);
-                        setSidebarOpen(false);
-                      }}
-                      className="nav-item"
-                    >
-                      <Icon className="nav-icon" />
-                      {item.name}
-                    </button>
+                    <div key={entry.section} className="nav-section">
+                      <button
+                        type="button"
+                        className="nav-section-header"
+                        onClick={() => toggleSection(entry.section)}
+                        aria-expanded={!collapsed}
+                        aria-controls={collapsed ? undefined : sectionId}
+                      >
+                        <ChevronRightIcon
+                          className={`nav-section-chevron ${collapsed ? '' : 'expanded'}`}
+                        />
+                        <span className="nav-section-title">{entry.section}</span>
+                      </button>
+                      {!collapsed && (
+                        <div className="nav-section-items" id={sectionId}>
+                          {entry.items.map(renderNavItem)}
+                        </div>
+                      )}
+                    </div>
                   );
                 }
 
-                if (item.isAction) {
-                  return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      onClick={() => {
-                        setMessageModalOpen(true);
-                        setSidebarOpen(false);
-                      }}
-                      className="nav-item"
-                    >
-                      <Icon className="nav-icon" />
-                      {item.name}
-                    </button>
-                  );
-                }
-                
-                return (
-                  <Link
-                    key={item.name}
-                    to={item.href}
-                    className={`nav-item ${current ? 'active' : ''}`}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <Icon className="nav-icon" />
-                    {item.name}
-                  </Link>
-                );
+                return renderNavItem(entry);
               })}
             </nav>
           </div>

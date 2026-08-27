@@ -24,7 +24,6 @@ import {
   TextField,
   Typography,
   Alert,
-  Tooltip,
   IconButton
 } from '@mui/material';
 import { ArrowPathIcon, TrophyIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
@@ -49,7 +48,6 @@ export default function AccountabilityTracker() {
   const [eventMembers, setEventMembers] = useState([]);
   const [eventMembersLoading, setEventMembersLoading] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState({});
-  const [expandedInterviews, setExpandedInterviews] = useState({});
   const [search, setSearch] = useState('');
 
   const fetchCycles = async () => {
@@ -92,10 +90,6 @@ export default function AccountabilityTracker() {
 
   const toggleEventExpand = (eventId) => {
     setExpandedEvents((prev) => ({ ...prev, [eventId]: !prev[eventId] }));
-  };
-
-  const toggleInterviewExpand = (interviewId) => {
-    setExpandedInterviews((prev) => ({ ...prev, [interviewId]: !prev[interviewId] }));
   };
 
   const openEventDialog = async (event) => {
@@ -145,18 +139,6 @@ export default function AccountabilityTracker() {
       setError(e.message || 'Failed to sync member attendance');
     } finally {
       setSyncLoading((prev) => ({ ...prev, [eventId]: false }));
-    }
-  };
-
-  const toggleInterviewAttendance = async (assignmentId, attended) => {
-    try {
-      await apiClient.post(`/admin/accountability/interview-assignments/${assignmentId}/attendance`, {
-        attended
-      });
-      setMessage('Interview attendance updated');
-      fetchData();
-    } catch (e) {
-      setError(e.message || 'Failed to update interview attendance');
     }
   };
 
@@ -274,7 +256,6 @@ export default function AccountabilityTracker() {
                     <TableCell>Member</TableCell>
                     <TableCell align="right">Events</TableCell>
                     <TableCell align="right">GTKUC</TableCell>
-                    <TableCell align="right">Interviews</TableCell>
                     <TableCell align="right">Total</TableCell>
                   </TableRow>
                 </TableHead>
@@ -310,7 +291,6 @@ export default function AccountabilityTracker() {
                           </TableCell>
                           <TableCell align="right">{member.eventCount}</TableCell>
                           <TableCell align="right">{member.gtkucCount}</TableCell>
-                          <TableCell align="right">{member.interviewCount}</TableCell>
                           <TableCell align="right">
                             <Chip label={member.total} color={isTop ? 'success' : isBottom ? 'error' : 'default'} size="small" />
                           </TableCell>
@@ -408,90 +388,6 @@ export default function AccountabilityTracker() {
             )}
           </Paper>
 
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Interviews
-            </Typography>
-            {data.interviews.length === 0 ? (
-              <Typography color="text.secondary">No interviews found for this cycle.</Typography>
-            ) : (
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell />
-                      <TableCell>Interview</TableCell>
-                      <TableCell>Type</TableCell>
-                      <TableCell>Date</TableCell>
-                      <TableCell align="right">Attended</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {data.interviews.map((interview) => {
-                      const attendedCount = interview.assignments.filter((a) => a.attended).length;
-                      const totalCount = interview.assignments.length;
-                      return (
-                        <React.Fragment key={interview.id}>
-                          <TableRow>
-                            <TableCell>
-                              <IconButton size="small" onClick={() => toggleInterviewExpand(interview.id)}>
-                                {expandedInterviews[interview.id] ? (
-                                  <ChevronUpIcon style={{ width: '1rem', height: '1rem' }} />
-                                ) : (
-                                  <ChevronDownIcon style={{ width: '1rem', height: '1rem' }} />
-                                )}
-                              </IconButton>
-                            </TableCell>
-                            <TableCell>{interview.title}</TableCell>
-                            <TableCell>{interview.interviewType}</TableCell>
-                            <TableCell>{formatDate(interview.startDate)}</TableCell>
-                            <TableCell align="right">
-                              <Chip
-                                label={`${attendedCount}/${totalCount}`}
-                                color={attendedCount === totalCount && totalCount > 0 ? 'success' : 'default'}
-                                size="small"
-                                variant="outlined"
-                              />
-                            </TableCell>
-                          </TableRow>
-                          {expandedInterviews[interview.id] && (
-                            <TableRow>
-                              <TableCell colSpan={5} sx={{ p: 0, borderBottom: 0 }}>
-                                <Box p={2} bgcolor="action.hover">
-                                  <Stack spacing={1}>
-                                    {interview.assignments.map((assignment) => (
-                                      <Stack
-                                        key={assignment.id}
-                                        direction="row"
-                                        spacing={2}
-                                        alignItems="center"
-                                        justifyContent="space-between"
-                                      >
-                                        <Typography variant="body2">
-                                          {assignment.user.fullName} ({assignment.role})
-                                        </Typography>
-                                        <Tooltip title="Toggle attendance">
-                                          <Switch
-                                            checked={assignment.attended}
-                                            onChange={(e) => toggleInterviewAttendance(assignment.id, e.target.checked)}
-                                            inputProps={{ 'aria-label': `${assignment.user.fullName} attended` }}
-                                          />
-                                        </Tooltip>
-                                      </Stack>
-                                    ))}
-                                  </Stack>
-                                </Box>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Paper>
         </Stack>
       )}
 

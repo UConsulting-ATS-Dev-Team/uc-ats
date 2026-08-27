@@ -1964,7 +1964,7 @@ function makeTimeFilter(cycle) {
   return Object.keys(filter).length > 0 ? filter : null;
 }
 
-// Get accountability summary for a cycle: leaderboard, events, and interviews
+// Get accountability summary for a cycle: leaderboard and events
 router.get('/accountability', async (req, res) => {
   try {
     const cycle = await getAccountabilityCycle(req);
@@ -1973,14 +1973,14 @@ router.get('/accountability', async (req, res) => {
     }
 
     const members = await prisma.user.findMany({
-      where: { role: { in: ['MEMBER', 'ADMIN'] } },
+      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
       select: { id: true, fullName: true, email: true, studentId: true, role: true },
       orderBy: { fullName: 'asc' }
     });
 
     const memberIds = members.map(m => m.id);
 
-    const [eventAttendances, gtkucSlots, interviewAssignments, events, interviews] = await Promise.all([
+    const [eventAttendances, gtkucSlots, events] = await Promise.all([
       prisma.memberEventAttendance.findMany({
         where: { event: { cycleId: cycle.id }, memberId: { in: memberIds } },
         select: { memberId: true }
@@ -1993,10 +1993,6 @@ router.get('/accountability', async (req, res) => {
         },
         select: { memberId: true }
       }),
-      prisma.interviewAssignment.findMany({
-        where: { userId: { in: memberIds }, attended: true, interview: { cycleId: cycle.id } },
-        select: { userId: true }
-      }),
       prisma.events.findMany({
         where: { cycleId: cycle.id },
         select: {
@@ -2008,24 +2004,6 @@ router.get('/accountability', async (req, res) => {
           _count: { select: { memberEventAttendance: true } }
         },
         orderBy: { eventStartDate: 'desc' }
-      }),
-      prisma.interview.findMany({
-        where: { cycleId: cycle.id },
-        select: {
-          id: true,
-          title: true,
-          interviewType: true,
-          startDate: true,
-          assignments: {
-            select: {
-              id: true,
-              attended: true,
-              role: true,
-              user: { select: { id: true, fullName: true, email: true } }
-            }
-          }
-        },
-        orderBy: { startDate: 'desc' }
       })
     ]);
 
@@ -2039,21 +2017,14 @@ router.get('/accountability', async (req, res) => {
       return acc;
     }, {});
 
-    const interviewCounts = interviewAssignments.reduce((acc, curr) => {
-      acc[curr.userId] = (acc[curr.userId] || 0) + 1;
-      return acc;
-    }, {});
-
     const leaderboard = members.map(member => {
       const eventCount = eventCounts[member.id] || 0;
       const gtkucCount = gtkucCounts[member.id] || 0;
-      const interviewCount = interviewCounts[member.id] || 0;
       return {
         ...member,
         eventCount,
         gtkucCount,
-        interviewCount,
-        total: eventCount + gtkucCount + interviewCount
+        total: eventCount + gtkucCount
       };
     }).sort((a, b) => b.total - a.total);
 
@@ -2063,8 +2034,7 @@ router.get('/accountability', async (req, res) => {
       events: events.map(e => ({
         ...e,
         memberAttendanceCount: e._count.memberEventAttendance
-      })),
-      interviews
+      }))
     });
   } catch (error) {
     console.error('[GET /api/admin/accountability]', error);
@@ -2083,7 +2053,7 @@ router.get('/accountability/events/:id/members', async (req, res) => {
         select: { id: true, eventName: true, memberAttendanceForm: true }
       }),
       prisma.user.findMany({
-        where: { role: { in: ['MEMBER', 'ADMIN'] } },
+        where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
         select: { id: true, fullName: true, email: true, studentId: true },
         orderBy: { fullName: 'asc' }
       })
@@ -2171,35 +2141,6 @@ router.post('/accountability/events/:id/sync-attendance', async (req, res) => {
   } catch (error) {
     console.error(`[POST /api/admin/accountability/events/${req.params.id}/sync-attendance]`, error);
     res.status(500).json({ error: 'Failed to sync member attendance' });
-  }
-});
-
-// Toggle interview assignment attendance
-router.post('/accountability/interview-assignments/:id/attendance', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { attended } = req.body;
-
-    if (attended === undefined || attended === null) {
-      return res.status(400).json({ error: 'attended is required' });
-    }
-
-    const updated = await prisma.interviewAssignment.update({
-      where: { id },
-      data: { attended: Boolean(attended) },
-      select: {
-        id: true,
-        attended: true,
-        role: true,
-        user: { select: { id: true, fullName: true, email: true } },
-        interview: { select: { id: true, title: true } }
-      }
-    });
-
-    res.json(updated);
-  } catch (error) {
-    console.error(`[POST /api/admin/accountability/interview-assignments/${req.params.id}/attendance]`, error);
-    res.status(500).json({ error: 'Failed to update interview attendance' });
   }
 });
 
