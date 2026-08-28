@@ -9,6 +9,7 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
+import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import '../styles/InterviewInterface.css';
 
 export default function InterviewInterface() {
@@ -641,6 +642,11 @@ export default function InterviewInterface() {
         </div>
       )}
       <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+      <InterviewQuestionPanel
+        interviewId={interviewId}
+        round={interview?.interviewType}
+        interviewTitle={interview?.title}
+      />
     </div>
     </AccessControl>
   );

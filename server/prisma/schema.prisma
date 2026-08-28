@@ -898,6 +898,49 @@ model Message {
   @@map("messages")
 }
 
+model InterviewQuestion {
+  id          String                  @id @default(uuid())
+  cycleId     String
+  prompt      String
+  guidance    String?
+  round       String
+  category    String?
+  status      InterviewQuestionStatus @default(DRAFT)
+  createdBy   String
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  @@index([cycleId])
+  @@index([round])
+  @@index([category])
+  @@index([status])
+  @@map("interview_questions")
+}
+
+enum InterviewQuestionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model InterviewSessionQuestion {
+  id          String    @id @default(uuid())
+  interviewId String
+  prompt      String
+  guidance    String?
+  questionBankId String?
+  addedBy     String
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([interviewId, position])
+  @@index([interviewId, updatedAt])
+  @@index([questionBankId])
+  @@map("interview_session_questions")
+}
+
 enum ConversationContextType {
   INTERVIEW
   APPLICATION

@@ -49,6 +49,7 @@ import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import MemberHelp from './pages/MemberHelp';
 import AdminHelpManagement from './pages/AdminHelpManagement';
+import AdminQuestionBank from './pages/AdminQuestionBank';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import MasterCommunications from './pages/MasterCommunications';
@@ -570,6 +571,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MemberHelp />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin interview question bank */}
+      <Route
+        path="/admin/question-bank"
+        element={
+          <ProtectedRoute>
+            <AdminQuestionBank />
           </ProtectedRoute>
         }
       />

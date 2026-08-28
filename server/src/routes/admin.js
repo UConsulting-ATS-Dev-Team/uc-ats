@@ -6069,4 +6069,174 @@ router.get('/talent-pool/stats', async (req, res) => {
   }
 });
 
+// -------------------- Interview Question Bank (ATS-23 / ATS-68) --------------------
+
+// Create a new interview question
+router.post('/interview-questions', async (req, res) => {
+  try {
+    const { cycleId, prompt, guidance, round, category, status } = req.body || {};
+
+    if (!cycleId || !prompt || !round) {
+      return res.status(400).json({ error: 'cycleId, prompt, and round are required' });
+    }
+
+    const validStatus = ['DRAFT', 'PUBLISHED', 'ARCHIVED'];
+    const questionStatus = status && validStatus.includes(status) ? status : 'DRAFT';
+
+    const question = await prisma.interviewQuestion.create({
+      data: {
+        cycleId,
+        prompt,
+        guidance: guidance || null,
+        round,
+        category: category || null,
+        status: questionStatus,
+        createdBy: req.user.id
+      }
+    });
+
+    res.status(201).json(question);
+  } catch (error) {
+    console.error('[POST /api/admin/interview-questions]', error);
+    res.status(500).json({ error: 'Failed to create interview question' });
+  }
+});
+
+// List and filter interview questions (admin sees all)
+router.get('/interview-questions', async (req, res) => {
+  try {
+    const { cycleId, round, category, status } = req.query || {};
+    const where = {};
+    if (cycleId) where.cycleId = String(cycleId);
+    if (round) where.round = String(round);
+    if (category) where.category = String(category);
+    if (status) where.status = String(status);
+
+    const questions = await prisma.interviewQuestion.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(questions);
+  } catch (error) {
+    console.error('[GET /api/admin/interview-questions]', error);
+    res.status(500).json({ error: 'Failed to fetch interview questions' });
+  }
+});
+
+// Update an interview question
+router.put('/interview-questions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { prompt, guidance, round, category } = req.body || {};
+
+    if (!prompt || !round) {
+      return res.status(400).json({ error: 'prompt and round are required' });
+    }
+
+    const question = await prisma.interviewQuestion.update({
+      where: { id },
+      data: {
+        prompt,
+        guidance: guidance || null,
+        round,
+        category: category || null
+      }
+    });
+
+    res.json(question);
+  } catch (error) {
+    console.error('[PUT /api/admin/interview-questions/:id]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Interview question not found' });
+    }
+    res.status(500).json({ error: 'Failed to update interview question' });
+  }
+});
+
+// Distinct category and round values in use, for filter dropdowns. Both columns are
+// free text, so the only source of truth for "what can I filter by" is the data itself.
+// Registered ahead of the /:id routes so "facets" is never read as an id.
+router.get('/interview-questions/facets', async (req, res) => {
+  try {
+    const { cycleId } = req.query || {};
+    const where = {};
+    if (cycleId) where.cycleId = String(cycleId);
+
+    const [categories, rounds] = await Promise.all([
+      prisma.interviewQuestion.findMany({
+        where: { ...where, category: { not: null } },
+        distinct: ['category'],
+        select: { category: true },
+        orderBy: { category: 'asc' }
+      }),
+      prisma.interviewQuestion.findMany({
+        where,
+        distinct: ['round'],
+        select: { round: true },
+        orderBy: { round: 'asc' }
+      })
+    ]);
+
+    res.json({
+      categories: categories.map((c) => c.category).filter(Boolean),
+      rounds: rounds.map((r) => r.round).filter(Boolean)
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/interview-questions/facets]', error);
+    res.status(500).json({ error: 'Failed to fetch interview question facets' });
+  }
+});
+
+// Update question status (DRAFT / PUBLISHED / ARCHIVED)
+router.patch('/interview-questions/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    const validStatus = ['DRAFT', 'PUBLISHED', 'ARCHIVED'];
+
+    if (!status || !validStatus.includes(status)) {
+      return res.status(400).json({ error: 'status must be DRAFT, PUBLISHED, or ARCHIVED' });
+    }
+
+    const question = await prisma.interviewQuestion.update({
+      where: { id },
+      data: { status }
+    });
+
+    res.json(question);
+  } catch (error) {
+    console.error('[PATCH /api/admin/interview-questions/:id/status]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Interview question not found' });
+    }
+    res.status(500).json({ error: 'Failed to update interview question status' });
+  }
+});
+
+// Permanently delete a bank question. Session questions are independent snapshots, so
+// they survive this - but their questionBankId would otherwise point at a row that no
+// longer exists, so it is cleared in the same transaction.
+router.delete('/interview-questions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [detached] = await prisma.$transaction([
+      prisma.interviewSessionQuestion.updateMany({
+        where: { questionBankId: id },
+        data: { questionBankId: null }
+      }),
+      prisma.interviewQuestion.delete({ where: { id } })
+    ]);
+
+    res.json({ success: true, detachedSessionQuestions: detached.count });
+  } catch (error) {
+    console.error('[DELETE /api/admin/interview-questions/:id]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Interview question not found' });
+    }
+    res.status(500).json({ error: 'Failed to delete interview question' });
+  }
+});
+
 export default router;
