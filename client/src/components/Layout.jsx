@@ -58,6 +58,7 @@ const ADMIN_NAV_SECTIONS = [
     items: [
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
+      { name: 'Question Bank', href: '/admin/question-bank', icon: QuestionMarkCircleIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
       { name: 'Get to Know UC', href: '/admin/meeting-slots', icon: ChatBubbleLeftRightIcon },
     ],

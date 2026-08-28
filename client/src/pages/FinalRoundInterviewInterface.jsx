@@ -20,6 +20,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
+import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import CaseViewer from '../components/case/CaseViewer';
 import { usePreviewActive } from '../utils/previewMode';
 import '../styles/FinalRoundInterviewInterface.css';
@@ -917,9 +918,17 @@ export default function FinalRoundInterviewInterface() {
             title={preview.title}
           />
         )}
-        {/* Chat is hidden entirely during candidate preview so nothing pops over the exhibit. */}
+        {/* Chat and the question panel are hidden entirely during candidate preview so
+            nothing pops over the exhibit. */}
         {!candidatePreviewActive && (
-          <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+          <>
+            <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+            <InterviewQuestionPanel
+              interviewId={interviewId}
+              round={interview?.interviewType}
+              interviewTitle={interview?.title}
+            />
+          </>
         )}
       </div>
     </AccessControl>

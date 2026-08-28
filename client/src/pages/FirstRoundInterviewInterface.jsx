@@ -17,6 +17,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
+import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import '../styles/FirstRoundInterviewInterface.css';
 
 export default function FirstRoundInterviewInterface() {
@@ -1166,6 +1167,11 @@ export default function FirstRoundInterviewInterface() {
           />
         )}
         <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+        <InterviewQuestionPanel
+          interviewId={interviewId}
+          round={interview?.interviewType}
+          interviewTitle={interview?.title}
+        />
       </div>
     </AccessControl>
   );

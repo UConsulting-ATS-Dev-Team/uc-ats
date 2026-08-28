@@ -6154,6 +6154,40 @@ router.put('/interview-questions/:id', async (req, res) => {
   }
 });
 
+// Distinct category and round values in use, for filter dropdowns. Both columns are
+// free text, so the only source of truth for "what can I filter by" is the data itself.
+// Registered ahead of the /:id routes so "facets" is never read as an id.
+router.get('/interview-questions/facets', async (req, res) => {
+  try {
+    const { cycleId } = req.query || {};
+    const where = {};
+    if (cycleId) where.cycleId = String(cycleId);
+
+    const [categories, rounds] = await Promise.all([
+      prisma.interviewQuestion.findMany({
+        where: { ...where, category: { not: null } },
+        distinct: ['category'],
+        select: { category: true },
+        orderBy: { category: 'asc' }
+      }),
+      prisma.interviewQuestion.findMany({
+        where,
+        distinct: ['round'],
+        select: { round: true },
+        orderBy: { round: 'asc' }
+      })
+    ]);
+
+    res.json({
+      categories: categories.map((c) => c.category).filter(Boolean),
+      rounds: rounds.map((r) => r.round).filter(Boolean)
+    });
+  } catch (error) {
+    console.error('[GET /api/admin/interview-questions/facets]', error);
+    res.status(500).json({ error: 'Failed to fetch interview question facets' });
+  }
+});
+
 // Update question status (DRAFT / PUBLISHED / ARCHIVED)
 router.patch('/interview-questions/:id/status', async (req, res) => {
   try {
@@ -6177,6 +6211,31 @@ router.patch('/interview-questions/:id/status', async (req, res) => {
       return res.status(404).json({ error: 'Interview question not found' });
     }
     res.status(500).json({ error: 'Failed to update interview question status' });
+  }
+});
+
+// Permanently delete a bank question. Session questions are independent snapshots, so
+// they survive this - but their questionBankId would otherwise point at a row that no
+// longer exists, so it is cleared in the same transaction.
+router.delete('/interview-questions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [detached] = await prisma.$transaction([
+      prisma.interviewSessionQuestion.updateMany({
+        where: { questionBankId: id },
+        data: { questionBankId: null }
+      }),
+      prisma.interviewQuestion.delete({ where: { id } })
+    ]);
+
+    res.json({ success: true, detachedSessionQuestions: detached.count });
+  } catch (error) {
+    console.error('[DELETE /api/admin/interview-questions/:id]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Interview question not found' });
+    }
+    res.status(500).json({ error: 'Failed to delete interview question' });
   }
 });
 

@@ -2057,6 +2057,44 @@ router.get('/interview-questions', requireAuth, requireAdminOrMember, async (req
   }
 });
 
+// Distinct category and round values across the published bank, for filter dropdowns.
+router.get('/interview-questions/facets', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { cycleId } = req.query || {};
+    const activeCycle = await resolveCycleForRequest(prisma, req);
+    const targetCycleId = cycleId || activeCycle?.id;
+
+    if (!targetCycleId) {
+      return res.json({ categories: [], rounds: [] });
+    }
+
+    const where = { cycleId: targetCycleId, status: 'PUBLISHED' };
+
+    const [categories, rounds] = await Promise.all([
+      prisma.interviewQuestion.findMany({
+        where: { ...where, category: { not: null } },
+        distinct: ['category'],
+        select: { category: true },
+        orderBy: { category: 'asc' }
+      }),
+      prisma.interviewQuestion.findMany({
+        where,
+        distinct: ['round'],
+        select: { round: true },
+        orderBy: { round: 'asc' }
+      })
+    ]);
+
+    res.json({
+      categories: categories.map((c) => c.category).filter(Boolean),
+      rounds: rounds.map((r) => r.round).filter(Boolean)
+    });
+  } catch (error) {
+    console.error('[GET /api/member/interview-questions/facets]', error);
+    res.status(500).json({ error: 'Failed to fetch interview question facets' });
+  }
+});
+
 // Add a published bank question to the interview session as a snapshot (ATS-23)
 router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
@@ -2167,11 +2205,13 @@ router.get('/interviews/:interviewId/session-questions', requireAuth, requireAdm
 
     const where = { interviewId };
     if (since) {
-      try {
-        where.updatedAt = { gte: new Date(since) };
-      } catch {
+      const sinceDate = new Date(since);
+      if (Number.isNaN(sinceDate.getTime())) {
         return res.status(400).json({ error: 'Invalid since timestamp' });
       }
+      // Soft-deleted rows are returned on purpose here: they are the tombstones a
+      // polling client needs to drop questions removed since its last sync.
+      where.updatedAt = { gte: sinceDate };
     } else {
       where.deletedAt = null;
     }
@@ -2217,6 +2257,58 @@ router.delete('/interviews/:interviewId/session-questions/:id', requireAuth, req
   } catch (error) {
     console.error('[DELETE /api/member/interviews/:interviewId/session-questions/:id]', error);
     res.status(500).json({ error: 'Failed to remove interview question' });
+  }
+});
+
+// Renumber the whole active question list for an interview. Takes the full ordered id
+// list rather than a single moved id: positions are assigned on insert only, and two
+// interviewers adding at once can compute the same position, so a subset renumber would
+// interleave with the rows left out.
+router.patch('/interviews/:interviewId/session-questions/reorder', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { interviewId } = req.params;
+    const { order } = req.body || {};
+
+    if (!Array.isArray(order) || order.length === 0) {
+      return res.status(400).json({ error: 'order must be a non-empty array of question ids' });
+    }
+
+    if (!(await canAccessInterview(req, interviewId))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
+    }
+
+    const active = await prisma.interviewSessionQuestion.findMany({
+      where: { interviewId, deletedAt: null },
+      select: { id: true }
+    });
+    const activeIds = new Set(active.map((q) => q.id));
+    const unique = new Set(order);
+
+    // A stale list means the client is reordering against questions someone else has
+    // already added or removed; renumbering it would silently discard their change.
+    if (
+      unique.size !== order.length ||
+      unique.size !== activeIds.size ||
+      order.some((id) => !activeIds.has(id))
+    ) {
+      return res.status(409).json({
+        error: 'order must list every active question for this interview exactly once'
+      });
+    }
+
+    const questions = await prisma.$transaction(
+      order.map((id, index) =>
+        prisma.interviewSessionQuestion.update({
+          where: { id },
+          data: { position: index }
+        })
+      )
+    );
+
+    res.json(questions);
+  } catch (error) {
+    console.error('[PATCH /api/member/interviews/:interviewId/session-questions/reorder]', error);
+    res.status(500).json({ error: 'Failed to reorder interview questions' });
   }
 });
 

@@ -893,6 +893,9 @@ model Message {
   deletedAt      DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
 }
 
 model InterviewQuestion {
@@ -934,6 +937,7 @@ model InterviewSessionQuestion {
 
   @@index([interviewId, position])
   @@index([interviewId, updatedAt])
+  @@index([questionBankId])
   @@map("interview_session_questions")
 }
 
