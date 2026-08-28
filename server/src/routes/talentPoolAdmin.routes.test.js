@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import talentPoolAdminRoutes from './talentPoolAdmin.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { PREVIEW_CAP } from '../utils/talentPoolFilters.js';
 
 vi.mock('../prismaClient.js', () => {
   const tx = {
@@ -223,6 +224,42 @@ describe('preview', () => {
     expect(body.errors.join(' ')).toMatch(/None of those filters could be used/i);
   });
 
+  it('spends the row cap as one budget, so a full applicant pool cannot starve the others', async () => {
+    // The bug this replaces: every pool took the full cap and the concatenated
+    // list was sliced back down at the end, so cap-many applicants pushed every
+    // member row out of the response - counted in `total`, then dropped without
+    // a word. That is the "ticking Members shows nothing" symptom again.
+    const applicants = Array.from({ length: PREVIEW_CAP }, (_, i) => ({
+      id: `app-${i}`,
+      firstName: 'A',
+      lastName: String(i),
+      graduationYear: '2029'
+    }));
+    prisma.application.count.mockResolvedValue(PREVIEW_CAP + 300);
+    prisma.application.findMany.mockImplementation(({ take }) => applicants.slice(0, take));
+    prisma.memberResume.count.mockResolvedValue(6);
+    prisma.memberResume.findMany.mockImplementation(({ take }) =>
+      Array.from({ length: Math.min(6, take) }, (_, i) => ({
+        id: `mr-${i}`,
+        member: { fullName: `Member ${i}` }
+      }))
+    );
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS', 'MEMBERS'], rows: [] } }
+    });
+
+    const body = await res.json();
+    // Never more than the cap, and the count the UI prints matches the rows it got.
+    expect(body.rows.length).toBe(PREVIEW_CAP);
+    expect(body.truncated).toBe(true);
+    // And the truncation is now something the admin can act on, rather than a
+    // page that returns identically forever.
+    expect(body.notes.join(' ')).toMatch(/narrow it/i);
+  });
+
   it('reports how many rows each consent gate excluded', async () => {
     // 10 match the filter, 7 have not opted out, 5 of those have a blind resume.
     prisma.application.count
@@ -408,14 +445,14 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
   });
 
   it('caps a single assignment batch', async () => {
-    const keys = Array.from({ length: 501 }, (_, i) => `APPLICATION:app-${i}`);
+    const keys = Array.from({ length: PREVIEW_CAP + 1 }, (_, i) => `APPLICATION:app-${i}`);
     const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
       user: adminUser,
       method: 'POST',
       body: { keys }
     });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/at most 500/i);
+    expect((await res.json()).error).toMatch(new RegExp(`at most ${PREVIEW_CAP}`, 'i'));
   });
 });
 

@@ -286,8 +286,11 @@ describe('assignment keys', () => {
 });
 
 describe('caps', () => {
-  it('bounds preview and commit size', () => {
-    expect(PREVIEW_CAP).toBe(500);
+  it('bounds preview and commit size above the whole assignable universe', () => {
+    // The cap must stay ABOVE the set it bounds. Below it, the preview returns
+    // the same unreachable first page every run and the tail can never be
+    // assigned - which is how a client stalled at 521 of 762.
+    expect(PREVIEW_CAP).toBe(2000);
   });
 });
 

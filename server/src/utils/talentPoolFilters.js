@@ -84,7 +84,20 @@ export const NUMBER_OPS = ['gte', 'lte'];
 
 // The preview never renders more than this, and a commit never accepts more.
 // A runaway filter therefore cannot quietly hand a client thousands of resumes.
-export const PREVIEW_CAP = 500;
+//
+// It was 500, set when "every opted-in application in the system" was ~250 rows
+// and the cap was therefore twice the entire assignable universe. Reading the
+// consent gate as "has not opted out" tripled that universe to ~760, which put
+// the cap BELOW it - and because the preview always takes the same first page
+// by submitted date, the rows past the cap became unreachable: re-running the
+// filter returned the identical page, every row already assigned, with nothing
+// new to tick. An admin could get to 521 of 762 and then stall with no
+// indication why.
+//
+// 2000 restores the original intent - comfortably above the whole assignable
+// set - and matches MAX_MATERIALIZED in clientResumeQuery.js, which bounds the
+// same universe from the portal side.
+export const PREVIEW_CAP = 2000;
 
 const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 

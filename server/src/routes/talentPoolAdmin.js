@@ -361,6 +361,15 @@ router.post('/clients/:id/preview', async (req, res) => {
     const rows = [];
     let total = 0;
 
+    // PREVIEW_CAP is a budget for the WHOLE response, not for each pool. Each
+    // pool used to take the full cap and the concatenation was sliced back down
+    // at the end, so a filter matching cap-many applicants dropped every member
+    // and student row on the floor - the pools were queried, counted into
+    // `total`, and then silently cut. Spending from a shared remainder means a
+    // truncated preview loses the tail of the last pool rather than an entire
+    // pool nobody was told about.
+    const remaining = () => Math.max(PREVIEW_CAP - rows.length, 0);
+
     if (applicant.where) {
       // Diagnostics: how many the consent gate and the blind gate each removed.
       // filterOnlyWhere is never used to select rows for assignment.
@@ -377,7 +386,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       excluded.noBlindResume = Math.max(notOptedOut - matched, 0);
       total += matched;
 
-      const applications = await prisma.application.findMany({
+      const applications = remaining() === 0 ? [] : await prisma.application.findMany({
         where: applicant.where,
         select: {
           id: true,
@@ -390,7 +399,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           cumulativeGpa: true
         },
         orderBy: { submittedAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
       rows.push(
@@ -415,7 +424,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       excluded.memberNoConsent = Math.max(filterOnly - matched, 0);
       total += matched;
 
-      const memberResumes = await prisma.memberResume.findMany({
+      const memberResumes = remaining() === 0 ? [] : await prisma.memberResume.findMany({
         where: member.where,
         select: {
           id: true,
@@ -426,7 +435,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           member: { select: { fullName: true } }
         },
         orderBy: { createdAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
       rows.push(
@@ -459,7 +468,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       excluded.externalNotAssignable = Math.max(filterOnly - matched, 0);
       total += matched;
 
-      const externalResumes = await prisma.externalResume.findMany({
+      const externalResumes = remaining() === 0 ? [] : await prisma.externalResume.findMany({
         where: external.where,
         select: {
           id: true,
@@ -470,7 +479,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           user: { select: { fullName: true } }
         },
         orderBy: { createdAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
       rows.push(
@@ -525,10 +534,20 @@ router.post('/clients/:id/preview', async (req, res) => {
       if (row.alreadyAssigned) excluded.alreadyAssigned += 1;
     }
 
+    // rows can no longer exceed the cap - remaining() enforces it - so this is
+    // a comparison against what the admin is actually looking at rather than
+    // against a longer list that was about to be sliced.
+    const truncated = total > rows.length;
+    if (truncated) {
+      notes.push(
+        `Showing ${rows.length} of ${total} matches. The same ${rows.length} come back every time this filter runs, so narrow it - by cycle, class, or major - to reach the rest.`
+      );
+    }
+
     res.json({
-      rows: rows.slice(0, PREVIEW_CAP),
+      rows,
       total,
-      truncated: total > rows.length,
+      truncated,
       cap: PREVIEW_CAP,
       excluded,
       notes,
