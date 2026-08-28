@@ -2057,4 +2057,167 @@ router.get('/interview-questions', requireAuth, requireAdminOrMember, async (req
   }
 });
 
+// Add a published bank question to the interview session as a snapshot (ATS-23)
+router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { interviewId } = req.params;
+    const { questionId, position } = req.body || {};
+
+    if (!questionId) {
+      return res.status(400).json({ error: 'questionId is required' });
+    }
+
+    if (!(await canAccessInterview(req, interviewId))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
+    }
+
+    const bankQuestion = await prisma.interviewQuestion.findFirst({
+      where: { id: questionId, status: 'PUBLISHED' }
+    });
+
+    if (!bankQuestion) {
+      return res.status(404).json({ error: 'Published question not found' });
+    }
+
+    let targetPosition = Number(position);
+    if (Number.isNaN(targetPosition)) {
+      const last = await prisma.interviewSessionQuestion.findFirst({
+        where: { interviewId },
+        orderBy: { position: 'desc' },
+        select: { position: true }
+      });
+      targetPosition = (last?.position || 0) + 1;
+    }
+
+    const question = await prisma.interviewSessionQuestion.create({
+      data: {
+        interviewId,
+        prompt: bankQuestion.prompt,
+        guidance: bankQuestion.guidance,
+        questionBankId: bankQuestion.id,
+        addedBy: req.user.id,
+        position: targetPosition
+      }
+    });
+
+    res.status(201).json(question);
+  } catch (error) {
+    console.error('[POST /api/member/interviews/:interviewId/session-questions/bank]', error);
+    res.status(500).json({ error: 'Failed to add bank question' });
+  }
+});
+
+// Live interview session questions (ATS-13 / ATS-69)
+
+async function canAccessInterview(req, interviewId) {
+  if (req.user.role === 'ADMIN') return true;
+  const assignment = await prisma.interviewAssignment.findFirst({
+    where: { interviewId, userId: req.user.id }
+  });
+  return Boolean(assignment);
+}
+
+router.post('/interviews/:interviewId/session-questions', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { interviewId } = req.params;
+    const { prompt, position } = req.body || {};
+
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+
+    if (!(await canAccessInterview(req, interviewId))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
+    }
+
+    let targetPosition = Number(position);
+    if (Number.isNaN(targetPosition)) {
+      const last = await prisma.interviewSessionQuestion.findFirst({
+        where: { interviewId },
+        orderBy: { position: 'desc' },
+        select: { position: true }
+      });
+      targetPosition = (last?.position || 0) + 1;
+    }
+
+    const question = await prisma.interviewSessionQuestion.create({
+      data: {
+        interviewId,
+        prompt: prompt.trim(),
+        addedBy: req.user.id,
+        position: targetPosition
+      }
+    });
+
+    res.status(201).json(question);
+  } catch (error) {
+    console.error('[POST /api/member/interviews/:interviewId/session-questions]', error);
+    res.status(500).json({ error: 'Failed to add interview question' });
+  }
+});
+
+router.get('/interviews/:interviewId/session-questions', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { interviewId } = req.params;
+    const { since } = req.query || {};
+
+    if (!(await canAccessInterview(req, interviewId))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
+    }
+
+    const where = { interviewId };
+    if (since) {
+      try {
+        where.updatedAt = { gte: new Date(since) };
+      } catch {
+        return res.status(400).json({ error: 'Invalid since timestamp' });
+      }
+    } else {
+      where.deletedAt = null;
+    }
+
+    const questions = await prisma.interviewSessionQuestion.findMany({
+      where,
+      orderBy: [{ position: 'asc' }, { updatedAt: 'asc' }]
+    });
+
+    res.json(questions);
+  } catch (error) {
+    console.error('[GET /api/member/interviews/:interviewId/session-questions]', error);
+    res.status(500).json({ error: 'Failed to fetch interview questions' });
+  }
+});
+
+router.delete('/interviews/:interviewId/session-questions/:id', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const { interviewId, id } = req.params;
+
+    if (!(await canAccessInterview(req, interviewId))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
+    }
+
+    const question = await prisma.interviewSessionQuestion.findFirst({
+      where: { id, interviewId }
+    });
+
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+
+    if (req.user.role !== 'ADMIN' && question.addedBy !== req.user.id) {
+      return res.status(403).json({ error: 'You can only remove your own questions' });
+    }
+
+    const updated = await prisma.interviewSessionQuestion.update({
+      where: { id },
+      data: { deletedAt: new Date() }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[DELETE /api/member/interviews/:interviewId/session-questions/:id]', error);
+    res.status(500).json({ error: 'Failed to remove interview question' });
+  }
+});
+
 export default router;
