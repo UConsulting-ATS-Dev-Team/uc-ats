@@ -86,6 +86,22 @@ describe('ClientAssignBuilder', () => {
     ).toBeInTheDocument();
   });
 
+  it('previews the whole pool with no filter rows at all', async () => {
+    // The pool checkboxes are themselves a filter, so requiring a row on top of
+    // them just blocked the commonest request there is: share every member.
+    mockApi();
+    const user = userEvent.setup();
+    render(<ClientAssignBuilder client={client} onDone={vi.fn()} />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
+
+    expect(screen.getByRole('button', { name: /preview whole pool/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /preview whole pool/i }));
+
+    await screen.findByText(/3 matches/i);
+    const call = apiClient.post.mock.calls.find(([url]) => url.includes('/preview'));
+    expect(call[1].filter.rows).toEqual([]);
+  });
+
   it('lists a row the filter could not narrow, unticked and labelled', async () => {
     // A member resume has no recruiting cycle and no GPA, so a filter using
     // either cannot narrow it. It used to be dropped entirely, which is why

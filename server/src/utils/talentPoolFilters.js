@@ -115,10 +115,12 @@ const cleanDecimal = (value) => {
 
 /**
  * Normalize and validate raw filter input from the admin UI.
- * Returns { value: { pool, rows }, errors: string[] }.
+ * Returns { value: { pool, pools, rows, unfiltered }, errors: string[] }.
  *
- * An empty or fully-invalid row set is an ERROR, never "match everything" -
- * see the guard note on buildApplicantWhere.
+ * No rows at all is legal and means "every assignable resume in the selected
+ * pools" - the pool choice is the filter. A row set that was written and then
+ * fully rejected is an ERROR, because that one would widen the match behind the
+ * admin's back. See the note on the guard itself.
  */
 export const sanitizeFilterDsl = (input) => {
   const errors = [];
@@ -202,14 +204,25 @@ export const sanitizeFilterDsl = (input) => {
     }
   }
 
-  if (rows.length === 0) {
-    // Deliberately an error. "No filter" must never be read as "every resume":
-    // that is the one mistake in this feature that cannot be walked back once a
-    // client has seen the rows.
-    errors.push('Add at least one filter before previewing.');
+  if (rows.length === 0 && rawRows.length > 0) {
+    // The distinction that matters. NO rows is a coherent request - "everything
+    // in the pools I ticked" - and the pool selection is itself the filter.
+    // Rows that were written and then all failed validation is a different
+    // thing: the admin meant to narrow and the narrowing silently evaporated,
+    // which is the one mistake here that cannot be walked back once a client
+    // has seen the rows. That case still errors; an empty filter does not.
+    errors.push(
+      'None of those filters could be used. Fix them, or remove them to match the whole pool.'
+    );
   }
 
-  return { value: { pool, pools, rows }, errors };
+  // True only when the admin wrote no rows at all - never as a consequence of
+  // rows being dropped, which errors above. A caller reading this as "no
+  // narrowing was applied" would otherwise treat a failed filter as a
+  // deliberate one.
+  const unfiltered = rows.length === 0 && rawRows.length === 0;
+
+  return { value: { pool, pools, rows, unfiltered }, errors };
 };
 
 // Prisma's `in` has no case-insensitive mode, and both gender and major are
