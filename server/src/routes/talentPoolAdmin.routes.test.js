@@ -260,6 +260,52 @@ describe('preview', () => {
     expect(body.notes.join(' ')).toMatch(/narrow it/i);
   });
 
+  it('collapses repeat applicants to one row per person', async () => {
+    // 762 assignable applications are 627 people. Assigning both of someone's
+    // forms puts them in a client's library twice, which is how one client came
+    // to hold 521 rows for 456 people.
+    const apps = [
+      { id: 'a1', firstName: 'Jin', lastName: 'Kim', candidateId: 'cand-1' },
+      { id: 'a2', firstName: 'Jin', lastName: 'Kim', candidateId: 'cand-1' },
+      { id: 'a3', firstName: 'Ada', lastName: 'L', email: 'Ada@ucla.edu' },
+      { id: 'a4', firstName: 'Ada', lastName: 'L', email: 'ada@ucla.edu' },
+      { id: 'a5', firstName: 'Solo', lastName: 'One', candidateId: 'cand-2' }
+    ];
+    prisma.application.count.mockResolvedValue(apps.length);
+    prisma.application.findMany.mockResolvedValue(apps);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS'], rows: [] } }
+    });
+
+    const body = await res.json();
+    expect(body.rows.map((r) => r.key)).toEqual([
+      'APPLICATION:a1',
+      'APPLICATION:a3',
+      'APPLICATION:a5'
+    ]);
+    // The headline count is people, not submissions, when the whole pool fit.
+    expect(body.total).toBe(3);
+    expect(body.excluded.duplicateApplications).toBe(2);
+  });
+
+  it('keeps the row count when the fetch was capped, since duplicates past the cap are unknown', async () => {
+    prisma.application.count.mockResolvedValue(5000);
+    prisma.application.findMany.mockResolvedValue(
+      Array.from({ length: PREVIEW_CAP }, (_, i) => ({ id: `a${i}`, candidateId: `c${i}` }))
+    );
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS'], rows: [] } }
+    });
+    const body = await res.json();
+    expect(body.total).toBe(5000);
+    expect(body.truncated).toBe(true);
+  });
+
   it('reports how many rows each consent gate excluded', async () => {
     // 10 match the filter, 7 have not opted out, 5 of those have a blind resume.
     prisma.application.count

@@ -253,12 +253,26 @@ const majorAnyOf = (values) => ({
 });
 
 /**
- * The applicant consent gate, read as "has not said no".
+ * The applicant consent gate, read as "this PERSON has not said no".
  *
  * An explicit No is the one answer that makes an applicant permanently
  * unassignable. A null - every Fall 2025 applicant, and anyone whose form
  * predates the question - is not a refusal, it is an absence, and treating the
  * two the same hid the entire back catalogue from the network.
+ *
+ * The second clause is the part that is easy to get wrong, and did. Opt-in is
+ * stored per APPLICATION, but consent belongs to the person: someone who
+ * applied twice and answered No on one form has said no, full stop. Checking
+ * only the row in hand let their other application - submitted before the
+ * question existed, so null - stay assignable, which put two people who had
+ * explicitly refused in front of a client. `applications: { none: ... }` asks
+ * the question of every form they have ever submitted.
+ *
+ * Rows with no candidateId are matched on their own answer alone: an
+ * unlinked application has no other rows to be contradicted by. Sync links
+ * applications to a Candidate by studentId or email, so this is a small and
+ * shrinking set - but it fails safe either way, because an unlinked row that
+ * says No is still excluded by the first clause.
  *
  * Written as an OR rather than `{ not: false }` so the null branch is visible
  * at the call site: this clause decides who may be shared with an outside
@@ -266,7 +280,17 @@ const majorAnyOf = (values) => ({
  * NULL under a negation. Exported so the preview's diagnostics count exactly
  * what the gate excludes, rather than a restatement that could drift from it.
  */
-export const NOT_OPTED_OUT = { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] };
+export const NOT_OPTED_OUT = {
+  AND: [
+    { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] },
+    {
+      OR: [
+        { candidateId: null },
+        { candidate: { applications: { none: { talentPoolOptIn: false } } } }
+      ]
+    }
+  ]
+};
 
 /**
  * Build the Prisma where clause for the applicant pool.
@@ -504,6 +528,40 @@ export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => 
     unnarrowedBy: unsupported,
     notes
   };
+};
+
+/**
+ * Collapse applications to one row per PERSON, newest first.
+ *
+ * The applicant pool is keyed on Application, not on Candidate, so someone who
+ * applied in two cycles is two rows - and assigning both puts the same person
+ * in a client's library twice. 762 assignable rows are 627 people, and one
+ * client was already holding 521 rows for 456 people.
+ *
+ * Rows must arrive newest-first: the first one seen for a person wins, which is
+ * their most recent application and therefore their most recent resume. Same
+ * key and same rule as the all-cycles roster in routes/admin.js, so the two
+ * views of "how many applicants are there" cannot disagree.
+ *
+ * The `app:` fallback keeps an unlinked, email-less row as its own person
+ * rather than collapsing every such row into one.
+ */
+export const personKey = (app) =>
+  app.candidateId
+  || (app.email ? `email:${String(app.email).trim().toLowerCase()}` : null)
+  || (app.studentId ? `student:${String(app.studentId).trim()}` : null)
+  || `app:${app.id}`;
+
+export const dedupeApplicantsByPerson = (applications) => {
+  const seen = new Set();
+  const out = [];
+  for (const app of applications) {
+    const key = personKey(app);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(app);
+  }
+  return out;
 };
 
 // Assignment keys are opaque to the client UI and are what a commit sends back.

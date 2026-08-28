@@ -17,6 +17,7 @@ import {
   APPLICATION_STATUSES,
   PREVIEW_CAP,
   NOT_OPTED_OUT,
+  dedupeApplicantsByPerson,
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
@@ -353,6 +354,7 @@ router.post('/clients/:id/preview', async (req, res) => {
     const excluded = {
       optedOut: 0,
       noBlindResume: 0,
+      duplicateApplications: 0,
       memberNoConsent: 0,
       externalNotAssignable: 0,
       alreadyAssigned: 0
@@ -384,7 +386,6 @@ router.post('/clients/:id/preview', async (req, res) => {
       // counted here because it is not a refusal - it is simply assignable.
       excluded.optedOut = Math.max(filterOnly - notOptedOut, 0);
       excluded.noBlindResume = Math.max(notOptedOut - matched, 0);
-      total += matched;
 
       const applications = remaining() === 0 ? [] : await prisma.application.findMany({
         where: applicant.where,
@@ -396,14 +397,27 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: true,
           major2: true,
           gender: true,
-          cumulativeGpa: true
+          cumulativeGpa: true,
+          // Identity, for collapsing repeat applicants to one row each.
+          candidateId: true,
+          email: true,
+          studentId: true
         },
         orderBy: { submittedAt: 'desc' },
         take: remaining()
       });
 
+      // One row per person, not per submission. `matched` counts applications,
+      // so a pool we fetched in full reports the person count instead - the
+      // number the admin recognises. A capped fetch cannot know how many
+      // duplicates lie past the cap, so it keeps the row count and lets
+      // `truncated` say the picture is partial.
+      const people = dedupeApplicantsByPerson(applications);
+      excluded.duplicateApplications = applications.length - people.length;
+      total += applications.length === matched ? people.length : matched;
+
       rows.push(
-        ...applications.map((a) => ({
+        ...people.map((a) => ({
           key: buildAssignmentKey('APPLICATION', a.id),
           kind: 'APPLICANT',
           name: `${a.firstName} ${a.lastName}`.trim(),
@@ -598,7 +612,17 @@ router.post('/clients/:id/assign', async (req, res) => {
       applicationIds.length
         ? prisma.application.findMany({
             where: { id: { in: applicationIds } },
-            select: { id: true, talentPoolOptIn: true, resumeUrl: true, blindResumeUrl: true }
+            select: {
+              id: true,
+              talentPoolOptIn: true,
+              resumeUrl: true,
+              blindResumeUrl: true,
+              // Consent belongs to the person, not the submission. A No on any
+              // of their applications disqualifies all of them - see
+              // NOT_OPTED_OUT. Read here too, because a commit never re-runs
+              // the filter and must not trust a key minted before this rule.
+              candidate: { select: { applications: { select: { talentPoolOptIn: true } } } }
+            }
           })
         : [],
       memberResumeIds.length
@@ -655,9 +679,13 @@ router.post('/clients/:id/assign', async (req, res) => {
         const app = appById.get(p.id);
         if (!app) {
           skipped.push({ key: p.key, reason: 'Application no longer exists' });
-        } else if (app.talentPoolOptIn === false) {
-          // An explicit No, and only that. A null means the applicant was never
-          // asked, which is not a refusal - see the gate in talentPoolFilters.js.
+        } else if (
+          app.talentPoolOptIn === false ||
+          app.candidate?.applications?.some((other) => other.talentPoolOptIn === false)
+        ) {
+          // An explicit No on ANY of this person's applications. A null means
+          // they were never asked, which is not a refusal - see the gate in
+          // talentPoolFilters.js.
           skipped.push({ key: p.key, reason: 'Applicant opted out of the Talent Partner Network' });
         } else if (!app.resumeUrl) {
           skipped.push({ key: p.key, reason: 'No resume on file' });
