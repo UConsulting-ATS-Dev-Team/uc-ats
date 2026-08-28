@@ -910,6 +910,9 @@ model VoteSession {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   closedAt        DateTime?
+  confirmedOptionId String?
+  confirmedBy     String?
+  confirmedAt     DateTime?
   options         VoteOption[]
   votes           Vote[]
 

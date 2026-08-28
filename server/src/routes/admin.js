@@ -6202,6 +6202,50 @@ router.patch('/vote-sessions/:id/status', async (req, res) => {
   }
 });
 
+// Admin confirm vote result and lock final decision (ATS-54)
+router.patch('/vote-sessions/:id/confirm', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { optionId } = req.body || {};
+
+    if (!optionId) {
+      return res.status(400).json({ error: 'optionId is required' });
+    }
+
+    const session = await prisma.voteSession.findUnique({
+      where: { id },
+      include: { options: true }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+
+    const option = session.options.find((o) => o.id === optionId);
+    if (!option) {
+      return res.status(400).json({ error: 'Invalid option for this session' });
+    }
+
+    const updated = await prisma.voteSession.update({
+      where: { id },
+      data: {
+        confirmedOptionId: optionId,
+        confirmedBy: req.user.id,
+        confirmedAt: new Date()
+      },
+      include: { options: true }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/vote-sessions/:id/confirm]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+    res.status(500).json({ error: 'Failed to confirm vote session' });
+  }
+});
+
 // Delete a vote session
 router.delete('/vote-sessions/:id', async (req, res) => {
   try {
