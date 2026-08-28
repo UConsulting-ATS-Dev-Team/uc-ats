@@ -25,19 +25,33 @@ describe('sanitizeFilterDsl', () => {
     expect(value.rows).toEqual([{ field: 'graduationYear', values: ['2029', '2030'] }]);
   });
 
-  it('errors rather than matching everything when there are no rows', () => {
+  it('reads no rows at all as the whole pool, which the pool choice already scopes', () => {
     const { value, errors } = sanitizeFilterDsl({ pool: 'APPLICANTS', rows: [] });
     expect(value.rows).toEqual([]);
-    expect(errors).toContain('Add at least one filter before previewing.');
+    expect(value.unfiltered).toBe(true);
+    expect(errors).toEqual([]);
   });
 
-  it('errors when every row is an unknown field, instead of falling back to an empty filter', () => {
+  it('errors when every row is an unknown field, rather than widening to the whole pool', () => {
+    // The dangerous case, and the reason `unfiltered` is not simply
+    // "rows.length === 0": the admin asked to narrow and the narrowing
+    // vanished. An empty filter is a choice; this is a silent failure.
     const { value, errors } = sanitizeFilterDsl({
       rows: [{ field: 'salaryExpectation', values: ['high'] }]
     });
     expect(value.rows).toEqual([]);
-    expect(errors).toContain('Add at least one filter before previewing.');
+    expect(value.unfiltered).toBe(false);
+    expect(errors.some((e) => e.includes('None of those filters could be used'))).toBe(true);
     expect(errors.some((e) => e.includes('salaryExpectation'))).toBe(true);
+  });
+
+  it('errors when a written row is dropped for an empty value list', () => {
+    const { value, errors } = sanitizeFilterDsl({
+      pool: 'MEMBERS',
+      rows: [{ field: 'graduationYear', values: [] }]
+    });
+    expect(value.unfiltered).toBe(false);
+    expect(errors.some((e) => e.includes('None of those filters could be used'))).toBe(true);
   });
 
   it('rejects a garbage GPA rather than coercing it', () => {

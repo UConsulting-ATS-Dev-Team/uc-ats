@@ -328,12 +328,14 @@ const ClientAssignBuilder = ({ client, onDone }) => {
               Add filter
             </Button>
             <Button variant="contained" onClick={runPreview} disabled={loading}>
-              Preview matches
+              {rows.some((r) => r.field) ? 'Preview matches' : 'Preview whole pool'}
             </Button>
           </Stack>
 
           <Typography variant="caption" color="text.secondary">
-            Filters combine with AND. Multiple values in one filter combine with OR.
+            {rows.some((r) => r.field)
+              ? 'Filters combine with AND. Multiple values in one filter combine with OR.'
+              : 'No filters - previewing will list every assignable resume in the pools above. Add a filter to narrow it.'}
           </Typography>
         </Stack>
       </Paper>

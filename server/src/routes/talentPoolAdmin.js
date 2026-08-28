@@ -331,6 +331,8 @@ router.post('/clients/:id/preview', async (req, res) => {
     if (!client) return res.status(404).json({ error: 'Partner client not found' });
 
     const { value: dsl, errors } = sanitizeFilterDsl(req.body?.filter);
+    // Errors with nothing usable left to run. An empty filter is not this case -
+    // it produces no errors and means "the whole pool" (see sanitizeFilterDsl).
     if (errors.length > 0 && dsl.rows.length === 0) {
       return res.status(400).json({ error: errors[0], errors });
     }
@@ -341,6 +343,13 @@ router.post('/clients/:id/preview', async (req, res) => {
     const external = buildExternalResumeWhere(dsl, { visibility: client.visibility });
 
     const notes = [...errors, ...applicant.notes, ...member.notes, ...external.notes];
+    if (dsl.unfiltered) {
+      // Said plainly, because an unfiltered preview looks exactly like a
+      // filtered one that happened to match a lot.
+      notes.unshift(
+        'No filters - this is every assignable resume in the pools you selected. Untick anyone you do not mean to share.'
+      );
+    }
     const excluded = {
       optedOut: 0,
       noBlindResume: 0,

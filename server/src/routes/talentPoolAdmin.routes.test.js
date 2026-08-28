@@ -197,14 +197,30 @@ describe('creating a client account', () => {
 });
 
 describe('preview', () => {
-  it('refuses an empty filter rather than matching every resume', async () => {
+  it('previews the whole pool when no filter was written, and says so', async () => {
     const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
       user: adminUser,
       method: 'POST',
-      body: { filter: { pool: 'APPLICANTS', rows: [] } }
+      body: { filter: { pools: ['APPLICANTS'], rows: [] } }
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).notes[0]).toMatch(/No filters/i);
+  });
+
+  it('still refuses a filter whose every row was rejected', async () => {
+    // Not the same as no filter: the admin meant to narrow, and running the
+    // unnarrowed set would show them more people than they asked for.
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS'], rows: [{ field: 'salaryExpectation', values: ['x'] }] } }
     });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/at least one filter/i);
+    const body = await res.json();
+    // The headline names the offending field - more use than the summary - and
+    // the summary rides along in `errors`.
+    expect(body.error).toMatch(/salaryExpectation/);
+    expect(body.errors.join(' ')).toMatch(/None of those filters could be used/i);
   });
 
   it('reports how many rows each consent gate excluded', async () => {
