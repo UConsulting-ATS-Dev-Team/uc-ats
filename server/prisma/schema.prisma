@@ -905,8 +905,11 @@ model InterviewSessionQuestion {
   addedBy     String
   position    Int       @default(0)
   createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
 
   @@index([interviewId, position])
+  @@index([interviewId, updatedAt])
   @@map("interview_session_questions")
 }
 

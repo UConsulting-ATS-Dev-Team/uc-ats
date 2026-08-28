@@ -2079,14 +2079,26 @@ router.post('/interviews/:interviewId/session-questions', requireAuth, requireAd
 router.get('/interviews/:interviewId/session-questions', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { interviewId } = req.params;
+    const { since } = req.query || {};
 
     if (!(await canAccessInterview(req, interviewId))) {
       return res.status(403).json({ error: 'Not assigned to this interview' });
     }
 
+    const where = { interviewId };
+    if (since) {
+      try {
+        where.updatedAt = { gte: new Date(since) };
+      } catch {
+        return res.status(400).json({ error: 'Invalid since timestamp' });
+      }
+    } else {
+      where.deletedAt = null;
+    }
+
     const questions = await prisma.interviewSessionQuestion.findMany({
-      where: { interviewId },
-      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }]
+      where,
+      orderBy: [{ position: 'asc' }, { updatedAt: 'asc' }]
     });
 
     res.json(questions);
@@ -2116,9 +2128,12 @@ router.delete('/interviews/:interviewId/session-questions/:id', requireAuth, req
       return res.status(403).json({ error: 'You can only remove your own questions' });
     }
 
-    await prisma.interviewSessionQuestion.delete({ where: { id } });
+    const updated = await prisma.interviewSessionQuestion.update({
+      where: { id },
+      data: { deletedAt: new Date() }
+    });
 
-    res.status(204).send();
+    res.json(updated);
   } catch (error) {
     console.error('[DELETE /api/member/interviews/:interviewId/session-questions/:id]', error);
     res.status(500).json({ error: 'Failed to remove interview question' });
