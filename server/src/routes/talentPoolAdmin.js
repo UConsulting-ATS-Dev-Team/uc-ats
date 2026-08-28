@@ -18,6 +18,7 @@ import {
   PREVIEW_CAP,
   NOT_OPTED_OUT,
   dedupeApplicantsByPerson,
+  personKey,
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
@@ -363,6 +364,11 @@ router.post('/clients/:id/preview', async (req, res) => {
     const rows = [];
     let total = 0;
 
+    // rowKey -> person, for applicant rows only. Kept beside the rows rather
+    // than on them: the person key is built from email and student id, and the
+    // response has no business carrying either.
+    const personOfRow = new Map();
+
     // PREVIEW_CAP is a budget for the WHOLE response, not for each pool. Each
     // pool used to take the full cap and the concatenation was sliced back down
     // at the end, so a filter matching cap-many applicants dropped every member
@@ -413,6 +419,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       // duplicates lie past the cap, so it keeps the row count and lets
       // `truncated` say the picture is partial.
       const people = dedupeApplicantsByPerson(applications);
+      for (const a of people) personOfRow.set(buildAssignmentKey('APPLICATION', a.id), personKey(a));
       excluded.duplicateApplications = applications.length - people.length;
       total += applications.length === matched ? people.length : matched;
 
@@ -512,39 +519,33 @@ router.post('/clients/:id/preview', async (req, res) => {
     }
 
     // Flag rows this client already has so the admin is not re-assigning blind.
-    const idsOfKind = (kind) =>
-      rows
-        .map((r) => parseAssignmentKey(r.key))
-        .filter((p) => p?.kind === kind)
-        .map((p) => p.id);
-
-    const applicationIds = idsOfKind('APPLICATION');
-    const memberResumeIds = idsOfKind('MEMBER_RESUME');
-    const externalResumeIds = idsOfKind('EXTERNAL_RESUME');
-
+    //
+    // Scoped to the client's whole live library rather than to the ids in this
+    // preview, because for applicants the question is not "do you hold this
+    // application" but "do you hold this PERSON". Dedupe hands back everyone's
+    // newest application; if the client was assigned an older one, an id-only
+    // check reads as not-assigned and a second row for the same person gets
+    // created - which is how a library reaches 521 rows for 456 people.
     const live = await prisma.clientResumeAssignment.findMany({
-      where: {
-        clientId: client.id,
-        revokedAt: null,
-        OR: [
-          { applicationId: { in: applicationIds } },
-          { memberResumeId: { in: memberResumeIds } },
-          { externalResumeId: { in: externalResumeIds } }
-        ]
-      },
-      select: { applicationId: true, memberResumeId: true, externalResumeId: true }
+      where: { clientId: client.id, revokedAt: null },
+      select: {
+        memberResumeId: true,
+        externalResumeId: true,
+        application: { select: { id: true, candidateId: true, email: true, studentId: true } }
+      }
     });
 
     const liveKeys = new Set([
-      ...live.filter((l) => l.applicationId).map((l) => buildAssignmentKey('APPLICATION', l.applicationId)),
       ...live.filter((l) => l.memberResumeId).map((l) => buildAssignmentKey('MEMBER_RESUME', l.memberResumeId)),
       ...live
         .filter((l) => l.externalResumeId)
         .map((l) => buildAssignmentKey('EXTERNAL_RESUME', l.externalResumeId))
     ]);
+    const livePeople = new Set(live.filter((l) => l.application).map((l) => personKey(l.application)));
 
     for (const row of rows) {
-      row.alreadyAssigned = liveKeys.has(row.key);
+      const person = personOfRow.get(row.key);
+      row.alreadyAssigned = person ? livePeople.has(person) : liveKeys.has(row.key);
       if (row.alreadyAssigned) excluded.alreadyAssigned += 1;
     }
 
@@ -617,6 +618,11 @@ router.post('/clients/:id/assign', async (req, res) => {
               talentPoolOptIn: true,
               resumeUrl: true,
               blindResumeUrl: true,
+              // Identity, so a second application for someone the client
+              // already holds is refused rather than duplicated.
+              candidateId: true,
+              email: true,
+              studentId: true,
               // Consent belongs to the person, not the submission. A No on any
               // of their applications disqualifies all of them - see
               // NOT_OPTED_OUT. Read here too, because a commit never re-runs
@@ -651,24 +657,25 @@ router.post('/clients/:id/assign', async (req, res) => {
             }
           })
         : [],
+      // The client's whole live library, not just the ids being posted: an
+      // applicant is a duplicate when the PERSON is already held, whichever of
+      // their applications carries them. The commit never re-runs the preview,
+      // so this check has to stand on its own.
       prisma.clientResumeAssignment.findMany({
-        where: {
-          clientId: client.id,
-          revokedAt: null,
-          OR: [
-            { applicationId: { in: applicationIds } },
-            { memberResumeId: { in: memberResumeIds } },
-            { externalResumeId: { in: externalResumeIds } }
-          ]
-        },
-        select: { applicationId: true, memberResumeId: true, externalResumeId: true }
+        where: { clientId: client.id, revokedAt: null },
+        select: {
+          applicationId: true,
+          memberResumeId: true,
+          externalResumeId: true,
+          application: { select: { id: true, candidateId: true, email: true, studentId: true } }
+        }
       })
     ]);
 
     const appById = new Map(applications.map((a) => [a.id, a]));
     const memberById = new Map(memberResumes.map((m) => [m.id, m]));
     const externalById = new Map(externalResumes.map((e) => [e.id, e]));
-    const liveApps = new Set(live.map((l) => l.applicationId).filter(Boolean));
+    const livePeople = new Set(live.filter((l) => l.application).map((l) => personKey(l.application)));
     const liveMembers = new Set(live.map((l) => l.memberResumeId).filter(Boolean));
     const liveExternals = new Set(live.map((l) => l.externalResumeId).filter(Boolean));
 
@@ -691,9 +698,14 @@ router.post('/clients/:id/assign', async (req, res) => {
           skipped.push({ key: p.key, reason: 'No resume on file' });
         } else if (client.visibility === 'BLIND' && !app.blindResumeUrl) {
           skipped.push({ key: p.key, reason: 'No redacted resume, and this client is blind-visibility' });
-        } else if (liveApps.has(p.id)) {
+        } else if (livePeople.has(personKey(app))) {
+          // By person, so re-running an unfiltered assign is idempotent rather
+          // than additive.
           skipped.push({ key: p.key, reason: 'Already assigned to this client' });
         } else {
+          // Within-batch too: two applications by the same person can both be
+          // ticked, and neither is in `live` yet.
+          livePeople.add(personKey(app));
           toCreate.push({ applicationId: p.id, memberResumeId: null, externalResumeId: null });
         }
         continue;

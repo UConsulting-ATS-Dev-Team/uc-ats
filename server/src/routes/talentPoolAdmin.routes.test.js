@@ -467,10 +467,10 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
 
   it('skips a resume already live-assigned to this client', async () => {
     prisma.application.findMany.mockResolvedValue([
-      { id: 'app-1', talentPoolOptIn: true, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
+      { id: 'app-1', candidateId: 'cand-1', talentPoolOptIn: true, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
     ]);
     prisma.clientResumeAssignment.findMany.mockResolvedValue([
-      { applicationId: 'app-1', memberResumeId: null }
+      { applicationId: 'app-1', memberResumeId: null, application: { id: 'app-1', candidateId: 'cand-1' } }
     ]);
 
     const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
@@ -479,6 +479,42 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
       body: { keys: ['APPLICATION:app-1'] }
     });
     expect((await res.json()).skipped[0].reason).toMatch(/already assigned/i);
+  });
+
+  it('skips a DIFFERENT application by someone the client already holds', async () => {
+    // Dedupe hands back everyone's newest application. If the client was
+    // assigned an older one, an id-only check reads as not-assigned and the
+    // person lands in the library twice.
+    prisma.application.findMany.mockResolvedValue([
+      { id: 'app-new', candidateId: 'cand-1', talentPoolOptIn: null, resumeUrl: 'drive-2', blindResumeUrl: 'blind-2' }
+    ]);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([
+      { applicationId: 'app-old', memberResumeId: null, application: { id: 'app-old', candidateId: 'cand-1' } }
+    ]);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
+      user: adminUser,
+      method: 'POST',
+      body: { keys: ['APPLICATION:app-new'] }
+    });
+    expect((await res.json()).skipped[0].reason).toMatch(/already assigned/i);
+  });
+
+  it('assigns only one row when two applications by the same person are ticked', async () => {
+    prisma.application.findMany.mockResolvedValue([
+      { id: 'app-a', candidateId: 'cand-9', talentPoolOptIn: null, resumeUrl: 'd1', blindResumeUrl: 'b1' },
+      { id: 'app-b', candidateId: 'cand-9', talentPoolOptIn: null, resumeUrl: 'd2', blindResumeUrl: 'b2' }
+    ]);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([]);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
+      user: adminUser,
+      method: 'POST',
+      body: { keys: ['APPLICATION:app-a', 'APPLICATION:app-b'] }
+    });
+    const body = await res.json();
+    expect(body.created).toBe(1);
+    expect(body.skipped[0].reason).toMatch(/already assigned/i);
   });
 
   it('rejects a malformed key rather than guessing', async () => {
