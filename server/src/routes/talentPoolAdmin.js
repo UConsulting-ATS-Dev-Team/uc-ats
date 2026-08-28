@@ -17,6 +17,8 @@ import {
   APPLICATION_STATUSES,
   PREVIEW_CAP,
   NOT_OPTED_OUT,
+  dedupeApplicantsByPerson,
+  personKey,
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
@@ -353,6 +355,7 @@ router.post('/clients/:id/preview', async (req, res) => {
     const excluded = {
       optedOut: 0,
       noBlindResume: 0,
+      duplicateApplications: 0,
       memberNoConsent: 0,
       externalNotAssignable: 0,
       alreadyAssigned: 0
@@ -360,6 +363,20 @@ router.post('/clients/:id/preview', async (req, res) => {
 
     const rows = [];
     let total = 0;
+
+    // rowKey -> person, for applicant rows only. Kept beside the rows rather
+    // than on them: the person key is built from email and student id, and the
+    // response has no business carrying either.
+    const personOfRow = new Map();
+
+    // PREVIEW_CAP is a budget for the WHOLE response, not for each pool. Each
+    // pool used to take the full cap and the concatenation was sliced back down
+    // at the end, so a filter matching cap-many applicants dropped every member
+    // and student row on the floor - the pools were queried, counted into
+    // `total`, and then silently cut. Spending from a shared remainder means a
+    // truncated preview loses the tail of the last pool rather than an entire
+    // pool nobody was told about.
+    const remaining = () => Math.max(PREVIEW_CAP - rows.length, 0);
 
     if (applicant.where) {
       // Diagnostics: how many the consent gate and the blind gate each removed.
@@ -375,9 +392,8 @@ router.post('/clients/:id/preview', async (req, res) => {
       // counted here because it is not a refusal - it is simply assignable.
       excluded.optedOut = Math.max(filterOnly - notOptedOut, 0);
       excluded.noBlindResume = Math.max(notOptedOut - matched, 0);
-      total += matched;
 
-      const applications = await prisma.application.findMany({
+      const applications = remaining() === 0 ? [] : await prisma.application.findMany({
         where: applicant.where,
         select: {
           id: true,
@@ -387,14 +403,28 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: true,
           major2: true,
           gender: true,
-          cumulativeGpa: true
+          cumulativeGpa: true,
+          // Identity, for collapsing repeat applicants to one row each.
+          candidateId: true,
+          email: true,
+          studentId: true
         },
         orderBy: { submittedAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
+      // One row per person, not per submission. `matched` counts applications,
+      // so a pool we fetched in full reports the person count instead - the
+      // number the admin recognises. A capped fetch cannot know how many
+      // duplicates lie past the cap, so it keeps the row count and lets
+      // `truncated` say the picture is partial.
+      const people = dedupeApplicantsByPerson(applications);
+      for (const a of people) personOfRow.set(buildAssignmentKey('APPLICATION', a.id), personKey(a));
+      excluded.duplicateApplications = applications.length - people.length;
+      total += applications.length === matched ? people.length : matched;
+
       rows.push(
-        ...applications.map((a) => ({
+        ...people.map((a) => ({
           key: buildAssignmentKey('APPLICATION', a.id),
           kind: 'APPLICANT',
           name: `${a.firstName} ${a.lastName}`.trim(),
@@ -415,7 +445,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       excluded.memberNoConsent = Math.max(filterOnly - matched, 0);
       total += matched;
 
-      const memberResumes = await prisma.memberResume.findMany({
+      const memberResumes = remaining() === 0 ? [] : await prisma.memberResume.findMany({
         where: member.where,
         select: {
           id: true,
@@ -426,7 +456,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           member: { select: { fullName: true } }
         },
         orderBy: { createdAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
       rows.push(
@@ -459,7 +489,7 @@ router.post('/clients/:id/preview', async (req, res) => {
       excluded.externalNotAssignable = Math.max(filterOnly - matched, 0);
       total += matched;
 
-      const externalResumes = await prisma.externalResume.findMany({
+      const externalResumes = remaining() === 0 ? [] : await prisma.externalResume.findMany({
         where: external.where,
         select: {
           id: true,
@@ -470,7 +500,7 @@ router.post('/clients/:id/preview', async (req, res) => {
           user: { select: { fullName: true } }
         },
         orderBy: { createdAt: 'desc' },
-        take: PREVIEW_CAP
+        take: remaining()
       });
 
       rows.push(
@@ -489,46 +519,50 @@ router.post('/clients/:id/preview', async (req, res) => {
     }
 
     // Flag rows this client already has so the admin is not re-assigning blind.
-    const idsOfKind = (kind) =>
-      rows
-        .map((r) => parseAssignmentKey(r.key))
-        .filter((p) => p?.kind === kind)
-        .map((p) => p.id);
-
-    const applicationIds = idsOfKind('APPLICATION');
-    const memberResumeIds = idsOfKind('MEMBER_RESUME');
-    const externalResumeIds = idsOfKind('EXTERNAL_RESUME');
-
+    //
+    // Scoped to the client's whole live library rather than to the ids in this
+    // preview, because for applicants the question is not "do you hold this
+    // application" but "do you hold this PERSON". Dedupe hands back everyone's
+    // newest application; if the client was assigned an older one, an id-only
+    // check reads as not-assigned and a second row for the same person gets
+    // created - which is how a library reaches 521 rows for 456 people.
     const live = await prisma.clientResumeAssignment.findMany({
-      where: {
-        clientId: client.id,
-        revokedAt: null,
-        OR: [
-          { applicationId: { in: applicationIds } },
-          { memberResumeId: { in: memberResumeIds } },
-          { externalResumeId: { in: externalResumeIds } }
-        ]
-      },
-      select: { applicationId: true, memberResumeId: true, externalResumeId: true }
+      where: { clientId: client.id, revokedAt: null },
+      select: {
+        memberResumeId: true,
+        externalResumeId: true,
+        application: { select: { id: true, candidateId: true, email: true, studentId: true } }
+      }
     });
 
     const liveKeys = new Set([
-      ...live.filter((l) => l.applicationId).map((l) => buildAssignmentKey('APPLICATION', l.applicationId)),
       ...live.filter((l) => l.memberResumeId).map((l) => buildAssignmentKey('MEMBER_RESUME', l.memberResumeId)),
       ...live
         .filter((l) => l.externalResumeId)
         .map((l) => buildAssignmentKey('EXTERNAL_RESUME', l.externalResumeId))
     ]);
+    const livePeople = new Set(live.filter((l) => l.application).map((l) => personKey(l.application)));
 
     for (const row of rows) {
-      row.alreadyAssigned = liveKeys.has(row.key);
+      const person = personOfRow.get(row.key);
+      row.alreadyAssigned = person ? livePeople.has(person) : liveKeys.has(row.key);
       if (row.alreadyAssigned) excluded.alreadyAssigned += 1;
     }
 
+    // rows can no longer exceed the cap - remaining() enforces it - so this is
+    // a comparison against what the admin is actually looking at rather than
+    // against a longer list that was about to be sliced.
+    const truncated = total > rows.length;
+    if (truncated) {
+      notes.push(
+        `Showing ${rows.length} of ${total} matches. The same ${rows.length} come back every time this filter runs, so narrow it - by cycle, class, or major - to reach the rest.`
+      );
+    }
+
     res.json({
-      rows: rows.slice(0, PREVIEW_CAP),
+      rows,
       total,
-      truncated: total > rows.length,
+      truncated,
       cap: PREVIEW_CAP,
       excluded,
       notes,
@@ -579,7 +613,22 @@ router.post('/clients/:id/assign', async (req, res) => {
       applicationIds.length
         ? prisma.application.findMany({
             where: { id: { in: applicationIds } },
-            select: { id: true, talentPoolOptIn: true, resumeUrl: true, blindResumeUrl: true }
+            select: {
+              id: true,
+              talentPoolOptIn: true,
+              resumeUrl: true,
+              blindResumeUrl: true,
+              // Identity, so a second application for someone the client
+              // already holds is refused rather than duplicated.
+              candidateId: true,
+              email: true,
+              studentId: true,
+              // Consent belongs to the person, not the submission. A No on any
+              // of their applications disqualifies all of them - see
+              // NOT_OPTED_OUT. Read here too, because a commit never re-runs
+              // the filter and must not trust a key minted before this rule.
+              candidate: { select: { applications: { select: { talentPoolOptIn: true } } } }
+            }
           })
         : [],
       memberResumeIds.length
@@ -608,24 +657,25 @@ router.post('/clients/:id/assign', async (req, res) => {
             }
           })
         : [],
+      // The client's whole live library, not just the ids being posted: an
+      // applicant is a duplicate when the PERSON is already held, whichever of
+      // their applications carries them. The commit never re-runs the preview,
+      // so this check has to stand on its own.
       prisma.clientResumeAssignment.findMany({
-        where: {
-          clientId: client.id,
-          revokedAt: null,
-          OR: [
-            { applicationId: { in: applicationIds } },
-            { memberResumeId: { in: memberResumeIds } },
-            { externalResumeId: { in: externalResumeIds } }
-          ]
-        },
-        select: { applicationId: true, memberResumeId: true, externalResumeId: true }
+        where: { clientId: client.id, revokedAt: null },
+        select: {
+          applicationId: true,
+          memberResumeId: true,
+          externalResumeId: true,
+          application: { select: { id: true, candidateId: true, email: true, studentId: true } }
+        }
       })
     ]);
 
     const appById = new Map(applications.map((a) => [a.id, a]));
     const memberById = new Map(memberResumes.map((m) => [m.id, m]));
     const externalById = new Map(externalResumes.map((e) => [e.id, e]));
-    const liveApps = new Set(live.map((l) => l.applicationId).filter(Boolean));
+    const livePeople = new Set(live.filter((l) => l.application).map((l) => personKey(l.application)));
     const liveMembers = new Set(live.map((l) => l.memberResumeId).filter(Boolean));
     const liveExternals = new Set(live.map((l) => l.externalResumeId).filter(Boolean));
 
@@ -636,17 +686,26 @@ router.post('/clients/:id/assign', async (req, res) => {
         const app = appById.get(p.id);
         if (!app) {
           skipped.push({ key: p.key, reason: 'Application no longer exists' });
-        } else if (app.talentPoolOptIn === false) {
-          // An explicit No, and only that. A null means the applicant was never
-          // asked, which is not a refusal - see the gate in talentPoolFilters.js.
+        } else if (
+          app.talentPoolOptIn === false ||
+          app.candidate?.applications?.some((other) => other.talentPoolOptIn === false)
+        ) {
+          // An explicit No on ANY of this person's applications. A null means
+          // they were never asked, which is not a refusal - see the gate in
+          // talentPoolFilters.js.
           skipped.push({ key: p.key, reason: 'Applicant opted out of the Talent Partner Network' });
         } else if (!app.resumeUrl) {
           skipped.push({ key: p.key, reason: 'No resume on file' });
         } else if (client.visibility === 'BLIND' && !app.blindResumeUrl) {
           skipped.push({ key: p.key, reason: 'No redacted resume, and this client is blind-visibility' });
-        } else if (liveApps.has(p.id)) {
+        } else if (livePeople.has(personKey(app))) {
+          // By person, so re-running an unfiltered assign is idempotent rather
+          // than additive.
           skipped.push({ key: p.key, reason: 'Already assigned to this client' });
         } else {
+          // Within-batch too: two applications by the same person can both be
+          // ticked, and neither is in `live` yet.
+          livePeople.add(personKey(app));
           toCreate.push({ applicationId: p.id, memberResumeId: null, externalResumeId: null });
         }
         continue;

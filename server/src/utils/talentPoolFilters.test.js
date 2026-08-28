@@ -6,7 +6,8 @@ import {
   buildExternalResumeWhere,
   parseAssignmentKey,
   buildAssignmentKey,
-  PREVIEW_CAP
+  PREVIEW_CAP,
+  NOT_OPTED_OUT
 } from './talentPoolFilters.js';
 
 const dsl = (rows, pool = 'APPLICANTS') => ({ pool, rows });
@@ -97,19 +98,33 @@ describe('sanitizeFilterDsl', () => {
 });
 
 describe('buildApplicantWhere - consent is not optional', () => {
-  const NOT_OPTED_OUT = { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] };
+  const gateOf = (where) =>
+    where.AND.find((c) => JSON.stringify(c).includes('talentPoolOptIn'));
 
-  it('always excludes an explicit opt-out', () => {
+  it('always applies the consent gate', () => {
     const { where } = buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }]));
     expect(where.AND).toContainEqual(NOT_OPTED_OUT);
   });
 
   it('keeps applicants who were never asked - a null is an absence, not a refusal', () => {
-    const { where } = buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }]));
-    const gate = where.AND.find((c) => JSON.stringify(c).includes('talentPoolOptIn'));
-    expect(gate.OR).toContainEqual({ talentPoolOptIn: null });
-    // The one thing the gate must never admit.
-    expect(JSON.stringify(gate)).not.toContain('false');
+    const gate = gateOf(buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }])).where);
+    expect(gate.AND[0].OR).toContainEqual({ talentPoolOptIn: null });
+    expect(gate.AND[0].OR).toContainEqual({ talentPoolOptIn: true });
+    // The one answer the row-level clause must never admit.
+    expect(gate.AND[0].OR).not.toContainEqual({ talentPoolOptIn: false });
+  });
+
+  it('disqualifies every application of someone who said no on any one of them', () => {
+    // Consent belongs to the person. Checking only the row in hand let a "no"
+    // on one application coexist with a still-shareable null on another, which
+    // put two people who had explicitly refused in front of a client.
+    const gate = gateOf(buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }])).where);
+    expect(gate.AND[1].OR).toContainEqual({
+      candidate: { applications: { none: { talentPoolOptIn: false } } }
+    });
+    // An unlinked application has no siblings to be contradicted by, and its
+    // own answer is still checked by the first clause.
+    expect(gate.AND[1].OR).toContainEqual({ candidateId: null });
   });
 
   it('requires it even when the filter mentions nothing else', () => {
@@ -286,8 +301,11 @@ describe('assignment keys', () => {
 });
 
 describe('caps', () => {
-  it('bounds preview and commit size', () => {
-    expect(PREVIEW_CAP).toBe(500);
+  it('bounds preview and commit size above the whole assignable universe', () => {
+    // The cap must stay ABOVE the set it bounds. Below it, the preview returns
+    // the same unreachable first page every run and the tail can never be
+    // assigned - which is how a client stalled at 521 of 762.
+    expect(PREVIEW_CAP).toBe(2000);
   });
 });
 

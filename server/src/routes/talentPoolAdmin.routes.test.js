@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import talentPoolAdminRoutes from './talentPoolAdmin.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { PREVIEW_CAP } from '../utils/talentPoolFilters.js';
 
 vi.mock('../prismaClient.js', () => {
   const tx = {
@@ -223,6 +224,88 @@ describe('preview', () => {
     expect(body.errors.join(' ')).toMatch(/None of those filters could be used/i);
   });
 
+  it('spends the row cap as one budget, so a full applicant pool cannot starve the others', async () => {
+    // The bug this replaces: every pool took the full cap and the concatenated
+    // list was sliced back down at the end, so cap-many applicants pushed every
+    // member row out of the response - counted in `total`, then dropped without
+    // a word. That is the "ticking Members shows nothing" symptom again.
+    const applicants = Array.from({ length: PREVIEW_CAP }, (_, i) => ({
+      id: `app-${i}`,
+      firstName: 'A',
+      lastName: String(i),
+      graduationYear: '2029'
+    }));
+    prisma.application.count.mockResolvedValue(PREVIEW_CAP + 300);
+    prisma.application.findMany.mockImplementation(({ take }) => applicants.slice(0, take));
+    prisma.memberResume.count.mockResolvedValue(6);
+    prisma.memberResume.findMany.mockImplementation(({ take }) =>
+      Array.from({ length: Math.min(6, take) }, (_, i) => ({
+        id: `mr-${i}`,
+        member: { fullName: `Member ${i}` }
+      }))
+    );
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS', 'MEMBERS'], rows: [] } }
+    });
+
+    const body = await res.json();
+    // Never more than the cap, and the count the UI prints matches the rows it got.
+    expect(body.rows.length).toBe(PREVIEW_CAP);
+    expect(body.truncated).toBe(true);
+    // And the truncation is now something the admin can act on, rather than a
+    // page that returns identically forever.
+    expect(body.notes.join(' ')).toMatch(/narrow it/i);
+  });
+
+  it('collapses repeat applicants to one row per person', async () => {
+    // 762 assignable applications are 627 people. Assigning both of someone's
+    // forms puts them in a client's library twice, which is how one client came
+    // to hold 521 rows for 456 people.
+    const apps = [
+      { id: 'a1', firstName: 'Jin', lastName: 'Kim', candidateId: 'cand-1' },
+      { id: 'a2', firstName: 'Jin', lastName: 'Kim', candidateId: 'cand-1' },
+      { id: 'a3', firstName: 'Ada', lastName: 'L', email: 'Ada@ucla.edu' },
+      { id: 'a4', firstName: 'Ada', lastName: 'L', email: 'ada@ucla.edu' },
+      { id: 'a5', firstName: 'Solo', lastName: 'One', candidateId: 'cand-2' }
+    ];
+    prisma.application.count.mockResolvedValue(apps.length);
+    prisma.application.findMany.mockResolvedValue(apps);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS'], rows: [] } }
+    });
+
+    const body = await res.json();
+    expect(body.rows.map((r) => r.key)).toEqual([
+      'APPLICATION:a1',
+      'APPLICATION:a3',
+      'APPLICATION:a5'
+    ]);
+    // The headline count is people, not submissions, when the whole pool fit.
+    expect(body.total).toBe(3);
+    expect(body.excluded.duplicateApplications).toBe(2);
+  });
+
+  it('keeps the row count when the fetch was capped, since duplicates past the cap are unknown', async () => {
+    prisma.application.count.mockResolvedValue(5000);
+    prisma.application.findMany.mockResolvedValue(
+      Array.from({ length: PREVIEW_CAP }, (_, i) => ({ id: `a${i}`, candidateId: `c${i}` }))
+    );
+    const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
+      user: adminUser,
+      method: 'POST',
+      body: { filter: { pools: ['APPLICANTS'], rows: [] } }
+    });
+    const body = await res.json();
+    expect(body.total).toBe(5000);
+    expect(body.truncated).toBe(true);
+  });
+
   it('reports how many rows each consent gate excluded', async () => {
     // 10 match the filter, 7 have not opted out, 5 of those have a blind resume.
     prisma.application.count
@@ -384,10 +467,10 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
 
   it('skips a resume already live-assigned to this client', async () => {
     prisma.application.findMany.mockResolvedValue([
-      { id: 'app-1', talentPoolOptIn: true, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
+      { id: 'app-1', candidateId: 'cand-1', talentPoolOptIn: true, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
     ]);
     prisma.clientResumeAssignment.findMany.mockResolvedValue([
-      { applicationId: 'app-1', memberResumeId: null }
+      { applicationId: 'app-1', memberResumeId: null, application: { id: 'app-1', candidateId: 'cand-1' } }
     ]);
 
     const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
@@ -396,6 +479,42 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
       body: { keys: ['APPLICATION:app-1'] }
     });
     expect((await res.json()).skipped[0].reason).toMatch(/already assigned/i);
+  });
+
+  it('skips a DIFFERENT application by someone the client already holds', async () => {
+    // Dedupe hands back everyone's newest application. If the client was
+    // assigned an older one, an id-only check reads as not-assigned and the
+    // person lands in the library twice.
+    prisma.application.findMany.mockResolvedValue([
+      { id: 'app-new', candidateId: 'cand-1', talentPoolOptIn: null, resumeUrl: 'drive-2', blindResumeUrl: 'blind-2' }
+    ]);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([
+      { applicationId: 'app-old', memberResumeId: null, application: { id: 'app-old', candidateId: 'cand-1' } }
+    ]);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
+      user: adminUser,
+      method: 'POST',
+      body: { keys: ['APPLICATION:app-new'] }
+    });
+    expect((await res.json()).skipped[0].reason).toMatch(/already assigned/i);
+  });
+
+  it('assigns only one row when two applications by the same person are ticked', async () => {
+    prisma.application.findMany.mockResolvedValue([
+      { id: 'app-a', candidateId: 'cand-9', talentPoolOptIn: null, resumeUrl: 'd1', blindResumeUrl: 'b1' },
+      { id: 'app-b', candidateId: 'cand-9', talentPoolOptIn: null, resumeUrl: 'd2', blindResumeUrl: 'b2' }
+    ]);
+    prisma.clientResumeAssignment.findMany.mockResolvedValue([]);
+
+    const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
+      user: adminUser,
+      method: 'POST',
+      body: { keys: ['APPLICATION:app-a', 'APPLICATION:app-b'] }
+    });
+    const body = await res.json();
+    expect(body.created).toBe(1);
+    expect(body.skipped[0].reason).toMatch(/already assigned/i);
   });
 
   it('rejects a malformed key rather than guessing', async () => {
@@ -408,14 +527,14 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
   });
 
   it('caps a single assignment batch', async () => {
-    const keys = Array.from({ length: 501 }, (_, i) => `APPLICATION:app-${i}`);
+    const keys = Array.from({ length: PREVIEW_CAP + 1 }, (_, i) => `APPLICATION:app-${i}`);
     const res = await request('/api/admin/talent-pool/clients/partner-1/assign', {
       user: adminUser,
       method: 'POST',
       body: { keys }
     });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/at most 500/i);
+    expect((await res.json()).error).toMatch(new RegExp(`at most ${PREVIEW_CAP}`, 'i'));
   });
 });
 
