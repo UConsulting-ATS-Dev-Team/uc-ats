@@ -271,7 +271,7 @@ describe('filtering', () => {
     await waitFor(() => expect(screen.getByLabelText('Min GPA')).toBeInTheDocument());
   });
 
-  it('starts with both types included and asks for no kind at all', async () => {
+  it('starts with every type included and asks for no kind at all', async () => {
     mockApi({ items: [fullItem] });
     renderPage();
 
@@ -279,22 +279,58 @@ describe('filtering', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Members' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Applicants' })).toBeChecked();
-    // Both ticked is the whole library, which is no filter rather than an
-    // impossible "APPLICANT and MEMBER".
+    // The third pool. Without a box of its own a shared student resume could
+    // not be filtered to at all, and rendered under the "Applicant" label.
+    expect(screen.getByRole('checkbox', { name: 'UCLA Students' })).toBeChecked();
+    // All ticked is the whole library, which is no filter rather than an
+    // impossible "APPLICANT and MEMBER and EXTERNAL".
     expect(lastResumesCall()).not.toContain('kind=');
   });
 
-  it('narrows to one type when the other is unticked', async () => {
+  it('offers the platform-wide graduation years, not just the ones in this batch', async () => {
+    // The facets endpoint reports only what this client happens to hold. A
+    // partner filtering by class should see the classes UConsulting recruits,
+    // so this one dropdown reads the shared list instead - which is how 2026
+    // left the filter and 2030 entered it.
+    mockApi({
+      items: [fullItem],
+      facets: { graduationYear: ['2026', '2029'], major: [], gender: [], kind: ['APPLICANT'] },
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Jane Doe')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByLabelText('Graduation year'));
+    const listed = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(listed).toEqual(['2027', '2028', '2029', '2030']);
+    expect(listed).not.toContain('2026');
+  });
+
+  it('narrows to one type when the others are unticked', async () => {
     mockApi({ items: [fullItem] });
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Jane Doe')).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Applicants' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'UCLA Students' }));
     await waitFor(() => expect(lastResumesCall()).toContain('kind=MEMBER'));
+    expect(lastResumesCall()).not.toContain('EXTERNAL');
   });
 
-  it('asks the server for nothing when neither type is ticked', async () => {
+  it('sends a partial selection as a list rather than widening to everything', async () => {
+    mockApi({ items: [fullItem] });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Jane Doe')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Applicants' }));
+    await waitFor(() =>
+      expect(decodeURIComponent(lastResumesCall())).toContain('kind=MEMBER,EXTERNAL')
+    );
+  });
+
+  it('asks the server for nothing when no type is ticked', async () => {
     mockApi({ items: [fullItem] });
     renderPage();
 
@@ -302,6 +338,7 @@ describe('filtering', () => {
     const before = apiClient.get.mock.calls.length;
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Applicants' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'UCLA Students' }));
     await waitFor(() => expect(lastResumesCall()).toContain('kind=MEMBER'));
     const afterFirst = apiClient.get.mock.calls.length;
 

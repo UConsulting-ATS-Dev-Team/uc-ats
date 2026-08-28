@@ -16,6 +16,7 @@ import {
   FILTER_FIELDS,
   APPLICATION_STATUSES,
   PREVIEW_CAP,
+  NOT_OPTED_OUT,
   sanitizeFilterDsl,
   buildApplicantWhere,
   buildMemberResumeWhere,
@@ -341,7 +342,7 @@ router.post('/clients/:id/preview', async (req, res) => {
 
     const notes = [...errors, ...applicant.notes, ...member.notes, ...external.notes];
     const excluded = {
-      noOptIn: 0,
+      optedOut: 0,
       noBlindResume: 0,
       memberNoConsent: 0,
       externalNotAssignable: 0,
@@ -354,15 +355,17 @@ router.post('/clients/:id/preview', async (req, res) => {
     if (applicant.where) {
       // Diagnostics: how many the consent gate and the blind gate each removed.
       // filterOnlyWhere is never used to select rows for assignment.
-      const [matched, filterOnly, optedIn] = await Promise.all([
+      const [matched, filterOnly, notOptedOut] = await Promise.all([
         prisma.application.count({ where: applicant.where }),
         prisma.application.count({ where: applicant.filterOnlyWhere }),
         prisma.application.count({
-          where: { AND: [...applicant.filterOnlyWhere.AND, { talentPoolOptIn: true }] }
+          where: { AND: [...applicant.filterOnlyWhere.AND, NOT_OPTED_OUT] }
         })
       ]);
-      excluded.noOptIn = Math.max(filterOnly - optedIn, 0);
-      excluded.noBlindResume = Math.max(optedIn - matched, 0);
+      // Only an explicit No is an exclusion now. An unanswered opt-in is not
+      // counted here because it is not a refusal - it is simply assignable.
+      excluded.optedOut = Math.max(filterOnly - notOptedOut, 0);
+      excluded.noBlindResume = Math.max(notOptedOut - matched, 0);
       total += matched;
 
       const applications = await prisma.application.findMany({
@@ -426,7 +429,11 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: m.major1,
           major2: m.major2,
           gender: m.gender,
-          cumulativeGpa: null
+          cumulativeGpa: null,
+          // The filter asked something this pool cannot answer, so these rows
+          // are narrowed by less than the admin specified. The builder starts
+          // them unticked - see the unnarrowedBy note in talentPoolFilters.js.
+          unnarrowedBy: member.unnarrowedBy ?? []
         }))
       );
     }
@@ -466,7 +473,8 @@ router.post('/clients/:id/preview', async (req, res) => {
           major1: e.major1,
           major2: e.major2,
           gender: e.gender,
-          cumulativeGpa: null
+          cumulativeGpa: null,
+          unnarrowedBy: external.unnarrowedBy ?? []
         }))
       );
     }
@@ -619,8 +627,10 @@ router.post('/clients/:id/assign', async (req, res) => {
         const app = appById.get(p.id);
         if (!app) {
           skipped.push({ key: p.key, reason: 'Application no longer exists' });
-        } else if (app.talentPoolOptIn !== true) {
-          skipped.push({ key: p.key, reason: 'Applicant has not opted in to the Talent Partner Network' });
+        } else if (app.talentPoolOptIn === false) {
+          // An explicit No, and only that. A null means the applicant was never
+          // asked, which is not a refusal - see the gate in talentPoolFilters.js.
+          skipped.push({ key: p.key, reason: 'Applicant opted out of the Talent Partner Network' });
         } else if (!app.resumeUrl) {
           skipped.push({ key: p.key, reason: 'No resume on file' });
         } else if (client.visibility === 'BLIND' && !app.blindResumeUrl) {

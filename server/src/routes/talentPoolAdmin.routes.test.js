@@ -208,11 +208,11 @@ describe('preview', () => {
   });
 
   it('reports how many rows each consent gate excluded', async () => {
-    // 10 match the filter, 7 opted in, 5 of those have a blind resume.
+    // 10 match the filter, 7 have not opted out, 5 of those have a blind resume.
     prisma.application.count
       .mockResolvedValueOnce(5) // fully gated
       .mockResolvedValueOnce(10) // filter only
-      .mockResolvedValueOnce(7); // filter + opt-in
+      .mockResolvedValueOnce(7); // filter + not-opted-out
 
     const res = await request('/api/admin/talent-pool/clients/partner-1/preview', {
       user: adminUser,
@@ -221,7 +221,7 @@ describe('preview', () => {
     });
 
     const body = await res.json();
-    expect(body.excluded.noOptIn).toBe(3);
+    expect(body.excluded.optedOut).toBe(3);
     expect(body.excluded.noBlindResume).toBe(2);
   });
 });
@@ -286,7 +286,7 @@ describe('assign - the snapshot guarantee', () => {
 });
 
 describe('assign - consent gates cannot be bypassed by posting keys directly', () => {
-  it('skips an applicant who has not opted in', async () => {
+  it('skips an applicant who opted out', async () => {
     prisma.application.findMany.mockResolvedValue([
       { id: 'app-1', talentPoolOptIn: false, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
     ]);
@@ -299,11 +299,11 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
 
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.skipped[0].reason).toMatch(/opted in/i);
+    expect(body.skipped[0].reason).toMatch(/opted out/i);
     expect(prisma.__tx.clientResumeAssignment.createMany).not.toHaveBeenCalled();
   });
 
-  it('skips an applicant whose opt-in was never asked (null)', async () => {
+  it('assigns an applicant who was never asked - a null opt-in is not a refusal', async () => {
     prisma.application.findMany.mockResolvedValue([
       { id: 'app-1', talentPoolOptIn: null, resumeUrl: 'drive-1', blindResumeUrl: 'blind-1' }
     ]);
@@ -312,7 +312,8 @@ describe('assign - consent gates cannot be bypassed by posting keys directly', (
       method: 'POST',
       body: { keys: ['APPLICATION:app-1'] }
     });
-    expect((await res.json()).skipped[0].reason).toMatch(/opted in/i);
+    expect(res.status).toBe(201);
+    expect((await res.json()).created).toBe(1);
   });
 
   it('skips an applicant with no blind resume when the client is BLIND', async () => {

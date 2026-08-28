@@ -32,6 +32,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
+import { GRADUATION_YEARS } from '../utils/graduationYears';
 import '../styles/ClientResumeLibrary.css';
 
 // The only page a Talent Partner Network client sees: their assigned resumes as
@@ -106,10 +107,28 @@ const filenameFromDisposition = (header) => {
   return match ? match[1] : null;
 };
 
-// Both pools are included by default: a client's library is everything shared
+// Every pool is included by default: a client's library is everything shared
 // with them, and an unchecked box would hide rows they were never told about.
-// Unchecking one is how you narrow to the other.
-const DEFAULT_KINDS = { MEMBER: true, APPLICANT: true };
+// Unchecking one is how you narrow to the rest.
+//
+// All three kinds are listed because all three can be assigned. When this had
+// only two, a UCLA student's resume was shared, rendered in the table under the
+// "Applicant" label, and could not be filtered to at all.
+const KIND_LABELS = {
+  APPLICANT: 'Applicants',
+  MEMBER: 'Members',
+  EXTERNAL: 'UCLA Students',
+};
+
+// Row label for the Type column - singular, and matching the server's
+// KIND_LABELS so the table and the CSV read the same.
+const KIND_ROW_LABELS = {
+  APPLICANT: 'Applicant',
+  MEMBER: 'Member',
+  EXTERNAL: 'UCLA Student',
+};
+
+const DEFAULT_KINDS = { MEMBER: true, APPLICANT: true, EXTERNAL: true };
 
 const EMPTY_FILTERS = {
   kinds: DEFAULT_KINDS,
@@ -170,8 +189,8 @@ const ClientResumeLibrary = () => {
     };
   }, []);
 
-  // Both boxes ticked is the same set as no kind filter at all, so it sends no
-  // `kind` param rather than an impossible "APPLICANT and MEMBER".
+  // Every box ticked is the same set as no kind filter at all, so it sends no
+  // `kind` param. A subset is sent as a list, which the server ORs.
   const selectedKinds = useMemo(
     () => Object.keys(filters.kinds).filter((kind) => filters.kinds[kind]),
     [filters.kinds]
@@ -185,7 +204,9 @@ const ClientResumeLibrary = () => {
     params.set('sort', sort.field);
     params.set('dir', sort.dir);
     if (search) params.set('q', search);
-    if (selectedKinds.length === 1) params.set('kind', selectedKinds[0]);
+    if (selectedKinds.length > 0 && selectedKinds.length < Object.keys(filters.kinds).length) {
+      params.set('kind', selectedKinds.join(','));
+    }
     for (const field of ['graduationYear', 'major', 'gender']) {
       if (filters[field]?.length) params.set(field, filters[field].join(','));
     }
@@ -202,7 +223,7 @@ const ClientResumeLibrary = () => {
   useEffect(() => {
     if (!ready) return undefined;
 
-    // Neither type ticked matches nothing. Answering that locally rather than
+    // No type ticked matches nothing. Answering that locally rather than
     // asking the server keeps it from coming back as an unfiltered 500-row page,
     // which is what an empty `kind` param means to /client/resumes.
     if (noKindSelected) {
@@ -368,11 +389,20 @@ const ClientResumeLibrary = () => {
     </TableCell>
   );
 
+  // Graduation year is the one filter whose options are not derived from this
+  // client's own rows. It reads the platform-wide list instead - the same one
+  // every other graduation-year dropdown in the app uses - so a partner filters
+  // by the classes UConsulting currently recruits rather than by whichever
+  // years happen to be in the batch they were sent. Every other filter stays
+  // facet-driven, where offering a value that returns nothing would be a bug.
+  const filterOptions = (field) =>
+    field === 'graduationYear' ? GRADUATION_YEARS : facets[field] || [];
+
   const multiSelectFilter = (field, label) => (
     <Autocomplete
       multiple
       size="small"
-      options={facets[field] || []}
+      options={filterOptions(field)}
       value={filters[field]}
       onChange={(_, value) => updateFilter(field, value)}
       disableCloseOnSelect
@@ -498,26 +528,19 @@ const ClientResumeLibrary = () => {
                   Type
                 </FormLabel>
                 <FormGroup row>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={filters.kinds.MEMBER}
-                        onChange={() => toggleKind('MEMBER')}
-                      />
-                    }
-                    label="Members"
-                  />
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={filters.kinds.APPLICANT}
-                        onChange={() => toggleKind('APPLICANT')}
-                      />
-                    }
-                    label="Applicants"
-                  />
+                  {Object.keys(KIND_LABELS).map((kind) => (
+                    <FormControlLabel
+                      key={kind}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={Boolean(filters.kinds[kind])}
+                          onChange={() => toggleKind(kind)}
+                        />
+                      }
+                      label={KIND_LABELS[kind]}
+                    />
+                  ))}
                 </FormGroup>
               </FormControl>
 
@@ -646,7 +669,7 @@ const ClientResumeLibrary = () => {
 
                         {showsIdentity && <TableCell sx={COLUMNS.name}>{name || '—'}</TableCell>}
                         <TableCell sx={COLUMNS.kind}>
-                          {item.kind === 'MEMBER' ? 'Member' : 'Applicant'}
+                          {KIND_ROW_LABELS[item.kind] || 'Applicant'}
                         </TableCell>
                         <TableCell sx={COLUMNS.graduationYear}>
                           {item.graduationYear || '—'}

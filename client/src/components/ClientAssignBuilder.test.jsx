@@ -31,7 +31,7 @@ const mockApi = (previewOverrides = {}) => {
         rows: previewRows,
         total: previewRows.length,
         truncated: false,
-        excluded: { noOptIn: 4, noBlindResume: 0, memberNoConsent: 0 },
+        excluded: { optedOut: 4, noBlindResume: 0, memberNoConsent: 0 },
         notes: [],
         visibility: 'BASIC',
         ...previewOverrides,
@@ -78,12 +78,47 @@ describe('ClientAssignBuilder', () => {
     });
   });
 
-  it('surfaces how many rows the opt-in gate excluded', async () => {
+  it('surfaces how many rows the consent gate excluded', async () => {
     mockApi();
     await setUpPreview();
     expect(
-      screen.getByText(/4 did not opt in to the Talent Partner Network/i)
+      screen.getByText(/4 opted out of the Talent Partner Network/i)
     ).toBeInTheDocument();
+  });
+
+  it('lists a row the filter could not narrow, unticked and labelled', async () => {
+    // A member resume has no recruiting cycle and no GPA, so a filter using
+    // either cannot narrow it. It used to be dropped entirely, which is why
+    // ticking Members returned nothing. Now it is shown - but sharing it is a
+    // decision the admin has not made, so the box starts empty.
+    mockApi({
+      rows: [
+        ...previewRows,
+        {
+          key: 'MEMBER_RESUME:mr-1',
+          kind: 'MEMBER',
+          name: 'Aaron Teng',
+          graduationYear: '2029',
+          major1: 'Econ',
+          alreadyAssigned: false,
+          unnarrowedBy: ['Recruiting cycle'],
+        },
+      ],
+      total: 4,
+    });
+    const user = userEvent.setup();
+    render(<ClientAssignBuilder client={client} onDone={vi.fn()} />);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
+    await user.click(screen.getByLabelText('Field'));
+    await user.click(await screen.findByRole('option', { name: /Graduation year/ }));
+    await user.click(screen.getByRole('button', { name: /preview matches/i }));
+    await screen.findByText(/4 matches/i);
+
+    const memberRow = screen.getByText('Aaron Teng').closest('tr');
+    expect(within(memberRow).getByRole('checkbox')).not.toBeChecked();
+    expect(within(memberRow).getByText(/Not filtered by Recruiting cycle/i)).toBeInTheDocument();
+    // The two fully-matched applicants are still pre-selected.
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 
   it('pre-selects eligible rows but not ones already shared', async () => {
