@@ -83,14 +83,24 @@ describe('sanitizeFilterDsl', () => {
 });
 
 describe('buildApplicantWhere - consent is not optional', () => {
-  it('always requires talentPoolOptIn true', () => {
+  const NOT_OPTED_OUT = { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] };
+
+  it('always excludes an explicit opt-out', () => {
     const { where } = buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }]));
-    expect(where.AND).toContainEqual({ talentPoolOptIn: true });
+    expect(where.AND).toContainEqual(NOT_OPTED_OUT);
+  });
+
+  it('keeps applicants who were never asked - a null is an absence, not a refusal', () => {
+    const { where } = buildApplicantWhere(dsl([{ field: 'gender', values: ['Female'] }]));
+    const gate = where.AND.find((c) => JSON.stringify(c).includes('talentPoolOptIn'));
+    expect(gate.OR).toContainEqual({ talentPoolOptIn: null });
+    // The one thing the gate must never admit.
+    expect(JSON.stringify(gate)).not.toContain('false');
   });
 
   it('requires it even when the filter mentions nothing else', () => {
     const { where } = buildApplicantWhere(dsl([{ field: 'graduationYear', values: ['2030'] }]));
-    expect(where.AND).toContainEqual({ talentPoolOptIn: true });
+    expect(where.AND).toContainEqual(NOT_OPTED_OUT);
     expect(where.AND).toContainEqual({ resumeUrl: { not: '' } });
   });
 
@@ -142,7 +152,12 @@ describe('buildApplicantWhere - field mapping', () => {
       ])
     );
     expect(where.AND).toContainEqual({ cumulativeGpa: { gte: '3.50' } });
-    expect(where.AND.filter((c) => c.OR).length).toBe(2);
+    // Two OR clauses from the filter rows - graduation year and gender. The
+    // consent gate is an OR too, so it is excluded by name rather than counted.
+    const rowOrs = where.AND.filter(
+      (c) => c.OR && !JSON.stringify(c).includes('talentPoolOptIn')
+    );
+    expect(rowOrs.length).toBe(2);
   });
 
   it('passes booleans through as equality', () => {
@@ -194,8 +209,10 @@ describe('buildMemberResumeWhere', () => {
     expect(notes.join(' ')).toMatch(/no redacted version/i);
   });
 
-  it('names the applicant-only field instead of silently returning zero members', () => {
-    const { where, notes } = buildMemberResumeWhere(
+  it('ignores an applicant-only row instead of zeroing the pool, and names what it ignored', () => {
+    // The old behaviour returned null here, which is why a filter scoped to a
+    // recruiting cycle - the commonest one there is - showed no members at all.
+    const { where, notes, unnarrowedBy } = buildMemberResumeWhere(
       dsl(
         [
           { field: 'gender', values: ['Female'] },
@@ -205,9 +222,23 @@ describe('buildMemberResumeWhere', () => {
       ),
       { visibility: 'FULL' }
     );
-    expect(where).toBeNull();
-    expect(notes.join(' ')).toMatch(/Cumulative GPA/);
-    expect(notes.join(' ')).toMatch(/do not record/i);
+    expect(where).not.toBeNull();
+    expect(unnarrowedBy).toEqual(['Cumulative GPA']);
+    expect(notes.join(' ')).toMatch(/does not narrow them/i);
+    // The row it CAN answer still narrows.
+    expect(JSON.stringify(where)).toContain('Female');
+    // The one it cannot is absent rather than mistranslated.
+    expect(JSON.stringify(where)).not.toContain('cumulativeGpa');
+  });
+
+  it('still applies every consent gate to a row the filter could not narrow', () => {
+    const { where } = buildMemberResumeWhere(
+      dsl([{ field: 'cycleId', values: ['cycle-a'] }], 'MEMBERS'),
+      { visibility: 'FULL' }
+    );
+    expect(where.AND).toContainEqual({ shareConsent: true });
+    expect(where.AND).toContainEqual({ consentRevokedAt: null });
+    expect(where.AND).toContainEqual({ member: { isActive: true } });
   });
 
   it('matches nothing when the pool is applicants-only', () => {
@@ -289,13 +320,15 @@ describe('buildExternalResumeWhere', () => {
     expect(buildExternalResumeWhere({ pool: 'MEMBERS', rows }, { visibility: 'FULL' }).where).toBeNull();
   });
 
-  it('names the applicant-only field rather than returning a silent zero', () => {
-    const { where, notes } = buildExternalResumeWhere(
+  it('ignores the applicant-only field rather than zeroing the pool', () => {
+    const { where, notes, unnarrowedBy } = buildExternalResumeWhere(
       { pool: 'BOTH', rows: [{ field: 'cumulativeGpa', op: 'gte', value: '3.50' }] },
       { visibility: 'FULL' }
     );
-    expect(where).toBeNull();
+    expect(where).not.toBeNull();
+    expect(unnarrowedBy).toEqual(['Cumulative GPA']);
     expect(notes.join(' ')).toMatch(/Cumulative GPA/);
+    expect(where.AND).toContainEqual({ user: { emailVerifiedAt: { not: null }, isActive: true } });
   });
 });
 

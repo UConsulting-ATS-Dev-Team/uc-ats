@@ -5818,7 +5818,9 @@ router.post('/users/deactivate', async (req, res) => {
 // Opt-in is captured on the application form (see Application.talentPoolOptIn).
 // Requires auth + admin via router.use() at the top of this file.
 
-// Returns opt-in counts plus the roster of applicants who said yes.
+// Returns the opt-in breakdown - yes, no, and never asked - plus the full
+// applicant roster. Only an explicit no makes someone unassignable, so the
+// roster is everyone, with their answer on each row rather than as a filter.
 // `cycleId` is optional; omitted means the active cycle, `all` means every cycle.
 router.get('/talent-pool/stats', async (req, res) => {
   try {

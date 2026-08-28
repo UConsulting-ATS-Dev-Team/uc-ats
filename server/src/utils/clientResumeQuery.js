@@ -159,12 +159,15 @@ export const sanitizeClientQuery = (query = {}, visibility = 'BLIND') => {
 
   const filters = {};
 
-  // One kind or the other narrows; selecting both is the same as selecting
-  // neither, so it produces no clause rather than an impossible AND.
+  // A subset of the kinds narrows; every kind at once is the same as no kind
+  // filter at all, so it produces no clause. Kept as a list rather than the
+  // single value this once was: there are three pools now, and "members and
+  // students but not applicants" is a selection the old single value could not
+  // express - it collapsed to the unfiltered set and quietly showed applicants.
   const kinds = toArray(query.kind)
     .map((k) => k.toUpperCase())
     .filter((k) => KINDS.includes(k));
-  if (kinds.length === 1) filters.kind = kinds[0];
+  if (kinds.length > 0 && kinds.length < KINDS.length) filters.kinds = kinds;
 
   const graduationYear = toArray(query.graduationYear);
   if (graduationYear.length > 0) filters.graduationYear = graduationYear;
@@ -231,8 +234,15 @@ export const buildAssignmentFilters = (filters = {}) => {
   const and = [];
   const notes = [];
 
-  const kindColumn = KIND_COLUMN[filters.kind];
-  if (kindColumn) and.push({ [kindColumn]: { not: null } });
+  // Each kind is one nullable foreign key on the assignment row, so a set of
+  // kinds is an OR over those columns. Matching on the column rather than the
+  // relation keeps it an index lookup instead of a join.
+  const kindColumns = (filters.kinds || []).map((k) => KIND_COLUMN[k]).filter(Boolean);
+  if (kindColumns.length === 1) {
+    and.push({ [kindColumns[0]]: { not: null } });
+  } else if (kindColumns.length > 1) {
+    and.push({ OR: kindColumns.map((column) => ({ [column]: { not: null } })) });
+  }
 
   if (filters.graduationYear?.length) {
     and.push(anyPool(anyOfInsensitive('graduationYear', filters.graduationYear)));
@@ -252,7 +262,7 @@ export const buildAssignmentFilters = (filters = {}) => {
     // filter necessarily drops every one of those rows. Saying so beats letting
     // the client read the empty half as "no members matched".
     and.push({ application: { cumulativeGpa: gpa } });
-    if (filters.kind !== 'APPLICANT') {
+    if (filters.kinds?.length !== 1 || filters.kinds[0] !== 'APPLICANT') {
       notes.push('Uploaded resumes do not record a GPA, so a GPA filter shows applicants only.');
     }
   }

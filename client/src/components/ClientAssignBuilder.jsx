@@ -115,7 +115,17 @@ const ClientAssignBuilder = ({ client, onDone }) => {
       });
       setPreview(data);
       // Everything eligible starts checked; the admin trims down rather than up.
-      setChecked(new Set((data.rows || []).filter((r) => !r.alreadyAssigned).map((r) => r.key)));
+      // The exception is a row the filter could not fully narrow - an uploaded
+      // resume that has no recruiting cycle or GPA to test. Those are real
+      // matches for the part of the filter that does apply, but sharing them is
+      // a decision the admin has not made yet, so they start unticked.
+      setChecked(
+        new Set(
+          (data.rows || [])
+            .filter((r) => !r.alreadyAssigned && !r.unnarrowedBy?.length)
+            .map((r) => r.key)
+        )
+      );
     } catch (err) {
       setError(err.message || 'Failed to preview matches');
       setPreview(null);
@@ -157,6 +167,9 @@ const ClientAssignBuilder = ({ client, onDone }) => {
     setChecked(next);
   };
 
+  // "Select all" acts on everything still assignable, including the rows the
+  // filter could not fully narrow: ticking the header box is itself the
+  // deliberate act those rows were waiting for.
   const eligibleRows = (preview?.rows || []).filter((r) => !r.alreadyAssigned);
   const allChecked = eligibleRows.length > 0 && eligibleRows.every((r) => checked.has(r.key));
 
@@ -169,8 +182,8 @@ const ClientAssignBuilder = ({ client, onDone }) => {
         <Box>
           <Typography variant="h6">Assign resumes to {client.organization}</Typography>
           <Typography variant="body2" color="text.secondary">
-            Visibility: {client.visibility}. Only applicants who opted in to the Talent Partner
-            Network can be assigned.
+            Visibility: {client.visibility}. Applicants who opted out of the Talent Partner
+            Network are never assignable; everyone else in these pools is.
           </Typography>
         </Box>
       </Stack>
@@ -343,16 +356,16 @@ const ClientAssignBuilder = ({ client, onDone }) => {
             </Typography>
           </Stack>
 
-          {(preview.excluded?.noOptIn > 0 ||
+          {(preview.excluded?.optedOut > 0 ||
             preview.excluded?.noBlindResume > 0 ||
             preview.excluded?.memberNoConsent > 0 ||
             preview.excluded?.externalNotAssignable > 0) && (
             <Alert severity="info" sx={{ mb: 2 }}>
               <AlertTitle>Excluded from these matches</AlertTitle>
               <Stack spacing={0.5}>
-                {preview.excluded.noOptIn > 0 && (
+                {preview.excluded.optedOut > 0 && (
                   <Typography variant="body2">
-                    {preview.excluded.noOptIn} did not opt in to the Talent Partner Network.
+                    {preview.excluded.optedOut} opted out of the Talent Partner Network.
                   </Typography>
                 )}
                 {preview.excluded.noBlindResume > 0 && (
@@ -425,6 +438,15 @@ const ClientAssignBuilder = ({ client, onDone }) => {
                       {row.name}
                       {row.alreadyAssigned && (
                         <Chip size="small" label="Already shared" sx={{ ml: 1 }} variant="outlined" />
+                      )}
+                      {!row.alreadyAssigned && row.unnarrowedBy?.length > 0 && (
+                        <Chip
+                          size="small"
+                          color="warning"
+                          variant="outlined"
+                          sx={{ ml: 1 }}
+                          label={`Not filtered by ${row.unnarrowedBy.join(', ')}`}
+                        />
                       )}
                     </TableCell>
                     <TableCell>{KIND_LABELS[row.kind] || 'Applicant'}</TableCell>

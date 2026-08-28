@@ -87,10 +87,15 @@ describe('what a visibility level may ask for', () => {
       .major).toEqual(['Econ', 'Stats']);
   });
 
-  it('reads both kinds selected as no kind filter at all', () => {
-    expect(sanitizeClientQuery({ kind: 'APPLICANT,MEMBER' }, 'BLIND').value.filters.kind)
+  it('reads every kind selected as no kind filter at all', () => {
+    expect(sanitizeClientQuery({ kind: 'APPLICANT,MEMBER,EXTERNAL' }, 'BLIND').value.filters.kinds)
       .toBeUndefined();
-    expect(sanitizeClientQuery({ kind: 'MEMBER' }, 'BLIND').value.filters.kind).toBe('MEMBER');
+    expect(sanitizeClientQuery({ kind: 'MEMBER' }, 'BLIND').value.filters.kinds).toEqual(['MEMBER']);
+  });
+
+  it('keeps a partial selection, which the two-kind version used to widen to everything', () => {
+    expect(sanitizeClientQuery({ kind: 'MEMBER,EXTERNAL' }, 'BLIND').value.filters.kinds)
+      .toEqual(['MEMBER', 'EXTERNAL']);
   });
 });
 
@@ -117,14 +122,20 @@ describe('filter translation', () => {
   });
 
   it('narrows by kind through the foreign key, not the relation', () => {
-    expect(buildAssignmentFilters({ kind: 'MEMBER' }).and).toEqual([
+    expect(buildAssignmentFilters({ kinds: ['MEMBER'] }).and).toEqual([
       { memberResumeId: { not: null } }
     ]);
   });
 
   it('narrows to student resumes through their own foreign key', () => {
-    expect(buildAssignmentFilters({ kind: 'EXTERNAL' }).and).toEqual([
+    expect(buildAssignmentFilters({ kinds: ['EXTERNAL'] }).and).toEqual([
       { externalResumeId: { not: null } }
+    ]);
+  });
+
+  it('ORs several kinds rather than ANDing them into an impossible clause', () => {
+    expect(buildAssignmentFilters({ kinds: ['MEMBER', 'EXTERNAL'] }).and).toEqual([
+      { OR: [{ memberResumeId: { not: null } }, { externalResumeId: { not: null } }] }
     ]);
   });
 
@@ -137,7 +148,7 @@ describe('filter translation', () => {
   });
 
   it('stays quiet about members when the filter already excluded them', () => {
-    expect(buildAssignmentFilters({ gpaMin: '3.50', kind: 'APPLICANT' }).notes).toEqual([]);
+    expect(buildAssignmentFilters({ gpaMin: '3.50', kinds: ['APPLICANT'] }).notes).toEqual([]);
   });
 
   it('compares GPA as a string so float rounding never decides a cut-off', () => {

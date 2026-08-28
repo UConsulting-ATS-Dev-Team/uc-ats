@@ -64,9 +64,8 @@ export const APPLICATION_STATUSES = [
 
 // `pool: 'both'` means the field exists on every pool - applicants, member
 // resumes and external resumes. `applicants` fields have no equivalent on
-// either uploaded-resume pool: a filter using one cannot match a member or
-// external resume, which buildMemberResumeWhere and buildExternalResumeWhere
-// report rather than silently returning zero rows.
+// either uploaded-resume pool, so those pools drop such a row rather than
+// answering it - see the unnarrowedBy note in buildMemberResumeWhere.
 export const FILTER_FIELDS = [
   { key: 'graduationYear', label: 'Graduation year', pool: 'both', type: 'multiText' },
   { key: 'gender', label: 'Gender', pool: 'both', type: 'multiText' },
@@ -228,6 +227,22 @@ const majorAnyOf = (values) => ({
 });
 
 /**
+ * The applicant consent gate, read as "has not said no".
+ *
+ * An explicit No is the one answer that makes an applicant permanently
+ * unassignable. A null - every Fall 2025 applicant, and anyone whose form
+ * predates the question - is not a refusal, it is an absence, and treating the
+ * two the same hid the entire back catalogue from the network.
+ *
+ * Written as an OR rather than `{ not: false }` so the null branch is visible
+ * at the call site: this clause decides who may be shared with an outside
+ * organization, and it should not rest on the reader knowing how Prisma treats
+ * NULL under a negation. Exported so the preview's diagnostics count exactly
+ * what the gate excludes, rather than a restatement that could drift from it.
+ */
+export const NOT_OPTED_OUT = { OR: [{ talentPoolOptIn: true }, { talentPoolOptIn: null }] };
+
+/**
  * Build the Prisma where clause for the applicant pool.
  *
  * @returns {{ where: object|null, notes: string[] }} where is null when the
@@ -238,7 +253,7 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   const rows = dsl?.rows ?? [];
 
   if (!includesPool(dsl, 'APPLICANTS')) {
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], unnarrowedBy: [], notes };
   }
 
   // Clauses that come from the admin's filter, kept separate from the consent
@@ -248,11 +263,7 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
   const filterClauses = [{ resumeUrl: { not: '' } }];
 
   // Non-negotiable gates. Not admin-controllable.
-  const gateClauses = [
-    // The consent record. An applicant who answered No, and every Fall 2025
-    // applicant who was never asked (null), is never assignable.
-    { talentPoolOptIn: true }
-  ];
+  const gateClauses = [NOT_OPTED_OUT];
 
   if (visibility === 'BLIND') {
     // A BLIND client is only ever served blindResumeUrl, so an application
@@ -314,16 +325,19 @@ export const buildApplicantWhere = (dsl, { visibility = 'BLIND', activeCycleId =
 /**
  * Build the Prisma where clause for the member resume pool.
  *
- * @returns {{ where: object|null, notes: string[] }} where is null when the
- * filter cannot match any member resume - which the caller must surface rather
- * than rendering an empty result as "nothing matched".
+ * @returns {{ where: object|null, unnarrowedBy: string[], notes: string[] }}
+ * where is null when this pool is out of scope entirely - not selected, or a
+ * BLIND client that can never be shown an unredacted upload. `unnarrowedBy`
+ * names the applicant-only filter rows this pool could not answer and therefore
+ * ignored; the caller must flag those rows rather than presenting them as a
+ * full match.
  */
 export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
   if (!includesPool(dsl, 'MEMBERS')) {
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], unnarrowedBy: [], notes };
   }
 
   if (visibility === 'BLIND') {
@@ -331,7 +345,7 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
     // one file and there is no redacted variant of it, so there is nothing a
     // BLIND client could safely be shown.
     notes.push('Member resumes have no redacted version, so they cannot be assigned to a blind-visibility client.');
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], unnarrowedBy: [], notes };
   }
 
   const filterClauses = [{ isCurrent: true }];
@@ -368,19 +382,22 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   }
 
   if (unsupported.length > 0) {
-    // Naming the field matters. Silently returning zero members when an
-    // applicant-only filter is in play reads as "no members matched", which is
-    // a different and wrong conclusion.
+    // These rows are dropped for this pool rather than zeroing it. Zeroing was
+    // the old behaviour and it made the commonest filter of all - a recruiting
+    // cycle, which no uploaded resume has - silently return no members at all.
+    // Dropping them means the rows below are narrowed by less than the admin
+    // asked for, so they come back flagged and the builder leaves them
+    // unticked: visible, explained, and one deliberate click from being shared.
     notes.push(
-      `Member resumes do not record ${unsupported.join(', ')}, so no member resume can match this filter.`
+      `Member resumes do not record ${unsupported.join(', ')}, so that part of the filter does not narrow them. They are listed unticked - tick the ones you mean to share.`
     );
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
   return {
     where: { AND: [...gateClauses, ...filterClauses] },
     filterOnlyWhere: { AND: [...filterClauses] },
     gateClauses,
+    unnarrowedBy: unsupported,
     notes
   };
 };
@@ -396,16 +413,15 @@ export const buildMemberResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
  * lives here, in the same place as the consent gate, so no caller can assemble
  * one without the other.
  *
- * @returns {{ where: object|null, notes: string[] }} where is null when the
- * filter cannot match any external resume - which the caller must surface
- * rather than rendering an empty result as "nothing matched".
+ * @returns {{ where: object|null, unnarrowedBy: string[], notes: string[] }}
+ * Same contract as buildMemberResumeWhere above.
  */
 export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => {
   const notes = [];
   const rows = dsl?.rows ?? [];
 
   if (!includesPool(dsl, 'EXTERNALS')) {
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], unnarrowedBy: [], notes };
   }
 
   if (visibility === 'BLIND') {
@@ -415,7 +431,7 @@ export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => 
     notes.push(
       'Student-uploaded resumes have no redacted version, so they cannot be assigned to a blind-visibility client.'
     );
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
+    return { where: null, filterOnlyWhere: null, gateClauses: [], unnarrowedBy: [], notes };
   }
 
   const filterClauses = [{ isCurrent: true }];
@@ -448,16 +464,18 @@ export const buildExternalResumeWhere = (dsl, { visibility = 'BLIND' } = {}) => 
   }
 
   if (unsupported.length > 0) {
+    // Same rule as the member pool above: drop the rows this pool cannot
+    // answer, flag what was dropped, and let the admin tick.
     notes.push(
-      `Student-uploaded resumes do not record ${unsupported.join(', ')}, so no student resume can match this filter.`
+      `Student-uploaded resumes do not record ${unsupported.join(', ')}, so that part of the filter does not narrow them. They are listed unticked - tick the ones you mean to share.`
     );
-    return { where: null, filterOnlyWhere: null, gateClauses: [], notes };
   }
 
   return {
     where: { AND: [...gateClauses, ...filterClauses] },
     filterOnlyWhere: { AND: [...filterClauses] },
     gateClauses,
+    unnarrowedBy: unsupported,
     notes
   };
 };
