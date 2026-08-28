@@ -898,6 +898,62 @@ model Message {
   @@map("messages")
 }
 
+model VoteSession {
+  id              String          @id @default(uuid())
+  cycleId         String
+  deliberationId  String?
+  candidateId     String?
+  name            String
+  status          VoteSessionStatus @default(DRAFT)
+  requiredVotes   Int?
+  createdBy       String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  closedAt        DateTime?
+  confirmedOptionId String?
+  confirmedBy     String?
+  confirmedAt     DateTime?
+  options         VoteOption[]
+  votes           Vote[]
+
+  @@index([cycleId])
+  @@index([deliberationId])
+  @@index([candidateId])
+  @@map("vote_sessions")
+}
+
+model VoteOption {
+  id            String      @id @default(uuid())
+  voteSessionId String
+  label         String
+  value         String
+  createdAt     DateTime    @default(now())
+  voteSession   VoteSession @relation(fields: [voteSessionId], references: [id], onDelete: Cascade)
+  votes         Vote[]
+
+  @@map("vote_options")
+}
+
+model Vote {
+  id            String      @id @default(uuid())
+  voteSessionId String
+  optionId      String
+  voterId       String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  option        VoteOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  voteSession   VoteSession @relation(fields: [voteSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([voteSessionId, voterId])
+  @@map("votes")
+}
+
+enum VoteSessionStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
 enum ConversationContextType {
   INTERVIEW
   APPLICATION

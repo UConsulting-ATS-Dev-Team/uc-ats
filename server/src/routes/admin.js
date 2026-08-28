@@ -6069,4 +6069,198 @@ router.get('/talent-pool/stats', async (req, res) => {
   }
 });
 
+// -------------------- Live Deliberation Voting (ATS-54 / ATS-67) --------------------
+
+// Create a new vote session with options
+router.post('/vote-sessions', async (req, res) => {
+  try {
+    const { cycleId, deliberationId, candidateId, name, options, requiredVotes } = req.body || {};
+
+    if (!cycleId || !name || !Array.isArray(options) || options.length < 2) {
+      return res.status(400).json({ error: 'cycleId, name, and at least two options are required' });
+    }
+
+    const session = await prisma.$transaction(async (tx) => {
+      const created = await tx.voteSession.create({
+        data: {
+          cycleId,
+          deliberationId: deliberationId || null,
+          candidateId: candidateId || null,
+          name,
+          requiredVotes: requiredVotes != null ? Number(requiredVotes) : null,
+          createdBy: req.user.id
+        }
+      });
+
+      const optionRecords = await Promise.all(options.map((o, idx) =>
+        tx.voteOption.create({
+          data: {
+            voteSessionId: created.id,
+            label: String(o.label || o.value || `Option ${idx + 1}`),
+            value: String(o.value || o.label || idx)
+          }
+        })
+      ));
+
+      return { ...created, options: optionRecords };
+    });
+
+    res.status(201).json(session);
+  } catch (error) {
+    console.error('[POST /api/admin/vote-sessions]', error);
+    res.status(500).json({ error: 'Failed to create vote session' });
+  }
+});
+
+// List vote sessions for a cycle
+router.get('/vote-sessions', async (req, res) => {
+  try {
+    const { cycleId } = req.query;
+    const where = {};
+    if (cycleId) where.cycleId = String(cycleId);
+
+    const sessions = await prisma.voteSession.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        options: true,
+        _count: { select: { votes: true } }
+      }
+    });
+
+    res.json(sessions);
+  } catch (error) {
+    console.error('[GET /api/admin/vote-sessions]', error);
+    res.status(500).json({ error: 'Failed to list vote sessions' });
+  }
+});
+
+// Get a vote session with live tally
+router.get('/vote-sessions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const session = await prisma.voteSession.findUnique({
+      where: { id },
+      include: { options: true }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+
+    const voteCounts = await prisma.vote.groupBy({
+      by: ['optionId'],
+      where: { voteSessionId: id },
+      _count: { _all: true }
+    });
+
+    const totalVotes = voteCounts.reduce((sum, v) => sum + v._count._all, 0);
+    const optionTally = session.options.map((opt) => {
+      const found = voteCounts.find((vc) => vc.optionId === opt.id);
+      const count = found ? found._count._all : 0;
+      return {
+        ...opt,
+        count,
+        percentage: totalVotes > 0 ? Math.round((count / totalVotes) * 1000) / 10 : 0
+      };
+    });
+
+    res.json({ ...session, totalVotes, options: optionTally });
+  } catch (error) {
+    console.error('[GET /api/admin/vote-sessions/:id]', error);
+    res.status(500).json({ error: 'Failed to fetch vote session' });
+  }
+});
+
+// Update vote session status (OPEN / CLOSED)
+router.patch('/vote-sessions/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+
+    if (!status || !['DRAFT', 'OPEN', 'CLOSED'].includes(status)) {
+      return res.status(400).json({ error: 'status must be DRAFT, OPEN, or CLOSED' });
+    }
+
+    const data = { status };
+    if (status === 'CLOSED') data.closedAt = new Date();
+
+    const session = await prisma.voteSession.update({
+      where: { id },
+      data,
+      include: { options: true }
+    });
+
+    res.json(session);
+  } catch (error) {
+    console.error('[PATCH /api/admin/vote-sessions/:id/status]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+    res.status(500).json({ error: 'Failed to update vote session status' });
+  }
+});
+
+// Admin confirm vote result and lock final decision (ATS-54)
+router.patch('/vote-sessions/:id/confirm', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { optionId } = req.body || {};
+
+    if (!optionId) {
+      return res.status(400).json({ error: 'optionId is required' });
+    }
+
+    const session = await prisma.voteSession.findUnique({
+      where: { id },
+      include: { options: true }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+
+    const option = session.options.find((o) => o.id === optionId);
+    if (!option) {
+      return res.status(400).json({ error: 'Invalid option for this session' });
+    }
+
+    const updated = await prisma.voteSession.update({
+      where: { id },
+      data: {
+        confirmedOptionId: optionId,
+        confirmedBy: req.user.id,
+        confirmedAt: new Date()
+      },
+      include: { options: true }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('[PATCH /api/admin/vote-sessions/:id/confirm]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+    res.status(500).json({ error: 'Failed to confirm vote session' });
+  }
+});
+
+// Delete a vote session
+router.delete('/vote-sessions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await prisma.voteSession.delete({ where: { id } });
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('[DELETE /api/admin/vote-sessions/:id]', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Vote session not found' });
+    }
+    res.status(500).json({ error: 'Failed to delete vote session' });
+  }
+});
+
 export default router;
