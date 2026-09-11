@@ -11,8 +11,14 @@ import {
   userCanAccessConversation,
   syncInterviewParticipants
 } from '../services/messaging.js';
+import { isApplicationLocked, sendRecordLocked } from '../utils/lockedRecords.js';
 
 const router = express.Router();
+
+// A conversation about an application is part of that person's record, so it is
+// sealed along with it.
+const isSealedConversation = async (req, conversation) =>
+  conversation?.contextType === 'APPLICATION' && (await isApplicationLocked(req, conversation.contextId));
 
 router.get('/', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
@@ -58,6 +64,12 @@ router.get('/interviews/:interviewId', requireAuth, requireAdminOrMember, async 
 
 router.get('/:id', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: req.params.id },
+      select: { contextType: true, contextId: true }
+    });
+    if (await isSealedConversation(req, conversation)) return sendRecordLocked(res);
+
     const dto = await getConversationForUser(req.params.id, req.user);
     if (!dto) return res.status(404).json({ error: 'Conversation not found' });
     res.json(dto);
@@ -74,6 +86,7 @@ router.get('/:id/messages', requireAuth, requireAdminOrMember, async (req, res) 
     if (!(await userCanAccessConversation(conversation, req.user))) {
       return res.status(403).json({ error: 'Forbidden' });
     }
+    if (await isSealedConversation(req, conversation)) return sendRecordLocked(res);
     const messages = await listMessages(req.params.id, {
       before: req.query.before,
       limit: req.query.limit
@@ -92,6 +105,7 @@ router.post('/:id/messages', requireAuth, requireAdminOrMember, async (req, res)
     if (!(await userCanAccessConversation(conversation, req.user))) {
       return res.status(403).json({ error: 'Forbidden' });
     }
+    if (await isSealedConversation(req, conversation)) return sendRecordLocked(res);
     const message = await sendMessage({
       conversationId: req.params.id,
       sender: req.user,

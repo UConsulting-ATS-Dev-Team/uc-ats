@@ -13,6 +13,8 @@ vi.mock('../prismaClient.js', () => {
     },
     recruitingCycle: { findFirst: vi.fn(), findMany: vi.fn() },
     application: { findMany: vi.fn(), count: vi.fn() },
+    // Read by the record-seal check on every list route; nobody here is sealed.
+    candidate: { findMany: vi.fn().mockResolvedValue([]) },
     resumeScore: { findMany: vi.fn() },
     coverLetterScore: { findMany: vi.fn() },
     videoScore: { findMany: vi.fn() },

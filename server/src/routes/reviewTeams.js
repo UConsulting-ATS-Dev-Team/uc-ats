@@ -12,8 +12,33 @@ import {
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
 import { resolveCycleForRequest } from '../services/activeCycle.js';
+import {
+  candidateParamGuard,
+  guardCandidate,
+  lockedRowPredicate,
+  redactApplication
+} from '../utils/lockedRecords.js';
 
 const router = express.Router();
+
+// Review teams are a staff tool end to end. Each route below also names
+// requireAuth, but until this line nothing stopped a signed-in applicant from
+// reading scores or rearranging teams.
+router.use(requireAuth, requireAdminOrMember);
+
+// Every route with a candidate in its path returns that candidate's scores.
+router.param('candidateId', candidateParamGuard);
+
+// Grading writes: nobody scores a sealed record, or their own.
+router.post(['/resume-score', '/cover-letter-score', '/video-score'], guardCandidate((req) => req.body?.candidateId));
+
+// A member's grading queue and team are theirs alone; admins can look at anyone's.
+router.get(['/member-applications/:memberId', '/member/:memberId/candidates'], (req, res, next) => {
+  if (req.user.role !== 'ADMIN' && req.params.memberId !== req.user.id) {
+    return res.status(403).json({ error: 'You can only view your own grading queue' });
+  }
+  next();
+});
 
 // Admin audit of each reviewer's grading contribution within their assigned team.
 router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
@@ -489,7 +514,13 @@ router.get('/', requireAuth, async (req, res) => {
       };
     });
 
-    res.json(transformedGroups);
+    const isLocked = await lockedRowPredicate(req, transformedGroups.flatMap(group => group.applications));
+    res.json(transformedGroups.map(group => ({
+      ...group,
+      applications: group.applications.map(application =>
+        isLocked(application) ? redactApplication(application) : application
+      )
+    })));
   } catch (error) {
     console.error('Error fetching groups:', error);
     
@@ -929,7 +960,8 @@ router.get('/available-applications', requireAuth, async (req, res) => {
       submittedAt: application.submittedAt
     }));
 
-    res.json(transformedApplications);
+    const isLocked = await lockedRowPredicate(req, transformedApplications);
+    res.json(transformedApplications.map(application => (isLocked(application) ? redactApplication(application) : application)));
   } catch (error) {
     console.error('Error fetching available applications:', error);
     res.status(500).json({ error: 'Failed to fetch available applications' });
@@ -1032,7 +1064,8 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
       });
     });
 
-    res.json(allCandidates);
+    const isLocked = await lockedRowPredicate(req, allCandidates);
+    res.json(allCandidates.map(candidate => (isLocked(candidate) ? redactApplication(candidate) : candidate)));
   } catch (error) {
     console.error('Error fetching member candidates:', error);
     res.status(500).json({ error: 'Failed to fetch member candidates' });
@@ -1453,7 +1486,8 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
       return res.json([]);
     }
     
-    res.json(applications);
+    const isLocked = await lockedRowPredicate(req, applications);
+    res.json(applications.map(application => (isLocked(application) ? redactApplication(application) : application)));
   } catch (error) {
     console.error('Error fetching member applications:', error);
     // Return empty array instead of error object to prevent frontend filter errors

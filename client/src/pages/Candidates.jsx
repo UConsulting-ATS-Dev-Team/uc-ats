@@ -9,6 +9,7 @@ import {
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
+import { LockedChip } from '../components/LockedRecord';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
 import '../styles/ApplicationList.css';
@@ -291,7 +292,9 @@ export default function Candidates() {
                             {(app.name || '?').split(' ').map(n => n.charAt(0)).join('').slice(0,2).toUpperCase()}
                           </div>
                           <div>
-                            <div className="applicant-name">{app.name}</div>
+                            <div className="applicant-name">
+                              {app.name}{app.locked && <> <LockedChip /></>}
+                            </div>
                             <div className="applicant-email">{app.email}</div>
                           </div>
                         </div>
@@ -299,7 +302,9 @@ export default function Candidates() {
                       <td data-label="Status">
                         <span className={getBadgeClass(app.status)}>{(app.status || '').replace('_', ' ')}</span>
                       </td>
-                      <td data-label="Major / Year / GPA">{app.major} • {app.year} • GPA: {app.gpa}</td>
+                      <td data-label="Major / Year / GPA">
+                        {app.locked ? '—' : `${app.major} • ${app.year} • GPA: ${app.gpa}`}
+                      </td>
                       <td data-label="Attendance">
                         {attendanceByAppId[app.id] ? (
                           <div className="attendance-inline">

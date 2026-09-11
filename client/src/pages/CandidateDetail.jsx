@@ -5,36 +5,51 @@ import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
+import LockedRecord from '../components/LockedRecord';
 import { useAuth } from '../context/AuthContext';
+import { useExecUnlock } from '../context/ExecUnlockContext';
+import { isRecordLockedError } from '../utils/recordLock';
 import '../styles/CandidateDetail.css';
 
 export default function CandidateDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { version: execAccessVersion } = useExecUnlock();
   const [candidate, setCandidate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sealed, setSealed] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [deletingCandidate, setDeletingCandidate] = useState(false);
 
   const isAdmin = user?.role === 'ADMIN';
 
+  // Re-runs when executive access opens or closes, so a sealed record appears
+  // after unlocking and disappears again after locking.
   useEffect(() => {
     const fetchCandidate = async () => {
+      setLoading(true);
+      setError(null);
+      setSealed(false);
       try {
         const candidate = await apiClient.get(`/member/candidate/${id}`);
         setCandidate(candidate);
       } catch (err) {
-        console.error('Error loading candidate detail:', err);
-        setError(err.message);
+        if (isRecordLockedError(err)) {
+          setCandidate(null);
+          setSealed(true);
+        } else {
+          console.error('Error loading candidate detail:', err);
+          setError(err.message);
+        }
       } finally {
         setLoading(false);
       }
     };
 
     fetchCandidate();
-  }, [id]);
+  }, [id, execAccessVersion]);
 
   const getInitials = (name) => {
     if (!name) return '?';
@@ -121,6 +136,18 @@ export default function CandidateDetail() {
     return (
       <div className="candidate-detail">
         <div className="loading-state">Loading candidate details...</div>
+      </div>
+    );
+  }
+
+  if (sealed) {
+    return (
+      <div className="candidate-detail">
+        <Link to="/candidate-list" className="back-link">
+          <ArrowLeftIcon className="back-icon" />
+          Back to Candidates
+        </Link>
+        <LockedRecord />
       </div>
     );
   }

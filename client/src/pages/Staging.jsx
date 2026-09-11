@@ -153,8 +153,10 @@ const stagingAPI = {
     return await apiClient.post('/admin/advance-round', {});
   },
 
+  // Processing moves candidates along and sends nothing. The decision emails it
+  // queues are reviewed and sent from Master Communications.
   async processDecisions() {
-    return await apiClient.post('/admin/process-decisions', { sendEmails: false });
+    return await apiClient.post('/admin/process-decisions', {});
   },
 
   async processCoffeeDecisions() {
@@ -162,7 +164,7 @@ const stagingAPI = {
   },
 
   async processFirstRoundDecisions() {
-    return await apiClient.post('/admin/process-first-round-decisions', { sendEmails: false });
+    return await apiClient.post('/admin/process-first-round-decisions', {});
   },
 
   async processFinalDecisions() {
@@ -1371,16 +1373,28 @@ export default function Staging() {
 
       setPushAllDialogOpen(false);
 
-      const { summary } = result;
+      const { summary, batchId } = result;
       if (summary) {
-        const emailMessage = currentTab === 0 ? 'No emails sent (resume review round)' :
-                           currentTab === 1 ? 'No emails sent (coffee chat round)' :
-                           currentTab === 2 ? 'No emails sent (first round)' :
-                           `${summary.emailsSent} emails sent`;
+        const moved = currentTab === 3
+          ? `${summary.accepted} accepted as members, ${summary.rejected} rejected`
+          : `${summary.advanced} advanced to ${summary.nextRoundLabel}, ${summary.rejected} rejected`;
+        const notes = [
+          summary.undecided ? `${summary.undecided} still undecided` : null,
+          summary.membersCreated
+            ? `${summary.membersCreated} new member account${summary.membersCreated === 1 ? '' : 's'} created`
+            : null,
+          summary.conflicts?.length
+            ? `Needs attention: ${summary.conflicts.map((conflict) => `${conflict.name} - ${conflict.reason}`).join('; ')}`
+            : null
+        ].filter(Boolean);
+        const emails = summary.emailsQueued
+          ? `${summary.emailsQueued} decision emails are waiting for your review. Nothing has been sent.`
+          : 'No emails were queued.';
         setSnackbar({
           open: true,
-          message: `Successfully processed ${summary.totalApplications} candidates: ${summary.accepted} accepted, ${summary.rejected} rejected. ${emailMessage}.`,
-          severity: 'success'
+          message: `Processed ${summary.processed} candidates: ${moved}.${notes.length ? ` ${notes.join('. ')}.` : ''} ${emails}`,
+          severity: summary.conflicts?.length ? 'warning' : 'success',
+          reviewBatchId: summary.emailsQueued ? batchId : null
         });
       } else {
         setSnackbar({ open: true, message: 'Processed decisions.', severity: 'success' });
@@ -1402,7 +1416,10 @@ export default function Staging() {
 
   const fixInvalidDecision = async (candidateId, newDecision) => {
     try {
-      await stagingAPI.saveDecision(candidateId, newDecision, 'resume');
+      // The phase of the tab being processed. This used to be hard-coded to
+      // 'resume', so fixing a coffee chat or final round decision here quietly
+      // wrote it to resume review instead.
+      await stagingAPI.saveDecision(candidateId, newDecision, tabToPhase(currentTab));
 
       setPushAllPreview(prev => ({
         ...prev,
@@ -1940,10 +1957,11 @@ export default function Staging() {
             <CardContent>
               <Box mb={2} display="flex" justifyContent="space-between" alignItems="center">
                 <Typography variant="body2" color="text.secondary">
-                  {currentTab === 0 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Coffee Chats (no email), "No" marks as rejected (no email).'}
-                  {currentTab === 1 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to First Round (no email), "No" marks as rejected (no email).'}
-                  {currentTab === 2 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Final Round (no email), "No" marks as rejected (no email).'}
-                  {currentTab === 3 && '⚠️ All candidates must have a "Yes" or "No" decision. This will send emails and finalize decisions.'}
+                  {currentTab === 0 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Coffee Chats, "No" marks as rejected.'}
+                  {currentTab === 1 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to First Round, "No" marks as rejected.'}
+                  {currentTab === 2 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Final Round, "No" marks as rejected.'}
+                  {currentTab === 3 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" accepts them as members and seals their recruiting records, "No" marks as rejected.'}
+                  {' '}No emails are sent here - they wait in Master Communications for you to review and send.
                 </Typography>
                 <Button
                   variant="contained"
@@ -2371,25 +2389,25 @@ export default function Staging() {
               <Stack spacing={2} sx={{ mt: 1 }}>
                 <Alert severity="info">
                   <Typography variant="subtitle2" gutterBottom>
-                    {currentTab === 0 ? '🔄 This will advance candidates to the next round (no emails sent)' :
-                     currentTab === 1 ? '🔄 This will advance candidates to the next round (no emails sent)' :
-                     currentTab === 2 ? '🔄 This will advance candidates to the next round (no emails sent)' :
-                     '📧 This will send emails and advance candidates to the next round'}
+                    {currentTab === 3
+                      ? '🎉 This finalizes the Final Round. No emails are sent.'
+                      : '🔄 This advances candidates to the next round. No emails are sent.'}
                   </Typography>
                   <Typography variant="body2">
-                    {currentTab === 0 ? (
+                    {currentTab === 3 ? (
                       <>
-                        • <strong>Yes</strong> decisions: Advance to Coffee Chats round (no email)<br/>
-                        • <strong>No</strong> decisions: Mark as rejected (no email)<br/>
-                        • This action cannot be easily undone
+                        • <strong>Yes</strong> decisions: Accepted, and their account becomes a member account (one is created if they have none)<br/>
+                        • Accepted candidates' scores, feedback and application are sealed behind the executive password<br/>
+                        • <strong>No</strong> decisions: Marked as rejected<br/>
                       </>
                     ) : (
                       <>
-                        • <strong>Yes</strong> decisions: Acceptance emails + advance to next round<br/>
-                        • <strong>No</strong> decisions: Rejection emails + mark as rejected<br/>
-                        • This action cannot be easily undone
+                        • <strong>Yes</strong> decisions: Advance to {['Coffee Chats', 'First Round Interviews', 'the Final Round'][currentTab]}<br/>
+                        • <strong>No</strong> decisions: Marked as rejected<br/>
                       </>
                     )}
+                    • Decision emails are queued in Master Communications, where you review the wording and send them<br/>
+                    • This action cannot be easily undone
                   </Typography>
                 </Alert>
 
@@ -2495,7 +2513,9 @@ export default function Staging() {
                 />
                 <FormControlLabel
                   control={<Checkbox checked={pushAllAcknowledge} onChange={(e) => setPushAllAcknowledge(e.target.checked)} />}
-                  label={currentTab === 0 ? "I understand this will advance candidates to the next round (no emails will be sent)" : "I understand this will send emails and advance candidates to the next round"}
+                  label={currentTab === 3
+                    ? 'I understand this accepts these candidates as members and seals their records. Emails wait for my review.'
+                    : 'I understand this advances candidates to the next round. Emails wait for my review.'}
                 />
               </Stack>
             </DialogContent>
@@ -2512,8 +2532,31 @@ export default function Staging() {
             </DialogActions>
           </Dialog>
 
-          <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-            <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.severity}>
+          {/* Stays open when processing queued emails, so the link to review them is not missed. */}
+          <Snackbar
+            open={snackbar.open}
+            autoHideDuration={snackbar.reviewBatchId ? null : 6000}
+            onClose={() => setSnackbar({ ...snackbar, open: false })}
+          >
+            <Alert
+              onClose={() => setSnackbar({ ...snackbar, open: false })}
+              severity={snackbar.severity}
+              action={snackbar.reviewBatchId ? (
+                <Stack direction="row" spacing={1}>
+                  <Button
+                    color="inherit"
+                    size="small"
+                    variant="outlined"
+                    onClick={() => navigate(`/master-communications?tab=decisions&batch=${snackbar.reviewBatchId}`)}
+                  >
+                    Review emails
+                  </Button>
+                  <Button color="inherit" size="small" onClick={() => setSnackbar({ ...snackbar, open: false })}>
+                    Later
+                  </Button>
+                </Stack>
+              ) : undefined}
+            >
               {snackbar.message}
             </Alert>
           </Snackbar>

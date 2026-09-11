@@ -7,9 +7,15 @@ class ApiClient {
     this.token = token;
   }
 
+  // Short-lived executive unlock for sealed recruiting records. Managed by
+  // ExecUnlockContext; sent alongside the session token, never instead of it.
+  setExecUnlockToken(token) {
+    this.execUnlockToken = token;
+  }
+
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;
-    
+
     const config = {
       headers: {
         ...options.headers,
@@ -27,8 +33,12 @@ class ApiClient {
       config.headers.Authorization = `Bearer ${this.token}`;
     }
 
+    if (this.execUnlockToken) {
+      config.headers['X-Exec-Unlock'] = this.execUnlockToken;
+    }
+
     const response = await fetch(url, config);
-    
+
     if (!response.ok) {
       let error;
       try {
@@ -42,18 +52,23 @@ class ApiClient {
           error = { error: `Server Error (${response.status}): ${response.statusText}` };
         }
       }
-      
+
       console.error('API Error Response:', {
         status: response.status,
         statusText: response.statusText,
         error: error,
         url: url
       });
-      
+
       // Include more details in the error message
       const errorMessage = error.error || error.message || 'Request failed';
       const detailedError = `${errorMessage} (Status: ${response.status})`;
       const err = new Error(detailedError);
+      // Machine-readable pieces, so callers can branch on a sealed record
+      // (423, RECORD_LOCKED) without parsing the message.
+      err.status = response.status;
+      err.code = error.code;
+      err.serverMessage = errorMessage;
       if (error.contactEmail) {
         err.contactEmail = error.contactEmail;
       }
@@ -104,4 +119,4 @@ class ApiClient {
 // Create a singleton instance
 const apiClient = new ApiClient();
 
-export default apiClient; 
+export default apiClient;

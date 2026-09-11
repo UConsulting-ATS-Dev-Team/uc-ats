@@ -165,11 +165,36 @@ The system follows a **recruiting cycle-based workflow**:
   isExternalTalent`; the upload and consent routes additionally require
   `User.emailVerifiedAt`.
 - `/api/applications` - Application CRUD and review
-- `/api/review-teams` - Review team management and scoring
+- `/api/review-teams` - Review team management and scoring (ADMIN/MEMBER only)
 - `/api/files` - File upload/download via Google Drive
 - `/api/resume-uploads` - Candidate self-service resume replacement + version history
 - `/api/interview-resources` - Interview prep materials
+- `/api/exec-access` - Executive-committee unlock for sealed records, manual seal/unseal,
+  password rotation and the access log
+- `/api/master-communications/decision-batches` - Decision emails queued by Staging's
+  Process All Decisions, reviewed and sent by an admin
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
+
+**Sealed recruiting records:**
+- `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and
+  application. Set automatically when final-round processing makes them a member (they
+  may later be promoted onto recruitment), by hand from the application page, or by
+  `scripts/backfill-exec-locks.js`.
+- Enforced server-side in [server/src/utils/lockedRecords.js](server/src/utils/lockedRecords.js):
+  single-record routes answer `423 RECORD_LOCKED`, list routes redact the row to identity
+  and mark it `locked: true`. A request carrying a valid `X-Exec-Unlock` token (30 minutes,
+  from `POST /api/exec-access/unlock`) sees everything. Any new route that returns scores,
+  evaluations, comments or application content must go through these helpers.
+- The first executive password is set with `node scripts/set-exec-password.js`.
+
+**Decision processing:**
+- The four `POST /api/admin/process-*-decisions` endpoints share
+  [server/src/services/decisionProcessing.js](server/src/services/decisionProcessing.js).
+  They advance, reject or accept (final round: promote/create the MEMBER account and seal
+  the record) and **send no email**. Each run writes a `DecisionBatch` of
+  `DecisionMessage`s that an admin reviews and sends in Master Communications → Decisions
+  ([server/src/services/decisionBatches.js](server/src/services/decisionBatches.js)).
+- Round order lives in [server/src/utils/roundProgression.js](server/src/utils/roundProgression.js).
 
 **Key Services:**
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table

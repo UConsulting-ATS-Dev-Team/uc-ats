@@ -40,11 +40,13 @@ import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
+import ExecAccessAdminDialog from '../components/ExecAccessAdminDialog';
 
 const UserManagement = () => {
   const MISSING_GRADUATION_CLASS = '__UNKNOWN_GRADUATION_CLASS__';
 
   const { user, updateUser } = useAuth();
+  const [showExecAccess, setShowExecAccess] = useState(false);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -453,6 +455,13 @@ const UserManagement = () => {
               </Typography>
             </Box>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ width: { xs: '100%', md: 'auto' } }}>
+              <Button
+                variant="outlined"
+                onClick={() => setShowExecAccess(true)}
+              >
+                Executive Access
+              </Button>
+              <ExecAccessAdminDialog open={showExecAccess} onClose={() => setShowExecAccess(false)} />
               <Button
                 variant="outlined"
                 startIcon={<ContentCopyIcon />}

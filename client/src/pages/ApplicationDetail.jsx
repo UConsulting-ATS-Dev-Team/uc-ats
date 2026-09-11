@@ -6,7 +6,11 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
 import OfferLetterSection from '../components/OfferLetterSection';
+import LockedRecord from '../components/LockedRecord';
+import RecordSealControl from '../components/RecordSealControl';
 import { useAuth } from '../context/AuthContext';
+import { useExecUnlock } from '../context/ExecUnlockContext';
+import { isRecordLockedError } from '../utils/recordLock';
 import '../styles/ApplicationDetail.css';
 
 export default function ApplicationDetail({ applicationId: propApplicationId, embedded = false }) {
@@ -16,6 +20,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
   const [application, setApplication] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // The server sealed this application (423): show the executive-password placeholder.
+  const [sealed, setSealed] = useState(false);
+  const { version: execAccessVersion } = useExecUnlock();
   const [currentUserId, setCurrentUserId] = useState(null); // Store current user ID
   const [averageGrades, setAverageGrades] = useState({
     resume: 0,
@@ -407,15 +414,24 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         ]);
         
       } catch (err) {
-        console.error('Error loading data:', err);
-        setError(err.message);
+        if (isRecordLockedError(err)) {
+          setApplication(null);
+          setSealed(true);
+        } else {
+          console.error('Error loading data:', err);
+          setError(err.message);
+        }
       } finally {
         setLoading(false);
       }
     };
 
+    // Re-runs when executive access opens or closes, so a sealed application
+    // appears after unlocking and is hidden again after locking.
+    setSealed(false);
+    setError(null);
     fetchData();
-  }, [id]);
+  }, [id, execAccessVersion]);
 
   // Auto-scroll to bottom when comments change
   useEffect(() => {
@@ -430,6 +446,20 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         <div style={{ padding: '2rem', textAlign: 'center' }}>
           Loading application details...
         </div>
+      </div>
+    );
+  }
+
+  if (sealed) {
+    return (
+      <div className="application-detail">
+        {!embedded && (
+          <Link to="/application-list" className="back-link">
+            <ArrowLeftIcon className="back-icon" />
+            Back to Applications
+          </Link>
+        )}
+        <LockedRecord />
       </div>
     );
   }
@@ -482,6 +512,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 </h1>
                 <span className="applicant-id">ID: {application.id}</span>
               </div>
+              <RecordSealControl candidateId={application.candidateId} />
               
               <div className="average-grades-container">
                 {(() => {

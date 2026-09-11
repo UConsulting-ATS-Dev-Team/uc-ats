@@ -34,8 +34,27 @@ import {
 // active cycle's confirmation so the portal knows whether to force the
 // confirm/update modal before the member can open slots.
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
+import {
+  guardApplication,
+  guardCandidate,
+  lockedApplicationIds,
+  lockedRowPredicate,
+  redactCandidate,
+  redactLockedApplications
+} from '../utils/lockedRecords.js';
 
 const router = express.Router();
+
+// Staff reads and writes of applicants' records. Each route below names only
+// requireAuth, which let any signed-in applicant call them; the role check and
+// the record seal are applied here, ahead of the routes.
+router.get(
+  ['/all-applications', '/all-candidates', '/my-team', '/interviews/:id/applications', '/evaluations'],
+  requireAuth,
+  requireAdminOrMember
+);
+router.get('/candidate/:id', requireAuth, requireAdminOrMember, guardCandidate((req) => req.params.id));
+router.post('/evaluations', requireAuth, requireAdminOrMember, guardApplication((req) => req.body?.applicationId));
 
 // Get events for members with per-user RSVP status
 router.get('/events', requireAuth, async (req, res) => {
@@ -153,7 +172,7 @@ router.get('/all-applications', requireAuth, async (req, res) => {
     }));
 
     console.log('Transformed applications:', transformedApplications.length);
-    res.json(transformedApplications);
+    res.json(await redactLockedApplications(req, transformedApplications));
   } catch (error) {
     console.error('Error fetching all applications for member:', error);
     console.error('Error details:', error.message, error.stack);
@@ -327,10 +346,12 @@ router.get('/all-candidates', requireAuth, async (req, res) => {
 
     console.log('Found candidates:', candidates.length);
 
+    const isLocked = await lockedRowPredicate(req, candidates, { refOf: (candidate) => ({ candidateId: candidate.id }) });
+
     // Return with pagination metadata
     const totalPages = Math.ceil(total / limit);
     res.json({
-      data: candidates,
+      data: candidates.map((candidate) => (isLocked(candidate) ? redactCandidate(candidate) : candidate)),
       pagination: {
         page,
         limit,
@@ -579,6 +600,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
       cycleName: userTeam.cycle?.name
     };
 
+    transformedTeam.applications = await redactLockedApplications(req, transformedTeam.applications);
     res.json(transformedTeam);
   } catch (error) {
     console.error('Error fetching user team:', error);
@@ -1342,10 +1364,12 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
         coverLetterUrl: true,
         videoUrl: true,
         headshotUrl: true,
-        testFor: true
+        testFor: true,
+        candidateId: true,
+        studentId: true
       }
     });
-    
+
     // Transform applications to include name field
     const transformedApplications = applications.map(app => ({
       ...app,
@@ -1353,8 +1377,8 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
       major: app.major1,
       year: app.graduationYear
     }));
-    
-    res.json(transformedApplications);
+
+    res.json(await redactLockedApplications(req, transformedApplications));
   } catch (error) {
     console.error('[GET /api/member/interviews/:id/applications]', error);
     res.status(500).json({ error: 'Failed to fetch applications' });
@@ -1460,7 +1484,10 @@ router.get('/evaluations', requireAuth, async (req, res) => {
       return parsed;
     });
     
-    res.json(parsedEvaluations);
+    // An evaluator's own notes about a sealed person are sealed with the rest of
+    // their record.
+    const sealed = await lockedApplicationIds(req, parsedEvaluations.map((evaluation) => evaluation.applicationId));
+    res.json(parsedEvaluations.filter((evaluation) => !sealed.has(evaluation.applicationId)));
   } catch (error) {
     console.error('[GET /api/member/evaluations]', error);
     res.status(500).json({ error: 'Failed to fetch evaluations' });

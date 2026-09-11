@@ -57,6 +57,17 @@ import {
   resolveAdminCycle,
   resolveCandidateCycle
 } from '../services/activeCycle.js';
+import {
+  guardApplication,
+  guardCandidate,
+  lockedApplicationIds,
+  lockedRowPredicate,
+  redactApplication,
+  redactCandidate,
+  redactLockedApplications
+} from '../utils/lockedRecords.js';
+import { processRoundDecisions } from '../services/decisionProcessing.js';
+import { ROUNDS } from '../utils/roundProgression.js';
 
 const router = express.Router();
 
@@ -95,6 +106,36 @@ const safeParseJsonField = (field) => {
 
 // Protect all admin routes
 router.use(requireAuth, requireAdmin);
+
+// Routes that read or change one application's evaluation record: a sealed
+// record answers 423, and nobody decides or evaluates their own application.
+router.all(
+  [
+    '/staging/candidates/:id/status',
+    '/staging/candidates/:id/final-decision',
+    '/staging/candidates/:id/advance-round',
+    '/applications/:id/interview-evaluations',
+    '/applications/:id/final-round-interview-evaluations'
+  ],
+  guardApplication((req) => req.params.id)
+);
+// save-decision calls its application id `candidateId`.
+router.post('/save-decision', guardApplication((req) => req.body?.candidateId));
+router.post('/interviews/:id/evaluations', guardApplication((req) => req.body?.applicationId));
+
+// Score overrides name the score row, so resolve it to its candidate first.
+const guardScoreCandidate = (model) => async (req, res, next) => {
+  try {
+    const score = await prisma[model].findUnique({ where: { id: req.params.id }, select: { candidateId: true } });
+    return guardCandidate(() => score?.candidateId)(req, res, next);
+  } catch (error) {
+    console.error('[score record guard]', error);
+    res.status(500).json({ error: 'Failed to check record access' });
+  }
+};
+router.patch('/resume-scores/:id', guardScoreCandidate('resumeScore'));
+router.patch('/cover-letter-scores/:id', guardScoreCandidate('coverLetterScore'));
+router.patch('/video-scores/:id', guardScoreCandidate('videoScore'));
 
 // Get dashboard stats
 router.get('/stats', async (req, res) => {
@@ -174,12 +215,7 @@ router.get('/stats', async (req, res) => {
       );
       
       // Map round numbers to stage names
-      const roundToStage = {
-        '1': 'RESUME_REVIEW',
-        '2': 'COFFEE_CHAT',
-        '3': 'FIRST_ROUND',
-        '4': 'FINAL_ROUND'
-      };
+      const roundToStage = Object.fromEntries(ROUNDS.map((round) => [round.round, round.stage]));
       
       currentRound = roundToStage[mostCommonRound] || 'RESUME_REVIEW';
     }
@@ -267,7 +303,7 @@ router.get('/candidates', async (req, res) => {
     const totalPages = Math.ceil(total / limit);
 
     res.json({
-      data: candidates,
+      data: await redactLockedApplications(req, candidates),
       pagination: {
         page,
         limit,
@@ -447,7 +483,10 @@ router.get('/candidates/comprehensive', async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json(candidates);
+    // Sealed candidates keep their row, so the list still adds up, and lose
+    // everything that says how they were evaluated.
+    const isLocked = await lockedRowPredicate(req, candidates, { refOf: (candidate) => ({ candidateId: candidate.id }) });
+    res.json(candidates.map((candidate) => (isLocked(candidate) ? redactCandidate(candidate) : candidate)));
   } catch (error) {
     console.error('[GET /api/admin/candidates/comprehensive]', error);
     res.status(500).json({ error: 'Failed to fetch comprehensive candidate data' });
@@ -967,284 +1006,26 @@ router.post('/advance-round', async (req, res) => {
   }
 });
 
-// Process decisions with emails and round advancement
-router.post('/process-decisions', async (req, res) => {
+// Process All Decisions, one endpoint per Staging tab. Each moves its round's
+// applications along and queues their decision emails for review in Master
+// Communications; none of them sends anything. See services/decisionProcessing.js.
+const processDecisionsForRound = (round) => async (req, res) => {
   try {
-    console.log('Starting decision processing...');
-    
-    // Check if emails should be sent (default to true for backward compatibility)
-    const sendEmails = req.body.sendEmails !== false;
-    console.log('Send emails:', sendEmails);
-    
-    const active = await resolveCycleForRequest(prisma, req);
-    if (!active) {
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
-
-    console.log('Active cycle:', active.name);
-
-    // Get applications in Resume Review round (currentRound = '1') only
-    const applications = await prisma.application.findMany({
-      where: {
-        cycleId: active.id,
-        currentRound: '1'
-      },
-      include: {
-        candidate: true // Just include the candidate, no need for nested user
-      }
-    });
-
-    console.log('Applications to process:', applications.length);
-    console.log('Sample application:', applications[0]);
-
-    if (applications.length === 0) {
-      return res.status(400).json({ error: 'No applications found in Resume Review round.' });
-    }
-
-    // Import email functions
-    let sendAcceptanceEmail, sendRejectionEmail;
-    try {
-      const emailModule = await import('../services/emailNotifications.js');
-      sendAcceptanceEmail = emailModule.sendAcceptanceEmail;
-      sendRejectionEmail = emailModule.sendRejectionEmail;
-      console.log('Email services imported successfully');
-      
-      // Verify the functions exist
-      if (typeof sendAcceptanceEmail !== 'function' || typeof sendRejectionEmail !== 'function') {
-        throw new Error('Email service functions not found');
-      }
-    } catch (importError) {
-      console.error('Failed to import email services:', importError);
-      return res.status(500).json({ 
-        error: 'Failed to import email services', 
-        details: importError.message 
-      });
-    }
-
-    const results = {
-      accepted: [],
-      rejected: [],
-      errors: [],
-      emailsSent: 0,
-      emailsFailed: 0
-    };
-
-    // Process each application
-    for (const application of applications) {
-      try {
-        if (!application.candidate) {
-          results.errors.push({
-            applicationId: application.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: 'No candidate associated with application'
-          });
-          continue;
-        }
-
-        console.log(`Processing application ${application.id} for candidate ${application.candidate.id}: ${application.firstName} ${application.lastName}`);
-        
-        // Get the decision from the database (approved field)
-        let decision = null;
-        if (application.approved === true) {
-          decision = 'yes';
-        } else if (application.approved === false) {
-          decision = 'no';
-        }
-        // Note: approved === null means no decision or intermediate decision (maybe_yes/maybe_no)
-        
-        console.log(`Application ${application.id}: decision = ${decision} (approved = ${application.approved})`);
-        
-        if (!decision) {
-          // Check if there's a comment indicating an intermediate decision
-          const latestComment = await prisma.comment.findFirst({
-            where: { applicationId: application.id },
-            orderBy: { createdAt: 'desc' }
-          });
-          
-          let errorMessage = 'No decision provided (approved field is null)';
-          if (latestComment && latestComment.content.includes('Maybe -')) {
-            errorMessage = 'Intermediate decision provided (Maybe - Yes/No) - needs final decision';
-          }
-          
-          results.errors.push({
-            applicationId: application.id,
-            candidateId: application.candidate.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: errorMessage
-          });
-          continue;
-        }
-
-        if (decision === 'yes') {
-          // Accept candidate - advance to coffee chat round
-          console.log(`Updating application ${application.id} to coffee chat round`);
-          
-          const updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'UNDER_REVIEW', // This represents coffee chat round
-              currentRound: '2', // Coffee chat round
-              approved: null // reset for new round decisions
-            }
-          });
-          
-          console.log(`Application ${application.id} updated successfully:`, {
-            id: updatedApp.id,
-            status: updatedApp.status,
-            currentRound: updatedApp.currentRound,
-            approved: updatedApp.approved
-          });
-
-          // Send acceptance email (only if sendEmails is true)
-          let emailResult = { success: true }; // Default to success if emails are disabled
-          if (sendEmails) {
-            try {
-              emailResult = await sendAcceptanceEmail(
-                application.email, // Use application email
-                `${application.firstName} ${application.lastName}`,
-                active.name
-              );
-              console.log(`Acceptance email result for ${application.email}:`, emailResult);
-            } catch (emailError) {
-              console.error(`Error sending acceptance email to ${application.email}:`, emailError);
-              emailResult = { success: false, error: emailError.message };
-            }
-          } else {
-            console.log(`Skipping acceptance email for ${application.email} (emails disabled)`);
-          }
-
-          if (emailResult.success) {
-            if (sendEmails) results.emailsSent++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: sendEmails,
-              emailSkipped: !sendEmails
-            });
-          } else {
-            if (sendEmails) results.emailsFailed++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
-          }
-
-        } else if (decision === 'no') {
-          // Reject candidate
-          await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'REJECTED',
-              currentRound: '1', // Resume review round (final)
-              approved: false
-            }
-          });
-
-          // Send rejection email (only if sendEmails is true)
-          let emailResult = { success: true }; // Default to success if emails are disabled
-          if (sendEmails) {
-            try {
-              emailResult = await sendRejectionEmail(
-                application.email, // Use application email
-                `${application.firstName} ${application.lastName}`,
-                active.name
-              );
-              console.log(`Rejection email result for ${application.email}:`, emailResult);
-            } catch (emailError) {
-              console.error(`Error sending rejection email to ${application.email}:`, emailError);
-              emailResult = { success: false, error: emailError.message };
-            }
-          } else {
-            console.log(`Skipping rejection email for ${application.email} (emails disabled)`);
-          }
-
-          if (emailResult.success) {
-            if (sendEmails) results.emailsSent++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: sendEmails,
-              emailSkipped: !sendEmails
-            });
-          } else {
-            if (sendEmails) results.emailsFailed++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
-          }
-
-        } else {
-          // Invalid decision
-          results.errors.push({
-            applicationId: application.id,
-            candidateId: application.candidate.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: `Invalid decision: ${decision}`
-          });
-        }
-
-      } catch (error) {
-        console.error(`Error processing application ${application.id}:`, error);
-        results.errors.push({
-          applicationId: application.id,
-          candidateId: application.candidate?.id,
-          candidateName: application.candidate ? `${application.firstName} ${application.lastName}` : 'Unknown',
-          error: error.message
-        });
-      }
-    }
-
-    console.log('Decision processing completed:', results);
-    console.log('Summary:', {
-      totalApplications: applications.length,
-      accepted: results.accepted.length,
-      rejected: results.rejected.length,
-      errors: results.errors.length,
-      emailsSent: results.emailsSent,
-      emailsFailed: results.emailsFailed
-    });
-
-    res.json({
-      message: 'Decision processing completed',
-      results,
-      summary: {
-        totalApplications: applications.length,
-        accepted: results.accepted.length,
-        rejected: results.rejected.length,
-        errors: results.errors.length,
-        emailsSent: results.emailsSent,
-        emailsFailed: results.emailsFailed
-      }
-    });
-
+    res.json(await processRoundDecisions({ cycle, round, processedBy: req.user }));
   } catch (error) {
-    console.error('[POST /api/admin/process-decisions]', error);
-    
-    // Ensure we always return valid JSON with detailed error information
-    const errorResponse = {
-      error: 'Failed to process decisions',
-      details: error.message || 'Unknown error occurred',
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
-      timestamp: new Date().toISOString()
-    };
-    
-    console.error('Sending error response:', errorResponse);
-    res.status(500).json(errorResponse);
+    console.error(`[process decisions, round ${round}]`, error);
+    res.status(error.status || 500).json({
+      error: error.status ? error.message : 'Failed to process decisions',
+      details: error.message
+    });
   }
-});
+};
+
+router.post('/process-decisions', processDecisionsForRound('1'));
 
 // Approval status of a specific candidate
 router.post('/candidates/:id/approve', async (req, res) => {
@@ -2831,7 +2612,8 @@ router.get('/applications', async (req, res) => {
   try {
     const result = await loadAdminApplications(prisma, { page, limit });
     // Unpaginated callers still expect just the array
-    res.json(usePagination ? result : result.applications);
+    const applications = await redactLockedApplications(req, result.applications);
+    res.json(usePagination ? { ...result, applications } : applications);
   } catch (error) {
     console.error('Error fetching admin applications:', error);
     // Return appropriate response based on pagination usage
@@ -2951,6 +2733,50 @@ router.post('/test-email', async (req, res) => {
 
 // Staging endpoints
 
+// Staging shows a sealed person as a locked row. Identity stays so the board
+// still adds up; scores, attendance and decisions go. The row keeps its shape,
+// because Staging reads candidate.scores.* without guarding for undefined.
+const redactStagingCandidate = (candidate) => ({
+  ...redactApplication(candidate),
+  currentRound: candidate.currentRound,
+  scores: { resume: null, coverLetter: null, video: null, overall: null },
+  attendance: {},
+  decisions: {},
+  reviewTeam: null,
+  hasReferral: false,
+  referral: null
+});
+
+async function redactStagingCandidates(req, candidates) {
+  const isLocked = await lockedRowPredicate(req, candidates);
+  return candidates.map((candidate) => (isLocked(candidate) ? redactStagingCandidate(candidate) : candidate));
+}
+
+async function redactStagingSnapshot(req, snapshot) {
+  const rows = [...snapshot.candidates, ...snapshot.applications];
+  const isLocked = await lockedRowPredicate(req, rows);
+  // Both lists are keyed by application id.
+  const sealedIds = new Set(rows.filter(isLocked).map((row) => row.id));
+  if (!sealedIds.size) return snapshot;
+
+  const withoutSealed = (decisions) =>
+    Object.fromEntries(Object.entries(decisions).filter(([applicationId]) => !sealedIds.has(applicationId)));
+
+  return {
+    ...snapshot,
+    candidates: snapshot.candidates.map((candidate) =>
+      sealedIds.has(candidate.id) ? redactStagingCandidate(candidate) : candidate
+    ),
+    applications: snapshot.applications.map((application) =>
+      sealedIds.has(application.id) ? redactApplication(application) : application
+    ),
+    decisions: withoutSealed(snapshot.decisions),
+    perRoundDecisions: Object.fromEntries(
+      Object.entries(snapshot.perRoundDecisions).map(([round, decisions]) => [round, withoutSealed(decisions)])
+    )
+  };
+}
+
 // Get staging candidates with comprehensive data and optional pagination
 router.get('/staging/candidates', async (req, res) => {
   try {
@@ -2960,11 +2786,12 @@ router.get('/staging/candidates', async (req, res) => {
     const usePagination = Boolean(page && limit);
 
     const snapshot = await loadStagingCandidates(prisma, { page, limit });
+    const candidates = await redactStagingCandidates(req, snapshot.candidates);
 
     if (usePagination) {
-      res.json(snapshot);
+      res.json({ ...snapshot, candidates });
     } else {
-      res.json({ candidates: snapshot.candidates });
+      res.json({ candidates });
     }
   } catch (error) {
     console.error('[GET /api/admin/staging/candidates]', error);
@@ -2978,7 +2805,7 @@ router.get('/staging/candidates', async (req, res) => {
 // order whole snapshots instead of guessing from six independent responses.
 router.get('/staging/snapshot', async (req, res) => {
   try {
-    res.json(await loadStagingSnapshot(prisma));
+    res.json(await redactStagingSnapshot(req, await loadStagingSnapshot(prisma)));
   } catch (error) {
     console.error('[GET /api/admin/staging/snapshot]', error);
     res.status(500).json({ error: 'Failed to load staging snapshot' });
@@ -3294,7 +3121,9 @@ router.get('/interviews/:id/applications', async (req, res) => {
         coverLetterUrl: true,
         videoUrl: true,
         headshotUrl: true,
-        testFor: true
+        testFor: true,
+        candidateId: true,
+        studentId: true
       }
     });
     
@@ -3306,7 +3135,7 @@ router.get('/interviews/:id/applications', async (req, res) => {
       year: app.graduationYear
     }));
     
-    res.json(transformedApplications);
+    res.json(await redactLockedApplications(req, transformedApplications));
   } catch (error) {
     console.error('[GET /api/admin/interviews/:id/applications]', error);
     res.status(500).json({ error: 'Failed to fetch applications', details: error.message });
@@ -3403,7 +3232,10 @@ router.get('/evaluations', async (req, res) => {
       return parsed;
     });
     
-    res.json(parsedEvaluations);
+    // An evaluator's own notes about a sealed person are sealed with the rest of
+    // their record.
+    const sealed = await lockedApplicationIds(req, parsedEvaluations.map((evaluation) => evaluation.applicationId));
+    res.json(parsedEvaluations.filter((evaluation) => !sealed.has(evaluation.applicationId)));
   } catch (error) {
     console.error('[GET /api/admin/evaluations]', error);
     res.status(500).json({ error: 'Failed to fetch evaluations' });
@@ -3460,7 +3292,8 @@ router.get('/interviews/:id/evaluations', async (req, res) => {
       return parsed;
     });
     
-    res.json(parsedEvaluations);
+    const sealed = await lockedApplicationIds(req, parsedEvaluations.map((evaluation) => evaluation.applicationId));
+    res.json(parsedEvaluations.filter((evaluation) => !sealed.has(evaluation.applicationId)));
   } catch (error) {
     console.error('[GET /api/admin/interviews/:id/evaluations]', error);
     res.status(500).json({ error: 'Failed to fetch evaluations', details: error.message });
@@ -3858,6 +3691,9 @@ router.post('/applications/evaluation-summaries', async (req, res) => {
       summaries[evaluation.applicationId].evaluations.push(evaluation);
     });
     
+    // Sealed applications drop out of the summaries entirely.
+    const sealed = await lockedApplicationIds(req, applicationIds);
+    for (const applicationId of sealed) delete summaries[applicationId];
     res.json(summaries);
   } catch (error) {
     console.error('[POST /api/admin/applications/evaluation-summaries]', error);
@@ -3865,514 +3701,9 @@ router.post('/applications/evaluation-summaries', async (req, res) => {
   }
 });
 
-// Process Coffee Chat decisions with emails and advancement to First Round
-router.post('/process-coffee-decisions', async (req, res) => {
-  try {
-    console.log('Starting coffee chat decision processing...');
-
-    const active = await resolveCycleForRequest(prisma, req);
-    if (!active) {
-      return res.status(400).json({ error: 'No active recruiting cycle' });
-    }
-
-    console.log('Active cycle:', active.name);
-
-    // Get applications in Coffee Chat round (currentRound = '2')
-    const allApplications = await prisma.application.findMany({
-      where: {
-        cycleId: active.id,
-        currentRound: '2'
-      },
-      include: {
-        candidate: true
-      }
-    });
-
-    // Filter to only applications with clear Yes/No decisions (approved field is true or false)
-    const applications = allApplications.filter(app => app.approved === true || app.approved === false);
-    
-    // Also mark any remaining applications in round 2 as rejected (they should have been processed)
-    const remainingApplications = allApplications.filter(app => app.approved === null || (app.approved !== true && app.approved !== false));
-    
-    console.log('Applications with clear decisions:', applications.length);
-    console.log('Remaining applications to mark as rejected:', remainingApplications.length);
-
-    console.log('Total coffee chat applications:', allApplications.length);
-    console.log('Coffee chat applications with clear decisions:', applications.length);
-
-    if (applications.length === 0) {
-      const unclearDecisions = allApplications.filter(app => app.approved === null || (app.approved !== true && app.approved !== false));
-      return res.status(400).json({ 
-        error: 'No applications with clear decisions found in Coffee Chat round.',
-        details: `${unclearDecisions.length} applications have unclear decisions (Maybe/Unsure) and cannot be processed.`
-      });
-    }
-
-    // Disable email sending for coffee chat decisions
-    console.log('Email sending disabled for coffee chat decisions');
-
-    const results = {
-      accepted: [],
-      rejected: [],
-      errors: [],
-      emailsSent: 0,
-      emailsFailed: 0
-    };
-
-    for (const application of applications) {
-      try {
-        if (!application.candidate) {
-          results.errors.push({
-            applicationId: application.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: 'No candidate associated with application'
-          });
-          continue;
-        }
-
-        // Decision from approved field (we already filtered for clear decisions)
-        const decision = application.approved === true ? 'yes' : 'no';
-
-        if (decision === 'yes') {
-          // Advance to First Round Interviews (round 3)
-          const updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'UNDER_REVIEW',
-              currentRound: '3',
-              approved: null // reset for next round decisions
-            }
-          });
-
-          // Email sending disabled for coffee chat decisions
-          results.accepted.push({
-            applicationId: application.id,
-            candidateId: application.candidate.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            email: application.email,
-            emailSent: false,
-            note: 'Email sending disabled for coffee chat decisions'
-          });
-        } else if (decision === 'no') {
-          // Mark as rejected and remove from active process
-          await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'REJECTED',
-              currentRound: '2', // Keep the round they were rejected from for tracking
-              approved: false // Mark as rejected
-            }
-          });
-
-          // Don't send rejection email - they are marked as rejected
-          results.rejected.push({
-            applicationId: application.id,
-            candidateId: application.candidate.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            email: application.email,
-            emailSent: false,
-            note: 'Rejected from Coffee Chat round'
-          });
-        }
-      } catch (error) {
-        console.error(`Error processing coffee chat application ${application.id}:`, error);
-        results.errors.push({
-          applicationId: application.id,
-          candidateId: application.candidate?.id,
-          candidateName: application.candidate ? `${application.firstName} ${application.lastName}` : 'Unknown',
-          error: error.message
-        });
-      }
-    }
-
-    res.json({
-      message: 'Coffee chat decision processing completed (no emails sent)',
-      results,
-      summary: {
-        totalApplications: applications.length,
-        accepted: results.accepted.length,
-        rejected: results.rejected.length,
-        errors: results.errors.length,
-        emailsSent: 0, // No emails sent for coffee chat decisions
-        emailsFailed: 0
-      },
-      note: 'Accepted candidates moved to First Round Interviews (round 3). "No" candidates marked as rejected.'
-    });
-  } catch (error) {
-    console.error('[POST /api/admin/process-coffee-decisions]', error);
-    res.status(500).json({ error: 'Failed to process coffee chat decisions', details: error.message });
-  }
-});
-
-// Process First Round decisions with emails and advancement to Final Round
-router.post('/process-first-round-decisions', async (req, res) => {
-  try {
-    console.log('Starting first round decision processing...');
-    
-    // Check if emails should be sent (default to true for backward compatibility)
-    const sendEmails = req.body.sendEmails !== false;
-    console.log('Send emails:', sendEmails);
-
-    const active = await resolveCycleForRequest(prisma, req);
-    if (!active) {
-      return res.status(400).json({ error: 'No active recruiting cycle' });
-    }
-
-    console.log('Active cycle:', active.name);
-
-    // Get applications in First Round (currentRound = '3') with clear decisions only
-    const allApplications = await prisma.application.findMany({
-      where: {
-        cycleId: active.id,
-        currentRound: '3'
-      },
-      include: {
-        candidate: true
-      }
-    });
-
-    // Filter to only applications with clear Yes/No decisions (approved field is true or false)
-    const applications = allApplications.filter(app => app.approved === true || app.approved === false);
-
-    console.log('Total first round applications:', allApplications.length);
-    console.log('First round applications with clear decisions:', applications.length);
-
-    if (applications.length === 0) {
-      const unclearDecisions = allApplications.filter(app => app.approved === null || (app.approved !== true && app.approved !== false));
-      return res.status(400).json({ 
-        error: 'No applications with clear decisions found in First Round.',
-        details: `${unclearDecisions.length} applications have unclear decisions (Maybe/Unsure) and cannot be processed.`
-      });
-    }
-
-    let sendFirstRoundAcceptanceEmail, sendFirstRoundRejectionEmail;
-    try {
-      const emailModule = await import('../services/emailNotifications.js');
-      sendFirstRoundAcceptanceEmail = emailModule.sendFirstRoundAcceptanceEmail;
-      sendFirstRoundRejectionEmail = emailModule.sendFirstRoundRejectionEmail;
-      if (typeof sendFirstRoundAcceptanceEmail !== 'function' || typeof sendFirstRoundRejectionEmail !== 'function') {
-        throw new Error('First round email service functions not found');
-      }
-    } catch (importError) {
-      console.error('Failed to import first round email services:', importError);
-      return res.status(500).json({ 
-        error: 'Failed to import first round email services', 
-        details: importError.message 
-      });
-    }
-
-    const results = {
-      accepted: [],
-      rejected: [],
-      errors: [],
-      emailsSent: 0,
-      emailsFailed: 0
-    };
-
-    for (const application of applications) {
-      try {
-        if (!application.candidate) {
-          results.errors.push({
-            applicationId: application.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: 'No candidate associated with application'
-          });
-          continue;
-        }
-
-        // Decision from approved field (we already filtered for clear decisions)
-        const decision = application.approved === true ? 'yes' : 'no';
-
-        if (decision === 'yes') {
-          // Advance to Final Round (round 4) but keep the decision in First Round
-          const updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'UNDER_REVIEW',
-              currentRound: '4'
-              // Don't reset approved - keep the "Yes" decision visible in First Round tab
-            }
-          });
-
-          let emailResult = { success: true }; // Default to success if emails disabled
-          
-          if (sendEmails) {
-            try {
-              emailResult = await sendFirstRoundAcceptanceEmail(
-                application.email,
-                `${application.firstName} ${application.lastName}`,
-                active.name
-              );
-            } catch (emailError) {
-              console.error(`Error sending first round acceptance email to ${application.email}:`, emailError);
-              emailResult = { success: false, error: emailError.message };
-            }
-          } else {
-            console.log(`Skipping email for ${application.email} (emails disabled)`);
-          }
-
-          if (emailResult.success) {
-            if (sendEmails) {
-              results.emailsSent++;
-            }
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: sendEmails && emailResult.success,
-              emailSkipped: !sendEmails
-            });
-          } else {
-            results.emailsFailed++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
-          }
-
-        } else {
-          // Mark as rejected and remove from the process
-          await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'REJECTED',
-              currentRound: '3',
-              approved: false // keep the No decision
-            }
-          });
-
-          // Don't send rejection email - they are marked as rejected
-          results.rejected.push({
-            applicationId: application.id,
-            candidateId: application.candidate.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            email: application.email,
-            emailSent: false,
-            note: 'Marked as rejected'
-          });
-        }
-
-      } catch (error) {
-        console.error(`Error processing application ${application.id}:`, error);
-        results.errors.push({
-          applicationId: application.id,
-          candidateId: application.candidate?.id,
-          candidateName: `${application.firstName} ${application.lastName}`,
-          error: error.message
-        });
-      }
-    }
-
-    console.log('First round decision processing completed:', results);
-
-    res.json({
-      success: true,
-      summary: {
-        totalApplications: applications.length,
-        accepted: results.accepted.length,
-        rejected: results.rejected.length,
-        errors: results.errors.length,
-        emailsSent: results.emailsSent,
-        emailsFailed: results.emailsFailed
-      },
-      note: 'Accepted candidates moved to Final Round (round 4) and remain visible in First Round with "Yes" decision. "No" candidates marked as rejected.'
-    });
-  } catch (error) {
-    console.error('[POST /api/admin/process-first-round-decisions]', error);
-    res.status(500).json({ error: 'Failed to process first round decisions', details: error.message });
-  }
-});
-
-// Process Final Round decisions with emails and final advancement
-router.post('/process-final-decisions', async (req, res) => {
-  try {
-    console.log('Starting final round decision processing...');
-
-    const active = await resolveCycleForRequest(prisma, req);
-    if (!active) {
-      return res.status(400).json({ error: 'No active recruiting cycle' });
-    }
-
-    console.log('Active cycle:', active.name);
-
-    // Get applications in Final Round (currentRound = '4') with clear decisions only
-    const allApplications = await prisma.application.findMany({
-      where: {
-        cycleId: active.id,
-        currentRound: '4'
-      },
-      include: {
-        candidate: true
-      }
-    });
-
-    // Filter to only applications with clear Yes/No decisions (approved field is true or false)
-    const applications = allApplications.filter(app => app.approved === true || app.approved === false);
-
-    console.log('Total final round applications:', allApplications.length);
-    console.log('Final round applications with clear decisions:', applications.length);
-
-    if (applications.length === 0) {
-      const unclearDecisions = allApplications.filter(app => app.approved === null || (app.approved !== true && app.approved !== false));
-      return res.status(400).json({ 
-        error: 'No applications with clear decisions found in Final Round.',
-        details: `${unclearDecisions.length} applications have unclear decisions (Maybe/Unsure) and cannot be processed.`
-      });
-    }
-
-    let sendFinalAcceptanceEmail, sendFinalRejectionEmail;
-    try {
-      const emailModule = await import('../services/emailNotifications.js');
-      sendFinalAcceptanceEmail = emailModule.sendFinalAcceptanceEmail;
-      sendFinalRejectionEmail = emailModule.sendFinalRejectionEmail;
-      if (typeof sendFinalAcceptanceEmail !== 'function' || typeof sendFinalRejectionEmail !== 'function') {
-        throw new Error('Final round email service functions not found');
-      }
-    } catch (importError) {
-      console.error('Failed to import final round email services:', importError);
-      return res.status(500).json({ 
-        error: 'Failed to import final round email services', 
-        details: importError.message 
-      });
-    }
-
-    const results = {
-      accepted: [],
-      rejected: [],
-      errors: [],
-      emailsSent: 0,
-      emailsFailed: 0
-    };
-
-    for (const application of applications) {
-      try {
-        if (!application.candidate) {
-          results.errors.push({
-            applicationId: application.id,
-            candidateName: `${application.firstName} ${application.lastName}`,
-            error: 'No candidate associated with application'
-          });
-          continue;
-        }
-
-        // Decision from approved field (we already filtered for clear decisions)
-        const decision = application.approved === true ? 'yes' : 'no';
-
-        if (decision === 'yes') {
-          // Accept candidate - move to final stage (round 5)
-          const updatedApp = await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'ACCEPTED',
-              currentRound: '5',
-              approved: true // final acceptance
-            }
-          });
-
-          let emailResult;
-          try {
-            emailResult = await sendFinalAcceptanceEmail(
-              application.email,
-              `${application.firstName} ${application.lastName}`,
-              active.name
-            );
-          } catch (emailError) {
-            console.error(`Error sending final acceptance email to ${application.email}:`, emailError);
-            emailResult = { success: false, error: emailError.message };
-          }
-
-          if (emailResult.success) {
-            results.emailsSent++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: true
-            });
-          } else {
-            results.emailsFailed++;
-            results.accepted.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
-          }
-        } else if (decision === 'no') {
-          // Reject
-          await prisma.application.update({
-            where: { id: application.id },
-            data: {
-              status: 'REJECTED',
-              currentRound: '4',
-              approved: false
-            }
-          });
-
-          const emailResult = await sendFinalRejectionEmail(
-            application.email,
-            `${application.firstName} ${application.lastName}`,
-            active.name
-          );
-
-          if (emailResult.success) {
-            results.emailsSent++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: true
-            });
-          } else {
-            results.emailsFailed++;
-            results.rejected.push({
-              applicationId: application.id,
-              candidateId: application.candidate.id,
-              candidateName: `${application.firstName} ${application.lastName}`,
-              email: application.email,
-              emailSent: false,
-              emailError: emailResult.error
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`Error processing final round application ${application.id}:`, error);
-        results.errors.push({
-          applicationId: application.id,
-          candidateId: application.candidate?.id,
-          candidateName: application.candidate ? `${application.firstName} ${application.lastName}` : 'Unknown',
-          error: error.message
-        });
-      }
-    }
-
-    res.json({
-      message: 'Final round decision processing completed',
-      results,
-      summary: {
-        totalApplications: applications.length,
-        accepted: results.accepted.length,
-        rejected: results.rejected.length,
-        errors: results.errors.length,
-        emailsSent: results.emailsSent,
-        emailsFailed: results.emailsFailed
-      },
-      note: 'Accepted candidates moved to final stage (round 5). Rejected candidates remain in Final Round (round 4).'
-    });
-  } catch (error) {
-    console.error('[POST /api/admin/process-final-decisions]', error);
-    res.status(500).json({ error: 'Failed to process final round decisions', details: error.message });
-  }
-});
+router.post('/process-coffee-decisions', processDecisionsForRound('2'));
+router.post('/process-first-round-decisions', processDecisionsForRound('3'));
+router.post('/process-final-decisions', processDecisionsForRound('4'));
 
 // Shared validation for offer-letter send/preview
 function isFinalRoundAccepted(application) {

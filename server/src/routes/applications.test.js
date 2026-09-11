@@ -127,7 +127,11 @@ describe('GET /api/applications', () => {
     };
 
     prisma.application.findMany.mockResolvedValue([application]);
-    prisma.candidate.findMany.mockResolvedValue([{ id: 'candidate-1', assignedGroupId: group.id }]);
+    // The record-seal check (utils/lockedRecords.js) reads candidates too, filtered
+    // to sealed ones; nobody in this test is sealed.
+    prisma.candidate.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(where?.recordsLockedAt ? [] : [{ id: 'candidate-1', assignedGroupId: group.id }])
+    );
     prisma.groups.findMany.mockResolvedValue([group]);
 
     const res = await get();
@@ -187,7 +191,9 @@ describe('GET /api/applications', () => {
     };
 
     prisma.application.findMany.mockResolvedValue([application]);
-    prisma.candidate.findMany.mockResolvedValue([{ id: 'candidate-2', assignedGroupId: null }]);
+    prisma.candidate.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(where?.recordsLockedAt ? [] : [{ id: 'candidate-2', assignedGroupId: null }])
+    );
 
     const res = await get();
     expect(res.status).toBe(200);

@@ -103,8 +103,112 @@ model Candidate {
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
   onboarding        CandidateOnboarding?
+  /// When set, this person's scores, evaluations, comments and application are
+  /// sealed: staff routes answer 423 or redact them unless the request carries
+  /// an executive unlock (server/src/utils/lockedRecords.js). Set automatically
+  /// when the person becomes a member, because members can later be promoted
+  /// onto recruitment and would otherwise read their own file.
+  recordsLockedAt   DateTime?
+  /// User who sealed the record; null when a script or the decision pipeline did.
+  recordsLockedById String?
 
   @@map("candidates")
+}
+
+/// The executive-committee password that unseals Candidate records. One row,
+/// id "singleton", holding a bcrypt hash and nothing else. Set it with
+/// server/scripts/set-exec-password.js.
+model ExecAccessSetting {
+  id           String   @id @default("singleton")
+  passwordHash String
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
+
+  @@map("exec_access_settings")
+}
+
+/// Audit trail for sealed records: every unlock attempt, seal, unseal and
+/// password change. action is one of EXEC_ACCESS_ACTIONS in
+/// server/src/services/execAccess.js; userId is null when a script acted.
+model ExecAccessLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String
+  candidateId String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([candidateId])
+  @@map("exec_access_logs")
+}
+
+/// What decision processing did to one application, and so which email it gets.
+enum DecisionOutcome {
+  ADVANCED
+  REJECTED
+  ACCEPTED
+}
+
+enum DecisionMessageStatus {
+  PENDING
+  EXCLUDED
+  SENDING
+  SENT
+  FAILED
+}
+
+/// One run of "Process All Decisions" on Staging. Processing changes application
+/// state and sends nothing; the decision emails it implies wait here, one row per
+/// recipient, until an admin reviews and sends them from Master Communications.
+model DecisionBatch {
+  id            String            @id @default(uuid())
+  cycleId       String
+  /// The Staging round that was processed, '1' (resume review) to '4' (final).
+  round         String
+  /// Subject and body per outcome - { ADVANCED?, REJECTED?, ACCEPTED? } each
+  /// { subject, body } - copied from the defaults when the batch is made, so
+  /// editing one batch's wording never changes another's.
+  templates     Json
+  processedById String
+  processedAt   DateTime          @default(now())
+  messages      DecisionMessage[]
+
+  @@index([cycleId, processedAt])
+  @@map("decision_batches")
+}
+
+model DecisionMessage {
+  id                String                @id @default(uuid())
+  batchId           String
+  applicationId     String
+  candidateId       String?
+  userId            String?
+  email             String
+  firstName         String
+  lastName          String
+  outcome           DecisionOutcome
+  fromRound         String
+  toRound           String?
+  /// Processing created a member account for this person, so their email carries
+  /// a set-your-password link. The link's token is minted when the email is sent,
+  /// not when the batch is made, so a batch that waits for review cannot expire it.
+  needsInvite       Boolean               @default(false)
+  status            DecisionMessageStatus @default(PENDING)
+  attempts          Int                   @default(0)
+  sentAt            DateTime?
+  sentById          String?
+  error             String?
+  providerMessageId String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  batch             DecisionBatch         @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  /// One email per decision, ever: processing the same round again cannot queue
+  /// a second copy.
+  @@unique([applicationId, fromRound, outcome])
+  @@index([batchId, outcome, status])
+  @@map("decision_messages")
 }
 
 // Applicant information a candidate supplies themselves, at signup, when we

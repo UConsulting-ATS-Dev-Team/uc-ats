@@ -42,6 +42,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import DecisionBatchPanel from '../components/communications/DecisionBatchPanel';
 
 const CHANNELS = [
   { key: 'email', label: 'Email' },
@@ -51,7 +52,17 @@ const CHANNELS = [
   { key: 'templates', label: 'Templates' },
   { key: 'logs', label: 'Logs' },
   { key: 'scheduled', label: 'Scheduled' },
+  { key: 'decisions', label: 'Decisions' },
 ];
+
+// Staging links here after processing decisions: ?tab=decisions&batch=<id>.
+// Read from window.location rather than the router so the page still renders
+// outside one, as its smoke test does.
+const readDeepLink = () => {
+  const params = new URLSearchParams(window.location.search);
+  const tabIndex = CHANNELS.findIndex((c) => c.key === params.get('tab'));
+  return { tabIndex: tabIndex >= 0 ? tabIndex : 0, batchId: params.get('batch') };
+};
 
 const APPLICATION_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'ACCEPTED', 'REJECTED', 'WAITLISTED'];
 const INTERVIEW_ROUNDS = ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND'];
@@ -79,7 +90,8 @@ function TabPanel({ children, value, index }) {
 const MasterCommunications = () => {
   const { user } = useAuth();
   const messageRef = useRef(null);
-  const [tab, setTab] = useState(0);
+  const [deepLink] = useState(readDeepLink);
+  const [tab, setTab] = useState(deepLink.tabIndex);
   const [cycles, setCycles] = useState([]);
   const [events, setEvents] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -156,11 +168,15 @@ const MasterCommunications = () => {
     }
   }, [channel, primaryCycle]);
 
+  // Every list here is mapped or filtered during render, so anything that is not
+  // an array becomes an empty one rather than a crash.
+  const asList = (data) => (Array.isArray(data) ? data : []);
+
   const fetchCycles = async () => {
     try {
-      const data = await apiClient.get('/admin/cycles');
-      setCycles(data || []);
-      if (data?.length > 0 && selectedCycles.length === 0) {
+      const data = asList(await apiClient.get('/admin/cycles'));
+      setCycles(data);
+      if (data.length > 0 && selectedCycles.length === 0) {
         const active = data.find((c) => c.isActive);
         setSelectedCycles(active ? [active.id] : [data[0].id]);
       }
@@ -171,8 +187,7 @@ const MasterCommunications = () => {
 
   const fetchEvents = async () => {
     try {
-      const data = await apiClient.get('/admin/events');
-      setEvents(data || []);
+      setEvents(asList(await apiClient.get('/admin/events')));
     } catch (e) {
       setError(e.message || 'Failed to load events');
     }
@@ -180,8 +195,7 @@ const MasterCommunications = () => {
 
   const fetchTemplates = async (cycleId) => {
     try {
-      const data = await apiClient.get(`/master-communications/templates?cycleId=${cycleId}`);
-      setTemplates(data || []);
+      setTemplates(asList(await apiClient.get(`/master-communications/templates?cycleId=${cycleId}`)));
     } catch (e) {
       setError(e.message || 'Failed to load templates');
     }
@@ -189,8 +203,7 @@ const MasterCommunications = () => {
 
   const fetchLogs = async (cycleId) => {
     try {
-      const data = await apiClient.get(`/master-communications/logs?cycleId=${cycleId}`);
-      setLogs(data || []);
+      setLogs(asList(await apiClient.get(`/master-communications/logs?cycleId=${cycleId}`)));
     } catch (e) {
       setError(e.message || 'Failed to load logs');
     }
@@ -198,8 +211,7 @@ const MasterCommunications = () => {
 
   const fetchScheduled = async (cycleId) => {
     try {
-      const data = await apiClient.get(`/master-communications/schedule?cycleId=${cycleId}`);
-      setScheduledMessages(data || []);
+      setScheduledMessages(asList(await apiClient.get(`/master-communications/schedule?cycleId=${cycleId}`)));
     } catch (e) {
       setError(e.message || 'Failed to load scheduled messages');
     }
@@ -1142,6 +1154,13 @@ const MasterCommunications = () => {
           <TabPanel value={tab} index={4}>{renderTemplatesTab()}</TabPanel>
           <TabPanel value={tab} index={5}>{renderLogsTab()}</TabPanel>
           <TabPanel value={tab} index={6}>{renderScheduledTab()}</TabPanel>
+          <TabPanel value={tab} index={7}>
+            <DecisionBatchPanel
+              cycleId={primaryCycle}
+              initialBatchId={deepLink.batchId}
+              userEmail={user?.email}
+            />
+          </TabPanel>
         </Paper>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>

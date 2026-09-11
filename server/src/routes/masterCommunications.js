@@ -16,6 +16,16 @@ import {
   listScheduledMessages,
   cancelScheduledMessage,
 } from '../services/masterCommunications.js';
+import {
+  getDecisionBatch,
+  listDecisionBatches,
+  previewDecisionEmail,
+  requeueFailedDecisionEmails,
+  sendDecisionEmails,
+  sendDecisionTest,
+  setMessagesExcluded,
+  updateDecisionTemplate,
+} from '../services/decisionBatches.js';
 
 const router = express.Router();
 
@@ -105,6 +115,71 @@ router.delete('/drafts/:id', requireAuth, requireAdmin, async (req, res) => {
     res.status(error.status || 500).json({ error: error.message || 'Failed to delete draft' });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Decision emails
+// ---------------------------------------------------------------------------
+// Queued by Process All Decisions on Staging, which sends nothing itself. They
+// leave only from here: an admin reviews one outcome's wording and recipients
+// and approves that send (see services/decisionBatches.js).
+
+const decisionRoute = (label, handler) => async (req, res) => {
+  try {
+    res.json(await handler(req));
+  } catch (error) {
+    if (!error.status) console.error(`[${label}]`, error);
+    res.status(error.status || 500).json({ error: error.message || 'Decision email request failed' });
+  }
+};
+
+router.get('/decision-batches', requireAuth, requireAdmin, decisionRoute(
+  'GET /api/master-communications/decision-batches',
+  (req) => listDecisionBatches({ cycleId: req.query.cycleId })
+));
+
+router.get('/decision-batches/:id', requireAuth, requireAdmin, decisionRoute(
+  'GET /api/master-communications/decision-batches/:id',
+  (req) => getDecisionBatch(req.params.id)
+));
+
+router.patch('/decision-batches/:id/templates', requireAuth, requireAdmin, decisionRoute(
+  'PATCH /api/master-communications/decision-batches/:id/templates',
+  (req) => updateDecisionTemplate({ batchId: req.params.id, ...(req.body || {}) })
+));
+
+router.patch('/decision-batches/:id/messages', requireAuth, requireAdmin, decisionRoute(
+  'PATCH /api/master-communications/decision-batches/:id/messages',
+  (req) => setMessagesExcluded({
+    batchId: req.params.id,
+    messageIds: req.body?.messageIds,
+    excluded: Boolean(req.body?.excluded),
+  })
+));
+
+router.post('/decision-batches/:id/preview', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/preview',
+  (req) => previewDecisionEmail({ batchId: req.params.id, outcome: req.body?.outcome, messageId: req.body?.messageId })
+));
+
+router.post('/decision-batches/:id/test', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/test',
+  (req) => sendDecisionTest({ batchId: req.params.id, outcome: req.body?.outcome, user: req.user })
+));
+
+router.post('/decision-batches/:id/send', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/send',
+  (req) => sendDecisionEmails({
+    batchId: req.params.id,
+    outcome: req.body?.outcome,
+    expectedCount: req.body?.expectedCount,
+    sentBy: req.user.id,
+  })
+));
+
+router.post('/decision-batches/:id/retry', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/retry',
+  (req) => requeueFailedDecisionEmails({ batchId: req.params.id, outcome: req.body?.outcome })
+));
 
 router.get('/logs', requireAuth, requireAdmin, async (req, res) => {
   try {

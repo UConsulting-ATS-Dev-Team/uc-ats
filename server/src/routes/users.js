@@ -186,6 +186,10 @@ router.patch('/:id/role', requireAuth, async (req, res) => {
         createdAt: true, profileImage: true }
     });
 
+    // Without this the old role keeps authorizing requests for up to the cache
+    // TTL - five minutes in which a demoted admin is still an admin.
+    invalidateUserCache(id);
+
     console.log('[PATCH /api/users/:id/role] Role updated successfully:', updatedUser);
     res.json(updatedUser);
   } catch (error) {

@@ -5,8 +5,14 @@ import { getFormQuestions, getResponses } from '../services/google/forms.js';
 import { getGroupMemberUsers, groupMemberUserInclude } from '../utils/groupMembers.js';
 import config from '../config.js';
 import { resolveCycleForRequest } from '../services/activeCycle.js';
+import { applicationParamGuard, redactLockedApplications } from '../utils/lockedRecords.js';
 
 const router = express.Router();
+
+// Every `:id` in this router is an application. A sealed one answers 423, and
+// staff cannot write to their own. Param handlers run when a route matches, so
+// this sees req.user from the router.use(requireAuth) further down.
+router.param('id', applicationParamGuard);
 
 // Test Google Form API connection
 router.get('/test-google-api', async (req, res) => {
@@ -126,6 +132,14 @@ router.get('/test-google-api', async (req, res) => {
 
 // All routes below require authentication
 router.use(requireAuth);
+
+// Staff-only routes that named nothing beyond requireAuth, so any signed-in
+// applicant could call them about anyone's application. Gated here, ahead of the
+// routes themselves. GET /:id stays open to the application's owner.
+router.get('/', requireAdminOrMember);
+router.get('/candidate/:candidateId/latest', requireAdminOrMember);
+router.get('/:id/events', requireAdminOrMember);
+router.all('/:id/referral', requireAdminOrMember);
 
 // Create manual application
 router.post('/manual', requireAdmin, async (req, res) => {
@@ -505,7 +519,7 @@ router.get('/', async (req, res) => {
     // Return with pagination metadata
     const totalPages = Math.ceil(total / limit);
     res.json({
-      data: applicationsWithTeams,
+      data: await redactLockedApplications(req, applicationsWithTeams),
       pagination: {
         page,
         limit,
@@ -797,7 +811,8 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       console.log('Available studentIds in applications table:', allStudentIds.map(app => app.studentId));
     }
 
-    res.json(applications);
+    // A member's own applications are part of their sealed record too.
+    res.json(await redactLockedApplications(req, applications));
   } catch (error) {
     console.error('Error fetching user applications:', error);
     res.status(500).json({ 
@@ -893,8 +908,12 @@ router.get('/:id', async (req, res) => {
       });
     }
 
+    // Comments are staff notes about the applicant. The owner still gets their
+    // application, just without what reviewers wrote about it.
+    const viewerIsStaff = req.user.role === 'ADMIN' || req.user.role === 'MEMBER';
     res.json({
       ...application,
+      comments: viewerIsStaff ? application.comments : [],
       pastApplications
     });
   } catch (error) {
@@ -914,322 +933,6 @@ router.get('/current-user/id', (req, res) => {
   } catch (error) {
     console.error('Error getting user ID:', error);
     res.status(500).json({ error: 'Failed to get user ID' });
-  }
-});
-
-// Save or update grades for an application
-router.post('/:id/grades', requireAuth, async (req, res) => {
-  try {
-    const { id: applicationId } = req.params;
-    const userId = req.user.id;
-    const { resume_grade, video_grade, cover_letter_grade } = req.body;
-
-    // Check if at least one grade is provided
-    if (resume_grade === undefined && video_grade === undefined && cover_letter_grade === undefined) {
-      return res.status(400).json({ 
-        error: 'At least one grade field is required' 
-      });
-    }
-    
-    // Prepare data for upsert
-    const gradeData = {};
-    
-    // Validate and process each grade
-    if (resume_grade !== undefined) {
-      if (resume_grade !== null) {
-        const value = parseInt(resume_grade);
-        if (isNaN(value) || value < 1 || value > 10) {
-          return res.status(400).json({ error: 'Resume grade must be between 1 and 10' });
-        }
-        gradeData.resume = value.toString();
-      } else {
-        gradeData.resume = null;
-      }
-    }
-    
-    if (video_grade !== undefined) {
-      if (video_grade !== null) {
-        const value = parseInt(video_grade);
-        if (isNaN(value) || value < 1 || value > 10) {
-          return res.status(400).json({ error: 'Video grade must be between 1 and 10' });
-        }
-        gradeData.video = value.toString();
-      } else {
-        gradeData.video = null;
-      }
-    }
-    
-    if (cover_letter_grade !== undefined) {
-      if (cover_letter_grade !== null) {
-        const value = parseInt(cover_letter_grade);
-        if (isNaN(value) || value < 1 || value > 10) {
-          return res.status(400).json({ error: 'Cover letter grade must be between 1 and 10' });
-        }
-        gradeData.cover_letter = value.toString();
-      } else {
-        gradeData.cover_letter = null;
-      }
-    }
-
-    // Check if a grade already exists for this user and application
-    const existingGrade = await prisma.grade.findFirst({
-      where: {
-        applicant: applicationId,
-        user: userId
-      }
-    });
-
-    let grade;
-    if (existingGrade) {
-      // Update existing grade
-      grade = await prisma.grade.update({
-        where: { id: existingGrade.id },
-        data: gradeData,
-      });
-    } else {
-      // Create new grade with the provided data
-      grade = await prisma.grade.create({
-        data: {
-          ...gradeData,
-          applicant: applicationId,
-          user: userId,
-        },
-      });
-    }
-    // Get application and user details for the response
-    const [applicationDetails, userDetails] = await Promise.all([
-      prisma.application.findUnique({
-        where: { id: applicationId },
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true
-        }
-      }),
-      prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          fullName: true,
-          email: true, profileImage: true }
-      })
-    ]);
-    
-    res.status(201).json({
-      message: 'Grades saved successfully',
-      grade: {
-        id: grade.id,
-        resume_grade: grade.resume,
-        video_grade: grade.video,
-        cover_letter_grade: grade.cover_letter,
-        createdAt: grade.createdAt,
-        application: applicationDetails,
-        user: userDetails
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error saving grades:', {
-      message: error.message,
-      stack: error.stack,
-      applicationId,
-      userId,
-      grades: req.body
-    });
-    
-    // Return more detailed error information
-    res.status(500).json({ 
-      error: 'Failed to save grades',
-      details: {
-        message: error.message,
-        ...(process.env.NODE_ENV === 'development' && {
-          stack: error.stack,
-          code: error.code,
-          meta: error.meta
-        })
-      }
-    });
-  }
-});
-
-// Get most recent grades for an application and user
-router.get('/:id/grades/latest', requireAuth, async (req, res) => {
-  try {
-    const { id: applicationId } = req.params;
-    const userId = req.user.id;
-
-    // Find the most recent grade for this application and user
-    const latestGrade = await prisma.grade.findFirst({
-      where: {
-        applicant: applicationId,
-        user: userId
-      },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      select: {
-        resume: true,
-        video: true,
-        cover_letter: true,
-        createdAt: true
-      }
-    });
-
-    if (!latestGrade) {
-      return res.status(404).json({ error: 'No grades found for this application and user' });
-    }
-
-    res.json(latestGrade);
-  } catch (error) {
-    console.error('Error fetching latest grades:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch latest grades',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Get average grades for an application
-router.get('/:id/grades/average', requireAuth, async (req, res) => {
-  try {
-    const { id: applicationId } = req.params;
-
-    // Get all grades for this application
-    const grades = await prisma.grade.findMany({
-      where: {
-        applicant: applicationId
-      },
-      select: {
-        resume: true,
-        video: true,
-        cover_letter: true
-      }
-    });
-
-    if (grades.length === 0) {
-      return res.status(404).json({ 
-        error: 'No grades found for this application',
-        averages: {
-          resume: 0,
-          video: 0,
-          cover_letter: 0,
-          total: 0,
-          count: 0
-        }
-      });
-    }
-
-    // Filter out null grades and convert string grades to numbers
-    const resumeGrades = grades
-      .filter(g => g.resume !== null && g.resume !== undefined)
-      .map(g => parseFloat(g.resume));
-      
-    const videoGrades = grades
-      .filter(g => g.video !== null && g.video !== undefined)
-      .map(g => parseFloat(g.video));
-      
-    const coverLetterGrades = grades
-      .filter(g => g.cover_letter !== null && g.cover_letter !== undefined)
-      .map(g => parseFloat(g.cover_letter));
-    
-    // Calculate averages
-    const avgResume = resumeGrades.length > 0 ? 
-      (resumeGrades.reduce((a, b) => a + b, 0) / resumeGrades.length) : 0;
-      
-    const avgVideo = videoGrades.length > 0 ? 
-      (videoGrades.reduce((a, b) => a + b, 0) / videoGrades.length) : 0;
-      
-    const avgCoverLetter = coverLetterGrades.length > 0 ? 
-      (coverLetterGrades.reduce((a, b) => a + b, 0) / coverLetterGrades.length) : 0;
-    
-    // Calculate overall average if at least one grade exists
-    const allGradeValues = [...resumeGrades, ...videoGrades, ...coverLetterGrades];
-    let overallAverage = allGradeValues.length > 0 ? 
-      (allGradeValues.reduce((a, b) => a + b, 0) / allGradeValues.length) : 0;
-
-    // Get application for candidate ID and cycle dates
-    const application = await prisma.application.findUnique({
-      where: { id: applicationId },
-      select: {
-        candidateId: true,
-        studentId: true,
-        cycleId: true,
-        cycle: {
-          select: {
-            startDate: true,
-            endDate: true
-          }
-        }
-      }
-    });
-
-    let eventPointsContribution = 0;
-    
-    if (application && application.candidateId) {
-      // Calculate event points contribution (raw points, not scaled)
-      // Only include events from the current cycle
-      const eventAttendance = await prisma.eventAttendance.findMany({
-        where: {
-          candidateId: application.candidateId,
-          event: {
-            cycleId: application.cycleId
-          }
-        },
-        include: { event: true }
-      });
-
-      const totalEventPoints = eventAttendance.reduce((sum, attendance) => {
-        return sum + (attendance.event.points || 0);
-      }, 0);
-
-      eventPointsContribution = totalEventPoints;
-      overallAverage += eventPointsContribution;
-
-      // Add meeting attendance bonus (1 point for attending "Get to Know UC")
-      // Only count meetings within the current cycle's date range
-      // If the cycle has no start date, we cannot determine which meetings belong to this cycle,
-      // so we don't count any GTKUC attendance to avoid crediting old meetings
-      const cycleStartDate = application.cycle?.startDate ? new Date(application.cycle.startDate) : null;
-      const cycleEndDate = application.cycle?.endDate ? new Date(application.cycle.endDate) : null;
-
-      if (cycleStartDate) {
-        const meetingAttendance = await prisma.meetingSignup.findFirst({
-          where: {
-            studentId: application.studentId,
-            attended: true,
-            slot: {
-              startTime: {
-                gte: cycleStartDate,
-                ...(cycleEndDate && { lte: cycleEndDate })
-              }
-            }
-          }
-        });
-
-        if (meetingAttendance) {
-          overallAverage += 1;
-        }
-      }
-    }
-
-    const averages = {
-      resume: parseFloat(avgResume.toFixed(2)),
-      video: parseFloat(avgVideo.toFixed(2)),
-      cover_letter: parseFloat(avgCoverLetter.toFixed(2)),
-      total: parseFloat(overallAverage.toFixed(2)),
-      count: grades.length,
-      referralBonus: 0, // Referrals no longer contribute to overall score
-      eventPointsContribution: parseFloat(eventPointsContribution.toFixed(2))
-    };
-
-    res.json(averages);
-  } catch (error) {
-    console.error('Error calculating average grades:', error);
-    res.status(500).json({ 
-      error: 'Failed to calculate average grades',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
   }
 });
 

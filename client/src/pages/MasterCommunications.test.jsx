@@ -50,7 +50,25 @@ describe('the page', () => {
     // Order matters: two effects used to key off a hard-coded tab index, so
     // inserting a tab silently repointed them at the wrong one.
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      'Email', 'Slack', 'iMessage', 'Drafts', 'Templates', 'Logs', 'Scheduled',
+      'Email', 'Slack', 'iMessage', 'Drafts', 'Templates', 'Logs', 'Scheduled', 'Decisions',
     ]);
+  });
+
+  it('opens straight onto a decision batch when Staging links to one', async () => {
+    window.history.pushState({}, '', '/master-communications?tab=decisions&batch=batch-1');
+    // Lists come back as lists here: this test waits long enough for the page's
+    // other loads to land, and they expect arrays.
+    apiClient.get.mockImplementation((url) =>
+      Promise.resolve(url.includes('/decision-batches/') ? { id: 'batch-1', roundLabel: 'Final Round Interviews', groups: [] } : [])
+    );
+    try {
+      render(<MasterCommunications />);
+      expect(screen.getByRole('tab', { name: 'Decisions' })).toHaveAttribute('aria-selected', 'true');
+      await waitFor(() =>
+        expect(apiClient.get.mock.calls.some(([url]) => url.endsWith('/decision-batches/batch-1'))).toBe(true)
+      );
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
   });
 });

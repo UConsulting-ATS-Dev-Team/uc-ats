@@ -9,6 +9,7 @@ import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import ClientLayout from './components/ClientLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ExecUnlockProvider } from './context/ExecUnlockContext';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import CandidateManagement from './pages/CandidateManagement';
@@ -620,11 +621,13 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <DataProvider>
-        <CelebrationProvider>
-          <AppRoutes />
-        </CelebrationProvider>
-      </DataProvider>
+      <ExecUnlockProvider>
+        <DataProvider>
+          <CelebrationProvider>
+            <AppRoutes />
+          </CelebrationProvider>
+        </DataProvider>
+      </ExecUnlockProvider>
     </AuthProvider>
   );
 }
