@@ -19,6 +19,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component
@@ -644,7 +645,7 @@ export default function AssignedInterviews() {
               {showBehavioralQuestionsConfig ? (
                 <div className="behavioral-questions-config">
                   <div className="config-instruction">
-                    <p>Configure the behavioral questions for this interview. These questions will be used for all candidates in the selected groups.</p>
+                    <p>Configure the behavioral questions for this interview. These questions are asked of every candidate in the selected groups.</p>
                     {behavioralQuestionsConfig.length > 0 && (
                       <p className="existing-questions-note">
                         <strong>Existing questions:</strong> {behavioralQuestionsConfig.length} question(s) already configured. You can edit them below or add new ones.
@@ -688,6 +689,14 @@ export default function AssignedInterviews() {
                     <PlusIcon className="btn-icon" />
                     {behavioralQuestionsConfig.length === 0 ? 'Add First Question' : 'Add Another Question'}
                   </button>
+
+                  {interviews.find(i => i.id === selectedInterviewForStart)?.interviewType === 'ROUND_ONE' && (
+                    <CandidateQuestionSetup
+                      interviewId={selectedInterviewForStart}
+                      groupIds={selectedGroups}
+                      basePath="/member"
+                    />
+                  )}
                 </div>
               ) : (
                 (() => {

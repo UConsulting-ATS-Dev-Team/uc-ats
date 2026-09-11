@@ -17,7 +17,9 @@ import {
   FormControlLabel,
   Switch,
   CircularProgress,
+  IconButton,
 } from '@mui/material';
+import { Close as CloseIcon } from '@mui/icons-material';
 
 // Confirm/update the candidate-facing GTKUC profile. Rendered as a hard gate on
 // the first timeslot of a cycle (required=true, no dismiss) and as an editable
@@ -68,8 +70,18 @@ export default function GtkucProfileModal({ open, state, required = false, onClo
       fullWidth
       disableEscapeKeyDown={required}
     >
-      <DialogTitle sx={{ fontWeight: 600 }}>
+      <DialogTitle sx={{ fontWeight: 600, pr: 6 }}>
         {required ? 'Confirm your Get to Know UC profile' : 'Edit your Get to Know UC profile'}
+        {/* Always dismissible: the server still refuses new timeslots until the
+            profile is confirmed, so closing only postpones the gate. */}
+        <IconButton
+          aria-label="close"
+          onClick={onClose}
+          disabled={saving}
+          sx={{ position: 'absolute', right: 8, top: 8 }}
+        >
+          <CloseIcon />
+        </IconButton>
       </DialogTitle>
       <DialogContent dividers>
         {required && (

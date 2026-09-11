@@ -13,7 +13,9 @@ import { useExecUnlock } from '../context/ExecUnlockContext';
 import { isRecordLockedError } from '../utils/recordLock';
 import '../styles/ApplicationDetail.css';
 
-export default function ApplicationDetail({ applicationId: propApplicationId, embedded = false }) {
+// readOnly renders a past cycle's record inside the returning-applicant modal:
+// everything visible, nothing writable, and no nested past-applications list.
+export default function ApplicationDetail({ applicationId: propApplicationId, embedded = false, readOnly = false }) {
   const { id: paramId } = useParams();
   const id = propApplicationId || paramId;
   const navigate = useNavigate();
@@ -113,6 +115,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
       const list = await apiClient.get(`/applications/${id}/comments`);
       setComments(list);
       // Scroll to bottom after comments are loaded
+      if (readOnly) return;
       setTimeout(() => {
         if (commentsEndRef.current) {
           commentsEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -322,9 +325,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
       // Refresh the scores
       if (application?.candidateId) {
         await Promise.all([
-          fetchResumeScores(application.candidateId),
-          fetchCoverLetterScores(application.candidateId),
-          fetchVideoScores(application.candidateId)
+          fetchResumeScores(application.candidateId, application.cycleId),
+          fetchCoverLetterScores(application.candidateId, application.cycleId),
+          fetchVideoScores(application.candidateId, application.cycleId)
         ]);
       }
       
@@ -512,7 +515,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 </h1>
                 <span className="applicant-id">ID: {application.id}</span>
               </div>
-              <RecordSealControl candidateId={application.candidateId} />
+              {!readOnly && <RecordSealControl candidateId={application.candidateId} />}
               
               <div className="average-grades-container">
                 {(() => {
@@ -636,15 +639,17 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           </div>
 
           {/* Offer Letter - admin only, only for Final Round accepted candidates */}
-          <OfferLetterSection
-            application={application}
-            comments={comments}
-            isAdmin={isAdmin}
-            onSent={fetchComments}
-          />
+          {!readOnly && (
+            <OfferLetterSection
+              application={application}
+              comments={comments}
+              isAdmin={isAdmin}
+              onSent={fetchComments}
+            />
+          )}
 
           {/* Past Applications Section - only show if there are past applications */}
-          {application.pastApplications && application.pastApplications.length > 0 && (
+          {!readOnly && application.pastApplications && application.pastApplications.length > 0 && (
             <div className="info-section" style={{
               backgroundColor: '#eff6ff',
               border: '1px solid #bfdbfe',
@@ -1108,7 +1113,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                       padding: '40px 20px',
                       fontStyle: 'italic'
                     }}>
-                      No comments yet. Start the conversation!
+                      {readOnly ? 'No comments.' : 'No comments yet. Start the conversation!'}
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -1169,6 +1174,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 </div>
 
                 {/* Input Area */}
+                {!readOnly && (
                 <div style={{ 
                   padding: '16px 20px', 
                   borderTop: '1px solid #e5e7eb',
@@ -1264,6 +1270,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     Press Ctrl+Enter to send
                   </div>
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -1283,7 +1290,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
               Referral Information
             </h3>
-            {!referral && (
+            {!referral && !readOnly && (
               <button
                 onClick={() => setIsReferralModalOpen(true)}
                 style={{
@@ -1315,6 +1322,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   Added {new Date(referral.createdAt).toLocaleDateString()}
                 </div>
               </div>
+              {!readOnly && (
               <button
                 onClick={removeReferral}
                 style={{
@@ -1329,6 +1337,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               >
                 Remove
               </button>
+              )}
             </div>
           ) : (
             <div style={{ color: '#6b7280', fontSize: '0.875rem', fontStyle: 'italic' }}>
@@ -1372,7 +1381,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     setScoreModalOpen(true);
                   }}
                 >
-                  {isAdmin && (
+                  {isAdmin && !readOnly && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1471,7 +1480,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     setScoreModalOpen(true);
                   }}
                 >
-                  {isAdmin && (
+                  {isAdmin && !readOnly && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1570,7 +1579,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     setScoreModalOpen(true);
                   }}
                 >
-                  {isAdmin && (
+                  {isAdmin && !readOnly && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1645,7 +1654,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         <div className="info-section" style={{ marginTop: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 className="section-title">Test For Note (Admin)</h2>
-            {!isEditingTestFor && (
+            {!isEditingTestFor && !readOnly && (
               <button
                 onClick={() => setIsEditingTestFor(true)}
                 style={{
@@ -2856,9 +2865,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               backgroundColor: '#fff',
               borderRadius: '12px',
               padding: '24px',
-              maxWidth: '700px',
-              width: '90%',
-              maxHeight: '85vh',
+              maxWidth: '1400px',
+              width: '95%',
+              maxHeight: '90vh',
               overflow: 'auto'
             }}
             onClick={(e) => e.stopPropagation()}
@@ -2886,181 +2895,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               </button>
             </div>
 
-            {/* Status Badge */}
-            <div style={{ marginBottom: '20px' }}>
-              <span style={{
-                padding: '6px 12px',
-                borderRadius: '9999px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                backgroundColor:
-                  selectedPastApplication.status === 'ACCEPTED' ? '#dcfce7' :
-                  selectedPastApplication.status === 'REJECTED' ? '#fee2e2' :
-                  selectedPastApplication.status === 'WAITLISTED' ? '#fef3c7' :
-                  '#e0e7ff',
-                color:
-                  selectedPastApplication.status === 'ACCEPTED' ? '#166534' :
-                  selectedPastApplication.status === 'REJECTED' ? '#991b1b' :
-                  selectedPastApplication.status === 'WAITLISTED' ? '#92400e' :
-                  '#3730a3'
-              }}>
-                {selectedPastApplication.status.replace('_', ' ')}
-              </span>
-            </div>
-
-            {/* Basic Info */}
-            <div style={{ marginBottom: '20px' }}>
-              <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
-                Application Info
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Submitted</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>
-                    {new Date(selectedPastApplication.submittedAt).toLocaleDateString()}
-                  </div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Email</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>{selectedPastApplication.email}</div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Graduation Year</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>{selectedPastApplication.graduationYear}</div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Major</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>
-                    {selectedPastApplication.major1}
-                    {selectedPastApplication.major2 && `, ${selectedPastApplication.major2}`}
-                  </div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Cumulative GPA</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>{selectedPastApplication.cumulativeGpa}</div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Major GPA</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>
-                    {selectedPastApplication.majorGpa || 'Not provided'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Documents Section */}
-            <div style={{ marginBottom: '20px' }}>
-              <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
-                Documents
-              </h4>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                {selectedPastApplication.resumeUrl && (
-                  <button
-                    onClick={() => {
-                      setPastApplicationModalOpen(false);
-                      setPreview({
-                        open: true,
-                        src: selectedPastApplication.resumeUrl,
-                        kind: 'pdf',
-                        title: `${selectedPastApplication.firstName} ${selectedPastApplication.lastName} – Resume (${selectedPastApplication.cycle?.name || 'Past'})`
-                      });
-                    }}
-                    style={{
-                      padding: '10px 16px',
-                      backgroundColor: '#eff6ff',
-                      color: '#1e40af',
-                      border: '1px solid #bfdbfe',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontWeight: '500',
-                      fontSize: '0.875rem'
-                    }}
-                  >
-                    View Resume
-                  </button>
-                )}
-                {selectedPastApplication.coverLetterUrl && (
-                  <button
-                    onClick={() => {
-                      setPastApplicationModalOpen(false);
-                      setPreview({
-                        open: true,
-                        src: selectedPastApplication.coverLetterUrl,
-                        kind: 'pdf',
-                        title: `${selectedPastApplication.firstName} ${selectedPastApplication.lastName} – Cover Letter (${selectedPastApplication.cycle?.name || 'Past'})`
-                      });
-                    }}
-                    style={{
-                      padding: '10px 16px',
-                      backgroundColor: '#eff6ff',
-                      color: '#1e40af',
-                      border: '1px solid #bfdbfe',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontWeight: '500',
-                      fontSize: '0.875rem'
-                    }}
-                  >
-                    View Cover Letter
-                  </button>
-                )}
-                {selectedPastApplication.videoUrl && (
-                  <button
-                    onClick={() => {
-                      setPastApplicationModalOpen(false);
-                      setPreview({
-                        open: true,
-                        src: selectedPastApplication.videoUrl,
-                        kind: 'video',
-                        title: `${selectedPastApplication.firstName} ${selectedPastApplication.lastName} – Video (${selectedPastApplication.cycle?.name || 'Past'})`
-                      });
-                    }}
-                    style={{
-                      padding: '10px 16px',
-                      backgroundColor: '#f0fdf4',
-                      color: '#166534',
-                      border: '1px solid #bbf7d0',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontWeight: '500',
-                      fontSize: '0.875rem'
-                    }}
-                  >
-                    View Video
-                  </button>
-                )}
-                {!selectedPastApplication.resumeUrl && !selectedPastApplication.coverLetterUrl && !selectedPastApplication.videoUrl && (
-                  <p style={{ color: '#6b7280', fontStyle: 'italic', margin: 0 }}>No documents available</p>
-                )}
-              </div>
-            </div>
-
-            {/* Additional Info */}
-            <div style={{ marginBottom: '20px' }}>
-              <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
-                Additional Details
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Transfer Student</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>
-                    {selectedPastApplication.isTransferStudent ? 'Yes' : 'No'}
-                  </div>
-                </div>
-                <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>First Generation</div>
-                  <div style={{ fontWeight: '500', color: '#374151' }}>
-                    {selectedPastApplication.isFirstGeneration ? 'Yes' : 'No'}
-                  </div>
-                </div>
-                {selectedPastApplication.gender && (
-                  <div style={{ padding: '12px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '4px' }}>Gender</div>
-                    <div style={{ fontWeight: '500', color: '#374151' }}>{selectedPastApplication.gender}</div>
-                  </div>
-                )}
-              </div>
-            </div>
+            {/* The whole record for that cycle - scores, comments and interview
+                evaluations - read-only. Sealed records come back 423 and render
+                the locked placeholder, same as opening them directly. */}
+            <ApplicationDetail
+              key={selectedPastApplication.id}
+              applicationId={selectedPastApplication.id}
+              embedded
+              readOnly
+            />
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e5e7eb' }}>

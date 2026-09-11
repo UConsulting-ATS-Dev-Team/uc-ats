@@ -24,6 +24,7 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
+import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component for Admin
@@ -792,7 +793,7 @@ export default function AdminAssignedInterviews() {
               {showBehavioralQuestionsConfig ? (
                 <div className="behavioral-questions-config">
                   <p className="config-instruction">
-                    Configure the behavioral questions for this interview. All interviewers will see these same questions.
+                    Configure the behavioral questions for this interview. These are asked of every candidate in the selected groups, and all interviewers see them.
                   </p>
                   {behavioralQuestionsConfig.map((question, index) => (
                     <div key={index} className="question-config-row">
@@ -820,6 +821,14 @@ export default function AdminAssignedInterviews() {
                     <PlusIcon className="btn-icon" />
                     Add Question
                   </button>
+
+                  {interviews.find(i => i.id === selectedInterviewForStart)?.interviewType === 'ROUND_ONE' && (
+                    <CandidateQuestionSetup
+                      interviewId={selectedInterviewForStart}
+                      groupIds={selectedGroups}
+                      basePath="/admin"
+                    />
+                  )}
                 </div>
               ) : (
                 (() => {

@@ -75,6 +75,17 @@ describe('InterviewQuestionPanel', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it.each(['COFFEE_CHAT', 'DELIBERATIONS', undefined])('renders nothing for a %s interview', (round) => {
+    const { container } = render(<InterviewQuestionPanel interviewId="int-1" round={round} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it.each(['ROUND_ONE', 'ROUND_TWO', 'FINAL_ROUND'])('offers the question panel in a %s interview', (round) => {
+    render(<InterviewQuestionPanel interviewId="int-1" round={round} />);
+    expect(screen.getByRole('button', { name: 'Interview questions' })).toBeInTheDocument();
+  });
+
   it('stays out of the way until opened, then shows the queued questions with guidance', async () => {
     renderPanel();
     expect(screen.queryByText(mine.prompt)).not.toBeInTheDocument();

@@ -298,6 +298,7 @@ model Application {
   caseAssignments       CaseAssignment[]
   resumeUploads         ResumeUpload[]
   clientAssignments     ClientResumeAssignment[]
+  behavioralQuestions   BehavioralQuestion[]
 
   @@map("applications")
 }
@@ -948,10 +949,14 @@ model BehavioralQuestion {
   createdBy    String
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  // Set: asked of this one candidate only (round one). Null: shared by the group.
+  applicationId String?
   creator      User      @relation(fields: [createdBy], references: [id])
   interview    Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  application  Application? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   @@index([interviewId, groupId])
+  @@index([interviewId, applicationId])
   @@index([interviewId])
   @@index([groupId])
   @@index([createdBy])

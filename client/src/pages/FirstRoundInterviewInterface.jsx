@@ -18,6 +18,8 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
+import CandidateQuestionList from '../components/interview/CandidateQuestionList';
+import useCandidateQuestions from '../hooks/useCandidateQuestions';
 import '../styles/FirstRoundInterviewInterface.css';
 
 export default function FirstRoundInterviewInterface() {
@@ -39,6 +41,10 @@ export default function FirstRoundInterviewInterface() {
   const [behavioralQuestions, setBehavioralQuestions] = useState([]);
   const [timeRemaining, setTimeRemaining] = useState({ minutes: 30, seconds: 0 });
   const [interviewStartTime, setInterviewStartTime] = useState(null);
+
+  // Questions asked of one candidate only. The member routes serve admins too.
+  const applicationIds = useMemo(() => applications.map((application) => application.id), [applications]);
+  const candidateQuestions = useCandidateQuestions(interviewId, applicationIds, '/member');
 
   const decisionOptions = [
     { value: 'YES', label: 'Yes', color: 'green' },
@@ -676,7 +682,8 @@ export default function FirstRoundInterviewInterface() {
     );
   }
 
-  if (behavioralQuestions.length === 0 && currentRotation === 0) {
+  const hasCandidateQuestions = Object.values(candidateQuestions.byApplication).some((list) => list.length > 0);
+  if (behavioralQuestions.length === 0 && currentRotation === 0 && candidateQuestions.loaded && !hasCandidateQuestions) {
     return (
       <div className="first-round-interview-container">
         <div className="error-state">
@@ -689,6 +696,15 @@ export default function FirstRoundInterviewInterface() {
       </div>
     );
   }
+
+  // Shared questions, then one column for each candidate's own questions, then scores.
+  // No shared questions must not emit repeat(0, ...), which invalidates the whole template.
+  const behavioralGridColumns = [
+    '200px',
+    behavioralQuestions.length > 0 ? `repeat(${behavioralQuestions.length}, minmax(300px, 1fr))` : null,
+    'minmax(300px, 1fr)',
+    '120px 120px 120px 100px'
+  ].filter(Boolean).join(' ');
 
   return (
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
@@ -792,7 +808,7 @@ export default function FirstRoundInterviewInterface() {
             className="grid-header"
             style={{
               gridTemplateColumns: currentRotation === 0 
-                ? `200px repeat(${behavioralQuestions.length}, minmax(300px, 1fr)) 120px 120px 120px 100px`
+                ? behavioralGridColumns
                 : currentRotation === 1
                 ? '200px 1fr 120px 120px 120px 100px'
                 : '200px 1fr'
@@ -825,6 +841,11 @@ export default function FirstRoundInterviewInterface() {
                 </div>
               );
             })}
+            {currentRotation === 0 && (
+              <div className="header-cell question-header">
+                <span>Candidate-Specific</span>
+              </div>
+            )}
             {currentRotation === 0 && (
               <>
                 <div className="header-cell scoring-header">Leadership</div>
@@ -867,7 +888,7 @@ export default function FirstRoundInterviewInterface() {
                   className={`grid-row ${colorClass}`}
                   style={{
                     gridTemplateColumns: currentRotation === 0 
-                      ? `200px repeat(${behavioralQuestions.length}, minmax(300px, 1fr)) 120px 120px 120px 100px`
+                      ? behavioralGridColumns
                       : currentRotation === 1
                       ? '200px 1fr 120px 120px 120px 100px'
                       : '200px 200px 1fr'
@@ -968,6 +989,31 @@ export default function FirstRoundInterviewInterface() {
                     );
                   })}
                   
+                  {/* This candidate's own questions */}
+                  {currentRotation === 0 && (
+                    <div className={`grid-cell question-cell ${colorClass}`}>
+                      <div className="question-card">
+                        <CandidateQuestionList
+                          candidateName={application.name}
+                          questions={candidateQuestions.byApplication[application.id] || []}
+                          onAdd={(text) => candidateQuestions.add(application.id, text)}
+                          onUpdate={candidateQuestions.update}
+                          onRemove={candidateQuestions.remove}
+                          renderNotes={(question) => (
+                            <textarea
+                              className="comments-textarea"
+                              value={evaluation.behavioralNotes?.[question.id] || ''}
+                              onChange={(e) => updateBehavioralNotes(application.id, question.id, e.target.value)}
+                              placeholder="Comments"
+                              aria-label={`Notes: ${question.text}`}
+                              rows={4}
+                            />
+                          )}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {/* Behavioral Scoring Columns */}
                   {currentRotation === 0 && (
                     <>
@@ -1152,7 +1198,7 @@ export default function FirstRoundInterviewInterface() {
               }}
             >
               <PlusIcon className="btn-icon" />
-              Add Question
+              Add Question for All Candidates
             </button>
           </div>
         )}

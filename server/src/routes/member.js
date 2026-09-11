@@ -34,6 +34,7 @@ import {
 // active cycle's confirmation so the portal knows whether to force the
 // confirm/update modal before the member can open slots.
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
+import { candidateQuestionHandlers } from '../services/candidateQuestions.js';
 import {
   guardApplication,
   guardCandidate,
@@ -744,7 +745,8 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
         const behavioralQuestions = await prisma.behavioralQuestion.findMany({
           where: {
             interviewId: id,
-            groupId: { in: groupIdArray }
+            groupId: { in: groupIdArray },
+            applicationId: null
           },
           orderBy: { order: 'asc' },
           include: {
@@ -826,7 +828,8 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
       const existingQuestions = await prisma.behavioralQuestion.findMany({
         where: {
           interviewId: id,
-          groupId: groupId
+          groupId: groupId,
+          applicationId: null
         },
         orderBy: { order: 'asc' }
       });
@@ -878,6 +881,7 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
           where: {
             interviewId: id,
             groupId: groupId,
+            applicationId: null,
             order: { gte: filteredQuestions.length }
           }
         });
@@ -1303,6 +1307,16 @@ router.patch('/meeting-signups/:id/attendance', requireAuth, async (req, res) =>
     res.status(500).json({ error: 'Failed to update attendance' });
   }
 });
+
+// Round-one questions for one specific candidate (see services/candidateQuestions.js).
+router.get('/interviews/:id/candidate-questions', requireAuth, requireAdminOrMember, candidateQuestionHandlers.list);
+router.post(
+  '/interviews/:id/candidate-questions',
+  requireAuth, requireAdminOrMember, guardApplication((req) => req.body?.applicationId),
+  candidateQuestionHandlers.create
+);
+router.patch('/interviews/:id/candidate-questions/:questionId', requireAuth, requireAdminOrMember, candidateQuestionHandlers.update);
+router.delete('/interviews/:id/candidate-questions/:questionId', requireAuth, requireAdminOrMember, candidateQuestionHandlers.remove);
 
 // Get applications for interview groups (member version)
 router.get('/interviews/:id/applications', requireAuth, async (req, res) => {

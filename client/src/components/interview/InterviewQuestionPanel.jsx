@@ -24,6 +24,10 @@ const ROUND_LABELS = {
 
 const roundLabel = (round) => ROUND_LABELS[round] || round;
 
+// Question prep only belongs to the structured rounds. ROUND_TWO is the legacy
+// alias of FINAL_ROUND everywhere else in the app, so it keeps the panel too.
+const QUESTION_ROUNDS = new Set(['ROUND_ONE', 'ROUND_TWO', 'FINAL_ROUND']);
+
 // Session questions arrive as a stream of changes, not a snapshot: a ?since poll returns
 // soft-deleted rows too, because those tombstones are the only signal that a co-interviewer
 // removed something. Rows are folded into a Map so the boundary row a `gte` filter re-sends
@@ -255,7 +259,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   const canRemove = (question) =>
     user?.role === 'ADMIN' || question.addedBy === user?.id;
 
-  if (!interviewId) return null;
+  if (!interviewId || !QUESTION_ROUNDS.has(round)) return null;
 
   return (
     <>

@@ -18,6 +18,7 @@ import {
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
 import { isProfileComplete, missingProfileFields } from '../utils/gtkucProfile.js';
+import { candidateQuestionHandlers } from '../services/candidateQuestions.js';
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 import {
   getOfferLetterTemplate,
@@ -2174,7 +2175,8 @@ router.get('/interviews/:id/config', async (req, res) => {
         const behavioralQuestions = await prisma.behavioralQuestion.findMany({
           where: {
             interviewId: id,
-            groupId: { in: groupIdArray }
+            groupId: { in: groupIdArray },
+            applicationId: null
           },
           orderBy: { order: 'asc' },
           include: {
@@ -2264,7 +2266,8 @@ router.patch('/interviews/:id/config', async (req, res) => {
         const existingQuestions = await prisma.behavioralQuestion.findMany({
           where: {
             interviewId: id,
-            groupId: groupId
+            groupId: groupId,
+            applicationId: null
           },
           orderBy: { order: 'asc' }
         });
@@ -2316,6 +2319,7 @@ router.patch('/interviews/:id/config', async (req, res) => {
             where: {
               interviewId: id,
               groupId: groupId,
+              applicationId: null,
               order: { gte: filteredQuestions.length }
             }
           });
@@ -3060,6 +3064,16 @@ router.get('/existing-decisions', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch existing decisions', details: error.message });
   }
 });
+
+// Round-one questions for one specific candidate (see services/candidateQuestions.js).
+router.get('/interviews/:id/candidate-questions', candidateQuestionHandlers.list);
+router.post(
+  '/interviews/:id/candidate-questions',
+  guardApplication((req) => req.body?.applicationId),
+  candidateQuestionHandlers.create
+);
+router.patch('/interviews/:id/candidate-questions/:questionId', candidateQuestionHandlers.update);
+router.delete('/interviews/:id/candidate-questions/:questionId', candidateQuestionHandlers.remove);
 
 // Get applications for interview groups
 router.get('/interviews/:id/applications', async (req, res) => {
@@ -4632,10 +4646,11 @@ router.delete('/applications/:id', async (req, res) => {
 // Admin: list ALL meeting slots (across every member) with host details,
 // signups, and the communications log. Clients compute slot count / attendance
 // rate from this payload (optionally after filtering by cycle client-side).
+// Newest-created first, so a slot someone just opened is at the top of the list.
 router.get('/meeting-slots', async (req, res) => {
   try {
     const slots = await prisma.meetingSlot.findMany({
-      orderBy: { startTime: 'asc' },
+      orderBy: { createdAt: 'desc' },
       include: {
         member: {
           select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true }
