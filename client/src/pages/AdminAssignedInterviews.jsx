@@ -25,6 +25,7 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
+import { applicationsForInterview, roundLabelForInterview, emptyRoundMessage } from '../utils/interviewRounds';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component for Admin
@@ -213,7 +214,6 @@ export default function AdminAssignedInterviews() {
   const [selectedInterviewId, setSelectedInterviewId] = useState(null);
   const [expandedInterviewId, setExpandedInterviewId] = useState(null);
   const [interviewData, setInterviewData] = useState({});
-  const [coffeeChatApplications, setCoffeeChatApplications] = useState([]);
   const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
 
   const [isEditMode, setIsEditMode] = useState(false);
@@ -266,10 +266,6 @@ export default function AdminAssignedInterviews() {
         
         const allApps = apps.status === 'fulfilled' ? apps.value : [];
         setApplications(allApps);
-        // Filter applications for Coffee Chat round
-        // Use status to identify Coffee Chat candidates (UNDER_REVIEW)
-        const coffeeChatApps = allApps.filter(app => app.status === 'UNDER_REVIEW');
-        setCoffeeChatApplications(coffeeChatApps);
         setActiveCycle(cycle.status === 'fulfilled' ? cycle.value : null);
 
         // Initialize interview-specific data for each interview
@@ -1414,8 +1410,10 @@ export default function AdminAssignedInterviews() {
                                   const isCollapsed = collapsedGroups.has(`app-${group.id}`);
                                   const applicationSearchTerm = applicationSearchByGroup[group.id] || '';
                                   
-                                  // Filter applications
-                                  const filteredApplications = coffeeChatApplications.filter(app =>
+                                  // Candidates for this interview's round, not a fixed
+                                  // coffee-chat pool: status goes stale as a cycle advances.
+                                  const roundApplications = applicationsForInterview(applications, interview.interviewType);
+                                  const filteredApplications = roundApplications.filter(app =>
                                     !applicationSearchTerm || app.name?.toLowerCase().includes(applicationSearchTerm.toLowerCase())
                                   );
                                   
@@ -1453,8 +1451,8 @@ export default function AdminAssignedInterviews() {
                                       {!isCollapsed && (
                                         <div className="group-applications-list">
                                           <div className="applications-header">
-                                            <div className="applications-label">Coffee Chat Round Applications:</div>
-                                            {coffeeChatApplications.length > 0 && (
+                                            <div className="applications-label">{roundLabelForInterview(interview.interviewType)}</div>
+                                            {roundApplications.length > 0 && (
                                               <div className="applications-search-wrapper">
                                                 <MagnifyingGlassIcon className="search-icon small" />
                                                 <input
@@ -1467,8 +1465,8 @@ export default function AdminAssignedInterviews() {
                                               </div>
                                             )}
                                           </div>
-                                          {coffeeChatApplications.length === 0 ? (
-                                            <div className="no-applications">No applications in coffee chat round</div>
+                                          {roundApplications.length === 0 ? (
+                                            <div className="no-applications">{emptyRoundMessage(interview.interviewType)}</div>
                                           ) : filteredApplications.length === 0 ? (
                                             <div className="no-applications">No applications match your search</div>
                                           ) : (
