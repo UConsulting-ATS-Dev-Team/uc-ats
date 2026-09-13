@@ -3,6 +3,7 @@ import {
   canonicalGroupIdFor,
   expandGroupIdsForQuestions,
   getRosterForInterview,
+  interviewsAssignedTo,
   parseLegacyConfig,
   resolveGroupIds,
 } from './interviewRoster.js';
@@ -211,5 +212,53 @@ describe('getRosterForInterview', () => {
     const roster = await getRosterForInterview('iv1', client);
     expect(roster.memberGroups).toEqual([]);
     expect(roster.groupAssignments).toEqual({});
+  });
+});
+
+describe('interviewsAssignedTo', () => {
+  const client = (over = {}) => ({
+    interviewSlotAssignment: { findMany: vi.fn().mockResolvedValue(over.slots ?? []) },
+    interviewAssignment: { findMany: vi.fn().mockResolvedValue(over.legacy ?? []) },
+  });
+  const iv = (id, description = null) => ({ id, description });
+
+  it('keeps an interview the member is on a session for', async () => {
+    const c = client({ slots: [{ interviewId: 'iv1' }] });
+    const kept = await interviewsAssignedTo('u1', [iv('iv1'), iv('iv2')], c);
+    expect(kept.map((i) => i.id)).toEqual(['iv1']);
+  });
+
+  it('keeps one from the older assignment table', async () => {
+    // Past cycles were arranged before slots existed; hiding those would take
+    // an interview off a member who genuinely ran it.
+    const c = client({ legacy: [{ interviewId: 'iv2' }] });
+    const kept = await interviewsAssignedTo('u1', [iv('iv1'), iv('iv2')], c);
+    expect(kept.map((i) => i.id)).toEqual(['iv2']);
+  });
+
+  it('keeps one where the member is in a group in the old JSON config', async () => {
+    const blob = JSON.stringify({ memberGroups: [{ id: 'mg1', memberIds: ['u1', 'u9'] }] });
+    const kept = await interviewsAssignedTo('u1', [iv('iv1', blob), iv('iv2')], client());
+    expect(kept.map((i) => i.id)).toEqual(['iv1']);
+  });
+
+  it('drops everything the member is on no part of', async () => {
+    const blob = JSON.stringify({ memberGroups: [{ id: 'mg1', memberIds: ['someone-else'] }] });
+    const kept = await interviewsAssignedTo('u1', [iv('iv1', blob), iv('iv2')], client());
+    expect(kept).toEqual([]);
+  });
+
+  it('ignores an assignment that was removed', async () => {
+    // The query filters removedAt, so a dropped session returns nothing here.
+    const c = client({ slots: [] });
+    expect(await interviewsAssignedTo('u1', [iv('iv1')], c)).toEqual([]);
+    expect(c.interviewSlotAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ removedAt: null }) })
+    );
+  });
+
+  it('handles an interview with nothing to parse', async () => {
+    const kept = await interviewsAssignedTo('u1', [iv('iv1', 'Meet in Covel')], client());
+    expect(kept).toEqual([]);
   });
 });

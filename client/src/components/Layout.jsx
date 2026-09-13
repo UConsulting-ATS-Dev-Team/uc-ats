@@ -158,7 +158,7 @@ const Layout = ({ children }) => {
     ...(user?.role === 'MEMBER' ? [
       { name: 'Document Grading', href: '/document-grading', icon: DocumentTextIcon },
       { name: 'Events', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Interviews', href: '/admin/interviews', icon: UserGroupIcon2 },
+      { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },

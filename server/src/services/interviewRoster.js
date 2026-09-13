@@ -240,3 +240,49 @@ export async function getRosterForInterview(interviewId, client = prisma) {
 
   return { source: 'slots', memberGroups, applicationGroups, groupAssignments };
 }
+
+/**
+ * The interviews a member is actually on.
+ *
+ * Three ways somebody is attached, because the roster moved house mid-cycle and
+ * all three still exist in live data:
+ *
+ *   InterviewSlotAssignment   the current one - a member on a session
+ *   InterviewAssignment       the older table, still populated for past cycles
+ *   memberGroups in the blob  how final round and past cycles were arranged
+ *
+ * Missing any of them would quietly hide an interview a member is genuinely
+ * running, which is worse than showing one too many - so this is deliberately
+ * generous, and the caller decides what to do with the answer.
+ */
+export async function interviewsAssignedTo(userId, interviews, client = prisma) {
+  if (!interviews?.length) return [];
+  const ids = interviews.map((interview) => interview.id);
+
+  const [slotAssignments, legacyAssignments] = await Promise.all([
+    client.interviewSlotAssignment.findMany({
+      where: { userId, removedAt: null, interviewId: { in: ids } },
+      select: { interviewId: true },
+    }),
+    client.interviewAssignment.findMany({
+      where: { userId, interviewId: { in: ids } },
+      select: { interviewId: true },
+    }),
+  ]);
+
+  const assigned = new Set([
+    ...slotAssignments.map((row) => row.interviewId),
+    ...legacyAssignments.map((row) => row.interviewId),
+  ]);
+
+  for (const interview of interviews) {
+    if (assigned.has(interview.id)) continue;
+    const config = parseLegacyConfig(interview);
+    const inAGroup = (config.memberGroups ?? []).some((group) =>
+      (group.memberIds ?? []).includes(userId)
+    );
+    if (inAGroup) assigned.add(interview.id);
+  }
+
+  return interviews.filter((interview) => assigned.has(interview.id));
+}

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, removeResume, storageErrorResponse } from '../services/resumeStorage.js';
+import { interviewsAssignedTo } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -621,24 +622,19 @@ router.get('/interviews', requireAuth, async (req, res) => {
       return res.json([]);
     }
 
-    // Get all interviews for the active cycle
     const interviews = await prisma.interview.findMany({
-      where: {
-        cycleId: activeCycle.id
-      },
-      include: {
-        cycle: true
-      },
+      where: { cycleId: activeCycle.id },
+      include: { cycle: true },
       orderBy: { startDate: 'desc' }
     });
 
-    // Filter interviews to only show those where the current user is assigned
-    // This would need to be based on the interview configuration and member groups
-    // For now, we'll return all interviews and let the frontend handle filtering
-    // In a real implementation, you'd parse the interview description to check
-    // if the current user is in any of the member groups
-    
-    res.json(interviews);
+    // Admins run the round, so they see all of it. A member sees only what they
+    // are on: an interview they are not interviewing for tells them nothing and
+    // exposes a roster of candidates they have no business reading.
+    if (req.user.role === 'ADMIN') {
+      return res.json(interviews);
+    }
+    res.json(await interviewsAssignedTo(userId, interviews));
   } catch (error) {
     console.error('[GET /api/member/interviews]', {
       message: error?.message,
