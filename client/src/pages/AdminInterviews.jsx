@@ -402,6 +402,7 @@ export default function AdminInterviews() {
                         onPlace={handlePlace}
                         onAssignInterviewer={openAssign}
                         onRemoveInterviewer={removeInterviewer}
+                        selfService={active.stats.bookableSessions > 0}
                       />
                     )}
                     {view === 'candidate' && <CandidateSchedulingPreview />}

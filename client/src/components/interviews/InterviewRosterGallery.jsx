@@ -78,9 +78,19 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed,
     >
       <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={0.5}>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={600} noWrap>
-            {fullName(signup.candidate)}
-          </Typography>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            {signup.groupLabel && (
+              <Chip
+                size="small"
+                color="primary"
+                label={signup.groupLabel}
+                sx={{ height: 18, '& .MuiChip-label': { px: 0.6, fontSize: 11, fontWeight: 700 } }}
+              />
+            )}
+            <Typography variant="body2" fontWeight={600} noWrap>
+              {fullName(signup.candidate)}
+            </Typography>
+          </Stack>
           {!compact && (
             <Typography variant="caption" color="text.secondary" noWrap display="block">
               {signup.candidate?.major1}
@@ -275,7 +285,7 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterv
         <>
           <Divider sx={{ my: 1.5 }}>
             <Typography variant="caption" color="text.secondary">
-              Waiting ({waiting.length})
+              Waitlist ({waiting.length})
             </Typography>
           </Divider>
           <Stack spacing={0.75}>
@@ -313,6 +323,7 @@ export default function InterviewRosterGallery({
   onPlace,
   onAssignInterviewer,
   onRemoveInterviewer,
+  selfService = false,
   busy = false,
 }) {
   const [filter, setFilter] = useState('');
@@ -373,6 +384,15 @@ export default function InterviewRosterGallery({
         </Typography>
       </Stack>
 
+      {selfService && (
+        <Alert severity="info" sx={{ mb: 2 }} icon={false}>
+          <strong>Candidates choose their own session.</strong> They pick from the open sessions below;
+          if their first choice is full they are given a spot in another one and waitlisted for the one
+          they wanted, and promoted automatically if it frees up. Everything here is an override for when
+          that needs correcting.
+        </Alert>
+      )}
+
       {needsPlacement.length > 0 && (
         <Alert severity="error" sx={{ mb: 2 }}>
           <AlertTitle>
@@ -427,11 +447,12 @@ export default function InterviewRosterGallery({
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
             <PersonOffIcon fontSize="small" color="disabled" />
             <Typography variant="subtitle2">
-              Not scheduled ({roster.unassigned.length})
+              Haven't booked yet ({roster.unassigned.length})
             </Typography>
           </Stack>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            In this round, but not in any session yet.
+            In this round, but have not picked a session. They normally book themselves — click one only
+            to place them by hand.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
             {roster.unassigned.map((application) => (

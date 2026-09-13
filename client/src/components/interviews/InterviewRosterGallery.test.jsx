@@ -99,7 +99,7 @@ describe('InterviewRosterGallery', () => {
     );
     render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} />);
 
-    expect(screen.getByText('Waiting (1)')).toBeInTheDocument();
+    expect(screen.getByText('Waitlist (1)')).toBeInTheDocument();
     expect(screen.getByText('Holding a seat elsewhere')).toBeInTheDocument();
   });
 
@@ -112,12 +112,14 @@ describe('InterviewRosterGallery', () => {
     expect(screen.getByText(/you can go over\s+capacity/i)).toBeInTheDocument();
   });
 
-  it('lists people in the round who are in no session at all', () => {
+  it('lists people in the round who have not booked yet', () => {
     // The question the old page could not answer: who have we forgotten.
+    // Named for what it is - candidates book themselves, so this is "not yet",
+    // not "not assigned".
     const roster = coffeeChatRoster({ unassigned: [candidate('a9', 'Forgotten', 'Person')] });
     render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} />);
 
-    expect(screen.getByText('Not scheduled (1)')).toBeInTheDocument();
+    expect(screen.getByText("Haven't booked yet (1)")).toBeInTheDocument();
     expect(screen.getByText('Forgotten Person')).toBeInTheDocument();
   });
 
