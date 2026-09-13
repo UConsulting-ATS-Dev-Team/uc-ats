@@ -32,6 +32,7 @@ import clientRoutes from './routes/client.js';
 import talentRoutes from './routes/talent.js';
 import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
 import candidateInterviewSignupRoutes from './routes/candidateInterviewSignups.js';
+import interviewSlotsAdminRoutes from './routes/interviewSlotsAdmin.js';
 import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
@@ -89,6 +90,8 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 // Ahead of the catch-all /api/admin mount, same as release-notes above.
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
+// Before the catch-all admin router so its slot routes are matched first.
+app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
