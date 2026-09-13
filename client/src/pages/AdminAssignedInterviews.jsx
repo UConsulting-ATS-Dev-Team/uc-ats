@@ -26,6 +26,13 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import MemberAvatar from '../components/MemberAvatar';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import { applicationsForInterview, roundLabelForInterview, emptyRoundMessage } from '../utils/interviewRounds';
+import InterviewRosterPanel from '../components/interviews/InterviewRosterPanel';
+
+// Rounds where candidates pick their own time, and a slot therefore is the
+// application group. Everything else keeps the hand-built groups in the legacy
+// Interview.description config - final round is one candidate per group, and
+// past cycles have no slots at all.
+const USES_SLOTS = new Set(['COFFEE_CHAT', 'ROUND_ONE']);
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component for Admin
@@ -1165,6 +1172,27 @@ export default function AdminAssignedInterviews() {
                   {isExpanded && (
                     <div className="interview-expanded-content">
 
+                      {/* The roster, for rounds candidates schedule themselves.
+                          A slot is the group - four candidates at 2:00 - so the
+                          three-layer member-group / application-group /
+                          assignment editor below has nothing left to do here. */}
+                      {USES_SLOTS.has(interview.interviewType) && (
+                        <div className="expanded-section">
+                          <div className="expanded-section-header">
+                            <h3 className="expanded-section-title">Roster</h3>
+                          </div>
+                          <InterviewRosterPanel
+                            interviewId={interview.id}
+                            interviewType={interview.interviewType}
+                          />
+                        </div>
+                      )}
+
+                      {/* Final round and deliberations still schedule by hand,
+                          and every past cycle's roster lives in the old JSON
+                          config, so the group editor stays for them. */}
+                      {!USES_SLOTS.has(interview.interviewType) && (
+                      <>
                       {/* Groups Section */}
                       <div className="expanded-section">
                         <div className="expanded-section-header">
@@ -1539,6 +1567,8 @@ export default function AdminAssignedInterviews() {
                           );
                         })()}
                       </div>
+                      </>
+                      )}
                     </div>
                   )}
                 </div>
