@@ -26,9 +26,8 @@ import {
   AmbiguousApplicationError,
   findOwnApplication,
 } from '../utils/applicationOwnership.js';
-import { MODIFY_CUTOFF_HOURS, canModify } from '../utils/schedulingWindows.js';
-import { interviewTypesForRound } from '../utils/interviewRounds.js';
-import { isCandidateBookable, seatsRemaining } from '../services/interviewSignupPolicy.js';
+import { MODIFY_CUTOFF_HOURS } from '../utils/schedulingWindows.js';
+import { getBookingOptions, getOwnSignups } from '../services/candidateSchedulingView.js';
 import { cancelSignup, claimWithFallback, moveSignup } from '../services/interviewSignups.js';
 import {
   SLOT_NOTIFICATION_SUBJECTS,
@@ -69,126 +68,26 @@ async function resolveOwnApplication(req) {
   return { cycle, application };
 }
 
-/**
- * Shape one slot for a candidate.
- *
- * Deliberately never includes who else is in it. A seat count is necessary -
- * first-come-first-served is unusable if you cannot see what is left - but the
- * roster is not the candidate's business, the same rule the GTKUC endpoints follow.
- */
-const toCandidateSlot = (slot, confirmedCount, ownSignup, now) => ({
-  id: slot.id,
-  label: slot.label,
-  startTime: slot.startTime,
-  endTime: slot.endTime,
-  location: slot.location,
-  capacity: slot.candidateCapacity,
-  seatsRemaining: Math.max(0, seatsRemaining(slot, confirmedCount) ?? 0),
-  isFull: (seatsRemaining(slot, confirmedCount) ?? 0) <= 0,
-  isOpen: isCandidateBookable(slot, now),
-  yourStatus: ownSignup?.slotId === slot.id ? ownSignup.status : null,
-});
-
 // GET /api/my-interview-signups
-// Where the caller currently stands: their seat, their waitlist entry, and
-// whether they can still change it.
+// Where the caller currently stands, and what they can book. Both answers come
+// from services/candidateSchedulingView.js, which the admin preview also calls -
+// so what an admin is shown is literally what the candidate is served.
 router.get('/', async (req, res) => {
   try {
     const { cycle, application } = await resolveOwnApplication(req);
     if (!cycle || !application) return res.json({ signups: [], modifyCutoffHours: MODIFY_CUTOFF_HOURS });
-
-    const signups = await prisma.interviewSlotSignup.findMany({
-      where: {
-        applicationId: application.id,
-        status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] },
-      },
-      include: {
-        slot: { include: { interview: { select: { id: true, title: true, interviewType: true, location: true } } } },
-      },
-      orderBy: { signedUpAt: 'asc' },
-    });
-
-    res.json({
-      modifyCutoffHours: MODIFY_CUTOFF_HOURS,
-      signups: signups.map((signup) => ({
-        id: signup.id,
-        status: signup.status,
-        interview: signup.slot.interview,
-        slot: {
-          id: signup.slot.id,
-          label: signup.slot.label,
-          startTime: signup.slot.startTime,
-          endTime: signup.slot.endTime,
-          location: signup.slot.location || signup.slot.interview.location,
-        },
-        // Computed here rather than in the page, so one rule governs both the
-        // button state and what the server will actually allow.
-        canModify: canModify(signup.slot.startTime),
-      })),
-    });
+    res.json(await getOwnSignups(application.id));
   } catch (error) {
     respondToError(res, error, 'Failed to load your interview times');
   }
 });
 
 // GET /api/my-interview-signups/options
-// The slots this candidate is eligible to book, by interview.
 router.get('/options', async (req, res) => {
   try {
-    const now = new Date();
     const { cycle, application } = await resolveOwnApplication(req);
     if (!cycle || !application) return res.json({ interviews: [] });
-
-    // Eligibility is the round the candidate is sitting in, mapped to the
-    // interview types that serve it - a candidate in round 3 books a ROUND_ONE
-    // interview, never a coffee chat they have already passed.
-    const eligibleTypes = interviewTypesForRound(application.currentRound);
-    if (eligibleTypes.length === 0) return res.json({ interviews: [] });
-
-    const interviews = await prisma.interview.findMany({
-      where: {
-        cycleId: cycle.id,
-        interviewType: { in: eligibleTypes },
-        status: { notIn: ['CANCELLED', 'COMPLETED'] },
-      },
-      orderBy: { startDate: 'asc' },
-      include: { slots: { orderBy: { startTime: 'asc' } } },
-    });
-
-    const slotIds = interviews.flatMap((i) => i.slots.map((s) => s.id));
-    const counts = await prisma.interviewSlotSignup.groupBy({
-      by: ['slotId'],
-      where: { slotId: { in: slotIds }, status: 'CONFIRMED' },
-      _count: { _all: true },
-    });
-    const confirmedBySlot = new Map(counts.map((row) => [row.slotId, row._count._all]));
-
-    const own = await prisma.interviewSlotSignup.findMany({
-      where: {
-        applicationId: application.id,
-        status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] },
-      },
-      select: { id: true, slotId: true, interviewId: true, status: true },
-    });
-    const ownByInterview = new Map(own.map((row) => [row.interviewId, row]));
-
-    res.json({
-      modifyCutoffHours: MODIFY_CUTOFF_HOURS,
-      interviews: interviews
-        .filter((interview) => interview.slots.some((slot) => slot.candidateCapacity != null))
-        .map((interview) => ({
-          id: interview.id,
-          title: interview.title,
-          interviewType: interview.interviewType,
-          location: interview.location,
-          yourSignup: ownByInterview.get(interview.id) ?? null,
-          slots: interview.slots
-            .filter((slot) => slot.candidateCapacity != null)
-            .map((slot) =>
-              toCandidateSlot(slot, confirmedBySlot.get(slot.id) ?? 0, ownByInterview.get(interview.id), now)
-            ),
-        })),
-    });
+    res.json(await getBookingOptions(application, cycle.id));
   } catch (error) {
     respondToError(res, error, 'Failed to load available interview times');
   }

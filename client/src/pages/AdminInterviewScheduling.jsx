@@ -18,6 +18,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewRosterGallery from '../components/interviews/InterviewRosterGallery';
 import InterviewSlotSetup from '../components/interviews/InterviewSlotSetup';
+import CandidateSchedulingPreview from '../components/interviews/CandidateSchedulingPreview';
 
 /**
  * The whole cycle's scheduling, in one place.
@@ -50,6 +51,7 @@ export default function AdminInterviewScheduling() {
   const [toast, setToast] = useState('');
   const [tab, setTab] = useState(0);
   const [setupFor, setSetupFor] = useState(null);
+  const [view, setView] = useState('sessions');
 
   const load = useCallback(async () => {
     try {
@@ -272,13 +274,50 @@ export default function AdminInterviewScheduling() {
                   </Box>
                 )}
 
-                <InterviewRosterGallery
-                  roster={roster}
-                  busy={busy}
-                  onMove={handleMove}
-                  onRemove={handleRemove}
-                  onPlace={handlePlace}
-                />
+                {/* An interview carried over from the old group config has a
+                    roster but no sessions. Converting is one click rather than
+                    a second UI, which is what kept two screens alive. */}
+                {active.stats.sessions === 0 && (
+                  <Alert
+                    severity="info"
+                    sx={{ mb: 2 }}
+                    action={
+                      <Button
+                        size="small"
+                        disabled={busy}
+                        onClick={() =>
+                          Promise.all(
+                            active.interviews.map((i) =>
+                              apiClient.post(`/admin/interviews/${i.id}/adopt-sessions`, {}).catch(() => null)
+                            )
+                          ).then(() => load())
+                        }
+                      >
+                        Convert groups
+                      </Button>
+                    }
+                  >
+                    This round has no sessions. If it was scheduled with the old group editor, convert
+                    those groups into sessions to manage it here.
+                  </Alert>
+                )}
+
+                <Tabs value={view} onChange={(e, next) => setView(next)} sx={{ mb: 2 }}>
+                  <Tab value="sessions" label="Sessions" />
+                  <Tab value="candidate" label="Candidate view" />
+                </Tabs>
+
+                {view === 'sessions' ? (
+                  <InterviewRosterGallery
+                    roster={roster}
+                    busy={busy}
+                    onMove={handleMove}
+                    onRemove={handleRemove}
+                    onPlace={handlePlace}
+                  />
+                ) : (
+                  <CandidateSchedulingPreview />
+                )}
               </>
             )}
           </>

@@ -17,8 +17,14 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { resolveAdminCycle } from '../services/activeCycle.js';
-import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
+import { interviewTypesForRound, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 import { getRound } from '../utils/roundProgression.js';
+import { parseLegacyConfig } from '../services/interviewRoster.js';
+import {
+  EMPTY_REASONS,
+  getBookingOptions,
+  getOwnSignups,
+} from '../services/candidateSchedulingView.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate } from '../services/interviewSignups.js';
 import {
@@ -306,6 +312,199 @@ router.get('/scheduling/overview', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to load the scheduling overview');
+  }
+});
+
+// GET /api/admin/scheduling/preview?applicationId=...
+//
+// Exactly what that candidate is served, produced by the same functions their
+// own page calls. Not a mock-up of it: a preview built from a second query
+// would drift, and a preview that lies is worse than none.
+//
+// Read-only on purpose. This answers "what do they see"; changing anything for
+// them is done through the roster, where it is attributed to an admin.
+router.get('/scheduling/preview', async (req, res) => {
+  try {
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.json({ cycle: null, candidates: [], view: null });
+
+    // Anyone in the cycle, not only those currently in a scheduling round.
+    //
+    // Narrowing this to rounds 2 and 3 made the picker empty the moment a cycle
+    // finished, which is exactly when someone wants to look at what the page
+    // did. Whoever is picked, getBookingOptions answers honestly and
+    // emptyExplanation says why they would see nothing - "not in a scheduling
+    // round" is a useful answer, an empty dropdown is not.
+    const candidates = await prisma.application.findMany({
+      where: { cycleId: cycle.id },
+      select: { id: true, firstName: true, lastName: true, email: true, currentRound: true, status: true },
+      orderBy: [{ currentRound: 'desc' }, { lastName: 'asc' }],
+      take: 500,
+    });
+    // Someone who can actually book leads the list, so the default preview is
+    // the interesting case when there is one.
+    candidates.sort((a, b) => {
+      const live = (x) => (['2', '3'].includes(String(x.currentRound)) && x.status !== 'REJECTED' ? 0 : 1);
+      return live(a) - live(b);
+    });
+
+    const applicationId = req.query.applicationId || candidates[0]?.id || null;
+    if (!applicationId) return res.json({ cycle, candidates, view: null });
+
+    const application = await prisma.application.findUnique({
+      where: { id: applicationId },
+      select: { id: true, firstName: true, lastName: true, email: true, currentRound: true, cycleId: true },
+    });
+    if (!application) return res.status(404).json({ error: 'Candidate not found' });
+
+    const [mine, options] = await Promise.all([
+      getOwnSignups(application.id),
+      getBookingOptions(application, cycle.id),
+    ]);
+
+    res.json({
+      cycle: { id: cycle.id, name: cycle.name },
+      candidates,
+      application,
+      view: { ...mine, ...options },
+      // Spelled out rather than left as an empty list, so an admin knows whether
+      // the page is empty because of the candidate or because of the setup.
+      emptyReason: options.reason,
+      emptyExplanation: options.reason ? EMPTY_REASONS[options.reason] : null,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to build the candidate preview');
+  }
+});
+
+// PATCH /api/admin/scheduling/rounds/:round/signup-window   { opensAt, closesAt }
+// Open or close candidate signup for a whole round at once. Doing this session
+// by session across three interviews is how a block gets left shut by mistake.
+router.patch('/scheduling/rounds/:round/signup-window', async (req, res) => {
+  try {
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.status(409).json({ error: 'There is no active cycle' });
+
+    const types = interviewTypesForRound(req.params.round);
+    if (types.length === 0) return res.status(400).json({ error: 'Not a scheduling round' });
+
+    const opensAt = req.body?.opensAt === null ? null : parseTime(req.body?.opensAt);
+    const closesAt = req.body?.closesAt === null ? null : parseTime(req.body?.closesAt);
+    if (opensAt === undefined || closesAt === undefined) {
+      return res.status(400).json({ error: 'Those dates are not valid' });
+    }
+
+    const interviews = await prisma.interview.findMany({
+      where: { cycleId: cycle.id, interviewType: { in: types } },
+      select: { id: true },
+    });
+
+    const { count } = await prisma.interviewSlot.updateMany({
+      where: { interviewId: { in: interviews.map((i) => i.id) } },
+      data: {
+        ...(req.body?.opensAt !== undefined ? { signupOpensAt: opensAt } : {}),
+        ...(req.body?.closesAt !== undefined ? { signupClosesAt: closesAt } : {}),
+      },
+    });
+    res.json({ updated: count });
+  } catch (error) {
+    fail(res, error, 'Failed to update the signup window');
+  }
+});
+
+// POST /api/admin/interviews/:id/adopt-sessions
+//
+// Turn this interview's hand-built groups into real sessions.
+//
+// The point is to end the two-mode split. Final round and past cycles kept the
+// old JSON group editor purely because they had no slots, which meant two
+// different screens for the same job and a permanent "which page do I use"
+// question. Adopting converts a group into a session with its candidates, after
+// which one screen handles everything.
+//
+// Sessions are created closed to signup (no seat count). An existing roster is
+// not an invitation to let candidates rebook it - opening signup is a separate,
+// deliberate act.
+router.post('/interviews/:id/adopt-sessions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const interview = await prisma.interview.findUnique({
+      where: { id },
+      select: { id: true, description: true, startDate: true, endDate: true, createdAt: true,
+        slots: { select: { legacyGroupId: true } } },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const config = parseLegacyConfig(interview);
+    const groups = config.applicationGroups ?? [];
+    if (groups.length === 0) {
+      return res.status(409).json({ error: 'This interview has no groups to convert', code: 'NO_GROUPS' });
+    }
+
+    // Invert groupAssignments so a group can find its interviewers.
+    const membersByGroup = new Map();
+    for (const [memberGroupId, appGroupIds] of Object.entries(config.groupAssignments ?? {})) {
+      const memberGroup = (config.memberGroups ?? []).find((g) => g.id === memberGroupId);
+      if (!memberGroup) continue;
+      for (const appGroupId of appGroupIds ?? []) {
+        membersByGroup.set(appGroupId, [
+          ...(membersByGroup.get(appGroupId) ?? []),
+          ...(memberGroup.memberIds ?? []),
+        ]);
+      }
+    }
+
+    const already = new Set(interview.slots.map((s) => s.legacyGroupId).filter(Boolean));
+    let created = 0;
+
+    for (const group of groups) {
+      if (already.has(group.id)) continue;
+      const applicationIds = [...new Set(group.applicationIds ?? [])];
+      const memberIds = [...new Set(membersByGroup.get(group.id) ?? [])];
+
+      await prisma.$transaction(async (tx) => {
+        const slot = await tx.interviewSlot.create({
+          data: {
+            interviewId: id,
+            legacyGroupId: group.id,
+            label: group.name || 'Session',
+            notes: group.notes || null,
+            startTime: interview.startDate,
+            endTime: interview.endDate,
+            candidateCapacity: null,
+          },
+        });
+        for (const applicationId of applicationIds) {
+          // The partial unique index would reject a second confirmed seat, and a
+          // group listing someone twice is an artefact rather than an intent.
+          const existing = await tx.interviewSlotSignup.findFirst({
+            where: { interviewId: id, applicationId, status: 'CONFIRMED' },
+            select: { id: true },
+          });
+          if (existing) continue;
+          await tx.interviewSlotSignup.create({
+            data: {
+              slotId: slot.id,
+              interviewId: id,
+              applicationId,
+              status: 'CONFIRMED',
+              signedUpAt: interview.createdAt,
+              placedById: req.user.id,
+            },
+          });
+        }
+        for (const userId of memberIds) {
+          await tx.interviewSlotAssignment.create({
+            data: { slotId: slot.id, interviewId: id, userId },
+          });
+        }
+        created += 1;
+      });
+    }
+
+    res.json({ created, skipped: groups.length - created });
+  } catch (error) {
+    fail(res, error, 'Failed to convert those groups');
   }
 });
 
