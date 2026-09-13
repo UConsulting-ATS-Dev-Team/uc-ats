@@ -18,6 +18,72 @@ Legend: **A** = admin, **C** = candidate, **M** = member.
 
 ---
 
+# The 20-minute pass
+
+One continuous story that touches every part of the feature. Do this first. If
+all 14 steps behave, the feature works; the section-by-section matrix further
+down is for pinning down anything that did not.
+
+**The trick that makes it quick: one seat per block.** Two blocks of 1 seat and
+three candidates is enough to produce a full session, a waitlist, a promotion
+and an overflow — no need to invent forty people.
+
+### Set up (2 minutes)
+
+- One **Coffee Chat** interview in the active cycle, on a day **3+ days out**.
+- Three candidate logins whose applications are in **round 2** (`currentRound = 2`).
+- Keep the admin roster open in one tab and a candidate in another.
+
+### The pass
+
+| # | Who | Do this | Expect |
+|---|---|---|---|
+| 1 | **A** | Assigned Interviews → expand the coffee chat → **Named blocks**, pick the day, set **both blocks to 1 seat**, Create | Two columns: Morning `0 / 1`, Afternoon `0 / 1` |
+| 2 | **C1** | Interview Scheduling → Book **Morning** | Confirmed. Email arrives naming the block and time |
+| 3 | **C2** | Book **Morning** (now full) | Told they were booked into the next session **and** waitlisted for Morning. Banner leads with *"You have a confirmed spot"* |
+| 4 | **C3** | Book **Morning** | Told **recruitment has been notified** — not a dead end, not a silent queue. Recruitment inbox gets an alert |
+| 5 | **A** | Refresh roster | Morning `1 / 1` (C1) with C2 in its **Waiting** tray marked *"Holding a seat elsewhere"*; Afternoon `1 / 1` (C2); red band at top for C3 |
+| 6 | **C1** | Cancel their booking | Cancels cleanly |
+| 7 | **A** | Refresh roster | **C2 has been promoted into Morning automatically**, and their Afternoon card is gone. C2 gets an email. No admin action was needed |
+| 8 | **A** | Look at C3 | Still in the red band, and Afternoon is now empty. **This is expected** — see the note below |
+| 9 | **A** | Drag C3 into **Afternoon** | Moves immediately; red band clears; C3 gets an email |
+| 10 | **A** | Drag C3 into **Morning** (full) | *"This session is full"* dialog naming the counts. Press **Move anyway** |
+| 11 | **A** | Reload the page | Morning shows an **Over capacity** warning — it is a state, not a one-time toast |
+| 12 | **A** | Visit `/api/admin/interviews/<id>/roster/integrity` | `"ok": true`, with the overfill listed as **info** because an admin did it deliberately |
+| 13 | **M** | Member Dashboard → bottom → sign up to run a session, then try one that **overlaps** it | First succeeds; the overlapping one is refused |
+| 14 | **A** | Expand a **Final Round** interview | The **old** group editor, untouched. Nothing about final round changed |
+
+### The one thing that will look like a bug and is not
+
+At step 8, C3 is unscheduled **while Afternoon has an empty seat**.
+
+That is by design, and it is worth understanding before you report it. The
+waitlist is per-session: C3 asked for Morning, so their request is queued
+against Morning. When C2 vacated *Afternoon*, the system drained Afternoon's own
+queue, which was empty. C3 was never waiting for Afternoon.
+
+The design decision you made is that nobody is auto-placed into a session they
+did not ask for — recruitment is emailed and a human decides. Step 9 is that
+decision. If you would rather the system sweep unplaced candidates into any free
+seat, that is a small change to `drainWaitlist`, and worth saying so now.
+
+Note also that the integrity check does **not** flag this, because an empty seat
+plus an unplaced candidate is a deliberate state rather than a broken invariant.
+The red band is the thing that tells you.
+
+### Two more worth 60 seconds
+
+- **Time zone.** The time on the candidate page, in the email, and in the admin
+  gallery must be the **same Pacific time**. Most worth checking if your machine
+  is not on Pacific.
+- **Behavioural questions.** Add some to a first-round session, leave the page,
+  come back. They must still be there — this is the one regression that fails
+  silently.
+
+---
+
+# Full matrix
+
 ## 1. Creating sessions
 
 | # | Do this | Expect |
