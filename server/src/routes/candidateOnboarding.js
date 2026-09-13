@@ -28,6 +28,9 @@ import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
+// An external talent account is role USER too, but has no Candidate row and its
+// own portal, so role alone is not enough to tell the two apart.
+import { requireCandidate } from '../middleware/requireCandidate.js';
 import {
   sanitizeOnboardingInput,
   sanitizeOnboardingUpdate,
@@ -79,16 +82,6 @@ function uploadMiddleware(req, res, next) {
     return res.status(400).json({ error: err.message || 'Invalid file upload' });
   });
 }
-
-// An external talent account is role USER too, but it has no Candidate row and
-// its own portal. Without this it would fall through to a 404 on the candidate
-// lookup below, which reads as a bug rather than as "wrong door".
-const requireCandidate = (req, res, next) => {
-  if (req.user?.role !== 'USER' || req.user?.isExternalTalent === true) {
-    return res.status(403).json({ error: 'Candidate access required' });
-  }
-  next();
-};
 
 const requireVerifiedEmail = (req, res, next) => {
   if (!req.user?.emailVerifiedAt) {

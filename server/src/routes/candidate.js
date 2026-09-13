@@ -10,14 +10,11 @@ import {
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Candidate-facing: always the candidate pointer, never the caller's role.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
+// A candidate may cancel or rebook only up to MODIFY_CUTOFF_HOURS before the
+// start time. Shared with interview slot signup so there is one rule, not two.
+import { MODIFY_CUTOFF_HOURS, canModify, hoursUntil } from '../utils/schedulingWindows.js';
 
 const router = express.Router();
-
-// A candidate may cancel or rebook their GTKUC slot only up to this many hours
-// before the slot start time. Inside this window, the booking is locked.
-const MODIFY_CUTOFF_HOURS = 12;
-
-const hoursUntil = (startTime) => (new Date(startTime).getTime() - Date.now()) / (1000 * 60 * 60);
 
 // GET /api/my-meeting-signups
 // Returns the logged-in candidate's upcoming GTKUC signups. Intentionally returns
@@ -54,7 +51,9 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
         location: signup.slot.location,
         startTime: signup.slot.startTime,
         endTime: signup.slot.endTime,
-        canModify: hoursUntil(signup.slot.startTime) >= MODIFY_CUTOFF_HOURS,
+        canModify: canModify(signup.slot.startTime),
+        // Sent so the page can render the rule instead of hardcoding its own copy.
+        modifyCutoffHours: MODIFY_CUTOFF_HOURS,
       }));
 
     res.json(upcoming);

@@ -27,7 +27,11 @@ import {
   LinkedIn as LinkedInIcon,
 } from '@mui/icons-material';
 
-const MODIFY_CUTOFF_HOURS = 12;
+// The cutoff is the server's rule (server/src/utils/schedulingWindows.js), and it
+// arrives on each signup as canModify plus modifyCutoffHours. This page used to
+// keep its own copy of the number, which is fine right up until one of them
+// changes. Fall back only so the sentence still reads if an older payload lands.
+const DEFAULT_MODIFY_CUTOFF_HOURS = 12;
 
 const formatDateTime = (dateTime) => {
   const date = new Date(dateTime);
@@ -240,7 +244,7 @@ export default function CandidateGTKUC() {
             icon={<LockClockIcon fontSize="inherit" />}
             sx={{ mt: 2 }}
           >
-            Changes are locked within {MODIFY_CUTOFF_HOURS} hours of your meeting.
+            Changes are locked within {mySignup.modifyCutoffHours ?? DEFAULT_MODIFY_CUTOFF_HOURS} hours of your meeting.
           </Alert>
         )}
       </CardContent>
