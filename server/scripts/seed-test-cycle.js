@@ -6,6 +6,7 @@
 //   node scripts/seed-test-cycle.js --dry-run       # show the plan
 //   node scripts/seed-test-cycle.js                 # seed it
 //   node scripts/seed-test-cycle.js --size 300      # bigger
+//   node scripts/seed-test-cycle.js --clear-interviews   # keep people, drop interviews
 //   node scripts/seed-test-cycle.js --wipe          # remove everything it made
 //
 // Defaults to the cycle named "Devin Test Cycle"; pass --cycle "<name>" for
@@ -35,6 +36,11 @@ import prisma from '../src/prismaClient.js';
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const wipe = args.includes('--wipe');
+// Candidates are the expensive half to recreate and the boring half to look at.
+// Clearing only the interviews leaves a cycle full of people waiting to be
+// scheduled, which is the state you want in order to build the sessions
+// yourself and watch what happens.
+const clearInterviews = args.includes('--clear-interviews');
 const cycleName = args.includes('--cycle') ? args[args.indexOf('--cycle') + 1] : 'Devin Test Cycle';
 const size = args.includes('--size') ? Number(args[args.indexOf('--size') + 1]) : 180;
 
@@ -90,6 +96,35 @@ async function resolveCycle() {
     throw new Error(`"${cycleName}" holds ${foreign} application(s) this script did not create. Refusing to touch it.`);
   }
   return cycle;
+}
+
+/** Every interview in the cycle and everything hanging off it. Candidates stay. */
+async function removeInterviews(cycle) {
+  const interviews = await prisma.interview.findMany({ where: { cycleId: cycle.id }, select: { id: true, title: true } });
+  const interviewIds = interviews.map((i) => i.id);
+  if (interviewIds.length === 0) {
+    log('No interviews in this cycle.');
+    return;
+  }
+
+  await prisma.interviewSlotNotification.deleteMany({ where: { slot: { interviewId: { in: interviewIds } } } });
+  // heldSeatId points from one signup to another, so break the links first.
+  await prisma.interviewSlotSignup.updateMany({
+    where: { interviewId: { in: interviewIds } },
+    data: { heldSeatId: null },
+  });
+  await prisma.interviewSlotSignup.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interviewSlotAssignment.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interviewSlot.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.behavioralQuestion.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interviewEvaluation.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.firstRoundInterviewEvaluation.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interviewActionItem.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interviewAssignment.deleteMany({ where: { interviewId: { in: interviewIds } } });
+  await prisma.interview.deleteMany({ where: { id: { in: interviewIds } } });
+
+  interviews.forEach((i) => log(`  - ${i.title}`));
+  log(`Removed ${interviewIds.length} interview(s) and every session, signup and assignment on them.`);
 }
 
 async function removeEverything(cycle) {
@@ -156,6 +191,21 @@ function buildPlan(total) {
 async function main() {
   const cycle = await resolveCycle();
   log(`Cycle: ${cycle.name}  (${cycle.id})\n`);
+
+  if (clearInterviews) {
+    const counts = await prisma.interview.count({ where: { cycleId: cycle.id } });
+    const people = await prisma.application.count({
+      where: { cycleId: cycle.id, responseID: { startsWith: MARKER } },
+    });
+    if (dryRun) {
+      log(`DRY RUN: would remove ${counts} interview(s) and keep ${people} candidate(s).`);
+      return;
+    }
+    await removeInterviews(cycle);
+    log(`\n${people} candidate(s) left in place, waiting to be scheduled.`);
+    log('Build the interviews yourself: Interviews → Manage interviews → New interview.');
+    return;
+  }
 
   if (wipe) {
     if (dryRun) {
