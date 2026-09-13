@@ -31,6 +31,7 @@ import {
   PlayArrow as PlayIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
+import InterviewCreateDialog from './InterviewCreateDialog';
 import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
 
 /**
@@ -58,15 +59,6 @@ const INTERFACE_FOR_TYPE = {
 };
 const DEFAULT_INTERFACE = '/admin/interview-interface';
 
-const emptyInterview = {
-  title: '',
-  interviewType: 'COFFEE_CHAT',
-  startDate: '',
-  endDate: '',
-  location: '',
-  dresscode: '',
-};
-
 export default function InterviewManageList({ cycle, onChanged }) {
   const navigate = useNavigate();
   const [interviews, setInterviews] = useState([]);
@@ -76,7 +68,6 @@ export default function InterviewManageList({ cycle, onChanged }) {
   const [error, setError] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [draft, setDraft] = useState(emptyInterview);
   const [startFor, setStartFor] = useState(null);
   const [chosenSessions, setChosenSessions] = useState([]);
   const [questionsFor, setQuestionsFor] = useState(null);
@@ -120,26 +111,6 @@ export default function InterviewManageList({ cycle, onChanged }) {
     }
     return [...groups.entries()];
   }, [interviews]);
-
-  const createInterview = async () => {
-    setBusy(true);
-    try {
-      await apiClient.post('/admin/interviews', {
-        ...draft,
-        startDate: draft.startDate ? new Date(draft.startDate).toISOString() : null,
-        endDate: draft.endDate ? new Date(draft.endDate).toISOString() : null,
-        cycleId: cycle?.id,
-      });
-      setCreateOpen(false);
-      setDraft(emptyInterview);
-      await load();
-      onChanged?.();
-    } catch (e) {
-      setError(e.message || 'Failed to create that interview.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const deleteInterview = async (interview) => {
     if (!window.confirm(`Delete "${interview.title}"? Its sessions and rosters go with it.`)) return;
@@ -321,64 +292,15 @@ export default function InterviewManageList({ cycle, onChanged }) {
         </Box>
       ))}
 
-      {/* Create ------------------------------------------------------- */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>New interview</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField label="Title" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} fullWidth />
-            <TextField
-              select
-              label="Round"
-              value={draft.interviewType}
-              onChange={(e) => setDraft({ ...draft, interviewType: e.target.value })}
-              fullWidth
-            >
-              {['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND', 'DELIBERATIONS'].map((type) => (
-                <MenuItem key={type} value={type}>
-                  {TYPE_LABEL[type]}
-                </MenuItem>
-              ))}
-            </TextField>
-            <Stack direction="row" spacing={2}>
-              <TextField
-                type="datetime-local"
-                label="Starts"
-                value={draft.startDate}
-                onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                fullWidth
-              />
-              <TextField
-                type="datetime-local"
-                label="Ends"
-                value={draft.endDate}
-                onChange={(e) => setDraft({ ...draft, endDate: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                fullWidth
-              />
-            </Stack>
-            <TextField label="Location" value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} fullWidth />
-            <TextField
-              label="Dress code (optional)"
-              value={draft.dresscode}
-              onChange={(e) => setDraft({ ...draft, dresscode: e.target.value })}
-              fullWidth
-            />
-            <Alert severity="info">After creating it, add its sessions from the Sessions view.</Alert>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={createInterview}
-            disabled={busy || !draft.title || !draft.startDate || !draft.endDate || !draft.location}
-          >
-            Create
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <InterviewCreateDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={async () => {
+          setCreateOpen(false);
+          await load();
+          onChanged?.();
+        }}
+      />
 
       {/* Run a session ------------------------------------------------ */}
       <Dialog open={Boolean(startFor)} onClose={() => setStartFor(null)} fullWidth maxWidth="sm">

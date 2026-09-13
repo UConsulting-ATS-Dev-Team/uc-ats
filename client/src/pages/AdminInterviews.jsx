@@ -6,6 +6,13 @@ import {
   Chip,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  List,
+  ListItemButton,
+  ListItemText,
   Paper,
   Snackbar,
   Stack,
@@ -75,6 +82,8 @@ export default function AdminInterviews() {
   const [tab, setTab] = useState(0);
   const [view, setView] = useState('sessions');
   const [setupFor, setSetupFor] = useState(null);
+  const [assignFor, setAssignFor] = useState(null);
+  const [staff, setStaff] = useState([]);
 
   useEffect(() => {
     try {
@@ -102,6 +111,29 @@ export default function AdminInterviews() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Loaded once, lazily: the assign picker is the only thing that needs it.
+  const openAssign = async (slot) => {
+    setAssignFor(slot);
+    if (staff.length === 0) {
+      try {
+        setStaff(await apiClient.get('/admin/interviews/staff'));
+      } catch {
+        setStaff([]);
+      }
+    }
+  };
+
+  const assignInterviewer = (userId) =>
+    run(
+      () => apiClient.post(`/admin/interviews/slots/${assignFor.id}/interviewers`, { userId }),
+      'Assigned.'
+    )
+      .then(() => setAssignFor(null))
+      .catch(() => {});
+
+  const removeInterviewer = (interviewer) =>
+    run(() => apiClient.delete(`/admin/interviews/slot-assignments/${interviewer.id}`), 'Removed.').catch(() => {});
 
   const rounds = data?.rounds ?? [];
   const active = rounds[tab] ?? null;
@@ -368,6 +400,8 @@ export default function AdminInterviews() {
                         onMove={handleMove}
                         onRemove={handleRemove}
                         onPlace={handlePlace}
+                        onAssignInterviewer={openAssign}
+                        onRemoveInterviewer={removeInterviewer}
                       />
                     )}
                     {view === 'candidate' && <CandidateSchedulingPreview />}
@@ -380,6 +414,30 @@ export default function AdminInterviews() {
             {rounds.length === 0 && <InterviewManageList cycle={data?.cycle} onChanged={load} />}
           </>
         )}
+
+        {/* Who runs a session. For first round this is the whole point: an
+            interviewer assigned here sees these candidates and no others. */}
+        <Dialog open={Boolean(assignFor)} onClose={() => setAssignFor(null)} fullWidth maxWidth="xs">
+          <DialogTitle>Assign an interviewer</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {assignFor?.label || 'This session'} — they will see only the candidates in the sessions
+              they are on.
+            </Typography>
+            <List dense>
+              {staff
+                .filter((person) => !(assignFor?.interviewers ?? []).some((i) => i.user.id === person.id))
+                .map((person) => (
+                  <ListItemButton key={person.id} onClick={() => assignInterviewer(person.id)}>
+                    <ListItemText primary={person.fullName} secondary={person.role} />
+                  </ListItemButton>
+                ))}
+            </List>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setAssignFor(null)}>Close</Button>
+          </DialogActions>
+        </Dialog>
 
         <Snackbar open={Boolean(toast)} autoHideDuration={5000} onClose={() => setToast('')} message={toast} />
       </Container>

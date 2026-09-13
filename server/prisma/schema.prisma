@@ -866,6 +866,14 @@ model InterviewSlotSignup {
   applicationId String
 
   status       InterviewSlotSignupStatus @default(CONFIRMED)
+  /// Which rotation group this candidate is in, within their session.
+  ///
+  /// Coffee chats run as a rotation: a session holds forty people, who move
+  /// between interviewer tables in pairs labelled 1A, 1B, 2A and so on. At a
+  /// table the interviewer asks which group they are and pulls up exactly those
+  /// candidates, so the label is what identifies a pair - not an id anybody
+  /// types. Null for first round, where the session IS the group.
+  groupLabel   String?
   signedUpAt   DateTime                  @default(now())
   /// FCFS ordering key for promotion. Set only on WAITLISTED rows.
   waitlistedAt DateTime?
@@ -902,6 +910,7 @@ model InterviewSlotSignup {
   /// something and one that fires on unrelated rows.
   @@index([slotId, status])
   @@index([slotId, status, waitlistedAt])
+  @@index([slotId, groupLabel])
   @@index([interviewId, status])
   @@index([applicationId, status])
   @@map("interview_slot_signups")

@@ -51,6 +51,25 @@ export async function resolveGroupIds(interviewId, groupIds, client = prisma) {
     .filter(Boolean);
   if (ids.length === 0) return [];
 
+  // "<slotId>:<label>" addresses one rotation group inside a session - the 1A
+  // an interviewer is handed at their table. The plain form addresses the whole
+  // session. Both are legal because this contract has always been opaque.
+  const applicationIds = new Set();
+  const matched = new Set();
+  const rotationIds = ids.filter((id) => id.includes(':'));
+
+  for (const id of rotationIds) {
+    const [slotId, label] = id.split(':');
+    const rows = await client.interviewSlotSignup.findMany({
+      where: { slotId, groupLabel: label, status: 'CONFIRMED' },
+      select: { applicationId: true },
+    });
+    if (rows.length > 0) {
+      matched.add(id);
+      for (const row of rows) applicationIds.add(row.applicationId);
+    }
+  }
+
   const slots = await client.interviewSlot.findMany({
     where: {
       interviewId,
@@ -66,8 +85,6 @@ export async function resolveGroupIds(interviewId, groupIds, client = prisma) {
     },
   });
 
-  const applicationIds = new Set();
-  const matched = new Set();
   for (const slot of slots) {
     matched.add(slot.id);
     if (slot.legacyGroupId) matched.add(slot.legacyGroupId);

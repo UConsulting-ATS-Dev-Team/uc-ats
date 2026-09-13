@@ -20,6 +20,7 @@ import { resolveAdminCycle } from '../services/activeCycle.js';
 import { interviewTypesForRound, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 import { getRound } from '../utils/roundProgression.js';
 import { parseLegacyConfig } from '../services/interviewRoster.js';
+import { combine, planSessions } from '../services/slotPlanner.js';
 import {
   EMPTY_REASONS,
   getBookingOptions,
@@ -131,6 +132,7 @@ router.get('/interviews/:id/roster', async (req, res) => {
           applicationId: signup.applicationId,
           signedUpAt: signup.signedUpAt,
           waitlistedAt: signup.waitlistedAt,
+          groupLabel: signup.groupLabel,
           // The cross-column relationship the two-block view most needs to make
           // legible: this person is waiting here but holds a seat over there.
           heldSeatId: signup.heldSeatId,
@@ -251,6 +253,7 @@ router.get('/scheduling/overview', async (req, res) => {
               applicationId: signup.applicationId,
               slotId: signup.slotId,
               waitlistedAt: signup.waitlistedAt,
+              groupLabel: signup.groupLabel,
               heldSeatId: signup.heldSeatId,
               movedById: signup.movedById,
               candidate: signup.application,
@@ -505,6 +508,259 @@ router.post('/interviews/:id/adopt-sessions', async (req, res) => {
     res.json({ created, skipped: groups.length - created });
   } catch (error) {
     fail(res, error, 'Failed to convert those groups');
+  }
+});
+
+// POST /api/admin/interviews/with-sessions
+//
+// Create an interview and the sessions it runs, in one go.
+//
+// Separately was the wrong shape: an interview with no sessions is not a thing
+// anybody wants, and making it in two steps meant creating one and then hunting
+// for where sessions live. Doing both in one transaction also means a bad
+// schedule fails before an empty interview exists.
+router.post('/interviews/with-sessions', async (req, res) => {
+  try {
+    const { title, interviewType, location, dresscode, day, sessions } = req.body ?? {};
+    if (!title || !interviewType || !location || !day) {
+      return res.status(400).json({ error: 'A title, round, day and location are required' });
+    }
+
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.status(409).json({ error: 'There is no active cycle' });
+
+    let rows;
+    try {
+      rows = planSessions({ day, ...(sessions ?? {}) });
+    } catch (planError) {
+      // The schedule is the part people get wrong, so its complaint is the
+      // one worth showing verbatim.
+      return res.status(400).json({ error: planError.message });
+    }
+
+    // The interview spans its sessions. With none, fall back to the whole day,
+    // which is what Interview.startDate/endDate meant before slots existed.
+    const startDate = rows.length ? new Date(Math.min(...rows.map((r) => r.startTime))) : combine(day, '09:00');
+    const endDate = rows.length ? new Date(Math.max(...rows.map((r) => r.endTime))) : combine(day, '17:00');
+
+    const interview = await prisma.interview.create({
+      data: {
+        title,
+        interviewType,
+        location,
+        dresscode: dresscode || null,
+        startDate,
+        endDate,
+        cycleId: cycle.id,
+        createdBy: req.user.id,
+        slots: { create: rows },
+      },
+      include: { slots: { orderBy: { startTime: 'asc' } } },
+    });
+
+    res.status(201).json(interview);
+  } catch (error) {
+    fail(res, error, 'Failed to create that interview');
+  }
+});
+
+// POST /api/admin/interviews/slots/:slotId/interviewers   { userId, role }
+// Put a member on a session. First round is the case that needs it: an
+// interviewer assigned to a session sees those candidates and no others.
+router.post('/interviews/slots/:slotId/interviewers', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { userId, role } = req.body ?? {};
+    if (!userId) return res.status(400).json({ error: 'A member is required' });
+
+    const slot = await prisma.interviewSlot.findUnique({
+      where: { id: slotId },
+      select: { id: true, interviewId: true },
+    });
+    if (!slot) return res.status(404).json({ error: 'Session not found' });
+
+    // Re-activate a previous assignment rather than stacking a second row, so
+    // removing and re-adding somebody does not litter the audit trail.
+    const existing = await prisma.interviewSlotAssignment.findFirst({
+      where: { slotId, userId },
+      select: { id: true, removedAt: true },
+    });
+    if (existing) {
+      if (!existing.removedAt) return res.status(409).json({ error: 'They are already on this session' });
+      const revived = await prisma.interviewSlotAssignment.update({
+        where: { id: existing.id },
+        data: { removedAt: null, removedBy: null, role: role || 'INTERVIEWER' },
+      });
+      return res.json(revived);
+    }
+
+    const assignment = await prisma.interviewSlotAssignment.create({
+      data: { slotId, interviewId: slot.interviewId, userId, role: role || 'INTERVIEWER' },
+    });
+    res.status(201).json(assignment);
+  } catch (error) {
+    fail(res, error, 'Failed to assign that member');
+  }
+});
+
+// DELETE /api/admin/interviews/slot-assignments/:id
+router.delete('/interviews/slot-assignments/:id', async (req, res) => {
+  try {
+    await prisma.interviewSlotAssignment.update({
+      where: { id: req.params.id },
+      // Soft delete: who was meant to run a session, and who came off it, is
+      // worth keeping when one turns out to have been unstaffed.
+      data: { removedAt: new Date(), removedBy: req.user.id },
+    });
+    res.json({ removed: true });
+  } catch (error) {
+    fail(res, error, 'Failed to remove that member');
+  }
+});
+
+// PATCH /api/admin/interviews/:id
+// Edit the interview itself. Dates, location, title - all of it changes, and
+// usually after everything else has been built around it.
+router.patch('/interviews/:id', async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const data = {};
+    for (const field of ['title', 'location', 'dresscode', 'interviewType', 'status']) {
+      if (body[field] !== undefined) data[field] = body[field] || null;
+    }
+    for (const field of ['startDate', 'endDate']) {
+      if (body[field] === undefined) continue;
+      const parsed = parseTime(body[field]);
+      if (parsed === undefined) return res.status(400).json({ error: `${field} is not a valid date` });
+      data[field] = parsed;
+    }
+    if (data.startDate && data.endDate && data.endDate <= data.startDate) {
+      return res.status(400).json({ error: 'The end time must be after the start time' });
+    }
+
+    const interview = await prisma.interview.update({ where: { id: req.params.id }, data });
+
+    // Moving the interview does not move its sessions: those carry their own
+    // times and are what candidates actually booked. Say so rather than
+    // silently doing one or the other.
+    const sessions = await prisma.interviewSlot.count({ where: { interviewId: interview.id } });
+    res.json({ ...interview, sessionCount: sessions });
+  } catch (error) {
+    fail(res, error, 'Failed to update that interview');
+  }
+});
+
+// POST /api/admin/interviews/:id/reschedule   { day, shiftMinutes }
+// Move every session of an interview at once - the "it is a week later now"
+// case, which is otherwise editing twenty sessions by hand.
+router.post('/interviews/:id/reschedule', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { day, shiftMinutes } = req.body ?? {};
+    const slots = await prisma.interviewSlot.findMany({ where: { interviewId: id } });
+    if (slots.length === 0) return res.status(409).json({ error: 'This interview has no sessions to move' });
+
+    const shift = (date) => {
+      if (Number.isFinite(Number(shiftMinutes)) && Number(shiftMinutes) !== 0) {
+        return new Date(date.getTime() + Number(shiftMinutes) * 60000);
+      }
+      if (!day) return date;
+      // Keep the wall-clock time, change the date: "same schedule, next Tuesday".
+      const target = new Date(`${day}T00:00:00`);
+      if (Number.isNaN(target.getTime())) return null;
+      target.setHours(date.getHours(), date.getMinutes(), 0, 0);
+      return target;
+    };
+
+    const updates = [];
+    for (const slot of slots) {
+      const startTime = shift(slot.startTime);
+      const endTime = shift(slot.endTime);
+      if (!startTime || !endTime) return res.status(400).json({ error: 'That day is not valid' });
+      updates.push(prisma.interviewSlot.update({ where: { id: slot.id }, data: { startTime, endTime } }));
+    }
+    await prisma.$transaction(updates);
+
+    const moved = await prisma.interviewSlot.findMany({ where: { interviewId: id }, orderBy: { startTime: 'asc' } });
+    await prisma.interview.update({
+      where: { id },
+      data: {
+        startDate: moved[0].startTime,
+        endDate: moved[moved.length - 1].endTime,
+      },
+    });
+    res.json({ moved: moved.length });
+  } catch (error) {
+    fail(res, error, 'Failed to reschedule that interview');
+  }
+});
+
+// POST /api/admin/interviews/slots/:slotId/groups   { size }
+//
+// Split a session's candidates into rotation groups - 1A, 1B, 2A - which is how
+// a coffee chat actually runs. Pairs move between tables together, and at a
+// table the interviewer asks for the group rather than for names.
+router.post('/interviews/slots/:slotId/groups', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const size = Math.max(1, Number(req.body?.size ?? 2));
+
+    const signups = await prisma.interviewSlotSignup.findMany({
+      where: { slotId, status: 'CONFIRMED' },
+      orderBy: { signedUpAt: 'asc' },
+      select: { id: true },
+    });
+    if (signups.length === 0) return res.status(409).json({ error: 'Nobody is in this session yet' });
+
+    // 1A 1B / 2A 2B: the number is the table rotation, the letter the pair
+    // within it. Both are said out loud, so both stay short.
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const updates = signups.map((signup, index) => {
+      const round = Math.floor(index / (size * 2)) + 1;
+      const withinRound = Math.floor((index % (size * 2)) / size);
+      return prisma.interviewSlotSignup.update({
+        where: { id: signup.id },
+        data: { groupLabel: `${round}${letters[withinRound] ?? 'A'}` },
+      });
+    });
+    await prisma.$transaction(updates);
+
+    const grouped = await prisma.interviewSlotSignup.groupBy({
+      by: ['groupLabel'],
+      where: { slotId, status: 'CONFIRMED' },
+      _count: { _all: true },
+    });
+    res.json({ groups: grouped.length, size, labels: grouped.map((g) => g.groupLabel).sort() });
+  } catch (error) {
+    fail(res, error, 'Failed to make groups');
+  }
+});
+
+// DELETE /api/admin/interviews/slots/:slotId/groups
+router.delete('/interviews/slots/:slotId/groups', async (req, res) => {
+  try {
+    const { count } = await prisma.interviewSlotSignup.updateMany({
+      where: { slotId: req.params.slotId },
+      data: { groupLabel: null },
+    });
+    res.json({ cleared: count });
+  } catch (error) {
+    fail(res, error, 'Failed to clear those groups');
+  }
+});
+
+// GET /api/admin/interviews/staff
+// Members and admins who can be put on a session.
+router.get('/interviews/staff', async (req, res) => {
+  try {
+    const staff = await prisma.user.findMany({
+      where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+      select: { id: true, fullName: true, email: true, role: true },
+      orderBy: { fullName: 'asc' },
+    });
+    res.json(staff);
+  } catch (error) {
+    fail(res, error, 'Failed to load members');
   }
 });
 

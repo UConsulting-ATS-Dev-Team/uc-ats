@@ -33,6 +33,7 @@ import {
 import {
   HourglassTop as HourglassIcon,
   MoreVert as MoreIcon,
+  PersonAdd as PersonAddIcon,
   PersonOff as PersonOffIcon,
   Warning as WarningIcon,
 } from '@mui/icons-material';
@@ -147,7 +148,7 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed,
 }
 
 /** One slot: heading, seat meter, confirmed candidates, then the waitlist tray. */
-function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterviewTitle }) {
+function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterviewTitle, onAssignInterviewer, onRemoveInterviewer }) {
   const { setNodeRef, isOver } = useDroppable({ id: slot.id });
 
   const confirmed = slot.signups.filter((s) => s.status === 'CONFIRMED');
@@ -238,6 +239,38 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterv
         )}
       </Stack>
 
+      {/* Who is running this session. First round is the case that needs it:
+          an interviewer assigned here sees these candidates and no others. */}
+      {onAssignInterviewer && (
+        <>
+          <Divider sx={{ my: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">
+              Interviewers ({slot.interviewers?.length ?? 0}
+              {slot.interviewerCapacity ? ` / ${slot.interviewerCapacity}` : ''})
+            </Typography>
+          </Divider>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+            {(slot.interviewers ?? []).map((interviewer) => (
+              <Chip
+                key={interviewer.id}
+                size="small"
+                variant="outlined"
+                label={interviewer.user.fullName}
+                onDelete={() => onRemoveInterviewer(interviewer)}
+                sx={{ height: 22 }}
+              />
+            ))}
+            <Chip
+              size="small"
+              icon={<PersonAddIcon />}
+              label="Assign"
+              onClick={() => onAssignInterviewer(slot)}
+              sx={{ height: 22 }}
+            />
+          </Stack>
+        </>
+      )}
+
       {waiting.length > 0 && (
         <>
           <Divider sx={{ my: 1.5 }}>
@@ -278,6 +311,8 @@ export default function InterviewRosterGallery({
   onMove,
   onRemove,
   onPlace,
+  onAssignInterviewer,
+  onRemoveInterviewer,
   busy = false,
 }) {
   const [filter, setFilter] = useState('');
@@ -375,6 +410,8 @@ export default function InterviewRosterGallery({
               showInterviewTitle={spansInterviews}
               onMove={requestMove}
               onRemove={onRemove}
+              onAssignInterviewer={onAssignInterviewer}
+              onRemoveInterviewer={onRemoveInterviewer}
             />
           ))}
           {slots.length === 0 && (
