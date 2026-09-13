@@ -21,8 +21,7 @@ import MemberDashboard from './pages/MemberDashboard';
 import DocumentGrading from './pages/DocumentGrading';
 import AdminDocumentGrading from './pages/AdminDocumentGrading';
 import AssignedInterviews from './pages/AssignedInterviews';
-import AdminAssignedInterviews from './pages/AdminAssignedInterviews';
-import AdminInterviewScheduling from './pages/AdminInterviewScheduling';
+import AdminInterviews from './pages/AdminInterviews';
 import InterviewInterface from './pages/InterviewInterface';
 import MemberInterviewInterface from './pages/MemberInterviewInterface';
 import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
@@ -414,25 +413,20 @@ const AppRoutes = () => {
       />
       
       <Route
-        path="/admin/assigned-interviews"
+        path="/admin/interviews"
         element={
           <ProtectedRoute>
-            <AdminAssignedInterviews />
+            <AdminInterviews />
           </ProtectedRoute>
         }
       />
 
-      {/* The whole cycle's scheduling in one place, grouped by round rather
-          than by interview - a coffee chat day runs as two Interview rows and
-          booking treats them as one pool. */}
-      <Route
-        path="/admin/interview-scheduling"
-        element={
-          <ProtectedRoute>
-            <AdminInterviewScheduling />
-          </ProtectedRoute>
-        }
-      />
+      {/* Both pages folded into /admin/interviews. Redirects rather than
+          deletions, so bookmarks and older links keep working. */}
+      <Route path="/admin/assigned-interviews" element={<Navigate to="/admin/interviews" replace />} />
+      <Route path="/admin/interview-scheduling" element={<Navigate to="/admin/interviews" replace />} />
+
+
       
       
       <Route
