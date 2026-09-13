@@ -1,0 +1,215 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  canonicalGroupIdFor,
+  expandGroupIdsForQuestions,
+  getRosterForInterview,
+  parseLegacyConfig,
+  resolveGroupIds,
+} from './interviewRoster.js';
+
+/**
+ * A client returning fixed slot rows plus one interview.
+ *
+ * Hand-rolled rather than a Prisma mock: what these tests care about is which
+ * source an id resolves against, and that is decided by the service, not by the
+ * query. The filters are applied here so a wrong `where` still shows up.
+ */
+const fakeClient = ({ slots = [], description = null } = {}) => ({
+  interviewSlot: {
+    findMany: vi.fn(({ where }) => {
+      const wanted = new Set([
+        ...(where.OR?.[0]?.id?.in ?? []),
+        ...(where.OR?.[1]?.legacyGroupId?.in ?? []),
+      ]);
+      return Promise.resolve(
+        slots.filter((slot) => wanted.has(slot.id) || wanted.has(slot.legacyGroupId))
+      );
+    }),
+    findFirst: vi.fn(({ where }) => {
+      const ids = [where.OR?.[0]?.id, where.OR?.[1]?.legacyGroupId].filter(Boolean);
+      return Promise.resolve(
+        slots.find((slot) => ids.includes(slot.id) || ids.includes(slot.legacyGroupId)) ?? null
+      );
+    }),
+  },
+  interview: {
+    findUnique: vi.fn(() => Promise.resolve({ id: 'iv1', description, slots })),
+  },
+});
+
+const slot = (over = {}) => ({
+  id: 'slot-1',
+  label: 'Morning Block',
+  notes: '',
+  legacyGroupId: null,
+  startTime: new Date('2026-10-06T16:00:00Z'),
+  endTime: new Date('2026-10-06T18:00:00Z'),
+  candidateCapacity: 40,
+  signups: [],
+  assignments: [],
+  ...over,
+});
+
+describe('parseLegacyConfig', () => {
+  it('reads a stringified config', () => {
+    expect(parseLegacyConfig({ description: '{"applicationGroups":[]}' })).toEqual({ applicationGroups: [] });
+  });
+
+  it('treats a plain description as no config rather than throwing', () => {
+    // Interview.description doubles as a literal description on older rows, so
+    // "Meet in Covel at 3" must resolve to {} and not blow up a live interview.
+    expect(parseLegacyConfig({ description: 'Meet in Covel at 3' })).toEqual({});
+    expect(parseLegacyConfig({ description: '[1,2,3]' })).toEqual({});
+    expect(parseLegacyConfig({ description: null })).toEqual({});
+    expect(parseLegacyConfig(null)).toEqual({});
+  });
+});
+
+describe('resolveGroupIds', () => {
+  it('resolves a slot id to its confirmed signups', async () => {
+    const client = fakeClient({
+      slots: [slot({ signups: [{ applicationId: 'app1' }, { applicationId: 'app2' }] })],
+    });
+    await expect(resolveGroupIds('iv1', 'slot-1', client)).resolves.toEqual(['app1', 'app2']);
+  });
+
+  it('resolves the legacy group id a slot was backfilled from', async () => {
+    // The bookmarked-URL case: an admin opened a live interview before the
+    // migration and the tab is still open afterwards.
+    const client = fakeClient({
+      slots: [slot({ legacyGroupId: 'old-group-1', signups: [{ applicationId: 'app1' }] })],
+    });
+    await expect(resolveGroupIds('iv1', 'old-group-1', client)).resolves.toEqual(['app1']);
+  });
+
+  it('falls back to the JSON blob for groups no slot claims', async () => {
+    const client = fakeClient({
+      description: JSON.stringify({
+        applicationGroups: [{ id: 'blob-group', applicationIds: ['app9'] }],
+      }),
+    });
+    await expect(resolveGroupIds('iv1', 'blob-group', client)).resolves.toEqual(['app9']);
+  });
+
+  it('handles a mixture of slot ids and blob-only ids', async () => {
+    // A half-migrated interview, which is what a real cycle looks like mid-cutover.
+    const client = fakeClient({
+      slots: [slot({ id: 'slot-1', signups: [{ applicationId: 'app1' }] })],
+      description: JSON.stringify({
+        applicationGroups: [{ id: 'blob-group', applicationIds: ['app9'] }],
+      }),
+    });
+    const ids = await resolveGroupIds('iv1', 'slot-1,blob-group', client);
+    expect(ids.sort()).toEqual(['app1', 'app9']);
+  });
+
+  it('never returns the same application twice', async () => {
+    const client = fakeClient({
+      slots: [
+        slot({ id: 'slot-1', signups: [{ applicationId: 'app1' }] }),
+        slot({ id: 'slot-2', signups: [{ applicationId: 'app1' }] }),
+      ],
+    });
+    await expect(resolveGroupIds('iv1', 'slot-1,slot-2', client)).resolves.toEqual(['app1']);
+  });
+
+  it('accepts an array, a string, and tolerates whitespace and blanks', async () => {
+    const client = fakeClient({ slots: [slot({ signups: [{ applicationId: 'app1' }] })] });
+    await expect(resolveGroupIds('iv1', ['slot-1'], client)).resolves.toEqual(['app1']);
+    await expect(resolveGroupIds('iv1', ' slot-1 , ', client)).resolves.toEqual(['app1']);
+    await expect(resolveGroupIds('iv1', '', client)).resolves.toEqual([]);
+  });
+});
+
+describe('expandGroupIdsForQuestions', () => {
+  it('reads under both the slot id and the id it was backfilled from', async () => {
+    // Questions written before the migration are keyed on the old id and ones
+    // written after on the slot id. Reading one key would make half of a
+    // group's questions disappear, and groupId has no foreign key to complain.
+    const client = fakeClient({ slots: [slot({ id: 'slot-1', legacyGroupId: 'old-group-1' })] });
+    const expanded = await expandGroupIdsForQuestions('iv1', 'slot-1', client);
+    expect(expanded.sort()).toEqual(['old-group-1', 'slot-1']);
+  });
+
+  it('leaves an unknown id alone so blob-only groups still resolve', async () => {
+    const client = fakeClient({ slots: [] });
+    await expect(expandGroupIdsForQuestions('iv1', 'blob-group', client)).resolves.toEqual(['blob-group']);
+  });
+});
+
+describe('canonicalGroupIdFor', () => {
+  it('keeps writing under the legacy id so a group\'s questions stay together', async () => {
+    const client = fakeClient({ slots: [slot({ id: 'slot-1', legacyGroupId: 'old-group-1' })] });
+    await expect(canonicalGroupIdFor('iv1', 'slot-1', client)).resolves.toBe('old-group-1');
+  });
+
+  it('uses its own id for a slot that was never backfilled', async () => {
+    const client = fakeClient({ slots: [slot({ id: 'slot-1', legacyGroupId: null })] });
+    await expect(canonicalGroupIdFor('iv1', 'slot-1', client)).resolves.toBe('slot-1');
+  });
+
+  it('passes an unknown id straight through', async () => {
+    const client = fakeClient({ slots: [] });
+    await expect(canonicalGroupIdFor('iv1', 'blob-group', client)).resolves.toBe('blob-group');
+  });
+});
+
+describe('getRosterForInterview', () => {
+  it('answers in the legacy shape when the interview has slots', async () => {
+    // Returning the blob's own shape is what lets the source of truth flip
+    // server-side with no client change - the whole point of this seam.
+    const client = fakeClient({
+      slots: [
+        slot({
+          id: 'slot-1',
+          label: 'Morning Block',
+          signups: [{ applicationId: 'app1' }, { applicationId: 'app2' }],
+          assignments: [{ userId: 'user1', role: 'INTERVIEWER' }],
+        }),
+      ],
+    });
+
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.source).toBe('slots');
+    expect(roster.applicationGroups).toEqual([
+      expect.objectContaining({ id: 'slot-1', name: 'Morning Block', applicationIds: ['app1', 'app2'] }),
+    ]);
+    expect(roster.memberGroups[0].memberIds).toEqual(['user1']);
+    // Co-membership in a slot IS the assignment, so this mapping is derived
+    // rather than maintained by hand.
+    expect(roster.groupAssignments).toEqual({ 'members-slot-1': ['slot-1'] });
+  });
+
+  it('exposes a backfilled slot under its legacy id', async () => {
+    const client = fakeClient({
+      slots: [slot({ id: 'slot-1', legacyGroupId: 'old-group-1', signups: [{ applicationId: 'app1' }] })],
+    });
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.applicationGroups[0].id).toBe('old-group-1');
+    expect(roster.applicationGroups[0].slotId).toBe('slot-1');
+  });
+
+  it('reads the blob untouched for an interview with no slots', async () => {
+    // Final round, deliberations and every past cycle live here. Slots replace
+    // groups only for interviews that have slots.
+    const client = fakeClient({
+      slots: [],
+      description: JSON.stringify({
+        memberGroups: [{ id: 'mg1', memberIds: ['u1'] }],
+        applicationGroups: [{ id: 'ag1', applicationIds: ['app1'] }],
+        groupAssignments: { mg1: ['ag1'] },
+      }),
+    });
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.source).toBe('legacy');
+    expect(roster.applicationGroups).toEqual([{ id: 'ag1', applicationIds: ['app1'] }]);
+    expect(roster.groupAssignments).toEqual({ mg1: ['ag1'] });
+  });
+
+  it('omits a member group for a slot nobody is staffing', async () => {
+    const client = fakeClient({ slots: [slot({ assignments: [] })] });
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.memberGroups).toEqual([]);
+    expect(roster.groupAssignments).toEqual({});
+  });
+});

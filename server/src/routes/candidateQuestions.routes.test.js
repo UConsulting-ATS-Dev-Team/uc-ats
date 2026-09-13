@@ -15,6 +15,11 @@ vi.mock('../prismaClient.js', () => ({
     interview: { findUnique: vi.fn(), update: vi.fn() },
     application: { findUnique: vi.fn(), findMany: vi.fn() },
     candidate: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+    // Consulted by services/interviewRoster.js to decide which group id a
+    // question is read and written under. Empty by default: these tests use raw
+    // group ids that no slot claims, which is the legacy path the roster service
+    // falls back to, so behaviour here is unchanged from before slots existed.
+    interviewSlot: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
     behavioralQuestion: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
