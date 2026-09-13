@@ -33,6 +33,7 @@ import talentRoutes from './routes/talent.js';
 import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
 import candidateInterviewSignupRoutes from './routes/candidateInterviewSignups.js';
 import interviewSlotsAdminRoutes from './routes/interviewSlotsAdmin.js';
+import interviewSlotsMemberRoutes from './routes/interviewSlotsMember.js';
 import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
@@ -96,6 +97,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
+// Before the catch-all member router so its slot routes are matched first.
+app.use('/api/member', requireAuth, interviewSlotsMemberRoutes);
 app.use('/api/member', memberRoutes);
 app.use('/api/member/help', requireAuth, memberHelpRoutes);
 app.use('/api/client', clientRoutes);

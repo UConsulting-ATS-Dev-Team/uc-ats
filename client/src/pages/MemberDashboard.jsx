@@ -22,6 +22,7 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
+import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -566,6 +567,12 @@ export default function MemberDashboard() {
           )}
         </Paper>
       )}
+
+      {/* Interviewer staffing. Sits at the bottom because it is periodic - a
+          member signs up once a round, then comes here for their tasks. */}
+      <Paper sx={{ mt: 4, p: 3 }}>
+        <InterviewStaffingSignup />
+      </Paper>
     </Box>
     </AccessControl>
   );
