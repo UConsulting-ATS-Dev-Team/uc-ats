@@ -40,6 +40,7 @@ import CandidateEvents from './pages/CandidateEvents';
 import MemberEvents from './pages/MemberEvents';
 import CandidateApplications from './pages/CandidateApplications';
 import CandidateGTKUC from './pages/CandidateGTKUC';
+import CandidateInterviewSignup from './pages/CandidateInterviewSignup';
 import ApplicantInformation from './pages/ApplicantInformation';
 import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
@@ -499,6 +500,17 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <CandidateGTKUC />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Where the decision email's scheduling link lands. Auth-gated like every
+          other candidate page, so login preserves the destination. */}
+      <Route
+        path="/interview-signup"
+        element={
+          <ProtectedRoute>
+            <CandidateInterviewSignup />
           </ProtectedRoute>
         }
       />
