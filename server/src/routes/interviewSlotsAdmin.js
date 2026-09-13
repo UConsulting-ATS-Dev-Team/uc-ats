@@ -119,6 +119,7 @@ router.get('/interviews/:id/roster', async (req, res) => {
         location: slot.location || interview.location,
         candidateCapacity: slot.candidateCapacity,
         interviewerCapacity: slot.interviewerCapacity,
+        groupSize: slot.groupSize,
         signupOpensAt: slot.signupOpensAt,
         signupClosesAt: slot.signupClosesAt,
         notes: slot.notes,
@@ -244,6 +245,7 @@ router.get('/scheduling/overview', async (req, res) => {
             location: slot.location || interview.location,
             candidateCapacity: slot.candidateCapacity,
             interviewerCapacity: slot.interviewerCapacity,
+            groupSize: slot.groupSize,
             confirmedCount: confirmed.length,
             isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
             isBookable: slot.candidateCapacity != null,
@@ -703,7 +705,18 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
 router.post('/interviews/slots/:slotId/groups', async (req, res) => {
   try {
     const { slotId } = req.params;
-    const size = Math.max(1, Number(req.body?.size ?? 2));
+    const slot = await prisma.interviewSlot.findUnique({
+      where: { id: slotId },
+      select: { groupSize: true },
+    });
+    if (!slot) return res.status(404).json({ error: 'Session not found' });
+    const size = Math.max(1, Number(req.body?.size ?? slot.groupSize ?? 2));
+
+    // Remember it, so bookings that arrive afterwards keep the same shape
+    // instead of reverting to pairs.
+    if (size !== slot.groupSize) {
+      await prisma.interviewSlot.update({ where: { id: slotId }, data: { groupSize: size } });
+    }
 
     const signups = await prisma.interviewSlotSignup.findMany({
       where: { slotId, status: 'CONFIRMED' },
@@ -733,6 +746,29 @@ router.post('/interviews/slots/:slotId/groups', async (req, res) => {
     res.json({ groups: grouped.length, size, labels: grouped.map((g) => g.groupLabel).sort() });
   } catch (error) {
     fail(res, error, 'Failed to make groups');
+  }
+});
+
+// PATCH /api/admin/interviews/slot-signups/:signupId/group   { groupLabel }
+//
+// Move one candidate between rotation groups, or out of grouping entirely.
+// Groups do not always divide evenly - a session of nine in pairs leaves one
+// over - so the last word belongs to a person, not to the arithmetic.
+router.patch('/interviews/slot-signups/:signupId/group', async (req, res) => {
+  try {
+    const raw = req.body?.groupLabel;
+    const groupLabel = raw == null || raw === '' ? null : String(raw).trim().toUpperCase();
+    if (groupLabel && !/^[0-9]{1,2}[A-Z]$/.test(groupLabel)) {
+      return res.status(400).json({ error: 'A group is a number and a letter, like 1A' });
+    }
+    const signup = await prisma.interviewSlotSignup.update({
+      where: { id: req.params.signupId },
+      data: { groupLabel },
+      select: { id: true, groupLabel: true, slotId: true },
+    });
+    res.json(signup);
+  } catch (error) {
+    fail(res, error, 'Failed to change that group');
   }
 });
 
@@ -891,6 +927,9 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     }
     if (body.interviewerCapacity !== undefined) {
       data.interviewerCapacity = body.interviewerCapacity == null ? null : Number(body.interviewerCapacity);
+    }
+    if (body.groupSize !== undefined) {
+      data.groupSize = body.groupSize == null || body.groupSize === '' ? null : Number(body.groupSize);
     }
     if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
     if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;

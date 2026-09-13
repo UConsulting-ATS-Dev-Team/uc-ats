@@ -144,3 +144,38 @@ export function planPromotions(snapshot, startSlotId, { maxCascade = MAX_CASCADE
 
   return operations;
 }
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/**
+ * The rotation group an arriving candidate joins, given what is already there.
+ *
+ * Appends to the last group with room; opens the next when it is full. Never
+ * rearranges anyone, because a label is what a candidate has been told and what
+ * they say out loud at an interviewer's table.
+ *
+ * "1A", "1B", "2A": the number is the rotation, the letter the group within it.
+ * Two groups per rotation, which is how many sit at one interviewer's table.
+ *
+ * `existing` is [{ groupLabel, count }]. Returns null when the session is not
+ * grouped - first round, where the session already is the group.
+ */
+export function nextLabelFrom(existing, size) {
+  if (!size || size < 1) return null;
+
+  const parsed = (existing ?? [])
+    .map((row) => {
+      const match = /^(\d+)([A-Z])$/.exec(row.groupLabel ?? '');
+      return match ? { round: Number(match[1]), letter: match[2], label: row.groupLabel, count: row.count } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.round - b.round || a.letter.localeCompare(b.letter));
+
+  if (parsed.length === 0) return '1A';
+
+  const last = parsed[parsed.length - 1];
+  if (last.count < size) return last.label;
+
+  const letterIndex = LETTERS.indexOf(last.letter);
+  return letterIndex < 1 ? `${last.round}${LETTERS[letterIndex + 1]}` : `${last.round + 1}A`;
+}

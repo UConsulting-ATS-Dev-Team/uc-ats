@@ -50,7 +50,7 @@ const fullName = (candidate) => `${candidate?.firstName ?? ''} ${candidate?.last
  * it is the accessible path, the mobile path, and the one that still works when
  * a drag lands on the wrong column.
  */
-function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed, compact }) {
+function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChangeGroup, dimmed, compact }) {
   const [anchor, setAnchor] = useState(null);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: signup.id,
@@ -142,6 +142,19 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed,
               Move to {slotHeading(slot)}
             </MenuItem>
           ))}
+        {onChangeGroup && (
+          <>
+            <Divider />
+            <MenuItem
+              onClick={() => {
+                setAnchor(null);
+                onChangeGroup(signup);
+              }}
+            >
+              {signup.groupLabel ? `Change group (now ${signup.groupLabel})` : 'Put in a group'}
+            </MenuItem>
+          </>
+        )}
         <Divider />
         <MenuItem
           onClick={() => {
@@ -158,7 +171,7 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed,
 }
 
 /** One slot: heading, seat meter, confirmed candidates, then the waitlist tray. */
-function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterviewTitle, onAssignInterviewer, onRemoveInterviewer }) {
+function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGroup, showInterviewTitle, onAssignInterviewer, onRemoveInterviewer, onSetGroupSize, onRegroup }) {
   const { setNodeRef, isOver } = useDroppable({ id: slot.id });
 
   const confirmed = slot.signups.filter((s) => s.status === 'CONFIRMED');
@@ -240,6 +253,7 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterv
             dimmed={!matches(signup)}
             onMove={onMove}
             onRemove={onRemove}
+            onChangeGroup={onChangeGroup}
           />
         ))}
         {confirmed.length === 0 && (
@@ -248,6 +262,35 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterv
           </Typography>
         )}
       </Stack>
+
+      {onSetGroupSize && (
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
+          <Typography variant="caption" color="text.secondary">
+            Groups of
+          </Typography>
+          <TextField
+            size="small"
+            select
+            value={slot.groupSize ?? ''}
+            onChange={(e) => onSetGroupSize(slot, e.target.value)}
+            SelectProps={{ native: true }}
+            inputProps={{ 'aria-label': `Group size for ${slotHeading(slot)}` }}
+            sx={{ width: 76, '& .MuiInputBase-input': { py: 0.25, fontSize: 12 } }}
+          >
+            <option value="">none</option>
+            {[2, 3, 4, 5, 6].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </TextField>
+          {slot.groupSize ? (
+            <Button size="small" sx={{ minWidth: 0, fontSize: 11 }} onClick={() => onRegroup(slot)}>
+              Rebalance
+            </Button>
+          ) : null}
+        </Stack>
+      )}
 
       {/* Who is running this session. First round is the case that needs it:
           an interviewer assigned here sees these candidates and no others. */}
@@ -299,6 +342,7 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterv
                 dimmed={!matches(signup)}
                 onMove={onMove}
                 onRemove={onRemove}
+                onChangeGroup={onChangeGroup}
               />
             ))}
           </Stack>
@@ -323,6 +367,9 @@ export default function InterviewRosterGallery({
   onPlace,
   onAssignInterviewer,
   onRemoveInterviewer,
+  onChangeGroup,
+  onSetGroupSize,
+  onRegroup,
   selfService = false,
   busy = false,
 }) {
@@ -432,6 +479,9 @@ export default function InterviewRosterGallery({
               onRemove={onRemove}
               onAssignInterviewer={onAssignInterviewer}
               onRemoveInterviewer={onRemoveInterviewer}
+              onChangeGroup={onChangeGroup}
+              onSetGroupSize={onSetGroupSize}
+              onRegroup={onRegroup}
             />
           ))}
           {slots.length === 0 && (

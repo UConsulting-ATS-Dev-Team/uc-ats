@@ -6,6 +6,7 @@ import {
   isCandidateBookable,
   nextInLine,
   planPromotions,
+  nextLabelFrom,
   seatsRemaining,
 } from './interviewSignupPolicy.js';
 
@@ -193,5 +194,51 @@ describe('planPromotions', () => {
       a: { capacity: null, confirmed: 0, queue: [{ id: 'w', status: 'WAITLISTED', waitlistedAt: '2026-09-01' }] },
     });
     expect(planPromotions(snap, 'a')).toEqual([]);
+  });
+});
+
+describe('nextLabelFrom — rotation groups', () => {
+  const group = (groupLabel, count) => ({ groupLabel, count });
+
+  it('starts a session at 1A', () => {
+    expect(nextLabelFrom([], 2)).toBe('1A');
+  });
+
+  it('fills the current group before opening another', () => {
+    expect(nextLabelFrom([group('1A', 1)], 2)).toBe('1A');
+    expect(nextLabelFrom([group('1A', 2)], 2)).toBe('1B');
+  });
+
+  it('starts a new rotation once both groups at a table are full', () => {
+    // Two groups sit at one interviewer's table, so 1B full means a new
+    // rotation rather than a 1C.
+    expect(nextLabelFrom([group('1A', 2), group('1B', 2)], 2)).toBe('2A');
+  });
+
+  it('honours a group size other than two', () => {
+    expect(nextLabelFrom([group('1A', 2)], 4)).toBe('1A');
+    expect(nextLabelFrom([group('1A', 4)], 4)).toBe('1B');
+    expect(nextLabelFrom([group('1A', 3), group('1B', 3)], 3)).toBe('2A');
+  });
+
+  it('never moves anyone already placed', () => {
+    // The invariant that matters: a label is what a candidate was told, so an
+    // arrival appends rather than rebalancing. A half-empty earlier group stays
+    // half-empty until somebody rebalances on purpose.
+    expect(nextLabelFrom([group('1A', 1), group('1B', 2), group('2A', 2)], 2)).toBe('2B');
+  });
+
+  it('returns nothing when the session is not grouped', () => {
+    // First round: the session already is the group.
+    expect(nextLabelFrom([group('1A', 1)], null)).toBeNull();
+    expect(nextLabelFrom([], 0)).toBeNull();
+  });
+
+  it('ignores labels it did not write', () => {
+    expect(nextLabelFrom([group('Table Red', 1)], 2)).toBe('1A');
+  });
+
+  it('keeps counting past nine rotations', () => {
+    expect(nextLabelFrom([group('9A', 2), group('9B', 2)], 2)).toBe('10A');
   });
 });

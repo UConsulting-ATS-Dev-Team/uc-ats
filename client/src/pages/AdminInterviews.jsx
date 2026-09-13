@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Chip,
@@ -131,6 +132,40 @@ export default function AdminInterviews() {
     )
       .then(() => setAssignFor(null))
       .catch(() => {});
+
+  const setGroupSize = (slot, value) =>
+    run(
+      () =>
+        apiClient.patch(`/admin/interviews/slots/${slot.id}`, {
+          groupSize: value === '' ? null : Number(value),
+        }),
+      value === '' ? 'Grouping turned off.' : `Groups of ${value}.`
+    ).catch(() => {});
+
+  // Rebalancing renumbers everyone, so it is a button rather than something
+  // that happens on its own. Labels are what candidates are told.
+  const regroup = (slot) => {
+    if (
+      !window.confirm(
+        'Rebalance this session into fresh groups? Everyone gets a new label, so do not do this once candidates have been told theirs.'
+      )
+    ) {
+      return Promise.resolve();
+    }
+    return run(() => apiClient.post(`/admin/interviews/slots/${slot.id}/groups`, {}), 'Regrouped.').catch(() => {});
+  };
+
+  const changeGroup = (signup) => {
+    const next = window.prompt(
+      `Group for ${signup.candidate?.firstName ?? 'this candidate'} — a number and a letter, like 1A. Leave blank to remove them from a group.`,
+      signup.groupLabel ?? ''
+    );
+    if (next === null) return Promise.resolve();
+    return run(
+      () => apiClient.patch(`/admin/interviews/slot-signups/${signup.id}/group`, { groupLabel: next }),
+      'Group updated.'
+    ).catch(() => {});
+  };
 
   const removeInterviewer = (interviewer) =>
     run(() => apiClient.delete(`/admin/interviews/slot-assignments/${interviewer.id}`), 'Removed.').catch(() => {});
@@ -341,6 +376,32 @@ export default function AdminInterviews() {
                       </Stack>
                     </Paper>
 
+                    {/* The invariant recruitment works to: every advancing
+                        candidate gets a seat. Checked here rather than
+                        discovered by the candidate who finds nothing left. */}
+                    {active.stats.bookableSessions > 0 && active.stats.seats < active.stats.eligible && (
+                      <Alert severity="error" sx={{ mb: 2 }}>
+                        <AlertTitle>Not enough seats for this round</AlertTitle>
+                        {active.stats.seats} seat{active.stats.seats === 1 ? '' : 's'} across{' '}
+                        {active.stats.bookableSessions} open session
+                        {active.stats.bookableSessions === 1 ? '' : 's'}, but{' '}
+                        <strong>{active.stats.eligible} candidates</strong> are in this round.{' '}
+                        {active.stats.eligible - active.stats.seats} will have nowhere to book and will be
+                        told recruitment has been notified. Add sessions or raise the seat counts before
+                        sending the decision emails.
+                      </Alert>
+                    )}
+                    {active.stats.bookableSessions > 0 &&
+                      active.stats.seats >= active.stats.eligible &&
+                      active.stats.eligible > 0 && (
+                        <Alert severity="success" sx={{ mb: 2 }} icon={false}>
+                          <strong>Everyone fits.</strong> {active.stats.seats} seats for{' '}
+                          {active.stats.eligible} candidates. Nobody will be left without a session —
+                          a full first choice just means a spot in another one plus a place on its
+                          waitlist.
+                        </Alert>
+                      )}
+
                     {active.stats.bookableSessions === 0 && active.stats.sessions > 0 && (
                       <Alert severity="warning" sx={{ mb: 2 }}>
                         This round has {active.stats.sessions} session{active.stats.sessions === 1 ? '' : 's'} but{' '}
@@ -403,6 +464,9 @@ export default function AdminInterviews() {
                         onAssignInterviewer={openAssign}
                         onRemoveInterviewer={removeInterviewer}
                         selfService={active.stats.bookableSessions > 0}
+                        onChangeGroup={changeGroup}
+                        onSetGroupSize={setGroupSize}
+                        onRegroup={regroup}
                       />
                     )}
                     {view === 'candidate' && <CandidateSchedulingPreview />}

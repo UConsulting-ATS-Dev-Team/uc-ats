@@ -813,6 +813,14 @@ model InterviewSlot {
   /// Null means this slot is not open to candidate self-signup at all - an
   /// interviewer-only sitting, or a round that still schedules by hand.
   candidateCapacity   Int?
+  /// How many candidates share a rotation group in this session.
+  ///
+  /// Coffee chats run in small groups that move between interviewer tables
+  /// together - usually pairs, sometimes three or four. Set it and bookings are
+  /// labelled as they arrive, appending to the last group with room, so a label
+  /// never changes once a candidate has been told it. Null means no grouping,
+  /// which is first round: the session already is the group.
+  groupSize           Int?
   /// How many interviewers this sitting wants. Staffing target, not a cap.
   interviewerCapacity Int?
   signupOpensAt       DateTime?

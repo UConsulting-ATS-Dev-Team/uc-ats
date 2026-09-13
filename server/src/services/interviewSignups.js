@@ -27,6 +27,7 @@ import {
   hasRoom,
   isCandidateBookable,
   nextInLine,
+  nextLabelFrom,
 } from './interviewSignupPolicy.js';
 
 /// Statuses that occupy something. Everything else is history.
@@ -132,6 +133,37 @@ async function lockRoundSlots(tx, interview) {
 }
 
 /**
+ * The rotation group an arriving candidate joins.
+ *
+ * Appends to the last group that still has room, and starts a new one when
+ * none does. Appending rather than rebalancing is the whole point: a label is
+ * what a candidate is told and what they say out loud at an interviewer's
+ * table, so it must not change under them because somebody else booked later.
+ *
+ * Labels are "1A", "1B", "2A": the number is the rotation, the letter the group
+ * within it. An admin can rebalance afterwards, which is a deliberate act with
+ * consequences rather than something that happens on every booking.
+ *
+ * Returns null when the session is not grouped, which is first round - there
+ * the session already is the group.
+ *
+ * Safe against two simultaneous bookings because the caller holds FOR UPDATE on
+ * the session for the length of the transaction.
+ */
+async function nextGroupLabel(tx, slot) {
+  if (!slot.groupSize) return null;
+  const counts = await tx.interviewSlotSignup.groupBy({
+    by: ['groupLabel'],
+    where: { slotId: slot.id, status: 'CONFIRMED', groupLabel: { not: null } },
+    _count: { _all: true },
+  });
+  return nextLabelFrom(
+    counts.map((row) => ({ groupLabel: row.groupLabel, count: row._count._all })),
+    slot.groupSize
+  );
+}
+
+/**
  * Fill open seats in `startSlotId` from its queue, following the cascade.
  *
  * Promoting someone releases the fallback seat they were holding, which frees a
@@ -194,6 +226,8 @@ async function drainWaitlist(tx, startSlotId, now) {
           promotedAt: now,
           waitlistedAt: null,
           heldSeatId: null,
+          // They were queued, not seated, so they have no group here yet.
+          groupLabel: await nextGroupLabel(tx, slot),
         },
       });
       if (claimed.count === 0) {
@@ -306,7 +340,13 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
 
     if (hasRoom(preferred, preferred.confirmedCount)) {
       const signup = await tx.interviewSlotSignup.create({
-        data: { slotId, interviewId: interview.id, applicationId, status: 'CONFIRMED' },
+        data: {
+          slotId,
+          interviewId: interview.id,
+          applicationId,
+          status: 'CONFIRMED',
+          groupLabel: await nextGroupLabel(tx, preferred),
+        },
         select: SIGNUP_SELECT,
       });
       return { outcome: 'CONFIRMED', confirmed: signup, waitlisted: null, slot, interview };
@@ -331,7 +371,13 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
     const heldSeat = await tx.interviewSlotSignup.create({
       // The fallback may live in a sibling interview, so the seat is filed
       // against that one - the composite foreign key would reject it otherwise.
-      data: { slotId: fallback.id, interviewId: fallback.interviewId, applicationId, status: 'CONFIRMED' },
+      data: {
+        slotId: fallback.id,
+        interviewId: fallback.interviewId,
+        applicationId,
+        status: 'CONFIRMED',
+        groupLabel: await nextGroupLabel(tx, fallback),
+      },
       select: SIGNUP_SELECT,
     });
     const waitlisted = await tx.interviewSlotSignup.create({
