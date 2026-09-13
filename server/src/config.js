@@ -70,6 +70,19 @@ const config = {
    */
   recruitmentEmail: process.env.RECRUITMENT_EMAIL || process.env.EMAIL_REPLY_TO || process.env.EMAIL_USER || null,
 
+  /**
+   * Whether interview scheduling emails actually leave the building.
+   *
+   * Off by default, deliberately. This feature emails real candidates the
+   * moment somebody books, cancels or is promoted, and it is going to be poked
+   * at in a live cycle with real applicants in the database before anyone is
+   * ready for them to hear about it. Set SCHEDULING_EMAILS=on when you are.
+   *
+   * Suppression is recorded, not silent: notifications are still written, marked
+   * SUPPRESSED, and can be sent later from the roster once this is switched on.
+   */
+  schedulingEmailsEnabled: String(process.env.SCHEDULING_EMAILS || '').toLowerCase() === 'on',
+
   form: formConfig,
 
   /** Fine-grained PAT with Issues write on the ATS repo */

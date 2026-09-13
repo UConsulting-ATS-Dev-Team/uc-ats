@@ -17,6 +17,7 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [setupOpen, setSetupOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -134,11 +135,16 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
         </Alert>
       )}
 
-      {!hasSlots && (
+      {/* Always reachable, not just on an empty interview. A cycle that was
+          backfilled from the old group config already has slots - historical
+          pairings with no capacity - and hiding this behind "no slots yet" left
+          an admin with no way to add the sessions candidates actually book. */}
+      {(!hasSlots || setupOpen) && (
         <InterviewSlotSetup
           interviewId={interviewId}
           interviewType={interviewType}
           onCreated={() => {
+            setSetupOpen(false);
             load();
             onRosterChanged?.();
           }}
@@ -147,13 +153,18 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
 
       {hasSlots && (
         <>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1, mt: setupOpen ? 3 : 0 }}>
             <Typography variant="subtitle2" color="text.secondary">
               Drag a candidate between sessions, or use the menu on their card.
             </Typography>
-            <Button size="small" onClick={load} disabled={busy}>
-              Refresh
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => setSetupOpen((open) => !open)} disabled={busy}>
+                {setupOpen ? 'Close' : 'Add sessions'}
+              </Button>
+              <Button size="small" onClick={load} disabled={busy}>
+                Refresh
+              </Button>
+            </Stack>
           </Stack>
           <InterviewRosterGallery
             roster={roster}

@@ -14,6 +14,7 @@
 // retry re-runs the body, and a send that happened there would happen twice.
 
 import prisma from '../prismaClient.js';
+import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
 
 const SEND_ATTEMPTS = 3;
@@ -62,8 +63,19 @@ export async function queueNotifications(tx, entries) {
  * admin pressing Resend, cannot both send the same message.
  */
 async function sendOne(notificationId, renderBody) {
+  // The kill switch. Recorded rather than silent: the row stays, marked
+  // SUPPRESSED, so the roster shows exactly who would have been emailed and can
+  // send it for real once config.schedulingEmailsEnabled is turned on.
+  if (!config.schedulingEmailsEnabled) {
+    await prisma.interviewSlotNotification.updateMany({
+      where: { id: notificationId, status: { in: ['QUEUED', 'FAILED'] } },
+      data: { status: 'SUPPRESSED', error: 'Scheduling emails are switched off (SCHEDULING_EMAILS)' },
+    });
+    return { notificationId, suppressed: true };
+  }
+
   const { count } = await prisma.interviewSlotNotification.updateMany({
-    where: { id: notificationId, status: { in: ['QUEUED', 'FAILED'] } },
+    where: { id: notificationId, status: { in: ['QUEUED', 'FAILED', 'SUPPRESSED'] } },
     data: { status: 'SENDING', attempts: { increment: 1 } },
   });
   if (count === 0) return { notificationId, skipped: true };

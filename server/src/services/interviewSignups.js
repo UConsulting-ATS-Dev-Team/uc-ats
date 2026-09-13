@@ -63,6 +63,51 @@ async function loadSlotsWithCounts(tx, interviewId) {
 }
 
 /**
+ * Every bookable slot for this round, across sibling interviews.
+ *
+ * Recruitment models a coffee chat day as two Interview rows - "Coffee Chat -
+ * Round 1" in the morning and "Round 2" in the afternoon - rather than as two
+ * sittings of one interview. That is a reasonable way to run it, and it is how
+ * the real data is shaped, so "the other session a full candidate falls back
+ * into" has to be able to cross an interview boundary.
+ *
+ * Sibling means: same cycle, same interviewType, not cancelled or completed.
+ *
+ * Reading them inside the caller's transaction is what keeps this safe. Two
+ * candidates racing for the last seats of two different interviews each read
+ * the other's rows, so Postgres sees the dependency and aborts one - which is
+ * also the only thing enforcing "one seat per candidate per round", since a
+ * unique index cannot span interviews.
+ */
+async function loadRoundSlotsWithCounts(tx, interview) {
+  const siblings = await tx.interview.findMany({
+    where: {
+      cycleId: interview.cycleId,
+      interviewType: interview.interviewType,
+      status: { notIn: ['CANCELLED', 'COMPLETED'] },
+    },
+    select: { id: true },
+  });
+  const interviewIds = siblings.map((row) => row.id);
+  if (!interviewIds.includes(interview.id)) interviewIds.push(interview.id);
+
+  const slots = await tx.interviewSlot.findMany({
+    where: { interviewId: { in: interviewIds } },
+    orderBy: { startTime: 'asc' },
+  });
+  const counts = await tx.interviewSlotSignup.groupBy({
+    by: ['slotId'],
+    where: { interviewId: { in: interviewIds }, status: 'CONFIRMED' },
+    _count: { _all: true },
+  });
+  const byId = new Map(counts.map((row) => [row.slotId, row._count._all]));
+  return {
+    interviewIds,
+    slots: slots.map((slot) => ({ ...slot, confirmedCount: byId.get(slot.id) ?? 0 })),
+  };
+}
+
+/**
  * Fill open seats in `startSlotId` from its queue, following the cascade.
  *
  * Promoting someone releases the fallback seat they were holding, which frees a
@@ -192,8 +237,12 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
       throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
     }
 
+    // Sibling interviews of the same round count as one pool, so a candidate
+    // cannot hold a seat in "Coffee Chat - Round 1" and another in "Round 2".
+    const { interviewIds, slots } = await loadRoundSlotsWithCounts(tx, interview);
+
     const existing = await tx.interviewSlotSignup.findMany({
-      where: { interviewId: interview.id, applicationId, status: { in: LIVE_STATUSES } },
+      where: { interviewId: { in: interviewIds }, applicationId, status: { in: LIVE_STATUSES } },
       select: SIGNUP_SELECT,
     });
     const confirmedRow = existing.find((row) => row.status === 'CONFIRMED');
@@ -212,7 +261,6 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
       throw new SlotTransactionError(409, 'You already have a pending request for this interview');
     }
 
-    const slots = await loadSlotsWithCounts(tx, interview.id);
     const preferred = slots.find((s) => s.id === slotId);
 
     if (hasRoom(preferred, preferred.confirmedCount)) {
@@ -240,7 +288,9 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
     }
 
     const heldSeat = await tx.interviewSlotSignup.create({
-      data: { slotId: fallback.id, interviewId: interview.id, applicationId, status: 'CONFIRMED' },
+      // The fallback may live in a sibling interview, so the seat is filed
+      // against that one - the composite foreign key would reject it otherwise.
+      data: { slotId: fallback.id, interviewId: fallback.interviewId, applicationId, status: 'CONFIRMED' },
       select: SIGNUP_SELECT,
     });
     const waitlisted = await tx.interviewSlotSignup.create({
@@ -362,7 +412,21 @@ export async function moveSignup({
 
     const target = await loadSlotForBooking(tx, toSlotId);
     if (target.interviewId !== signup.interviewId) {
-      throw new SlotTransactionError(400, 'A booking can only move within the same interview');
+      // Moving between sibling interviews of the same round is allowed - that is
+      // how a coffee chat morning and afternoon are actually modelled. Moving to
+      // a different round is not: it would put someone in an interview they have
+      // not reached.
+      const from = await tx.interview.findUnique({
+        where: { id: signup.interviewId },
+        select: { cycleId: true, interviewType: true },
+      });
+      const sameRound =
+        from &&
+        from.cycleId === target.interview.cycleId &&
+        from.interviewType === target.interview.interviewType;
+      if (!sameRound) {
+        throw new SlotTransactionError(400, 'A booking can only move within the same interview round');
+      }
     }
     if (!isAdmin) {
       if (!isCandidateBookable(target, now)) {
@@ -387,6 +451,9 @@ export async function moveSignup({
       where: { id: signupId },
       data: {
         slotId: toSlotId,
+        // Carried with the slot. A move between sibling interviews changes both,
+        // and the composite foreign key would reject the row if only one moved.
+        interviewId: target.interviewId,
         // Someone moved off a waitlist or out of limbo now holds a real seat.
         status: 'CONFIRMED',
         waitlistedAt: null,
