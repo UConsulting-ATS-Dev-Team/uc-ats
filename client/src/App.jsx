@@ -22,6 +22,7 @@ import DocumentGrading from './pages/DocumentGrading';
 import AdminDocumentGrading from './pages/AdminDocumentGrading';
 import AssignedInterviews from './pages/AssignedInterviews';
 import AdminAssignedInterviews from './pages/AdminAssignedInterviews';
+import AdminInterviewScheduling from './pages/AdminInterviewScheduling';
 import InterviewInterface from './pages/InterviewInterface';
 import MemberInterviewInterface from './pages/MemberInterviewInterface';
 import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
@@ -417,6 +418,18 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <AdminAssignedInterviews />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* The whole cycle's scheduling in one place, grouped by round rather
+          than by interview - a coffee chat day runs as two Interview rows and
+          booking treats them as one pool. */}
+      <Route
+        path="/admin/interview-scheduling"
+        element={
+          <ProtectedRoute>
+            <AdminInterviewScheduling />
           </ProtectedRoute>
         }
       />

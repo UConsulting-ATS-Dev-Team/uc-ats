@@ -147,7 +147,7 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, dimmed,
 }
 
 /** One slot: heading, seat meter, confirmed candidates, then the waitlist tray. */
-function SlotColumn({ slot, slots, compact, filter, onMove, onRemove }) {
+function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, showInterviewTitle }) {
   const { setNodeRef, isOver } = useDroppable({ id: slot.id });
 
   const confirmed = slot.signups.filter((s) => s.status === 'CONFIRMED');
@@ -179,6 +179,22 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove }) {
         {formatDay(slot.startTime)}
         {slot.location ? ` · ${slot.location}` : ''}
       </Typography>
+      {/* Only when a round spans more than one interview, which is how a coffee
+          chat morning and afternoon are actually modelled. Repeating the same
+          title on every column when there is only one would be noise. */}
+      {slot.interviewTitle && showInterviewTitle && (
+        <Typography variant="caption" color="text.disabled" display="block" noWrap>
+          {slot.interviewTitle}
+        </Typography>
+      )}
+      {slot.isBookable === false && (
+        <Chip
+          size="small"
+          variant="outlined"
+          label="Not open to signup"
+          sx={{ mt: 0.5, height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
+        />
+      )}
 
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1, mb: 1 }}>
         <Typography variant="caption" fontWeight={600}>
@@ -271,6 +287,9 @@ export default function InterviewRosterGallery({
 
   const slots = roster?.slots ?? [];
   const compact = slots.length > 3;
+  // A round can span sibling interviews ("Coffee Chat - Round 1" and "Round 2"),
+  // in which case each column needs to say which one it belongs to.
+  const spansInterviews = new Set(slots.map((slot) => slot.interviewId).filter(Boolean)).size > 1;
 
   const needsPlacement = useMemo(
     () => slots.flatMap((slot) => slot.signups.filter((s) => s.status === 'NEEDS_PLACEMENT')),
@@ -353,6 +372,7 @@ export default function InterviewRosterGallery({
               slots={slots}
               compact={compact}
               filter={filter}
+              showInterviewTitle={spansInterviews}
               onMove={requestMove}
               onRemove={onRemove}
             />

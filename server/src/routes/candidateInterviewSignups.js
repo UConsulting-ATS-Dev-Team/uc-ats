@@ -63,7 +63,7 @@ function respondToError(res, error, fallbackMessage) {
 
 /** The caller's application in the candidate-facing cycle, or a 404-ish null. */
 async function resolveOwnApplication(req) {
-  const cycle = await resolveCandidateCycle();
+  const cycle = await resolveCandidateCycle(prisma);
   if (!cycle) return { cycle: null, application: null };
   const application = await findOwnApplication(prisma, req.user, cycle.id);
   return { cycle, application };

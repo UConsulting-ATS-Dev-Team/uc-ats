@@ -18,6 +18,7 @@ import express from 'express';
 import prisma from '../prismaClient.js';
 import { resolveAdminCycle } from '../services/activeCycle.js';
 import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
+import { getRound } from '../utils/roundProgression.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate } from '../services/interviewSignups.js';
 import {
@@ -157,6 +158,154 @@ router.get('/interviews/:id/roster', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to load the interview roster');
+  }
+});
+
+// GET /api/admin/scheduling/overview
+//
+// The whole cycle's scheduling picture in one request, grouped by ROUND rather
+// than by interview. That grouping is the point: recruitment runs a coffee chat
+// day as two Interview rows ("Round 1" morning, "Round 2" afternoon), and
+// booking treats them as one pool, so an admin needs to see them as one pool
+// too. Looking at them one interview at a time is what made this impossible to
+// follow.
+router.get('/scheduling/overview', async (req, res) => {
+  try {
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.json({ cycle: null, rounds: [] });
+
+    const interviews = await prisma.interview.findMany({
+      where: { cycleId: cycle.id, status: { notIn: ['CANCELLED'] } },
+      orderBy: { startDate: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        interviewType: true,
+        location: true,
+        startDate: true,
+        status: true,
+        slots: {
+          orderBy: { startTime: 'asc' },
+          include: {
+            signups: {
+              where: { status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] } },
+              orderBy: [{ waitlistedAt: 'asc' }, { signedUpAt: 'asc' }],
+              include: {
+                application: {
+                  select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
+                },
+              },
+            },
+            assignments: {
+              where: { removedAt: null },
+              include: { user: { select: { id: true, fullName: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    // Bucket interviews by the round their candidates come from, so siblings land together.
+    const byRound = new Map();
+    for (const interview of interviews) {
+      const round = roundNumberForInterviewType(interview.interviewType);
+      if (!round) continue;
+      byRound.set(round, [...(byRound.get(round) ?? []), interview]);
+    }
+
+    const applicationsByRound = await prisma.application.groupBy({
+      by: ['currentRound'],
+      where: { cycleId: cycle.id, status: { notIn: ['REJECTED'] } },
+      _count: { _all: true },
+    });
+    const eligibleCount = new Map(applicationsByRound.map((row) => [row.currentRound, row._count._all]));
+
+    const rounds = [];
+    for (const [round, roundInterviews] of [...byRound.entries()].sort()) {
+      const slots = roundInterviews.flatMap((interview) =>
+        interview.slots.map((slot) => {
+          const confirmed = slot.signups.filter((s) => s.status === 'CONFIRMED');
+          return {
+            id: slot.id,
+            // Carried so a merged view can say which interview a session is in.
+            interviewId: interview.id,
+            interviewTitle: interview.title,
+            label: slot.label,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            location: slot.location || interview.location,
+            candidateCapacity: slot.candidateCapacity,
+            interviewerCapacity: slot.interviewerCapacity,
+            confirmedCount: confirmed.length,
+            isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
+            isBookable: slot.candidateCapacity != null,
+            signups: slot.signups.map((signup) => ({
+              id: signup.id,
+              status: signup.status,
+              applicationId: signup.applicationId,
+              slotId: signup.slotId,
+              waitlistedAt: signup.waitlistedAt,
+              heldSeatId: signup.heldSeatId,
+              movedById: signup.movedById,
+              candidate: signup.application,
+            })),
+            interviewers: slot.assignments.map((a) => ({ id: a.id, user: a.user })),
+          };
+        })
+      );
+
+      const placed = new Set(slots.flatMap((s) => s.signups.map((x) => x.applicationId)));
+      const unassigned = await prisma.application.findMany({
+        where: {
+          cycleId: cycle.id,
+          currentRound: round,
+          status: { notIn: ['REJECTED'] },
+          id: { notIn: [...placed] },
+        },
+        select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      });
+
+      const allSignups = slots.flatMap((s) => s.signups);
+      const bookable = slots.filter((s) => s.isBookable);
+      rounds.push({
+        round,
+        // Taken from ROUNDS rather than guessed from the interview type, which
+        // got the final round wrong: anything that was not a coffee chat came
+        // back labelled "First Round Interviews".
+        label: getRound(round)?.label ?? `Round ${round}`,
+        interviewType: roundInterviews[0].interviewType,
+        interviews: roundInterviews.map((i) => ({ id: i.id, title: i.title, startDate: i.startDate, status: i.status })),
+        slots,
+        unassigned,
+        stats: {
+          eligible: eligibleCount.get(round) ?? 0,
+          sessions: slots.length,
+          bookableSessions: bookable.length,
+          seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
+          confirmed: allSignups.filter((s) => s.status === 'CONFIRMED').length,
+          waitlisted: allSignups.filter((s) => s.status === 'WAITLISTED').length,
+          needsPlacement: allSignups.filter((s) => s.status === 'NEEDS_PLACEMENT').length,
+          unassigned: unassigned.length,
+          interviewers: slots.reduce((n, s) => n + s.interviewers.length, 0),
+        },
+      });
+    }
+
+    // Email health, so "did anyone actually get told" is answerable on the page.
+    const notifications = await prisma.interviewSlotNotification.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    });
+
+    res.json({
+      cycle: { id: cycle.id, name: cycle.name },
+      rounds,
+      notifications: Object.fromEntries(notifications.map((row) => [row.status, row._count._all])),
+      emailsEnabled: config.schedulingEmailsEnabled,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to load the scheduling overview');
   }
 });
 

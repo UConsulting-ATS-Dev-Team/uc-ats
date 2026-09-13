@@ -42,7 +42,7 @@ router.get('/interview-slots', async (req, res) => {
     if (!STAFF_ROLES.has(req.user.role)) {
       return res.status(403).json({ error: 'Member access required' });
     }
-    const cycle = await resolveAdminCycle();
+    const cycle = await resolveAdminCycle(prisma);
     if (!cycle) return res.json({ interviews: [] });
 
     const interviews = await prisma.interview.findMany({

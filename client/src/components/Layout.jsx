@@ -24,7 +24,8 @@ import {
   ChevronRightIcon,
   EnvelopeIcon,
   BriefcaseIcon,
-  QuestionMarkCircleIcon
+  QuestionMarkCircleIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -56,6 +57,7 @@ const ADMIN_NAV_SECTIONS = [
   {
     section: 'Interviews',
     items: [
+      { name: 'Interview Scheduling', href: '/admin/interview-scheduling', icon: ClockIcon },
       { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Question Bank', href: '/admin/question-bank', icon: QuestionMarkCircleIcon },
