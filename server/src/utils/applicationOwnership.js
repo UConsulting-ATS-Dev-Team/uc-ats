@@ -73,7 +73,19 @@ export async function findOwnApplication(client, user, cycleId) {
 
   const applications = await client.application.findMany({
     where: { ...owned, ...(cycleId ? { cycleId } : {}) },
-    select: { id: true, cycleId: true, currentRound: true, status: true, candidateId: true },
+    // email and name come along because callers that book something also have
+    // to tell the candidate about it. Leaving them out produced a booking that
+    // succeeded and then failed while queueing its own confirmation.
+    select: {
+      id: true,
+      cycleId: true,
+      currentRound: true,
+      status: true,
+      candidateId: true,
+      email: true,
+      firstName: true,
+      lastName: true
+    },
     take: 2
   });
 

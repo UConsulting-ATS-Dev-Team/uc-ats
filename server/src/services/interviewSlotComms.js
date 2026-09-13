@@ -38,6 +38,17 @@ export async function queueNotifications(tx, entries) {
   if (!entries?.length) return [];
   const created = [];
   for (const entry of entries) {
+    // A booking that worked must not fail because we could not work out who to
+    // tell. Skipping leaves no row, which is honest - there was never a message
+    // to send - and the seat still stands.
+    if (!entry.slotId || !entry.recipient) {
+      console.warn('[queueNotifications] skipped a notification with no slot or recipient', {
+        type: entry.type,
+        slotId: entry.slotId ?? null,
+        hasRecipient: Boolean(entry.recipient),
+      });
+      continue;
+    }
     created.push(
       await tx.interviewSlotNotification.create({
         data: {

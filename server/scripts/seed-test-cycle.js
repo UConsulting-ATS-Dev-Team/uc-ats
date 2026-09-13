@@ -6,6 +6,7 @@
 //   node scripts/seed-test-cycle.js --dry-run       # show the plan
 //   node scripts/seed-test-cycle.js                 # seed it
 //   node scripts/seed-test-cycle.js --size 300      # bigger
+//   node scripts/seed-test-cycle.js --logins        # print working test logins
 //   node scripts/seed-test-cycle.js --clear-interviews   # keep people, drop interviews
 //   node scripts/seed-test-cycle.js --wipe          # remove everything it made
 //
@@ -41,6 +42,10 @@ const wipe = args.includes('--wipe');
 // scheduled, which is the state you want in order to build the sessions
 // yourself and watch what happens.
 const clearInterviews = args.includes('--clear-interviews');
+// Names are drawn at random, so nobody can guess a working address. Printing
+// them is the difference between a test plan that works and one that sends a
+// tester chasing a login that never existed.
+const listLogins = args.includes('--logins');
 const cycleName = args.includes('--cycle') ? args[args.indexOf('--cycle') + 1] : 'Devin Test Cycle';
 const size = args.includes('--size') ? Number(args[args.indexOf('--size') + 1]) : 180;
 
@@ -191,6 +196,30 @@ function buildPlan(total) {
 async function main() {
   const cycle = await resolveCycle();
   log(`Cycle: ${cycle.name}  (${cycle.id})\n`);
+
+  if (listLogins) {
+    const people = await prisma.application.findMany({
+      where: { cycleId: cycle.id, responseID: { startsWith: MARKER }, currentRound: { in: ['2', '3'] } },
+      select: { email: true, firstName: true, lastName: true, currentRound: true },
+      orderBy: [{ currentRound: 'asc' }, { lastName: 'asc' }],
+    });
+    const withLogin = [];
+    for (const person of people) {
+      const user = await prisma.user.findUnique({ where: { email: person.email }, select: { id: true } });
+      if (user) withLogin.push(person);
+    }
+
+    log(`Password for all of them: ${PASSWORD}\n`);
+    for (const round of ['2', '3']) {
+      const group = withLogin.filter((p) => p.currentRound === round);
+      if (group.length === 0) continue;
+      log(`Round ${round} — ${round === '2' ? 'waiting on a coffee chat' : 'waiting on a first round'} (${group.length})`);
+      group.slice(0, 12).forEach((p) => log(`  ${p.email.padEnd(44)} ${p.firstName} ${p.lastName}`));
+      if (group.length > 12) log(`  ...and ${group.length - 12} more`);
+      log('');
+    }
+    return;
+  }
 
   if (clearInterviews) {
     const counts = await prisma.interview.count({ where: { cycleId: cycle.id } });
