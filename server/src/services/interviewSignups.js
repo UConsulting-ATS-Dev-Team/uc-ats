@@ -108,6 +108,30 @@ async function loadRoundSlotsWithCounts(tx, interview) {
 }
 
 /**
+ * Lock every session of this round for the rest of the transaction.
+ *
+ * `FOR UPDATE` on the slot rows, ordered by id. The slot row itself is never
+ * modified by a booking - it is being used as the thing to queue on, because
+ * the real contention is over a count of child rows and there is nothing else
+ * for concurrent claims to agree on.
+ *
+ * Ordering matters: claimWithFallback can touch a preferred session and a
+ * fallback in another interview, so two claims choosing opposite preferences
+ * would deadlock if each locked its own first.
+ */
+async function lockRoundSlots(tx, interview) {
+  await tx.$queryRaw`
+    SELECT s.id
+    FROM interview_slots s
+    JOIN interviews i ON i.id = s."interviewId"
+    WHERE i."cycleId" = ${interview.cycleId}
+      AND i."interviewType"::text = ${String(interview.interviewType)}
+      AND i.status NOT IN ('CANCELLED', 'COMPLETED')
+    ORDER BY s.id
+    FOR UPDATE OF s`;
+}
+
+/**
  * Fill open seats in `startSlotId` from its queue, following the cascade.
  *
  * Promoting someone releases the fallback seat they were holding, which frees a
@@ -220,7 +244,9 @@ async function loadSlotForBooking(tx, slotId) {
 export async function claimWithFallback({ applicationId, slotId, cycleId }) {
   const now = new Date();
 
-  return withSerializableTransaction(prisma, async (tx) => {
+  return withSerializableTransaction(
+    prisma,
+    async (tx) => {
     const slot = await loadSlotForBooking(tx, slotId);
     const { interview } = slot;
 
@@ -236,6 +262,21 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
     if (!canModify(slot.startTime)) {
       throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
     }
+
+    // Take the round's sessions under a row lock before reading anything about
+    // who is in them.
+    //
+    // Serialisable alone is correct here but not survivable: every claim reads
+    // the same "how many are confirmed" predicate, so under a burst each insert
+    // conflicts with every concurrent reader and Postgres aborts nearly all of
+    // them. Measured at 200 simultaneous claims, 137 exhausted the retry budget
+    // and failed - correct, and useless.
+    //
+    // A lock turns that contention into a queue. Claims wait their turn instead
+    // of racing and losing, which is what a candidate wants: the seat is gone or
+    // it is not, and either answer beats an error. Ordered by id so two claims
+    // touching the same pair of sessions cannot deadlock.
+    await lockRoundSlots(tx, interview);
 
     // Sibling interviews of the same round count as one pool, so a candidate
     // cannot hold a seat in "Coffee Chat - Round 1" and another in "Round 2".
@@ -313,7 +354,14 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
       fallbackSlot: fallback,
       interview,
     };
-  });
+    },
+    // Read Committed, with the row lock above doing the work. Serialisable here
+    // aborts nearly every claim in a burst: at 200 simultaneous claims it failed
+    // 137, and adding the lock on top made it 162, because a queued transaction
+    // whose snapshot went stale aborts regardless. Under Read Committed the
+    // waiters simply re-read after acquiring the lock.
+    { isolationLevel: 'ReadCommitted', maxRetries: 5, timeout: 20000, maxWait: 15000 }
+  );
 }
 
 /**

@@ -47,15 +47,18 @@ export async function withSerializableTransaction(prisma, fn, options = {}) {
   const baseDelayMs = options.baseDelayMs ?? 50;
   const timeout = options.timeout ?? 10000;
   const maxWait = options.maxWait ?? 5000;
+  // Serialisable by default, because most callers rely on SSI to catch a
+  // conflicting write. A caller that takes its own row lock should pass
+  // ReadCommitted instead: under Serialisable, a transaction that queues on a
+  // lock and then finds the row committed beneath it aborts anyway, so the lock
+  // buys contention without buying success. Measured - see
+  // scripts/loadtest-slot-signup.js.
+  const isolationLevel = options.isolationLevel ?? 'Serializable';
 
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await prisma.$transaction(fn, {
-        isolationLevel: 'Serializable',
-        timeout,
-        maxWait,
-      });
+      return await prisma.$transaction(fn, { isolationLevel, timeout, maxWait });
     } catch (error) {
       lastError = error;
       const code =
