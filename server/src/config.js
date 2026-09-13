@@ -61,6 +61,15 @@ const config = {
 
   corsOrigin,
 
+  /**
+   * Where operational alerts addressed to recruitment go - currently the
+   * "every interview slot is full, this candidate needs placing by hand" case.
+   * Falls back to the reply-to address, which is already monitored by whoever
+   * answers candidate mail, so an unset variable degrades to the right inbox
+   * rather than to nobody.
+   */
+  recruitmentEmail: process.env.RECRUITMENT_EMAIL || process.env.EMAIL_REPLY_TO || process.env.EMAIL_USER || null,
+
   form: formConfig,
 
   /** Fine-grained PAT with Issues write on the ATS repo */
