@@ -51,7 +51,11 @@ export default function InterviewStaffingSignup() {
         // below because it has nothing to claim.
         apiClient.get('/member/interviews').catch(() => []),
       ]);
-      setInterviews(data.interviews || []);
+      // Only coffee chats are claimed by the member. First round groups are
+      // built by recruitment out of the availability collected above - a member
+      // picking their own group there would decide the schedule before anyone
+      // knows who is free, which is the thing availability exists to prevent.
+      setInterviews((data.interviews || []).filter((i) => i.interviewType === 'COFFEE_CHAT'));
       // Coffee chats are not asked about here. Their sittings already exist and
       // members claim them outright below - asking "are you free for Morning
       // Session?" next to a button that signs you up for Morning Session is the
@@ -119,7 +123,7 @@ export default function InterviewStaffingSignup() {
         Interview Signup
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Pick the sessions you can run. You cannot take two that overlap.
+        Mark when you are free, and claim any coffee chat sittings you want to run.
       </Typography>
 
       {error && (
@@ -142,8 +146,8 @@ export default function InterviewStaffingSignup() {
             When can you interview?
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Recruitment builds the day around this, so it matters even where there is nothing to sign up
-            for yet.
+            Recruitment builds first round out of these answers — which hours run, how many interviews go
+            at once, and who is in each one. You do not pick your own group.
           </Typography>
           <Stack spacing={2}>
             {availabilityFor.map((interview) => (
@@ -157,7 +161,7 @@ export default function InterviewStaffingSignup() {
         <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
           <GroupsIcon color="disabled" sx={{ fontSize: 40, mb: 1 }} />
           <Typography variant="body2" color="text.secondary">
-            No interview sessions are set up yet. They will appear here once recruitment schedules them.
+            No coffee chat sittings to claim yet. They will appear here once recruitment schedules them.
           </Typography>
         </Paper>
       )}

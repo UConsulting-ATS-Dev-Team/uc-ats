@@ -13,7 +13,6 @@ import {
   Paper,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import { Warning as WarningIcon } from '@mui/icons-material';
@@ -157,6 +156,9 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   // "how many panels could run at 10:00" is not a question about it. Sizing the
   // day that way belongs to first round, where sessions are small and parallel.
   const sizesTheDay = data.interview.interviewType !== 'COFFEE_CHAT';
+  // Coverage rows carry user ids; names live on the roster. One lookup rather
+  // than a find() per person per hour.
+  const byId = new Map((data.staff ?? []).map((u) => [u.id, u]));
   const conflicts = (data.placements ?? []).filter((p) => p.conflict === 'OUTSIDE_AVAILABILITY');
 
   return (
@@ -234,46 +236,118 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
       </Stack>
       )}
 
-      {/* The answer recruitment is actually after - for first round. */}
+      {/* The hour, and who is in it.
+          This is where first round gets built: recruitment reads an hour, sees
+          who said they can be there, and drops those people into the groups
+          sitting at that hour. Names, not a headcount - "6 free" cannot be
+          acted on, and an admin who has to cross-reference a number against a
+          list further down the page is back to doing it on paper. */}
       {sizesTheDay && (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="overline" color="text.secondary">
-          How many panels each hour could support
+          Who is free, hour by hour
         </Typography>
         {data.coverage.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             This interview has no time range to lay out yet.
           </Typography>
         ) : (
-          <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap', gap: 1 }}>
+          <Stack spacing={1.25} sx={{ mt: 1.5 }}>
             {data.coverage.map((row) => {
               const tone = toneFor(row, Number(wanted) || null);
+              // The groups sitting in this hour. A group counts as in the hour
+              // if it overlaps it at all, so a 90-minute group shows up in both
+              // hours it touches rather than falling between them.
+              const groupsHere = data.sessions.filter(
+                (session) =>
+                  new Date(session.startTime) < new Date(row.endTime) &&
+                  new Date(session.endTime) > new Date(row.startTime)
+              );
+              const free = (row.userIds ?? []).map(
+                (id) => byId.get(id) ?? { id, fullName: 'Unknown' }
+              );
+
               return (
-                <Tooltip
+                <Paper
                   key={row.startTime}
-                  title={`${row.availableInterviewers} interviewer${row.availableInterviewers === 1 ? '' : 's'} free`}
+                  variant="outlined"
+                  sx={{ p: 1.5, borderColor: `${tone.color}.main`, borderWidth: tone.color === 'success' ? 1 : 2 }}
                 >
-                  <Paper
-                    variant="outlined"
-                    sx={{
-                      px: 1.25,
-                      py: 0.75,
-                      minWidth: 96,
-                      borderColor: `${tone.color}.main`,
-                      borderWidth: tone.color === 'success' ? 1 : 2,
-                    }}
-                  >
-                    <Typography variant="caption" fontWeight={700} display="block">
+                  <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 1 }}>
+                    <Typography variant="body2" fontWeight={700}>
                       {formatTime(row.startTime)} – {formatTime(row.endTime)}
                     </Typography>
                     <Typography variant="caption" color={`${tone.color}.main`}>
-                      {tone.label}
+                      {row.availableInterviewers} free · {tone.label}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      {row.availableInterviewers} free
+                  </Stack>
+
+                  {free.length === 0 ? (
+                    <Typography variant="caption" color="text.secondary">
+                      Nobody has said they can make this hour.
                     </Typography>
-                  </Paper>
-                </Tooltip>
+                  ) : groupsHere.length === 0 ? (
+                    <>
+                      <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mb: 0.75 }}>
+                        {free.map((u) => (
+                          <Chip key={u.id} size="small" variant="outlined" label={fullName(u)} />
+                        ))}
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary">
+                        No groups at this hour yet — add one under Sessions, then place these people into it.
+                      </Typography>
+                    </>
+                  ) : (
+                    <Stack spacing={0.5}>
+                      {free.map((u) => {
+                        // Where this person already is in this hour, if anywhere.
+                        const already = groupsHere.find((session) =>
+                          session.assigned.some((a) => a.id === u.id)
+                        );
+                        return (
+                          <Stack
+                            key={u.id}
+                            direction="row"
+                            spacing={1}
+                            alignItems="center"
+                            sx={{ flexWrap: 'wrap', gap: 0.5 }}
+                          >
+                            <Typography variant="body2" sx={{ minWidth: 170 }}>
+                              {fullName(u)}
+                            </Typography>
+                            {already ? (
+                              <Chip
+                                size="small"
+                                color="success"
+                                variant="outlined"
+                                label={`In ${already.label || formatTimeRange(already.startTime, already.endTime)}`}
+                              />
+                            ) : (
+                              <TextField
+                                select
+                                size="small"
+                                value=""
+                                disabled={busy}
+                                label="Add to…"
+                                onChange={(e) => place(e.target.value, u.id)}
+                                sx={{ minWidth: 200 }}
+                              >
+                                {groupsHere.map((session) => (
+                                  <MenuItem key={session.id} value={session.id}>
+                                    {session.label || formatTimeRange(session.startTime, session.endTime)}
+                                    {session.interviewerCapacity != null
+                                      ? ` (${session.assigned.length}/${session.interviewerCapacity})`
+                                      : ''}
+                                  </MenuItem>
+                                ))}
+                              </TextField>
+                            )}
+                          </Stack>
+                        );
+                      })}
+                    </Stack>
+                  )}
+                </Paper>
               );
             })}
           </Stack>

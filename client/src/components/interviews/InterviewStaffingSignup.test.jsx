@@ -23,8 +23,36 @@ describe('InterviewStaffingSignup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.get.mockImplementation((url) =>
-      url === '/member/interviews' ? Promise.resolve(mine) : Promise.resolve({ interviews: [] })
+      url === '/member/interviews'
+        ? Promise.resolve(mine)
+        : Promise.resolve({
+            interviews: [
+              {
+                id: 'cc1',
+                title: 'W27 Coffee Chats',
+                interviewType: 'COFFEE_CHAT',
+                slots: [{ id: 'm1', label: 'Morning Session', startTime: '2026-10-06T16:00:00.000Z', endTime: '2026-10-06T18:00:00.000Z', candidateCount: 0, interviewers: [], interviewerCapacity: 4 }],
+              },
+              {
+                id: 'fr1',
+                title: 'W27 First Round',
+                interviewType: 'ROUND_ONE',
+                slots: [{ id: 'g1', label: 'Group 1A', startTime: '2026-10-06T16:00:00.000Z', endTime: '2026-10-06T17:00:00.000Z', candidateCount: 4, interviewers: [], interviewerCapacity: 2 }],
+              },
+            ],
+          })
     );
+  });
+
+  it('lets members claim coffee chat sittings but never first round groups', async () => {
+    render(<InterviewStaffingSignup />);
+
+    // Recruitment builds first round groups out of availability. A member
+    // picking their own group decides the schedule before anyone knows who is
+    // free, which is the thing availability exists to prevent.
+    expect(await screen.findByText('Morning Session')).toBeInTheDocument();
+    expect(screen.queryByText('Group 1A')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /sign up to run this/i })).toHaveLength(1);
   });
 
   it('asks for availability only where the sessions do not exist yet', async () => {

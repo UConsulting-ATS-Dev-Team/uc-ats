@@ -21,7 +21,11 @@ const payload = {
     endDate: '2026-10-06T19:00:00.000Z',
   },
   cadence: { minutes: 60, interviewersPerSession: 2 },
-  coverage: [],
+  coverage: [
+    // 9-10 has a group sitting in it; 10-11 has nobody free.
+    { startTime: '2026-10-06T16:00:00.000Z', endTime: '2026-10-06T17:00:00.000Z', availableInterviewers: 2, userIds: ['u1', 'u2'], possibleSessions: 1 },
+    { startTime: '2026-10-06T18:00:00.000Z', endTime: '2026-10-06T19:00:00.000Z', availableInterviewers: 0, userIds: [], possibleSessions: 0 },
+  ],
   interviewers: [
     {
       user: rsvped,
@@ -63,6 +67,44 @@ const payload = {
 const sessionCard = (label) =>
   within(screen.getByText(label).closest('.MuiPaper-root'));
 
+describe('InterviewerCoverage hour grid', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiClient.get.mockResolvedValue(payload);
+    apiClient.post.mockResolvedValue({});
+  });
+
+  it('names who is free in each hour rather than only counting them', async () => {
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    // A headcount cannot be acted on - the point is to read an hour and place
+    // the people in it.
+    const hour = within((await screen.findByText('9:00 AM – 10:00 AM')).closest('.MuiPaper-root'));
+    expect(hour.getByText('Ada Reyes')).toBeInTheDocument();
+    expect(hour.getByText('Ben Ortiz')).toBeInTheDocument();
+  });
+
+  it('places a free member into a group sitting in that hour', async () => {
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    const hour = within((await screen.findByText('9:00 AM – 10:00 AM')).closest('.MuiPaper-root'));
+    // Ada is already in Group 1A this hour, so Ben is the one with a picker.
+    await userEvent.click(hour.getAllByLabelText('Add to…')[0]);
+    await userEvent.click(await screen.findByRole('option', { name: /Group 1A/ }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/slots/s1/interviewers', { userId: 'u2' })
+    );
+  });
+
+  it('says so when an hour has nobody in it', async () => {
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    const hour = within((await screen.findByText('11:00 AM – 12:00 PM')).closest('.MuiPaper-root'));
+    expect(hour.getByText(/Nobody has said they can make this hour/)).toBeInTheDocument();
+  });
+});
+
 describe('InterviewerCoverage placement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -77,8 +119,10 @@ describe('InterviewerCoverage placement', () => {
     const pickers = await screen.findAllByPlaceholderText('Add anyone else…');
     await userEvent.click(pickers[0]);
 
-    // Ben is selectable even though he is not in canCover.
-    await userEvent.click(await screen.findByText('Ben Ortiz'));
+    // Ben is selectable even though he is not in canCover. Scoped to the
+    // dropdown - his name also appears in the hour grid above.
+    const listbox = within(await screen.findByRole('listbox'));
+    await userEvent.click(listbox.getByText('Ben Ortiz'));
 
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/slots/s1/interviewers', { userId: 'u2' })
