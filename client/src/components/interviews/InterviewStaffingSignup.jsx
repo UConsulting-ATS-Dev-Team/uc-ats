@@ -47,12 +47,17 @@ export default function InterviewStaffingSignup() {
         apiClient.get('/member/interview-slots'),
         // Every interview this member is on, sessions or not - an interview
         // with no sessions yet is exactly the one whose availability decides
-        // how many sessions it gets.
+        // how many sessions it gets, and it cannot appear in the claim list
+        // below because it has nothing to claim.
         apiClient.get('/member/interviews').catch(() => []),
       ]);
       setInterviews(data.interviews || []);
+      // Coffee chats are not asked about here. Their sittings already exist and
+      // members claim them outright below - asking "are you free for Morning
+      // Session?" next to a button that signs you up for Morning Session is the
+      // same question twice, and only one of them does anything.
       setAvailabilityFor(
-        (mine || []).filter((i) => ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND', 'ROUND_TWO'].includes(i.interviewType))
+        (mine || []).filter((i) => ['ROUND_ONE', 'FINAL_ROUND', 'ROUND_TWO'].includes(i.interviewType))
       );
     } catch (e) {
       setError(e.message || 'Failed to load interview sessions.');

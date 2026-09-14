@@ -94,30 +94,4 @@ describe('InterviewerAvailability', () => {
     expect(screen.queryByText('Group 1B')).not.toBeInTheDocument();
   });
 
-  it('asks a coffee chat by its named sessions, not by the hour', async () => {
-    apiClient.get.mockResolvedValue({
-      interview: {
-        id: 'i2',
-        title: 'Coffee Chats',
-        interviewType: 'COFFEE_CHAT',
-        startDate: '2026-10-06T16:00:00.000Z',
-        endDate: '2026-10-06T23:00:00.000Z',
-        slots: [
-          {
-            id: 's1',
-            label: 'Morning Session',
-            startTime: '2026-10-06T16:00:00.000Z',
-            endTime: '2026-10-06T18:00:00.000Z',
-            interviewerCapacity: 4,
-          },
-        ],
-      },
-      windows: [],
-      assignments: [],
-    });
-    render(<InterviewerAvailability interviewId="i2" />);
-
-    expect(await screen.findByText('Morning Session')).toBeInTheDocument();
-    expect(screen.queryByText('9:00 AM - 10:00 AM')).not.toBeInTheDocument();
-  });
 });

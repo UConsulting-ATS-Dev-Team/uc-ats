@@ -3,10 +3,8 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
-  FormControlLabel,
   Paper,
   Stack,
   TextField,
@@ -22,12 +20,13 @@ import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
  * first round needs two panels at 10:00 or four until it knows how many people
  * can be there at 10:00.
  *
- * Two ways of asking, one answer underneath. A coffee chat has named sittings
- * that everybody recognises, so it offers those as checkboxes. A first round
- * usually has no sessions yet - that is the point - so it offers every hour
- * inside the day recruitment described, to be ticked.
+ * Only rounds whose sessions do not exist yet are asked about here - first and
+ * final round. A coffee chat's sittings are already built and members claim
+ * them outright, so asking "are you free for Morning Session?" beside a button
+ * that signs you up for Morning Session is the same question twice, and only
+ * one of them does anything.
  *
- * Both save the same thing: windows of time. An hour ticked is an hour-long
+ * The answer is saved as windows of time. An hour ticked is an hour-long
  * window; contiguous ticks merge server-side, so ticking 9, 10 and 11 says
  * "I can do 9 to 12" without anyone having to phrase it that way.
  */
@@ -59,7 +58,6 @@ function hoursWithin(startDate, endDate) {
 
 export default function InterviewerAvailability({ interviewId, onSaved }) {
   const [data, setData] = useState(null);
-  const [checkedSessions, setCheckedSessions] = useState([]);
   const [checkedHours, setCheckedHours] = useState([]);
   const [hours, setHours] = useState([]);
   const [note, setNote] = useState('');
@@ -89,18 +87,6 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
           .map((hour) => hour.key)
       );
       setNote((result.windows ?? []).find((w) => w.note)?.note ?? '');
-      // A window that exactly matches a session is that session ticked.
-      setCheckedSessions(
-        (result.interview.slots ?? [])
-          .filter((slot) =>
-            (result.windows ?? []).some(
-              (w) =>
-                new Date(w.startTime).getTime() <= new Date(slot.startTime).getTime() &&
-                new Date(w.endTime).getTime() >= new Date(slot.endTime).getTime()
-            )
-          )
-          .map((slot) => slot.id)
-      );
 
     } catch (e) {
       setError(e.message || 'Failed to load your availability.');
@@ -122,25 +108,12 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
   }
   if (!data) return null;
 
-  const sessions = data.interview.slots ?? [];
-  // Branch on what the interview IS, not on whether sessions happen to exist
-  // yet. A coffee chat is two named sittings and always asks that way. A first
-  // round asks by the hour even once its groups are built: a member saying
-  // "I can be there 11 to 12" is not choosing to run group 1B, and showing
-  // them two identical "11:00 AM - 12:00 PM" cards for two parallel groups is
-  // a question about the schedule dressed up as a question about them.
-  const bySession = data.interview.interviewType === 'COFFEE_CHAT' && sessions.length > 0;
-
   const save = async () => {
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      const windows = bySession
-        ? sessions
-            .filter((slot) => checkedSessions.includes(slot.id))
-            .map((slot) => ({ startTime: slot.startTime, endTime: slot.endTime }))
-        : hours
+      const windows = hours
             .filter((hour) => checkedHours.includes(hour.key))
             .map((hour) => ({
               startTime: hour.startTime.toISOString(),
@@ -169,10 +142,9 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
         {data.interview.title}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        {formatDay(data.interview.startDate)} ·{' '}
-        {bySession
-          ? 'Tick the sessions you can run.'
-          : `Open ${formatTimeRange(data.interview.startDate, data.interview.endDate)}. Tick the hours you can be there.`}
+        {formatDay(data.interview.startDate)} · Open{' '}
+        {formatTimeRange(data.interview.startDate, data.interview.endDate)}. Tick the hours you can be
+        there.
       </Typography>
 
       {error && (
@@ -194,84 +166,51 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
         </Alert>
       )}
 
-      {bySession ? (
-        <Stack spacing={0.5}>
-          {sessions.map((slot) => (
-            <FormControlLabel
-              key={slot.id}
-              control={
-                <Checkbox
-                  checked={checkedSessions.includes(slot.id)}
-                  onChange={(e) =>
-                    setCheckedSessions((current) =>
-                      e.target.checked ? [...current, slot.id] : current.filter((id) => id !== slot.id)
-                    )
-                  }
-                />
-              }
-              label={
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="body2" fontWeight={600}>
-                    {slot.label || formatTimeRange(slot.startTime, slot.endTime)}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {formatTimeRange(slot.startTime, slot.endTime)}
-                  </Typography>
-                  {slot.interviewerCapacity ? (
-                    <Chip size="small" variant="outlined" label={`wants ${slot.interviewerCapacity}`} />
-                  ) : null}
-                </Stack>
-              }
-            />
-          ))}
+      <Stack spacing={1.5}>
+        <Typography variant="body2" color="text.secondary">
+          Recruitment decides how many interviews run at once from how many of us can be there.
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {hours.map((hour) => {
+            const on = checkedHours.includes(hour.key);
+            return (
+              <Chip
+                key={hour.key}
+                label={hour.label}
+                color={on ? 'primary' : 'default'}
+                variant={on ? 'filled' : 'outlined'}
+                onClick={() =>
+                  setCheckedHours((current) =>
+                    on ? current.filter((k) => k !== hour.key) : [...current, hour.key]
+                  )
+                }
+                sx={{ fontWeight: on ? 600 : 400 }}
+              />
+            );
+          })}
         </Stack>
-      ) : (
-        <Stack spacing={1.5}>
-          <Typography variant="body2" color="text.secondary">
-            Recruitment decides how many interviews run at once from how many of us can be there.
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-            {hours.map((hour) => {
-              const on = checkedHours.includes(hour.key);
-              return (
-                <Chip
-                  key={hour.key}
-                  label={hour.label}
-                  color={on ? 'primary' : 'default'}
-                  variant={on ? 'filled' : 'outlined'}
-                  onClick={() =>
-                    setCheckedHours((current) =>
-                      on ? current.filter((k) => k !== hour.key) : [...current, hour.key]
-                    )
-                  }
-                  sx={{ fontWeight: on ? 600 : 400 }}
-                />
-              );
-            })}
-          </Stack>
-          {hours.length === 0 && (
-            <Alert severity="info">
-              This interview has no time range yet, so there are no hours to mark.
-            </Alert>
-          )}
-          <Stack direction="row" spacing={1}>
-            <Button size="small" onClick={() => setCheckedHours(hours.map((h) => h.key))}>
-              All day
-            </Button>
-            <Button size="small" onClick={() => setCheckedHours([])}>
-              None
-            </Button>
-          </Stack>
-          <TextField
-            size="small"
-            label="Anything we should know"
-            placeholder="Leaving at 3 for class"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            fullWidth
-          />
+        {hours.length === 0 && (
+          <Alert severity="info">
+            This interview has no time range yet, so there are no hours to mark.
+          </Alert>
+        )}
+        <Stack direction="row" spacing={1}>
+          <Button size="small" onClick={() => setCheckedHours(hours.map((h) => h.key))}>
+            All day
+          </Button>
+          <Button size="small" onClick={() => setCheckedHours([])}>
+            None
+          </Button>
         </Stack>
-      )}
+        <TextField
+          size="small"
+          label="Anything we should know"
+          placeholder="Leaving at 3 for class"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          fullWidth
+        />
+      </Stack>
 
       <Box sx={{ mt: 2 }}>
         <Button variant="contained" onClick={save} disabled={busy}>
