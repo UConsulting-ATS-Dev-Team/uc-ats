@@ -37,6 +37,7 @@ import InterviewSlotSetup from '../components/interviews/InterviewSlotSetup';
 import CandidateSchedulingPreview from '../components/interviews/CandidateSchedulingPreview';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
+import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
 
 /**
  * Interviews - one page, two jobs.
@@ -508,6 +509,7 @@ export default function AdminInterviews() {
 
                     <Tabs value={view} onChange={(e, next) => setView(next)} sx={{ mb: 2 }}>
                       <Tab value="sessions" label="Sessions" />
+                      <Tab value="interviewers" label="Interviewers" />
                       <Tab value="candidate" label="Candidate view" />
                       <Tab value="manage" label="Manage interviews" />
                     </Tabs>
@@ -528,6 +530,26 @@ export default function AdminInterviews() {
                         onRegroup={regroup}
                       />
                     )}
+                    {view === 'interviewers' &&
+                      (active.interviews.length === 0 ? (
+                        <Alert severity="info">
+                          Create the interview first — availability is collected against it, and there is
+                          nothing to collect against yet.
+                        </Alert>
+                      ) : (
+                        <Stack spacing={3}>
+                          {active.interviews.map((interview) => (
+                            <Box key={interview.id}>
+                              {active.interviews.length > 1 && (
+                                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                                  {interview.title}
+                                </Typography>
+                              )}
+                              <InterviewerCoverage interviewId={interview.id} onChanged={load} />
+                            </Box>
+                          ))}
+                        </Stack>
+                      ))}
                     {view === 'candidate' && <CandidateSchedulingPreview />}
                     {view === 'manage' && <InterviewManageList cycle={data?.cycle} onChanged={load} />}
                   </>

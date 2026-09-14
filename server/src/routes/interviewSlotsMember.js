@@ -186,4 +186,86 @@ router.delete('/interview-slot-assignments/:id', async (req, res) => {
   }
 });
 
+// GET /api/member/interviews/:id/availability
+// What this member has already said, plus the sessions if any exist yet.
+router.get('/interviews/:id/availability', async (req, res) => {
+  try {
+    if (!STAFF_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Member access required' });
+    }
+    const interview = await prisma.interview.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, title: true, interviewType: true, location: true, startDate: true, endDate: true,
+        slots: {
+          orderBy: { startTime: 'asc' },
+          select: { id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true },
+        },
+      },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const windows = await prisma.interviewerAvailability.findMany({
+      where: { interviewId: interview.id, userId: req.user.id },
+      orderBy: { startTime: 'asc' },
+    });
+    const assignments = await prisma.interviewSlotAssignment.findMany({
+      where: { interviewId: interview.id, userId: req.user.id, removedAt: null },
+      select: { id: true, slotId: true },
+    });
+
+    res.json({ interview, windows, assignments });
+  } catch (error) {
+    fail(res, error, 'Failed to load your availability');
+  }
+});
+
+// PUT /api/member/interviews/:id/availability   { windows: [{start, end, note}] }
+//
+// Replaces this member's windows wholesale. A form that says "here is when I am
+// free" is a statement about the whole day, so merging it with what was said
+// before would quietly keep a time somebody had just removed.
+router.put('/interviews/:id/availability', async (req, res) => {
+  try {
+    if (!STAFF_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Member access required' });
+    }
+    const { id } = req.params;
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const rows = [];
+    for (const [index, window] of (req.body?.windows ?? []).entries()) {
+      const startTime = new Date(window.startTime);
+      const endTime = new Date(window.endTime);
+      if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
+        return res.status(400).json({ error: `Window ${index + 1} has an invalid time` });
+      }
+      if (endTime <= startTime) {
+        return res.status(400).json({ error: `Window ${index + 1} ends before it starts` });
+      }
+      rows.push({
+        interviewId: id,
+        userId: req.user.id,
+        startTime,
+        endTime,
+        note: window.note?.trim() || null,
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.interviewerAvailability.deleteMany({ where: { interviewId: id, userId: req.user.id } }),
+      ...(rows.length ? [prisma.interviewerAvailability.createMany({ data: rows })] : []),
+    ]);
+
+    const windows = await prisma.interviewerAvailability.findMany({
+      where: { interviewId: id, userId: req.user.id },
+      orderBy: { startTime: 'asc' },
+    });
+    res.json({ windows });
+  } catch (error) {
+    fail(res, error, 'Failed to save your availability');
+  }
+});
+
 export default router;

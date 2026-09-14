@@ -22,6 +22,11 @@ import { getRound } from '../utils/roundProgression.js';
 import { parseLegacyConfig } from '../services/interviewRoster.js';
 import { combine, planSessions } from '../services/slotPlanner.js';
 import {
+  conflictsWithAvailability,
+  coverageByTime,
+  whoCanCover,
+} from '../services/interviewerAvailability.js';
+import {
   EMPTY_REASONS,
   getBookingOptions,
   getOwnSignups,
@@ -800,6 +805,99 @@ router.delete('/interviews/slots/:slotId/groups', async (req, res) => {
     res.json({ cleared: count });
   } catch (error) {
     fail(res, error, 'Failed to clear those groups');
+  }
+});
+
+// GET /api/admin/interviews/:id/availability?minutes=60&per=2
+//
+// Who said they can interview, and what that means for the day.
+//
+// The coverage grid is the point: it answers "how many panels can we run at
+// 10:00" before anybody builds the schedule, which is the question that decides
+// whether first round needs one room at a time or four.
+router.get('/interviews/:id/availability', async (req, res) => {
+  try {
+    const interview = await prisma.interview.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, title: true, interviewType: true, startDate: true, endDate: true,
+        slots: {
+          orderBy: { startTime: 'asc' },
+          select: {
+            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true,
+            assignments: {
+              where: { removedAt: null },
+              select: { id: true, userId: true, user: { select: { id: true, fullName: true, email: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const windows = await prisma.interviewerAvailability.findMany({
+      where: { interviewId: interview.id },
+      include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
+      orderBy: [{ userId: 'asc' }, { startTime: 'asc' }],
+    });
+
+    const minutes = Number(req.query.minutes) || 60;
+    const perSession = Number(req.query.per) || 2;
+    const grid = coverageByTime(windows, {
+      start: interview.startDate,
+      end: interview.endDate,
+      minutes,
+      interviewersPerSession: perSession,
+    });
+
+    const byUser = new Map();
+    for (const window of windows) {
+      const entry = byUser.get(window.userId) ?? { user: window.user, windows: [] };
+      entry.windows.push({ id: window.id, startTime: window.startTime, endTime: window.endTime, note: window.note });
+      byUser.set(window.userId, entry);
+    }
+
+    // Who is already placed where, and whether that contradicts what they said.
+    // Reported rather than blocked: an admin may know something the form does
+    // not, and somebody who can suddenly make 4pm should not have to re-submit
+    // a form before being put there.
+    const placements = interview.slots.flatMap((slot) =>
+      slot.assignments.map((assignment) => ({
+        assignmentId: assignment.id,
+        slotId: slot.id,
+        slotLabel: slot.label,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        user: assignment.user,
+        conflict: conflictsWithAvailability(windows, assignment.userId, slot.startTime, slot.endTime),
+      }))
+    );
+
+    res.json({
+      interview: {
+        id: interview.id, title: interview.title, interviewType: interview.interviewType,
+        startDate: interview.startDate, endDate: interview.endDate,
+      },
+      cadence: { minutes, interviewersPerSession: perSession },
+      coverage: grid,
+      interviewers: [...byUser.values()].sort((a, b) =>
+        (a.user.fullName ?? '').localeCompare(b.user.fullName ?? '')
+      ),
+      sessions: interview.slots.map((slot) => ({
+        id: slot.id,
+        label: slot.label,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        interviewerCapacity: slot.interviewerCapacity,
+        // Who could staff this session, so an admin placing somebody is choosing
+        // from people who said yes rather than from the whole roster.
+        canCover: whoCanCover(windows, slot.startTime, slot.endTime),
+        assigned: slot.assignments.map((a) => a.user),
+      })),
+      placements,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to load interviewer availability');
   }
 });
 

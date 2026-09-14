@@ -18,6 +18,7 @@ import {
   LocationOn as LocationIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
+import InterviewerAvailability from './InterviewerAvailability';
 import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
 
 const slotHeading = (slot) => slot.label || formatTimeRange(slot.startTime, slot.endTime);
@@ -33,6 +34,7 @@ const slotHeading = (slot) => slot.label || formatTimeRange(slot.startTime, slot
  */
 export default function InterviewStaffingSignup() {
   const [interviews, setInterviews] = useState([]);
+  const [availabilityFor, setAvailabilityFor] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -41,8 +43,17 @@ export default function InterviewStaffingSignup() {
   const load = useCallback(async () => {
     try {
       setError('');
-      const data = await apiClient.get('/member/interview-slots');
+      const [data, mine] = await Promise.all([
+        apiClient.get('/member/interview-slots'),
+        // Every interview this member is on, sessions or not - an interview
+        // with no sessions yet is exactly the one whose availability decides
+        // how many sessions it gets.
+        apiClient.get('/member/interviews').catch(() => []),
+      ]);
       setInterviews(data.interviews || []);
+      setAvailabilityFor(
+        (mine || []).filter((i) => ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND', 'ROUND_TWO'].includes(i.interviewType))
+      );
     } catch (e) {
       setError(e.message || 'Failed to load interview sessions.');
     } finally {
@@ -115,6 +126,26 @@ export default function InterviewStaffingSignup() {
         <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>
           {notice}
         </Alert>
+      )}
+
+      {/* Availability comes before staffing, and often before the sessions
+          exist at all - it is what recruitment sizes the day against. Shown
+          first for the same reason. */}
+      {availabilityFor.length > 0 && (
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+            When can you interview?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Recruitment builds the day around this, so it matters even where there is nothing to sign up
+            for yet.
+          </Typography>
+          <Stack spacing={2}>
+            {availabilityFor.map((interview) => (
+              <InterviewerAvailability key={interview.id} interviewId={interview.id} onSaved={load} />
+            ))}
+          </Stack>
+        </Box>
       )}
 
       {interviews.length === 0 && (

@@ -50,6 +50,7 @@ model User {
   completedActionItems       InterviewActionItem[]           @relation("InterviewActionItemCompletion")
   interviewAssignments       InterviewAssignment[]           @relation("InterviewAssignment")
   interviewSlotAssignments   InterviewSlotAssignment[]       @relation("InterviewSlotAssignment")
+  interviewerAvailability    InterviewerAvailability[]       @relation("InterviewerAvailability")
   interviewEvaluations       InterviewEvaluation[]           @relation("InterviewEvaluator")
   interviewResources         InterviewResource[]
   createdInterviews          Interview[]                     @relation("InterviewCreator")
@@ -777,8 +778,43 @@ model Interview {
   cycle                 RecruitingCycle                 @relation(fields: [cycleId], references: [id])
   caseAssignments       CaseAssignment[]
   slots                 InterviewSlot[]
+  availability          InterviewerAvailability[]
 
   @@map("interviews")
+}
+
+/// When an interviewer says they are free, before anyone decides what the day
+/// looks like.
+///
+/// Deliberately not attached to a session. The whole point is that it comes
+/// first: recruitment cannot know whether first round needs two panels at 10:00
+/// or four until it knows how many people can be there at 10:00. Hanging this
+/// off InterviewSlot would require the sessions to exist before the information
+/// that decides how many there should be.
+///
+/// Stored as windows rather than ticked boxes for the same reason. "I can do
+/// 9 to 12" answers a question nobody has asked yet; "I can do the 10:00
+/// session" only answers it once that session exists. For a coffee chat, whose
+/// sessions are named and known up front, the page offers those as checkboxes
+/// and records the window behind them - one model, two ways of asking.
+model InterviewerAvailability {
+  id          String   @id @default(uuid())
+  interviewId String
+  userId      String
+  startTime   DateTime
+  endTime     DateTime
+  /// "Can only do the morning", "leaving at 3 for class" - the thing a
+  /// scheduling grid cannot express and an admin needs anyway.
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  user      User      @relation("InterviewerAvailability", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([interviewId, startTime])
+  @@index([userId])
+  @@map("interviewer_availability")
 }
 
 /// One bookable sitting of an interview.
