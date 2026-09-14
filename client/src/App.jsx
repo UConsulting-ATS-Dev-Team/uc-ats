@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Route, Routes, Navigate, useLocation } from 'react-router-dom';
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import { GOOGLE_CLIENT_ID, googleSignInEnabled } from './utils/googleSignIn';
 import ApplicationList from './pages/ApplicationList';
 import ApplicationDetail from './pages/ApplicationDetail';
 import Login from './pages/Login';
 import SignUp from './pages/SignUp';
 import MemberSignUp from './pages/MemberSignUp';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import ClientLayout from './components/ClientLayout';
@@ -216,6 +219,10 @@ const AppRoutes = () => {
       {/* The candidate half of the same link. Public for the same reason: the
           email is usually opened in a browser that has no session. */}
       <Route path="/verify-email" element={<VerifyEmail audience="candidate" />} />
+
+      {/* Public and outside ProtectedRoute on purpose: Google will not publish
+          an OAuth consent screen whose privacy policy sits behind a login. */}
+      <Route path="/privacy" element={<PrivacyPolicy />} />
       
       <Route path="/" element={<HomeRoute />} />
       
@@ -619,7 +626,7 @@ export default function App() {
     document.body.style.fontWeight = '300';
   }, []);
 
-  return (
+  const tree = (
     <AuthProvider>
       <ExecUnlockProvider>
         <DataProvider>
@@ -629,5 +636,16 @@ export default function App() {
         </DataProvider>
       </ExecUnlockProvider>
     </AuthProvider>
+  );
+
+  // Outside AuthProvider on purpose: AuthProvider renders nothing until the
+  // /auth/verify round trip settles, so anything inside it would only start
+  // loading Google's script after that, and the button would paint late on the
+  // one page that needs it. Conditional so a checkout without the env var
+  // behaves exactly as it did before.
+  return googleSignInEnabled ? (
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>{tree}</GoogleOAuthProvider>
+  ) : (
+    tree
   );
 }

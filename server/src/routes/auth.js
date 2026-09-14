@@ -10,6 +10,7 @@ import {
   sendPasswordResetConfirmationEmail,
   sendEmailVerification
 } from '../services/emailNotifications.js';
+import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
 import {
   sanitizeExternalSignup,
   createVerificationToken,
@@ -37,9 +38,14 @@ const publicUser = (user) => {
     resetTokenExpiry: _resetTokenExpiry,
     emailVerificationToken: _emailVerificationToken,
     emailVerificationExpiry: _emailVerificationExpiry,
+    googleId: _googleId,
     ...safe
   } = user;
-  return safe;
+  // Two derived booleans instead of the raw values. The UI has to be able to
+  // tell somebody how they sign in - a Google-created account has no password,
+  // and offering it a password box is a dead end - but googleId itself is a
+  // stable Google account identifier the browser has no use for.
+  return { ...safe, hasPassword: _password != null, hasGoogle: _googleId != null };
 };
 
 const signToken = (user) =>
@@ -52,8 +58,13 @@ const signToken = (user) =>
 // Register new user
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, fullName, graduationClass, studentId } = req.body;
-    
+    const { email: rawEmail, password, fullName, graduationClass, studentId } = req.body;
+
+    // Stored lowercased. This endpoint used to keep whatever case was typed,
+    // which made `Joe@ucla.edu` and `joe@ucla.edu` two different rows to the
+    // unique index and one mailbox to everybody else.
+    const email = normalizeEmail(rawEmail);
+
     // Validate required fields
     if (!email || !password || !fullName || !graduationClass || !studentId) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -65,8 +76,8 @@ router.post('/register', async (req, res) => {
     }
     
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
+    const existingUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } }
     });
     
     if (existingUser) {
@@ -77,14 +88,28 @@ router.post('/register', async (req, res) => {
     const existingStudentId = await prisma.user.findFirst({
       where: { studentId: studentId }
     });
-    
+
     if (existingStudentId) {
-      return res.status(400).json({ error: 'Student ID is already registered' });
+      // The email check above already returned, so reaching here means the
+      // address is free and the student ID is not: the same person, under
+      // another address. Google sign-in makes that likelier than it used to be
+      // - it creates an account from whatever address Google reports and never
+      // asks for a student ID, so somebody who signed in with a personal Gmail
+      // arrives here with a perfectly good account they cannot see.
+      //
+      // Say what to do about it. The disclosure is unchanged: that this student
+      // ID is registered is exactly what the old wording leaked. Which mailbox
+      // holds it is not disclosed, because that would be a way to enumerate
+      // people's addresses from a student ID.
+      return res.status(400).json({
+        error: 'That student ID already has an account under a different email address. Sign in with that account instead, or use "Forgot password?" if you cannot get into it.',
+        code: 'STUDENT_ID_TAKEN'
+      });
     }
-    
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
-    
+
     // Create user, unverified. The address has been typed, not proved - the
     // same standing a talent-portal signup starts from, and for the same
     // reason: everything we later show or send this person is keyed to a
@@ -168,18 +193,30 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
-    // Find user
-    const user = await prisma.user.findUnique({
-      where: { email }
+    // Case-insensitive: rows created before the Google migration could hold the
+    // address exactly as it was typed, and somebody who signed up as
+    // `Joe@ucla.edu` types `joe@ucla.edu` soon enough.
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
     });
-    
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    
+
+    // No password at all, which is not the same as a wrong one. Saying so is
+    // the only way the person learns which button actually works; it discloses
+    // that the address has an account, which /register already does.
+    if (!user.password) {
+      return res.status(401).json({
+        error: 'This account signs in with Google. Use "Continue with Google", or use Forgot password to set one.',
+        code: 'GOOGLE_ACCOUNT'
+      });
+    }
+
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password);
-    
+
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
@@ -208,6 +245,36 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+/**
+ * POST /api/auth/google - body { credential }
+ *
+ * `credential` is an ID token from Google Identity Services: a JWT Google signed
+ * for our own client id. There is no redirect leg and no code exchange, so there
+ * is no client secret involved - the browser is handed a signed assertion and
+ * this endpoint checks the signature.
+ *
+ * Public, like /login. The work of deciding who the token belongs to lives in
+ * services/googleAuth.js.
+ */
+router.post('/google', async (req, res) => {
+  try {
+    const { user, isNewAccount } = await signInWithGoogle(req.body?.credential);
+
+    res.status(isNewAccount ? 201 : 200).json({
+      message: isNewAccount ? 'Account created' : 'Signed in with Google',
+      user: publicUser(user),
+      token: signToken(user),
+      isNewAccount
+    });
+  } catch (error) {
+    if (error instanceof GoogleAuthError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    console.error('Google sign-in error:', error);
+    res.status(500).json({ error: 'Google sign-in failed' });
   }
 });
 
@@ -246,7 +313,11 @@ router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Case-insensitive for the same reason as /login: this has to find the
+    // account somebody actually has, not the one whose casing they remembered.
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
+    });
 
     if (!user) {
       // Don't reveal if email exists
@@ -265,7 +336,9 @@ router.post('/forgot-password', async (req, res) => {
     const resetTokenExpiry = new Date(Date.now() + 1000 * 60 * 30); // 30 mins
 
     await prisma.user.update({
-      where: { email },
+      // By id, not email: the lookup above is case-insensitive, so the address
+      // as typed is not necessarily the address as stored.
+      where: { id: user.id },
       data: {
         resetToken,
         resetTokenExpiry
@@ -273,7 +346,9 @@ router.post('/forgot-password', async (req, res) => {
     });
 
     const resetLink = `${config.clientUrl}/reset-password?token=${resetToken}`;
-    await sendPasswordResetEmail(email, resetLink);
+    // The stored address, not the typed one - a reset link must go to the
+    // mailbox on the account, not to whatever casing arrived in the request.
+    await sendPasswordResetEmail(user.email, resetLink);
 
     res.json({ message: 'Reset link sent if email exists' });
 
@@ -343,7 +418,10 @@ router.post('/reset-password', async (req, res) => {
 // Register new member (special endpoint)
 router.post('/register-member', async (req, res) => {
   try {
-    const { email, password, fullName, graduationClass, studentId, accessToken } = req.body;
+    const { email: rawEmail, password, fullName, graduationClass, studentId, accessToken } = req.body;
+
+    // Lowercased on write, same reason as /register above.
+    const email = normalizeEmail(rawEmail);
 
     if (!accessToken || accessToken !== config.memberRegistrationToken) {
       return res.status(403).json({ error: 'Unauthorized access' });
@@ -360,8 +438,8 @@ router.post('/register-member', async (req, res) => {
     }
     
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
+    const existingUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } }
     });
     
     if (existingUser) {
@@ -457,7 +535,13 @@ router.post('/register-external', async (req, res) => {
     // signup simply takes it over. This is what keeps one abandoned typo - or
     // someone squatting a classmate's address - from locking the real owner out
     // of their own email forever.
-    if (existing && existing.role === 'USER' && existing.isExternalTalent && !existing.emailVerifiedAt) {
+    // The !googleId clause is belt and braces. A Google-created account always
+    // has emailVerifiedAt set, so it cannot reach this branch today - but that
+    // invariant lives in another file, and if it ever slipped, this branch
+    // would let a stranger overwrite the password and name of a Google-linked
+    // account while leaving googleId in place, so both credentials would work.
+    if (existing && existing.role === 'USER' && existing.isExternalTalent
+        && !existing.emailVerifiedAt && !existing.googleId) {
       const { token, expiresAt } = createVerificationToken();
       const user = await prisma.user.update({
         where: { id: existing.id },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box,
   TextField,
@@ -8,21 +8,26 @@ import {
   Paper,
   Alert,
   Container,
+  Divider,
+  Link,
 } from '@mui/material';
+import { GoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../context/AuthContext';
 import UConsultingLogo from '../components/UConsultingLogo';
+import { googleSignInEnabled } from '../utils/googleSignIn';
+import { postLoginDestination } from '../utils/postLoginDestination';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
-  const { login, user, loading } = useAuth();
+  const { login, loginWithGoogle, user, loading } = useAuth();
 
   // Redirect if user is already logged in
   useEffect(() => {
     if (!loading && user) {
-      navigate(user.role === 'CLIENT' ? '/partner/resumes' : '/dashboard');
+      navigate(postLoginDestination(user));
     }
   }, [user, loading, navigate]);
 
@@ -47,9 +52,19 @@ const Login = () => {
     const result = await login(email, password);
 
     if (result.success) {
-      // Talent Partner Network clients have exactly one page, and every other
-      // route 403s for them.
-      navigate(result.user?.role === 'CLIENT' ? '/partner/resumes' : '/application-list');
+      navigate(postLoginDestination(result.user));
+    } else {
+      setError(result.error);
+    }
+  };
+
+  const handleGoogleSuccess = async (credentialResponse) => {
+    setError('');
+
+    const result = await loginWithGoogle(credentialResponse?.credential);
+
+    if (result.success) {
+      navigate(postLoginDestination(result.user));
     } else {
       setError(result.error);
     }
@@ -111,7 +126,24 @@ const Login = () => {
               <Button type="submit" fullWidth variant="contained" size="large" sx={{ mb: 3 }}>
                 Sign In
               </Button>
-              
+
+              {/* GoogleLogin renders a div[role=button], not a submit button,
+                  so it is safe inside the form. No useOneTap: it prompts on its
+                  own, and a stray click there would silently create an account. */}
+              {googleSignInEnabled && (
+                <>
+                  <Divider sx={{ mb: 3 }}>or</Divider>
+                  <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError('Google sign-in was cancelled or failed. Try again.')}
+                      text="continue_with"
+                      width="336"
+                    />
+                  </Box>
+                </>
+              )}
+
               <Box sx={{ textAlign: 'center', mb: 2 }}>
                 <Button 
                   onClick={() => navigate('/forgot-password')}
@@ -137,6 +169,15 @@ const Login = () => {
               </Box>
             </Box>
           </Paper>
+
+          {/* Reachable from the app, not only by direct URL - Google checks
+              that when reviewing the consent screen, and anyone deciding
+              whether to sign in with Google should be able to find it. */}
+          <Typography variant="body2" align="center" sx={{ mt: 3, color: 'text.secondary' }}>
+            <Link component={RouterLink} to="/privacy" color="inherit" underline="hover">
+              Privacy Policy
+            </Link>
+          </Typography>
         </Container>
       </Box>
   );

@@ -56,6 +56,22 @@ const config = {
   dbUrl: process.env.DATABASE_URL,
   gCloudKeyPath: process.env.GOOGLE_CLOUD_KEY_PATH ? path.resolve(process.env.GOOGLE_CLOUD_KEY_PATH) : null,
 
+  /**
+   * OAuth client id for "Sign in with Google". Nothing to do with
+   * GOOGLE_CLOUD_KEY_PATH above - that is a service account this server acts as
+   * when reading Forms and Drive, this is the browser-facing client a person
+   * signs in through, and the two are different credentials in Google Cloud.
+   *
+   * Public by design: the same value ships in the client bundle as
+   * VITE_GOOGLE_CLIENT_ID, and it must match, since it is the `audience` an ID
+   * token is verified against. There is no client secret in this flow.
+   *
+   * Optional rather than required. Only JWT_SECRET and MEMBER_REGISTRATION_TOKEN
+   * are allowed to stop the server from booting; unset here simply means the
+   * Google endpoint answers 503 and password login carries on.
+   */
+  googleClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || null,
+
   baseUrl: process.env.BASE_URL || previewUrl || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:3001'),
   clientUrl: process.env.CLIENT_URL || previewUrl || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173'),
 

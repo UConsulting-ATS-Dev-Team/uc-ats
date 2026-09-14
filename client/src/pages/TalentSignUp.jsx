@@ -5,14 +5,18 @@ import {
   Box,
   Button,
   Container,
+  Divider,
   Link,
   Paper,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
+import { GoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../context/AuthContext';
 import UConsultingLogo from '../components/UConsultingLogo';
+import { googleSignInEnabled } from '../utils/googleSignIn';
+import { postLoginDestination } from '../utils/postLoginDestination';
 
 // Public signup for the UConsulting Talent Network - open to any UCLA student,
 // with no application and no prior contact with UConsulting required.
@@ -36,7 +40,7 @@ const TalentSignUp = () => {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
-  const { registerExternal, user, loading } = useAuth();
+  const { registerExternal, loginWithGoogle, user, loading } = useAuth();
 
   useEffect(() => {
     if (!loading && user) {
@@ -79,6 +83,20 @@ const TalentSignUp = () => {
 
     if (result.success) {
       navigate('/talent/profile');
+    } else {
+      setError(result.error);
+    }
+  };
+
+  const handleGoogleSuccess = async (credentialResponse) => {
+    setError('');
+
+    const result = await loginWithGoogle(credentialResponse?.credential);
+
+    // postLoginDestination rather than a hardcoded /talent/profile: somebody
+    // who already has a member or admin account may well press this button.
+    if (result.success) {
+      navigate(postLoginDestination(result.user));
     } else {
       setError(result.error);
     }
@@ -157,6 +175,24 @@ const TalentSignUp = () => {
               <Button type="submit" variant="contained" size="large" disabled={submitting}>
                 {submitting ? 'Creating account...' : 'Create account'}
               </Button>
+
+              {/* For somebody arriving here, Google sign-in *is* the signup -
+                  the server creates the same kind of account this form does,
+                  already verified, and asks for the graduation year on the
+                  profile instead. */}
+              {googleSignInEnabled && (
+                <>
+                  <Divider>or</Divider>
+                  <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError('Google sign-in was cancelled or failed. Try again.')}
+                      text="continue_with"
+                      width="336"
+                    />
+                  </Box>
+                </>
+              )}
             </Stack>
           </Box>
 
