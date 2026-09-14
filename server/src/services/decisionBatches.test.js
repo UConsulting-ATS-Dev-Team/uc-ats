@@ -51,6 +51,11 @@ function fakeClient(messages) {
   const client = {
     decisionBatch: { findUnique: vi.fn().mockResolvedValue(BATCH) },
     recruitingCycle: { findUnique: vi.fn().mockResolvedValue({ name: 'Fall 2026' }) },
+    // Read once per batch to decide whether {{schedulingLink}} becomes a link or
+    // falls back to "details are on their way". Empty here: these tests are
+    // about send mechanics, and the scheduling wording has its own suite in
+    // decisionTemplates.test.js.
+    interview: { findMany: vi.fn().mockResolvedValue([]) },
     decisionMessage: {
       findMany: vi.fn(({ where }) =>
         Promise.resolve([...rows.values()].filter((row) => matches(row, where)).map((row) => ({ id: row.id })))
@@ -135,6 +140,22 @@ describe('sending decision emails', () => {
     expect(data.resetTokenExpiry.getTime()).toBeGreaterThanOrEqual(before + INVITE_TTL_MS);
     expect(sendEmail.mock.calls[0][2]).toContain(`/reset-password?token=${data.resetToken}`);
     expect(rows.get('m1')).toMatchObject({ status: 'SENT', sentById: 'exec-1', providerMessageId: 'provider-1' });
+  });
+
+  it('puts a scheduling link in an advancing email when that round has bookable times', async () => {
+    // Covers the wiring rather than the wording: the batch reads the cycle's
+    // interviews once, maps COFFEE_CHAT to round 2, and the recipient's toRound
+    // is what selects the link. decisionTemplates.test.js covers the copy.
+    const { client } = fakeClient([message({ id: 'm1', outcome: 'ADVANCED', toRound: '2' })]);
+    client.interview.findMany.mockResolvedValue([{ interviewType: 'COFFEE_CHAT' }]);
+    client.decisionBatch.findUnique.mockResolvedValue({
+      ...BATCH,
+      templates: { ...BATCH.templates, ADVANCED: { subject: 'Advancing', body: '{{schedulingLink}}' } }
+    });
+
+    await sendDecisionEmails({ batchId: 'batch-1', outcome: 'ADVANCED', expectedCount: 1, sentBy: 'exec-1' }, client);
+
+    expect(sendEmail.mock.calls[0][2]).toContain('/interview-signup');
   });
 
   it('records a failure without losing the successes, and logs what was sent', async () => {

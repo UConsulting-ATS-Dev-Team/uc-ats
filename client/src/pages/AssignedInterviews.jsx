@@ -275,24 +275,28 @@ export default function AssignedInterviews() {
           setSelectedInterviewId(ivs[0].id);
         }
 
-        // Initialize interview-specific data for each interview
+        // Groups come from the server, not from Interview.description.
+        //
+        // Parsing that column worked when the roster lived in it. Interviews
+        // whose candidates booked their own sessions keep their roster in real
+        // rows instead, so parsing found nothing, every interview looked
+        // unassigned, and there was no group to pick. The config endpoint
+        // answers from whichever the interview actually uses.
         const initialData = {};
-        ivs.forEach(interview => {
-          const desc = interview.description;
-          let parsed;
-          try {
-            parsed = typeof desc === 'string' ? JSON.parse(desc) : desc;
-          } catch {
-            parsed = {};
-          }
-          
-          console.log('Interview description for', interview.id, ':', parsed);
-          initialData[interview.id] = {
-            memberGroups: parsed?.memberGroups || [],
-            applicationGroups: parsed?.applicationGroups || [],
-            groupAssignments: parsed?.groupAssignments || {}
-          };
-        });
+        await Promise.all(
+          ivs.map(async (interview) => {
+            try {
+              const config = await apiClient.get(`/member/interviews/${interview.id}/config`);
+              initialData[interview.id] = {
+                memberGroups: config?.memberGroups || [],
+                applicationGroups: config?.applicationGroups || [],
+                groupAssignments: config?.groupAssignments || {}
+              };
+            } catch {
+              initialData[interview.id] = { memberGroups: [], applicationGroups: [], groupAssignments: {} };
+            }
+          })
+        );
         setInterviewData(initialData);
 
         // Load evaluations for each interview
@@ -815,33 +819,22 @@ export default function AssignedInterviews() {
         </button>
       </div>
 
+      {/* Availability and session signup, above the interviews themselves.
+          Saying when you are free comes before there is anything to conduct,
+          and burying it at the bottom of the dashboard meant members could not
+          find the thing recruitment had just emailed them about. */}
+      <div style={{ padding: '0 24px 8px' }}>
+      </div>
+
       {/* Main Content - Interview Cards Grid */}
       <div className="interviews-grid">
         {(() => {
-          // Filter interviews to only show those where the user is assigned to a member group
-          const assignedInterviews = currentUser ? interviews.filter(interview => {
-            const data = interviewData[interview.id] || {};
-            const memberGroups = data.memberGroups || [];
-            
-            // Check if the current user is in any member group for this interview
-            // Handle both string and number ID types
-            const userId = String(currentUser.id);
-            const userInGroup = memberGroups.some(memberGroup => {
-              if (!memberGroup.memberIds || !Array.isArray(memberGroup.memberIds)) {
-                return false;
-              }
-              // Check both string and number comparisons
-              return memberGroup.memberIds.some(id => 
-                String(id) === userId || id === currentUser.id
-              );
-            });
-            
-            if (!userInGroup) {
-              console.log(`User ${currentUser.id} not found in any member group for interview ${interview.id}`);
-            }
-            
-            return userInGroup;
-          }) : [];
+          // The server already returns only the interviews this person is on -
+          // by session assignment, by the older assignment table, or by a group
+          // in the legacy config. Re-deciding that here from a parsed blob is
+          // what made an assigned interview read as "none assigned": two
+          // answers to one question, and the weaker one won.
+          const assignedInterviews = interviews;
           
           return assignedInterviews.length === 0 ? (
             <div className="no-interviews-card">

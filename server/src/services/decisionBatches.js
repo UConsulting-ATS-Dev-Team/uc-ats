@@ -4,6 +4,7 @@ import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
 import { DECISION_OUTCOMES, outcomeLabel, renderDecisionEmail } from './decisionTemplates.js';
 import { getRound } from '../utils/roundProgression.js';
+import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
 
 // Decision emails, held for human review.
 //
@@ -53,12 +54,43 @@ function templateFor(batch, outcome) {
   return template;
 }
 
+/**
+ * Which rounds in this cycle have somewhere for a candidate to book.
+ *
+ * Keyed by the round a recipient is moving *to*, which is what
+ * DecisionMessage.toRound holds. A round only earns a link if one of its
+ * interviews actually has a slot open to candidate signup - linking someone to
+ * an empty page is worse than the "details are on their way" sentence the link
+ * replaces, so schedulingLink() falls back to that wording when a key is absent.
+ *
+ * One query for the whole batch. This is cycle-wide context built once; anything
+ * per-recipient has to happen in sendOne.
+ */
+async function schedulingLinksByRound(batch, client) {
+  const interviews = await client.interview.findMany({
+    where: {
+      cycleId: batch.cycleId,
+      status: { notIn: ['CANCELLED', 'COMPLETED'] },
+      slots: { some: { candidateCapacity: { not: null } } }
+    },
+    select: { interviewType: true }
+  });
+
+  const links = {};
+  for (const interview of interviews) {
+    const round = roundNumberForInterviewType(interview.interviewType);
+    if (round) links[round] = `${config.clientUrl}/interview-signup`;
+  }
+  return links;
+}
+
 async function renderContext(batch, client, extra = {}) {
   const cycle = await client.recruitingCycle.findUnique({ where: { id: batch.cycleId }, select: { name: true } });
   return {
     cycleName: cycle?.name || '',
     round: batch.round,
     loginUrl: `${config.clientUrl}/login`,
+    schedulingLinksByRound: await schedulingLinksByRound(batch, client),
     ...extra
   };
 }

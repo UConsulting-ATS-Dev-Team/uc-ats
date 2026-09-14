@@ -24,7 +24,8 @@ import {
   ChevronRightIcon,
   EnvelopeIcon,
   BriefcaseIcon,
-  QuestionMarkCircleIcon
+  QuestionMarkCircleIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -56,7 +57,9 @@ const ADMIN_NAV_SECTIONS = [
   {
     section: 'Interviews',
     items: [
-      { name: 'Assigned Interviews', href: '/admin/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interviews', href: '/admin/interviews', icon: ClockIcon },
+      { name: 'Interview RSVP', href: '/interview-rsvp', icon: CalendarDaysIcon },
+      { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Question Bank', href: '/admin/question-bank', icon: QuestionMarkCircleIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },
@@ -157,7 +160,8 @@ const Layout = ({ children }) => {
     ...(user?.role === 'MEMBER' ? [
       { name: 'Document Grading', href: '/document-grading', icon: DocumentTextIcon },
       { name: 'Events', href: '/events', icon: CalendarDaysIcon },
-      { name: 'Assigned Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
+      { name: 'Interview RSVP', href: '/interview-rsvp', icon: CalendarDaysIcon },
+      { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
       { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },

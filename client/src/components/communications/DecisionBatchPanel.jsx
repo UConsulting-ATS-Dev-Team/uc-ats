@@ -43,7 +43,7 @@ const STATUS_CHIPS = {
 };
 
 const MERGE_FIELDS_BY_OUTCOME = {
-  ADVANCED: ['firstName', 'lastName', 'fullName', 'cycleName', 'nextRoundName'],
+  ADVANCED: ['firstName', 'lastName', 'fullName', 'cycleName', 'nextRoundName', 'schedulingLink'],
   ACCEPTED: ['firstName', 'lastName', 'fullName', 'cycleName', 'accountSetup'],
   REJECTED: ['firstName', 'lastName', 'fullName', 'cycleName']
 };
@@ -207,6 +207,7 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
             <Typography variant="caption" color="text.secondary">
               Merge fields: {MERGE_FIELDS_BY_OUTCOME[outcome].map((field) => `{{${field}}}`).join('  ')}
               {outcome === 'ACCEPTED' && ' - {{accountSetup}} becomes a set-password link for new accounts, or a sign-in link for existing ones.'}
+              {outcome === 'ADVANCED' && ' - {{schedulingLink}} becomes a link to pick an interview time, or "Scheduling details are on their way" if that round has no bookable times yet.'}
             </Typography>
             <Box>
               <Button variant="outlined" onClick={saveWording} disabled={!dirty || saving}>

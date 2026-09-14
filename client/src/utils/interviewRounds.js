@@ -4,6 +4,13 @@
 // server/src/utils/roundProgression.js: '1' Resume Review, '2' Coffee Chats,
 // '3' First Round, '4' Final Round ('5' means accepted). ROUND_TWO is the
 // legacy alias of FINAL_ROUND, matching how the rest of the app treats it.
+//
+// The authority for this mapping is server/src/utils/interviewRounds.js, which
+// derives it from ROUNDS and is covered by a test that enumerates the
+// InterviewType enum out of schema.prisma. What lives here is the display half -
+// the labels are deliberately shorter than the server's ("First Round" reads
+// better in a picker than "First Round Interviews"). Round numbers must agree
+// with the server; if you change one, change both.
 export const ROUND_FOR_INTERVIEW_TYPE = Object.freeze({
   COFFEE_CHAT: { round: '2', label: 'Coffee Chat Round' },
   ROUND_ONE: { round: '3', label: 'First Round' },

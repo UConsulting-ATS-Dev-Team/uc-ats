@@ -1463,6 +1463,157 @@ export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName
 export { sendEmail };
 
 // ---------------------------------------------------------------------------
+// Interview slot scheduling
+// ---------------------------------------------------------------------------
+
+/// What each notification type actually says. Separated from the markup so the
+/// wording is reviewable in one place - these are the sentences a candidate
+/// reads at the most anxious point in the process, and they should be plain.
+const SLOT_EMAIL_COPY = {
+  CONFIRMATION: {
+    heading: 'Your time is confirmed',
+    body: (ctx) => `You're booked for ${ctx.interviewTitle}. The details are below - add them to your calendar now so they don't get lost.`,
+  },
+  WAITLIST_ADDED: {
+    heading: "You have a spot, and you're on the waitlist",
+    body: (ctx) =>
+      `Your first choice was full, so we've booked you into ${ctx.slotName} and added you to the waitlist for ${ctx.preferredName}. ` +
+      'You have a confirmed spot either way - if the one you wanted opens up, we move you automatically and email you.',
+  },
+  PROMOTED: {
+    heading: 'You got your preferred time',
+    body: (ctx) => `A spot opened up in ${ctx.slotName}, so we've moved you. Your previous time has been released - the details below are the ones that count.`,
+  },
+  FALLBACK_RELEASED: {
+    heading: 'Your time has changed',
+    body: () => 'You have been moved to the time you originally asked for. Your earlier booking has been released.',
+  },
+  CANCELLATION: {
+    heading: 'Your booking is cancelled',
+    body: (ctx) => `Your spot for ${ctx.interviewTitle} has been cancelled. If this was not you, contact recruitment as soon as you can.`,
+  },
+  MOVED_BY_ADMIN: {
+    heading: 'Your time has been updated',
+    body: (ctx) => `Recruitment has moved your ${ctx.interviewTitle} booking. Your new time is below - please check it carefully.`,
+  },
+  ADMIN_OVERFLOW_ALERT: {
+    heading: 'A candidate could not be scheduled',
+    body: (ctx) =>
+      `${ctx.candidateName} tried to sign up for ${ctx.interviewTitle} and every slot was full, so no spot could be given automatically. ` +
+      'They have been told recruitment will reach out. Place them from the interview roster - you can book over capacity if you need to.',
+  },
+  AVAILABILITY_REQUEST: {
+    heading: 'When can you interview?',
+    body: (ctx) =>
+      `Recruitment is putting together the schedule for ${ctx.interviewTitle} and needs to know when you are free. ` +
+      'Add your availability and they will build the day around it - including how many interviews run at once, ' +
+      'which is decided by how many of us can be there.',
+  },
+  INTERVIEWER_ASSIGNED: {
+    heading: "You're interviewing",
+    body: (ctx) => `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
+  },
+  INTERVIEWER_MOVED: {
+    heading: 'Your interview session has changed',
+    body: (ctx) =>
+      `Recruitment has moved which ${ctx.interviewTitle} session you are running` +
+      (ctx.fromName ? ` - you were on ${ctx.fromName}.` : '.') +
+      ' Your new session is below. Please check it and update your calendar.',
+  },
+  INTERVIEWER_REMOVED: {
+    heading: 'You have been taken off a session',
+    body: (ctx) => `You are no longer down to interview at this session for ${ctx.interviewTitle}.`,
+  },
+  REMINDER: {
+    heading: 'A reminder about your upcoming interview',
+    body: (ctx) => `This is a reminder about your ${ctx.interviewTitle} booking.`,
+  },
+};
+
+/**
+ * One notification, rendered.
+ *
+ * Takes an InterviewSlotNotification with its slot, interview and signup loaded.
+ * `ctaUrl` is built by the caller from config.clientUrl - this module has never
+ * imported config, and every link in it arrives as a finished string.
+ */
+export const renderInterviewSlotEmail = (
+  notification,
+  { ctaUrl = null, ctaLabel = 'View or change your time', preferredSlotName = null, fromSlotName = null } = {}
+) => {
+  const slot = notification.slot ?? {};
+  // A message about the whole interview - "when are you free" - carries no
+  // session, so the interview is the only thing that can name it.
+  const interview = slot.interview ?? notification.interview ?? {};
+  const application = notification.signup?.application ?? {};
+  const hasSession = Boolean(slot.startTime);
+
+  const ctx = {
+    interviewTitle: interview.title || 'your interview',
+    fromName: fromSlotName,
+    slotName: slot.label || formatEmailDateTime(slot.startTime),
+    preferredName: preferredSlotName || 'your first choice',
+    candidateName: [application.firstName, application.lastName].filter(Boolean).join(' ') || 'A candidate',
+  };
+
+  const copy = SLOT_EMAIL_COPY[notification.type] ?? SLOT_EMAIL_COPY.CONFIRMATION;
+  // Nothing to show in a details card when there is no session yet, or when the
+  // point of the message is that a booking is gone.
+  const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(notification.type);
+
+  const heading = escapeHtml(copy.heading);
+  const body = escapeHtml(copy.body(ctx));
+  const title = escapeHtml(ctx.interviewTitle);
+  const when = hasSession
+    ? escapeHtml(`${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}`)
+    : '';
+  const where = escapeHtml(slot.location || interview.location || '');
+  const blockLabel = slot.label ? escapeHtml(slot.label) : null;
+
+  return `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #042742; margin: 0;">UConsulting</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">${heading}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${body}</p>
+
+          ${
+            !showDetails
+              ? ''
+              : `<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 10px 0;">${title}</h4>
+            ${blockLabel ? `<p style="color: #666; margin: 5px 0;"><strong>Session:</strong> ${blockLabel}</p>` : ''}
+            <p style="color: #666; margin: 5px 0;"><strong>When:</strong> ${when}</p>
+            ${where ? `<p style="color: #666; margin: 5px 0;"><strong>Where:</strong> ${where}</p>` : ''}
+          </div>`
+          }
+
+          ${
+            ctaUrl
+              ? `<p style="text-align: center; margin: 30px 0;">
+            <a href="${ctaUrl}" style="background-color: #0C74C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">View or change your time</a>
+          </p>`
+              : ''
+          }
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `;
+};
+
+// ---------------------------------------------------------------------------
 // External talent portal
 // ---------------------------------------------------------------------------
 

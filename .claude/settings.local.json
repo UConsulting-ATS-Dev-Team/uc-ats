@@ -14,7 +14,11 @@
       "Bash(node:*)",
       "Bash(dir:*)",
       "Bash(git checkout:*)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(tail -30 /tmp/s4.log)",
+      "Read(//private/tmp/**)",
+      "Bash(sed -i '' 's/await resolveAdminCycle\\(\\)/await resolveAdminCycle\\(prisma\\)/' src/routes/interviewSlotsMember.js src/routes/interviewSlotsAdmin.js)",
+      "Bash(sed -i '' 's/await resolveCandidateCycle\\(\\)/await resolveCandidateCycle\\(prisma\\)/' src/routes/candidateInterviewSignups.js)"
     ]
   }
 }

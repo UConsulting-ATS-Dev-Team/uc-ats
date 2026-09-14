@@ -9,13 +9,21 @@ import { nextRound } from '../utils/roundProgression.js';
 // processing used to send on its own.
 //
 // Merge fields: {{firstName}} {{lastName}} {{fullName}} {{cycleName}}
-// {{nextRoundName}} {{accountSetup}}. Values are HTML-escaped before the
-// Markdown is rendered. accountSetup is the exception: it is written here, not
-// typed by a person, and it carries a link.
+// {{nextRoundName}} {{accountSetup}} {{schedulingLink}}. Values are HTML-escaped
+// before the Markdown is rendered. accountSetup and schedulingLink are the
+// exceptions: they are written here, not typed by a person, and they carry links.
 
 export const DECISION_OUTCOMES = ['ADVANCED', 'ACCEPTED', 'REJECTED'];
 
-export const DECISION_MERGE_FIELDS = ['firstName', 'lastName', 'fullName', 'cycleName', 'nextRoundName', 'accountSetup'];
+export const DECISION_MERGE_FIELDS = [
+  'firstName',
+  'lastName',
+  'fullName',
+  'cycleName',
+  'nextRoundName',
+  'accountSetup',
+  'schedulingLink'
+];
 
 const SIGN_OFF = 'Best regards,\nUConsulting Recruitment Team';
 
@@ -28,7 +36,7 @@ const COPY = {
       body: [
         'Hi {{firstName}},',
         "We're excited to let you know that you've advanced to the **Coffee Chats** round of UConsulting's {{cycleName}} recruitment cycle!",
-        "- You've passed the Resume Review round\n- You'll be invited to a Coffee Chat\n- Scheduling details are on their way",
+        "- You've passed the Resume Review round\n- You'll be invited to a Coffee Chat\n- {{schedulingLink}}",
         'This is a real achievement and reflects the quality of your application. We look forward to getting to know you better.',
         SIGN_OFF
       ].join('\n\n')
@@ -50,7 +58,7 @@ const COPY = {
       body: [
         'Hi {{firstName}},',
         "We're thrilled to let you know that you've advanced to **First Round Interviews** in UConsulting's {{cycleName}} recruitment cycle!",
-        "- You've passed the Coffee Chat round\n- You'll be invited to a First Round Interview\n- Scheduling details are on their way",
+        "- You've passed the Coffee Chat round\n- You'll be invited to a First Round Interview\n- {{schedulingLink}}",
         'First Round Interviews include behavioral questions and a market sizing case. We will send preparation materials along with your scheduling information.',
         SIGN_OFF
       ].join('\n\n')
@@ -141,6 +149,25 @@ function accountSetup(recipient, { preview = false, setPasswordLink = null, logi
   return "We'll follow up shortly about setting up your member account.";
 }
 
+/**
+ * "Pick your time" - or the old promise, when there is nothing to pick yet.
+ *
+ * `schedulingLinksByRound` is keyed by the round the recipient is moving *to*
+ * (DecisionMessage.toRound), built once per batch in decisionBatches.renderContext.
+ * A round with no interview configured, or one whose interviews have no
+ * candidate-bookable slots, has no entry - and then this falls back to the
+ * sentence this feature replaced, so a batch sent before slots exist still reads
+ * correctly rather than linking somewhere empty.
+ */
+function schedulingLink(recipient, { preview = false, schedulingLinksByRound = {} } = {}) {
+  const url = schedulingLinksByRound[String(recipient.toRound)] ?? null;
+  // A preview has no batch context to mint from; the placeholder keeps admins
+  // from seeing a dead link and reporting it as a bug. Same trick as accountSetup.
+  const href = url || (preview ? '#scheduling-link-shown-when-sent' : null);
+  if (!href) return 'Scheduling details are on their way.';
+  return `[Choose your time now](${href}) - times are first come, first served.`;
+}
+
 function fillMergeFields(text, values, { escape }) {
   return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (token, key) => {
     if (!Object.prototype.hasOwnProperty.call(values, key)) return token;
@@ -161,7 +188,10 @@ export function renderDecisionEmail(template, recipient, context = {}) {
     fullName: { value: [recipient.firstName, recipient.lastName].filter(Boolean).join(' ') },
     cycleName: { value: context.cycleName || '' },
     nextRoundName: { value: nextRound(context.round)?.label || '' },
-    accountSetup: { value: accountSetup(recipient, context), trusted: true }
+    accountSetup: { value: accountSetup(recipient, context), trusted: true },
+    // trusted for the same reason accountSetup is: the Markdown link is composed
+    // here from a server-built URL, and escaping it would print the syntax.
+    schedulingLink: { value: schedulingLink(recipient, context), trusted: true }
   };
 
   // A subject is a plain-text header: nothing to escape, and no line breaks.

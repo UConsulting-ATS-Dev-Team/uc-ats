@@ -12,6 +12,7 @@ import {
   LightBulbIcon,
   UserGroupIcon,
   PencilSquareIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import FeatureRequestModal from './FeatureRequestModal';
@@ -41,6 +42,7 @@ const CandidateLayout = ({ children }) => {
     { name: 'Applications', href: '/applications', icon: DocumentTextIcon },
     { name: 'Applicant Information', href: '/applicant-information', icon: PencilSquareIcon },
     { name: 'Events', href: '/events', icon: CalendarDaysIcon },
+    { name: 'Interview Scheduling', href: '/interview-signup', icon: ClockIcon },
     { name: 'Get to Know UC', href: '/get-to-know-uc', icon: UserGroupIcon },
     { name: 'Recruitment Resources', href: '/interview-prep', icon: AcademicCapIcon },
     FEATURE_REQUEST_NAV,
