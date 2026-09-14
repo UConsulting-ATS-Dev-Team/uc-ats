@@ -170,6 +170,7 @@ export async function getRosterForInterview(interviewId, client = prisma) {
     select: {
       id: true,
       description: true,
+      interviewType: true,
       slots: {
         orderBy: { startTime: 'asc' },
         select: {
@@ -220,11 +221,15 @@ export async function getRosterForInterview(interviewId, client = prisma) {
     const groupId = slot.legacyGroupId ?? slot.id;
     const sessionName = slot.label || 'Session';
 
-    // A coffee chat session of forty is not a group anybody interviews. It holds
-    // rotation groups - 1A, 1B - that move between tables together, and the
-    // interviewer at a table picks the ones in front of them. Offer those where
-    // they exist; where they do not, the session IS the group, which is first
-    // round and every interview that predates rotation groups.
+    // A coffee chat session is a container, never a group. Forty people in a
+    // morning is not something anybody interviews; the rotation groups inside
+    // it - 1A, 1B - are, and they come to each table in turn. First round is
+    // the opposite: the session is four candidates in a room, so it IS the
+    // group. Which one applies is a fact about the round, not about whether
+    // labels happen to have been handed out yet - an empty coffee chat session
+    // offering itself as a group is how "Afternoon Session, 0 candidates" ended
+    // up in a picker of rotation groups.
+    const sessionIsAGroup = interview.interviewType !== 'COFFEE_CHAT';
     const labelled = new Map();
     for (const signup of slot.signups) {
       if (!signup.groupLabel) continue;
@@ -232,7 +237,7 @@ export async function getRosterForInterview(interviewId, client = prisma) {
     }
 
     const groupIdsForSlot = [];
-    if (labelled.size > 0) {
+    if (labelled.size > 0 || !sessionIsAGroup) {
       const ungrouped = slot.signups.filter((signup) => !signup.groupLabel);
       for (const [label, applicationIds] of [...labelled.entries()].sort((a, b) =>
         String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true })
@@ -254,7 +259,8 @@ export async function getRosterForInterview(interviewId, client = prisma) {
         });
       }
       // Anybody in the session without a label yet still has to be reachable,
-      // or they simply could not be interviewed.
+      // or they simply could not be interviewed. An empty session contributes
+      // nothing at all - there is no group there to pick.
       if (ungrouped.length > 0) {
         groupIdsForSlot.push(groupId);
         applicationGroups.push({

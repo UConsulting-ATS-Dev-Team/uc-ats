@@ -15,7 +15,7 @@ import {
  * source an id resolves against, and that is decided by the service, not by the
  * query. The filters are applied here so a wrong `where` still shows up.
  */
-const fakeClient = ({ slots = [], description = null } = {}) => ({
+const fakeClient = ({ slots = [], description = null, interviewType = 'ROUND_ONE' } = {}) => ({
   interviewSlot: {
     findMany: vi.fn(({ where }) => {
       const wanted = new Set([
@@ -34,7 +34,7 @@ const fakeClient = ({ slots = [], description = null } = {}) => ({
     }),
   },
   interview: {
-    findUnique: vi.fn(() => Promise.resolve({ id: 'iv1', description, slots })),
+    findUnique: vi.fn(() => Promise.resolve({ id: 'iv1', description, slots, interviewType })),
   },
 });
 
@@ -264,8 +264,8 @@ describe('interviewsAssignedTo', () => {
 });
 
 describe('getRosterForInterview — rotation groups', () => {
-  const withSignups = (signups, over = {}) =>
-    fakeClient({ slots: [slot({ id: 'morning', label: 'Morning Session', signups, ...over })] });
+  const withSignups = (signups, over = {}, interviewType = 'COFFEE_CHAT') =>
+    fakeClient({ slots: [slot({ id: 'morning', label: 'Morning Session', signups, ...over })], interviewType });
 
   it('offers each rotation group, not the whole session', async () => {
     // An interviewer at a table sees two pairs, not forty people. Offering
@@ -297,9 +297,13 @@ describe('getRosterForInterview — rotation groups', () => {
     expect(roster.applicationGroups.map((g) => g.groupLabel)).toEqual(['1A', '2A', '10A']);
   });
 
-  it('keeps the session as one group when nobody is in a rotation group', async () => {
-    // First round: the session already is the group of four.
-    const client = withSignups([{ applicationId: 'a1', groupLabel: null }, { applicationId: 'a2', groupLabel: null }]);
+  it('keeps the session as one group for first round', async () => {
+    // First round: the session already is the group of four in a room.
+    const client = withSignups(
+      [{ applicationId: 'a1', groupLabel: null }, { applicationId: 'a2', groupLabel: null }],
+      {},
+      'ROUND_ONE'
+    );
     const roster = await getRosterForInterview('iv1', client);
     expect(roster.applicationGroups).toHaveLength(1);
     expect(roster.applicationGroups[0].name).toBe('Morning Session');
@@ -328,5 +332,54 @@ describe('getRosterForInterview — rotation groups', () => {
     );
     const roster = await getRosterForInterview('iv1', client);
     expect(roster.groupAssignments['members-morning']).toEqual(['morning:1A', 'morning:1B']);
+  });
+});
+
+describe('a coffee chat session is a container, not a group', () => {
+  const coffeeChat = (slots) => fakeClient({ slots, interviewType: 'COFFEE_CHAT' });
+
+  it('offers nothing for an empty session', async () => {
+    // "Afternoon Session, 0 candidates" in a list of rotation groups is not a
+    // thing anybody can interview.
+    const roster = await getRosterForInterview(
+      'iv1',
+      coffeeChat([slot({ id: 'afternoon', label: 'Afternoon Session', signups: [] })])
+    );
+    expect(roster.applicationGroups).toEqual([]);
+  });
+
+  it('offers only the rotation groups, never the session itself', async () => {
+    const roster = await getRosterForInterview(
+      'iv1',
+      coffeeChat([
+        slot({
+          id: 'morning',
+          label: 'Morning Session',
+          signups: [
+            { applicationId: 'a1', groupLabel: '1A' },
+            { applicationId: 'a2', groupLabel: '1A' },
+          ],
+        }),
+      ])
+    );
+    expect(roster.applicationGroups.map((g) => g.name)).toEqual(['Morning Session · 1A']);
+  });
+
+  it('surfaces people nobody has grouped yet, so they are still interviewable', async () => {
+    const roster = await getRosterForInterview(
+      'iv1',
+      coffeeChat([
+        slot({ id: 'morning', label: 'Morning Session', signups: [{ applicationId: 'a1', groupLabel: null }] }),
+      ])
+    );
+    expect(roster.applicationGroups.map((g) => g.name)).toEqual(['Morning Session · not in a group']);
+  });
+
+  it('still lets first round offer an empty session, because it is the room', async () => {
+    const roster = await getRosterForInterview(
+      'iv1',
+      fakeClient({ slots: [slot({ id: 't1', label: null, signups: [] })], interviewType: 'ROUND_ONE' })
+    );
+    expect(roster.applicationGroups).toHaveLength(1);
   });
 });

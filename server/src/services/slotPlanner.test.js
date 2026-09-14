@@ -28,6 +28,9 @@ describe('planBlocks — the coffee chat shape', () => {
     ]);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ label: 'Morning Session', candidateCapacity: 20, interviewerCapacity: 4 });
+    // Named sittings run in rotation groups, so bookings get labelled from the
+    // first one rather than waiting for somebody to set it.
+    expect(rows[0].groupSize).toBe(2);
     expect(hhmm(rows[0].startTime)).toBe('09:00');
     expect(rows[1].candidateCapacity).toBe(25);
     expect(rows[1].interviewerCapacity).toBeNull();

@@ -53,6 +53,11 @@ export function planBlocks(day, blocks = []) {
       endTime,
       candidateCapacity: block.capacity == null || block.capacity === '' ? null : Number(block.capacity),
       interviewerCapacity: block.interviewers == null || block.interviewers === '' ? null : Number(block.interviewers),
+      // Named sittings are the coffee chat shape, and a coffee chat runs in
+      // rotation groups. Defaulting to pairs means bookings are labelled from
+      // the first one, rather than arriving unlabelled until somebody notices
+      // the setting.
+      groupSize: block.groupSize == null || block.groupSize === '' ? 2 : Number(block.groupSize),
     });
   }
   return rows;
