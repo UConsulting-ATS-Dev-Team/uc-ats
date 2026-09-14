@@ -182,7 +182,8 @@ export async function getRosterForInterview(interviewId, client = prisma) {
           candidateCapacity: true,
           signups: {
             where: { status: 'CONFIRMED' },
-            select: { applicationId: true },
+            select: { applicationId: true, groupLabel: true },
+            orderBy: { signedUpAt: 'asc' },
           },
           assignments: {
             where: { removedAt: null },
@@ -217,29 +218,82 @@ export async function getRosterForInterview(interviewId, client = prisma) {
     // The group id a client will send back. legacyGroupId when there is one, so
     // URLs and question rows minted before the backfill keep resolving.
     const groupId = slot.legacyGroupId ?? slot.id;
-    applicationGroups.push({
-      id: groupId,
-      name: slot.label || 'Session',
-      notes: slot.notes ?? '',
-      applicationIds: slot.signups.map((signup) => signup.applicationId),
-      slotId: slot.id,
-      startTime: slot.startTime,
-      endTime: slot.endTime,
-      capacity: slot.candidateCapacity,
-    });
+    const sessionName = slot.label || 'Session';
+
+    // A coffee chat session of forty is not a group anybody interviews. It holds
+    // rotation groups - 1A, 1B - that move between tables together, and the
+    // interviewer at a table picks the ones in front of them. Offer those where
+    // they exist; where they do not, the session IS the group, which is first
+    // round and every interview that predates rotation groups.
+    const labelled = new Map();
+    for (const signup of slot.signups) {
+      if (!signup.groupLabel) continue;
+      labelled.set(signup.groupLabel, [...(labelled.get(signup.groupLabel) ?? []), signup.applicationId]);
+    }
+
+    const groupIdsForSlot = [];
+    if (labelled.size > 0) {
+      const ungrouped = slot.signups.filter((signup) => !signup.groupLabel);
+      for (const [label, applicationIds] of [...labelled.entries()].sort((a, b) =>
+        String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true })
+      )) {
+        // "<slotId>:<label>" is what resolveGroupIds reads back; the contract
+        // has always been an opaque string.
+        const rotationId = `${slot.id}:${label}`;
+        groupIdsForSlot.push(rotationId);
+        applicationGroups.push({
+          id: rotationId,
+          name: `${sessionName} · ${label}`,
+          notes: '',
+          applicationIds,
+          slotId: slot.id,
+          groupLabel: label,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          capacity: slot.candidateCapacity,
+        });
+      }
+      // Anybody in the session without a label yet still has to be reachable,
+      // or they simply could not be interviewed.
+      if (ungrouped.length > 0) {
+        groupIdsForSlot.push(groupId);
+        applicationGroups.push({
+          id: groupId,
+          name: `${sessionName} · not in a group`,
+          notes: slot.notes ?? '',
+          applicationIds: ungrouped.map((signup) => signup.applicationId),
+          slotId: slot.id,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          capacity: slot.candidateCapacity,
+        });
+      }
+    } else {
+      groupIdsForSlot.push(groupId);
+      applicationGroups.push({
+        id: groupId,
+        name: sessionName,
+        notes: slot.notes ?? '',
+        applicationIds: slot.signups.map((signup) => signup.applicationId),
+        slotId: slot.id,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        capacity: slot.candidateCapacity,
+      });
+    }
 
     if (slot.assignments.length > 0) {
       const memberGroupId = `members-${groupId}`;
       memberGroups.push({
         id: memberGroupId,
-        name: slot.label || 'Session',
+        name: sessionName,
         memberIds: slot.assignments.map((assignment) => assignment.userId),
         slotId: slot.id,
       });
       // Co-membership in a slot is the assignment, so this mapping is now
-      // derived rather than maintained by hand. The old groupAssignments map
-      // existed only because groups had no time to agree on.
-      groupAssignments[memberGroupId] = [groupId];
+      // derived rather than maintained by hand. An interviewer on a session can
+      // reach every rotation group inside it, because the groups come to them.
+      groupAssignments[memberGroupId] = groupIdsForSlot;
     }
   }
 

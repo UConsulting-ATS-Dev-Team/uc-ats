@@ -262,3 +262,71 @@ describe('interviewsAssignedTo', () => {
     expect(kept).toEqual([]);
   });
 });
+
+describe('getRosterForInterview — rotation groups', () => {
+  const withSignups = (signups, over = {}) =>
+    fakeClient({ slots: [slot({ id: 'morning', label: 'Morning Session', signups, ...over })] });
+
+  it('offers each rotation group, not the whole session', async () => {
+    // An interviewer at a table sees two pairs, not forty people. Offering
+    // "Morning Session, 8 applications" gives them no way to pick their table.
+    const client = withSignups([
+      { applicationId: 'a1', groupLabel: '1A' },
+      { applicationId: 'a2', groupLabel: '1A' },
+      { applicationId: 'a3', groupLabel: '1B' },
+      { applicationId: 'a4', groupLabel: '1B' },
+    ]);
+    const roster = await getRosterForInterview('iv1', client);
+
+    expect(roster.applicationGroups.map((g) => g.name)).toEqual([
+      'Morning Session · 1A',
+      'Morning Session · 1B',
+    ]);
+    expect(roster.applicationGroups[0].applicationIds).toEqual(['a1', 'a2']);
+    // The id the picker sends back, which resolveGroupIds understands.
+    expect(roster.applicationGroups[0].id).toBe('morning:1A');
+  });
+
+  it('orders groups the way a person counts them', async () => {
+    const client = withSignups([
+      { applicationId: 'a1', groupLabel: '10A' },
+      { applicationId: 'a2', groupLabel: '2A' },
+      { applicationId: 'a3', groupLabel: '1A' },
+    ]);
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.applicationGroups.map((g) => g.groupLabel)).toEqual(['1A', '2A', '10A']);
+  });
+
+  it('keeps the session as one group when nobody is in a rotation group', async () => {
+    // First round: the session already is the group of four.
+    const client = withSignups([{ applicationId: 'a1', groupLabel: null }, { applicationId: 'a2', groupLabel: null }]);
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.applicationGroups).toHaveLength(1);
+    expect(roster.applicationGroups[0].name).toBe('Morning Session');
+    expect(roster.applicationGroups[0].id).toBe('morning');
+  });
+
+  it('still reaches somebody who has not been put in a group yet', async () => {
+    // Otherwise a late booking becomes uninterviewable until an admin notices.
+    const client = withSignups([
+      { applicationId: 'a1', groupLabel: '1A' },
+      { applicationId: 'late', groupLabel: null },
+    ]);
+    const roster = await getRosterForInterview('iv1', client);
+    const leftover = roster.applicationGroups.find((g) => g.name.includes('not in a group'));
+    expect(leftover.applicationIds).toEqual(['late']);
+  });
+
+  it('lets an interviewer on the session reach every group in it', async () => {
+    // The groups rotate to them, so being on the session means all of them.
+    const client = withSignups(
+      [
+        { applicationId: 'a1', groupLabel: '1A' },
+        { applicationId: 'a2', groupLabel: '1B' },
+      ],
+      { assignments: [{ userId: 'u1', role: 'INTERVIEWER' }] }
+    );
+    const roster = await getRosterForInterview('iv1', client);
+    expect(roster.groupAssignments['members-morning']).toEqual(['morning:1A', 'morning:1B']);
+  });
+});
