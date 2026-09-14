@@ -779,6 +779,7 @@ model Interview {
   caseAssignments       CaseAssignment[]
   slots                 InterviewSlot[]
   availability          InterviewerAvailability[]
+  notifications         InterviewSlotNotification[]
 
   @@map("interviews")
 }
@@ -994,7 +995,11 @@ model InterviewSlotAssignment {
 /// with a Resend button next to it.
 model InterviewSlotNotification {
   id        String                        @id @default(uuid())
-  slotId    String
+  /// Null for a message about the interview rather than one session - asking
+  /// interviewers when they are free is the case, and it is deliberately sent
+  /// before any session exists.
+  slotId    String?
+  interviewId String?
   signupId  String?
   type      InterviewSlotNotificationType
   recipient String
@@ -1005,10 +1010,12 @@ model InterviewSlotNotification {
   queuedAt  DateTime                      @default(now())
   sentAt    DateTime?
 
-  slot   InterviewSlot        @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  signup InterviewSlotSignup? @relation(fields: [signupId], references: [id], onDelete: SetNull)
+  slot      InterviewSlot?       @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  interview Interview?           @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  signup    InterviewSlotSignup? @relation(fields: [signupId], references: [id], onDelete: SetNull)
 
   @@index([slotId])
+  @@index([interviewId])
   @@index([signupId])
   @@index([status])
   @@map("interview_slot_notifications")
@@ -1493,6 +1500,11 @@ enum InterviewSlotNotificationType {
   FALLBACK_RELEASED
   CANCELLATION
   MOVED_BY_ADMIN
+  /// To interviewers, before a schedule exists: tell us when you are free.
+  AVAILABILITY_REQUEST
+  /// To an interviewer, once recruitment has placed them in a session.
+  INTERVIEWER_ASSIGNED
+  INTERVIEWER_REMOVED
   /// To recruitment, not the candidate: every slot was full, somebody needs a
   /// seat found for them by hand.
   ADMIN_OVERFLOW_ALERT

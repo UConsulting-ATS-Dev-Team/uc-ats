@@ -32,6 +32,7 @@ import {
   SLOT_NOTIFICATION_SUBJECTS,
   flushNotifications,
   queueNotifications,
+  queueNotificationsBulk,
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import config from '../config.js';
@@ -549,12 +550,14 @@ router.post('/interviews/slots/:slotId/interviewers', async (req, res) => {
         where: { id: existing.id },
         data: { removedAt: null, removedBy: null, role: role || 'INTERVIEWER' },
       });
+      await notifyInterviewer(slotId, userId, 'INTERVIEWER_ASSIGNED');
       return res.json(revived);
     }
 
     const assignment = await prisma.interviewSlotAssignment.create({
       data: { slotId, interviewId: slot.interviewId, userId, role: role || 'INTERVIEWER' },
     });
+    await notifyInterviewer(slotId, userId, 'INTERVIEWER_ASSIGNED');
     res.status(201).json(assignment);
   } catch (error) {
     fail(res, error, 'Failed to assign that member');
@@ -564,12 +567,20 @@ router.post('/interviews/slots/:slotId/interviewers', async (req, res) => {
 // DELETE /api/admin/interviews/slot-assignments/:id
 router.delete('/interviews/slot-assignments/:id', async (req, res) => {
   try {
+    const existing = await prisma.interviewSlotAssignment.findUnique({
+      where: { id: req.params.id },
+      select: { slotId: true, userId: true, removedAt: true },
+    });
     await prisma.interviewSlotAssignment.update({
       where: { id: req.params.id },
       // Soft delete: who was meant to run a session, and who came off it, is
       // worth keeping when one turns out to have been unstaffed.
       data: { removedAt: new Date(), removedBy: req.user.id },
     });
+    // Somebody who was told they were interviewing has to be told they are not.
+    if (existing && !existing.removedAt) {
+      await notifyInterviewer(existing.slotId, existing.userId, 'INTERVIEWER_REMOVED');
+    }
     res.json({ removed: true });
   } catch (error) {
     fail(res, error, 'Failed to remove that member');
@@ -831,6 +842,72 @@ router.get('/interviews/:id/availability', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to load interviewer availability');
+  }
+});
+
+// POST /api/admin/interviews/:id/request-availability
+//
+// Ask the people who might interview when they are free. Sent before the
+// schedule exists, because it is what the schedule is built from.
+//
+// Defaults to everybody who has not answered yet, so pressing it twice chases
+// the stragglers rather than nagging the people who already did their bit.
+router.post('/interviews/:id/request-availability', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const interview = await prisma.interview.findUnique({
+      where: { id },
+      select: { id: true, title: true, startDate: true, location: true },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const staff = await prisma.user.findMany({
+      where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+      select: { id: true, email: true, fullName: true },
+    });
+
+    const answered = new Set(
+      (
+        await prisma.interviewerAvailability.findMany({
+          where: { interviewId: id },
+          select: { userId: true },
+          distinct: ['userId'],
+        })
+      ).map((row) => row.userId)
+    );
+
+    const everyone = req.body?.everyone === true;
+    const recipients = staff.filter((user) => user.email && (everyone || !answered.has(user.id)));
+
+    if (recipients.length === 0) {
+      return res.json({
+        queued: 0,
+        alreadyAnswered: answered.size,
+        message: everyone ? 'Nobody to email.' : 'Everybody has already sent their availability.',
+      });
+    }
+
+    const entries = recipients.map((user) => ({
+      interviewId: id,
+      type: 'AVAILABILITY_REQUEST',
+      recipient: user.email,
+      subject: SLOT_NOTIFICATION_SUBJECTS.AVAILABILITY_REQUEST(interview.title),
+    }));
+    const ids = await queueNotificationsBulk(entries);
+    flushNotifications(ids, (n) =>
+      renderInterviewSlotEmail(n, {
+        ctaUrl: `${config.clientUrl}/assigned-interviews`,
+        ctaLabel: 'Add my availability',
+      })
+    ).catch((e) => console.error('[request-availability] flush failed', e));
+
+    res.json({
+      queued: ids.length,
+      alreadyAnswered: answered.size,
+      emailsEnabled: config.schedulingEmailsEnabled,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to ask for availability');
   }
 });
 
@@ -1197,6 +1274,40 @@ router.get('/interviews/:id/roster/integrity', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+
+/** Tell an interviewer they have been put on, or taken off, a session. */
+async function notifyInterviewer(slotId, userId, type) {
+  try {
+    const [user, slot] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
+      prisma.interviewSlot.findUnique({
+        where: { id: slotId },
+        select: { id: true, interview: { select: { title: true } } },
+      }),
+    ]);
+    if (!user?.email || !slot) return;
+
+    const ids = await prisma.$transaction((tx) =>
+      queueNotifications(tx, [
+        {
+          slotId,
+          type,
+          recipient: user.email,
+          subject: SLOT_NOTIFICATION_SUBJECTS[type](slot.interview.title),
+        },
+      ])
+    );
+    flushNotifications(ids, (n) =>
+      renderInterviewSlotEmail(n, {
+        ctaUrl: `${config.clientUrl}/assigned-interviews`,
+        ctaLabel: 'See my interviews',
+      })
+    ).catch((e) => console.error('[notifyInterviewer] flush failed', e));
+  } catch (error) {
+    // Telling somebody is not worth failing the placement over.
+    console.error('[notifyInterviewer]', error);
+  }
+}
 
 async function notifyMoved(result) {
   const entries = [];

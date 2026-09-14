@@ -1502,6 +1502,21 @@ const SLOT_EMAIL_COPY = {
       `${ctx.candidateName} tried to sign up for ${ctx.interviewTitle} and every slot was full, so no spot could be given automatically. ` +
       'They have been told recruitment will reach out. Place them from the interview roster - you can book over capacity if you need to.',
   },
+  AVAILABILITY_REQUEST: {
+    heading: 'When can you interview?',
+    body: (ctx) =>
+      `Recruitment is putting together the schedule for ${ctx.interviewTitle} and needs to know when you are free. ` +
+      'Add your availability and they will build the day around it - including how many interviews run at once, ' +
+      'which is decided by how many of us can be there.',
+  },
+  INTERVIEWER_ASSIGNED: {
+    heading: "You're interviewing",
+    body: (ctx) => `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
+  },
+  INTERVIEWER_REMOVED: {
+    heading: 'You have been taken off a session',
+    body: (ctx) => `You are no longer down to interview at this session for ${ctx.interviewTitle}.`,
+  },
   REMINDER: {
     heading: 'A reminder about your upcoming interview',
     body: (ctx) => `This is a reminder about your ${ctx.interviewTitle} booking.`,
@@ -1515,10 +1530,16 @@ const SLOT_EMAIL_COPY = {
  * `ctaUrl` is built by the caller from config.clientUrl - this module has never
  * imported config, and every link in it arrives as a finished string.
  */
-export const renderInterviewSlotEmail = (notification, { ctaUrl = null, preferredSlotName = null } = {}) => {
+export const renderInterviewSlotEmail = (
+  notification,
+  { ctaUrl = null, ctaLabel = 'View or change your time', preferredSlotName = null } = {}
+) => {
   const slot = notification.slot ?? {};
-  const interview = slot.interview ?? {};
+  // A message about the whole interview - "when are you free" - carries no
+  // session, so the interview is the only thing that can name it.
+  const interview = slot.interview ?? notification.interview ?? {};
   const application = notification.signup?.application ?? {};
+  const hasSession = Boolean(slot.startTime);
 
   const ctx = {
     interviewTitle: interview.title || 'your interview',
@@ -1528,12 +1549,16 @@ export const renderInterviewSlotEmail = (notification, { ctaUrl = null, preferre
   };
 
   const copy = SLOT_EMAIL_COPY[notification.type] ?? SLOT_EMAIL_COPY.CONFIRMATION;
-  const isCancelled = notification.type === 'CANCELLATION';
+  // Nothing to show in a details card when there is no session yet, or when the
+  // point of the message is that a booking is gone.
+  const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(notification.type);
 
   const heading = escapeHtml(copy.heading);
   const body = escapeHtml(copy.body(ctx));
   const title = escapeHtml(ctx.interviewTitle);
-  const when = escapeHtml(`${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}`);
+  const when = hasSession
+    ? escapeHtml(`${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}`)
+    : '';
   const where = escapeHtml(slot.location || interview.location || '');
   const blockLabel = slot.label ? escapeHtml(slot.label) : null;
 
@@ -1549,7 +1574,7 @@ export const renderInterviewSlotEmail = (notification, { ctaUrl = null, preferre
           <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${body}</p>
 
           ${
-            isCancelled
+            !showDetails
               ? ''
               : `<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h4 style="color: #333; margin: 0 0 10px 0;">${title}</h4>

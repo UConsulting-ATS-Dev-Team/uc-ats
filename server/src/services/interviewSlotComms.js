@@ -13,6 +13,7 @@
 // Nothing in here may be called from inside a transaction body. A serialisation
 // retry re-runs the body, and a send that happened there would happen twice.
 
+import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
@@ -27,6 +28,9 @@ export const SLOT_NOTIFICATION_SUBJECTS = {
   CANCELLATION: (interviewTitle) => `Your booking is cancelled - ${interviewTitle}`,
   MOVED_BY_ADMIN: (interviewTitle) => `Your time has been updated - ${interviewTitle}`,
   ADMIN_OVERFLOW_ALERT: (interviewTitle) => `Action needed: a candidate could not be scheduled for ${interviewTitle}`,
+  AVAILABILITY_REQUEST: (interviewTitle) => `When can you interview? - ${interviewTitle}`,
+  INTERVIEWER_ASSIGNED: (interviewTitle) => `You're interviewing - ${interviewTitle}`,
+  INTERVIEWER_REMOVED: (interviewTitle) => `You've been taken off a session - ${interviewTitle}`,
   REMINDER: (interviewTitle) => `Reminder - ${interviewTitle}`,
 };
 
@@ -41,7 +45,7 @@ export async function queueNotifications(tx, entries) {
     // A booking that worked must not fail because we could not work out who to
     // tell. Skipping leaves no row, which is honest - there was never a message
     // to send - and the seat still stands.
-    if (!entry.slotId || !entry.recipient) {
+    if ((!entry.slotId && !entry.interviewId) || !entry.recipient) {
       console.warn('[queueNotifications] skipped a notification with no slot or recipient', {
         type: entry.type,
         slotId: entry.slotId ?? null,
@@ -52,7 +56,8 @@ export async function queueNotifications(tx, entries) {
     created.push(
       await tx.interviewSlotNotification.create({
         data: {
-          slotId: entry.slotId,
+          slotId: entry.slotId ?? null,
+          interviewId: entry.interviewId ?? null,
           signupId: entry.signupId ?? null,
           type: entry.type,
           recipient: entry.recipient,
@@ -64,6 +69,35 @@ export async function queueNotifications(tx, entries) {
     );
   }
   return created.map((row) => row.id);
+}
+
+/**
+ * Queue many notifications at once, outside a transaction.
+ *
+ * The per-row version holds an interactive transaction open for the length of
+ * the loop, which is right when a booking has to queue its own confirmation
+ * atomically. Asking eighty members for their availability is not that: it is a
+ * bulk send with nothing to roll back, and doing it row by row inside one
+ * transaction blows the timeout - measured as P2028, "transaction not found",
+ * which reads like a bug in Prisma and is really a loop that took too long.
+ */
+export async function queueNotificationsBulk(entries) {
+  const rows = (entries ?? [])
+    .filter((entry) => (entry.slotId || entry.interviewId) && entry.recipient)
+    .map((entry) => ({
+      id: randomUUID(),
+      slotId: entry.slotId ?? null,
+      interviewId: entry.interviewId ?? null,
+      signupId: entry.signupId ?? null,
+      type: entry.type,
+      recipient: entry.recipient,
+      subject: entry.subject ?? '',
+      status: 'QUEUED',
+    }));
+  if (rows.length === 0) return [];
+
+  await prisma.interviewSlotNotification.createMany({ data: rows, skipDuplicates: true });
+  return rows.map((row) => row.id);
 }
 
 /**
@@ -95,6 +129,7 @@ async function sendOne(notificationId, renderBody) {
     where: { id: notificationId },
     include: {
       slot: { include: { interview: { select: { title: true, location: true, interviewType: true } } } },
+      interview: { select: { title: true, location: true, interviewType: true } },
       signup: { include: { application: { select: { firstName: true, lastName: true, email: true } } } },
     },
   });

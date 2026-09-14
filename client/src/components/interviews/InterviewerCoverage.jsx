@@ -48,6 +48,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [asked, setAsked] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -63,6 +64,28 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Defaults to chasing only the people who have not answered, so pressing it
+  // twice does not nag everybody who already did their bit.
+  const askForAvailability = async (everyone) => {
+    setBusy(true);
+    setError('');
+    setAsked('');
+    try {
+      const result = await apiClient.post(`/admin/interviews/${interviewId}/request-availability`, { everyone });
+      setAsked(
+        result.queued === 0
+          ? result.message || 'Nobody to email.'
+          : `Asked ${result.queued} ${result.queued === 1 ? 'person' : 'people'}.` +
+            (result.emailsEnabled === false ? ' Scheduling emails are switched off, so these are being held.' : '')
+      );
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to send that request.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const place = async (slotId, userId) => {
     setBusy(true);
@@ -101,6 +124,10 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   if (!data) return null;
 
   const nobodyYet = data.interviewers.length === 0;
+  // A coffee chat runs as named sittings that everybody rotates through, so
+  // "how many panels could run at 10:00" is not a question about it. Sizing the
+  // day that way belongs to first round, where sessions are small and parallel.
+  const sizesTheDay = data.interview.interviewType !== 'COFFEE_CHAT';
   const conflicts = (data.placements ?? []).filter((p) => p.conflict === 'OUTSIDE_AVAILABILITY');
 
   return (
@@ -111,13 +138,30 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
         </Alert>
       )}
 
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
+        <Button variant="contained" size="small" disabled={busy} onClick={() => askForAvailability(false)}>
+          Ask members for availability
+        </Button>
+        {data.interviewers.length > 0 && (
+          <Button size="small" disabled={busy} onClick={() => askForAvailability(true)}>
+            Ask everyone again
+          </Button>
+        )}
+        {asked && (
+          <Typography variant="caption" color="text.secondary">
+            {asked}
+          </Typography>
+        )}
+      </Stack>
+
       {nobodyYet && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          <strong>Nobody has said when they are free yet.</strong> Members fill this in from My Interviews.
-          Until they do there is nothing to size the day against.
+          <strong>Nobody has said when they are free yet.</strong> Send the request above; members fill it
+          in from My Interviews. Until they do there is nothing to size the day against.
         </Alert>
       )}
 
+      {sizesTheDay && (
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
         <Typography variant="subtitle2">If sessions were</Typography>
         <TextField
@@ -158,8 +202,10 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
           helperText="optional"
         />
       </Stack>
+      )}
 
-      {/* The answer recruitment is actually after. */}
+      {/* The answer recruitment is actually after - for first round. */}
+      {sizesTheDay && (
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="overline" color="text.secondary">
           How many panels each hour could support
@@ -188,7 +234,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                     }}
                   >
                     <Typography variant="caption" fontWeight={700} display="block">
-                      {formatTime(row.startTime)}
+                      {formatTime(row.startTime)} – {formatTime(row.endTime)}
                     </Typography>
                     <Typography variant="caption" color={`${tone.color}.main`}>
                       {tone.label}
@@ -203,6 +249,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
           </Stack>
         )}
       </Paper>
+      )}
 
       {conflicts.length > 0 && (
         <Alert severity="warning" icon={<WarningIcon />} sx={{ mb: 3 }}>

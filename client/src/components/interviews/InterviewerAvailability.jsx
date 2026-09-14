@@ -7,13 +7,11 @@ import {
   Chip,
   CircularProgress,
   FormControlLabel,
-  IconButton,
   Paper,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
-import { Add as AddIcon, Close as CloseIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
 
@@ -26,23 +24,45 @@ import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
  *
  * Two ways of asking, one answer underneath. A coffee chat has named sittings
  * that everybody recognises, so it offers those as checkboxes. A first round
- * usually has no sessions yet - that is the point - so it asks for times.
+ * usually has no sessions yet - that is the point - so it offers every hour
+ * inside the day recruitment described, to be ticked.
+ *
+ * Both save the same thing: windows of time. An hour ticked is an hour-long
+ * window; contiguous ticks merge server-side, so ticking 9, 10 and 11 says
+ * "I can do 9 to 12" without anyone having to phrase it that way.
  */
 
-const pad = (n) => String(n).padStart(2, '0');
-const toTimeInput = (value) => {
-  const d = new Date(value);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-const toDayInput = (value) => {
-  const d = new Date(value);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
+/** Every whole hour inside the interview's own window. */
+function hoursWithin(startDate, endDate) {
+  const from = new Date(startDate);
+  const to = new Date(endDate);
+  if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return [];
+  const out = [];
+  const cursor = new Date(from);
+  // Truncate in UTC, not local. Pacific sits a whole number of hours from UTC,
+  // so a UTC hour boundary is a Pacific hour boundary - and the grid then lines
+  // up with the admin coverage grid no matter what clock the member is on.
+  cursor.setUTCMinutes(0, 0, 0);
+  while (cursor < to && out.length < 24) {
+    const next = new Date(cursor.getTime() + 3600000);
+    if (next > to) break;
+    out.push({
+      key: cursor.toISOString(),
+      startTime: new Date(cursor),
+      endTime: next,
+      label: formatTimeRange(cursor, next),
+    });
+    cursor.setTime(next.getTime());
+  }
+  return out;
+}
 
 export default function InterviewerAvailability({ interviewId, onSaved }) {
   const [data, setData] = useState(null);
-  const [rows, setRows] = useState([]);
   const [checkedSessions, setCheckedSessions] = useState([]);
+  const [checkedHours, setCheckedHours] = useState([]);
+  const [hours, setHours] = useState([]);
+  const [note, setNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -54,15 +74,21 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
       const result = await apiClient.get(`/member/interviews/${interviewId}/availability`);
       setData(result);
 
-      const day = toDayInput(result.interview.startDate);
-      setRows(
-        (result.windows ?? []).map((w) => ({
-          day: toDayInput(w.startTime),
-          start: toTimeInput(w.startTime),
-          end: toTimeInput(w.endTime),
-          note: w.note ?? '',
-        }))
+      const grid = hoursWithin(result.interview.startDate, result.interview.endDate);
+      setHours(grid);
+      // An hour counts as marked when a saved window covers it. Windows that
+      // were merged on the way in still light up each hour they span.
+      setCheckedHours(
+        grid
+          .filter((hour) =>
+            (result.windows ?? []).some(
+              (w) =>
+                new Date(w.startTime) <= hour.startTime && new Date(w.endTime) >= hour.endTime
+            )
+          )
+          .map((hour) => hour.key)
       );
+      setNote((result.windows ?? []).find((w) => w.note)?.note ?? '');
       // A window that exactly matches a session is that session ticked.
       setCheckedSessions(
         (result.interview.slots ?? [])
@@ -75,7 +101,7 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
           )
           .map((slot) => slot.id)
       );
-      if (!result.windows?.length) setRows([{ day, start: '09:00', end: '17:00', note: '' }]);
+
     } catch (e) {
       setError(e.message || 'Failed to load your availability.');
     } finally {
@@ -108,12 +134,12 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
         ? sessions
             .filter((slot) => checkedSessions.includes(slot.id))
             .map((slot) => ({ startTime: slot.startTime, endTime: slot.endTime }))
-        : rows
-            .filter((r) => r.day && r.start && r.end)
-            .map((r) => ({
-              startTime: new Date(`${r.day}T${r.start}`).toISOString(),
-              endTime: new Date(`${r.day}T${r.end}`).toISOString(),
-              note: r.note,
+        : hours
+            .filter((hour) => checkedHours.includes(hour.key))
+            .map((hour) => ({
+              startTime: hour.startTime.toISOString(),
+              endTime: hour.endTime.toISOString(),
+              note: note || null,
             }));
 
       await apiClient.put(`/member/interviews/${interviewId}/availability`, { windows });
@@ -140,7 +166,7 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
         {formatDay(data.interview.startDate)} ·{' '}
         {bySession
           ? 'Tick the sessions you can run.'
-          : 'Tell us when you are free and recruitment will build the schedule around it.'}
+          : `Open ${formatTimeRange(data.interview.startDate, data.interview.endDate)}. Tick the hours you can be there.`}
       </Typography>
 
       {error && (
@@ -195,71 +221,49 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
         </Stack>
       ) : (
         <Stack spacing={1.5}>
-          {rows.map((row, index) => (
-            <Stack key={index} direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', gap: 1 }}>
-              <TextField
-                size="small"
-                type="date"
-                label="Day"
-                value={row.day}
-                onChange={(e) =>
-                  setRows((c) => c.map((r, i) => (i === index ? { ...r, day: e.target.value } : r)))
-                }
-                InputLabelProps={{ shrink: true }}
-                sx={{ width: 160 }}
-              />
-              <TextField
-                size="small"
-                type="time"
-                label="From"
-                value={row.start}
-                onChange={(e) =>
-                  setRows((c) => c.map((r, i) => (i === index ? { ...r, start: e.target.value } : r)))
-                }
-                InputLabelProps={{ shrink: true }}
-              />
-              <TextField
-                size="small"
-                type="time"
-                label="Until"
-                value={row.end}
-                onChange={(e) => setRows((c) => c.map((r, i) => (i === index ? { ...r, end: e.target.value } : r)))}
-                InputLabelProps={{ shrink: true }}
-              />
-              <TextField
-                size="small"
-                label="Anything we should know"
-                placeholder="Leaving at 3 for class"
-                value={row.note}
-                onChange={(e) => setRows((c) => c.map((r, i) => (i === index ? { ...r, note: e.target.value } : r)))}
-                sx={{ flex: 1, minWidth: 200 }}
-              />
-              <IconButton
-                size="small"
-                aria-label={`Remove window ${index + 1}`}
-                onClick={() => setRows((c) => c.filter((_, i) => i !== index))}
-              >
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </Stack>
-          ))}
-          <Box>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() =>
-                setRows((c) => [
-                  ...c,
-                  { day: toDayInput(data.interview.startDate), start: '13:00', end: '17:00', note: '' },
-                ])
-              }
-            >
-              Add another time
-            </Button>
-          </Box>
-          <Typography variant="caption" color="text.secondary">
-            Split it up if there is a gap — two windows say more than one long one that is not quite true.
+          <Typography variant="body2" color="text.secondary">
+            Recruitment decides how many interviews run at once from how many of us can be there.
           </Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+            {hours.map((hour) => {
+              const on = checkedHours.includes(hour.key);
+              return (
+                <Chip
+                  key={hour.key}
+                  label={hour.label}
+                  color={on ? 'primary' : 'default'}
+                  variant={on ? 'filled' : 'outlined'}
+                  onClick={() =>
+                    setCheckedHours((current) =>
+                      on ? current.filter((k) => k !== hour.key) : [...current, hour.key]
+                    )
+                  }
+                  sx={{ fontWeight: on ? 600 : 400 }}
+                />
+              );
+            })}
+          </Stack>
+          {hours.length === 0 && (
+            <Alert severity="info">
+              This interview has no time range yet, so there are no hours to mark.
+            </Alert>
+          )}
+          <Stack direction="row" spacing={1}>
+            <Button size="small" onClick={() => setCheckedHours(hours.map((h) => h.key))}>
+              All day
+            </Button>
+            <Button size="small" onClick={() => setCheckedHours([])}>
+              None
+            </Button>
+          </Stack>
+          <TextField
+            size="small"
+            label="Anything we should know"
+            placeholder="Leaving at 3 for class"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            fullWidth
+          />
         </Stack>
       )}
 
