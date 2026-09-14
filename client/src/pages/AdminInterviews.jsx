@@ -396,7 +396,7 @@ export default function AdminInterviews() {
                     {/* The invariant recruitment works to: every advancing
                         candidate gets a seat. Checked here rather than
                         discovered by the candidate who finds nothing left. */}
-                    {active.stats.bookableSessions > 0 && active.stats.seats < active.stats.eligible && (
+                    {active.interviews.length > 0 && active.stats.bookableSessions > 0 && active.stats.seats < active.stats.eligible && (
                       <Alert severity="error" sx={{ mb: 2 }}>
                         <AlertTitle>Not enough seats for this round</AlertTitle>
                         {active.stats.seats} seat{active.stats.seats === 1 ? '' : 's'} across{' '}
@@ -408,7 +408,8 @@ export default function AdminInterviews() {
                         sending the decision emails.
                       </Alert>
                     )}
-                    {active.stats.bookableSessions > 0 &&
+                    {active.interviews.length > 0 &&
+                      active.stats.bookableSessions > 0 &&
                       active.stats.seats >= active.stats.eligible &&
                       active.stats.eligible > 0 && (
                         <Alert severity="success" sx={{ mb: 2 }} icon={false}>
@@ -419,7 +420,7 @@ export default function AdminInterviews() {
                         </Alert>
                       )}
 
-                    {active.stats.bookableSessions === 0 && active.stats.sessions > 0 && (
+                    {active.interviews.length > 0 && active.stats.bookableSessions === 0 && active.stats.sessions > 0 && (
                       <Alert severity="warning" sx={{ mb: 2 }}>
                         This round has {active.stats.sessions} session{active.stats.sessions === 1 ? '' : 's'} but{' '}
                         <strong>none are open to candidates</strong> — they came from last cycle's groups and have no
@@ -427,7 +428,27 @@ export default function AdminInterviews() {
                       </Alert>
                     )}
 
-                    {active.stats.sessions === 0 && (
+                    {/* A round with no interview yet is the normal state early
+                        in a cycle, not an error. Offer the thing to do next. */}
+                    {active.interviews.length === 0 && (
+                      <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', mb: 2 }}>
+                        <Typography variant="h6" gutterBottom>
+                          No {active.label.toLowerCase()} yet
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                          {active.stats.eligible > 0
+                            ? `${active.stats.eligible} candidate${active.stats.eligible === 1 ? ' is' : 's are'} already in this round.`
+                            : 'Nobody is in this round yet, but you can set it up now.'}{' '}
+                          Create the interview and its sessions, and candidates will be able to book when
+                          they reach it.
+                        </Typography>
+                        <Button variant="contained" onClick={() => setView('manage')}>
+                          Create the interview
+                        </Button>
+                      </Paper>
+                    )}
+
+                    {active.interviews.length > 0 && active.stats.sessions === 0 && (
                       <Alert
                         severity="info"
                         sx={{ mb: 2 }}

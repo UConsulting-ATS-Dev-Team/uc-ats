@@ -52,6 +52,10 @@ const fail = (res, error, fallback) => {
   return res.status(500).json({ error: fallback });
 };
 
+/// The rounds candidates schedule themselves into, in order. Shown always, so a
+/// round can be set up before anybody reaches it.
+const SCHEDULABLE_ROUNDS = ['2', '3', '4'];
+
 const parseTime = (value) => {
   if (value == null) return null;
   const date = new Date(value);
@@ -214,8 +218,14 @@ router.get('/scheduling/overview', async (req, res) => {
       },
     });
 
-    // Bucket interviews by the round their candidates come from, so siblings land together.
+    // Every schedulable round, whether or not an interview exists for it yet.
+    //
+    // Building the tabs from the interviews that happen to exist meant a cycle
+    // with only a coffee chat showed only coffee chats, and there was nowhere
+    // to set up first round before reaching it. Recruitment plans the whole
+    // cycle up front; the page has to let them.
     const byRound = new Map();
+    for (const round of SCHEDULABLE_ROUNDS) byRound.set(round, []);
     for (const interview of interviews) {
       const round = roundNumberForInterviewType(interview.interviewType);
       if (!round) continue;
@@ -285,7 +295,15 @@ router.get('/scheduling/overview', async (req, res) => {
         // got the final round wrong: anything that was not a coffee chat came
         // back labelled "First Round Interviews".
         label: getRound(round)?.label ?? `Round ${round}`,
-        interviewType: roundInterviews[0].interviewType,
+        // The type a new interview for this round should be created as, taken
+        // from the mapping rather than from an interview that may not exist.
+        // ROUND_TWO is a legacy alias of FINAL_ROUND that both map to round 4;
+        // a new interview should be created under the name people use.
+        interviewType:
+          roundInterviews[0]?.interviewType ??
+          interviewTypesForRound(round).find((type) => type !== 'ROUND_TWO') ??
+          interviewTypesForRound(round)[0] ??
+          null,
         interviews: roundInterviews.map((i) => ({ id: i.id, title: i.title, startDate: i.startDate, status: i.status })),
         slots,
         unassigned,
