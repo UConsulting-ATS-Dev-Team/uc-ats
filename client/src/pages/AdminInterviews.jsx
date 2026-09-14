@@ -155,6 +155,23 @@ export default function AdminInterviews() {
     return run(() => apiClient.post(`/admin/interviews/slots/${slot.id}/groups`, {}), 'Regrouped.').catch(() => {});
   };
 
+  // "She is on the morning waitlist and I want her in the morning" - which the
+  // move action cannot express, because her row is already on that session.
+  const promote = (signup) => {
+    const name = `${signup.candidate?.firstName ?? ''} ${signup.candidate?.lastName ?? ''}`.trim();
+    return run(
+      () => apiClient.post(`/admin/interviews/slot-signups/${signup.id}/promote`, {}),
+      `${name} moved off the waitlist.`
+    ).catch((e) => {
+      if (!String(e?.message ?? '').includes('OVER_CAPACITY')) return;
+      if (!window.confirm(`That session is already full. Give ${name} a place anyway?`)) return;
+      return run(
+        () => apiClient.post(`/admin/interviews/slot-signups/${signup.id}/promote`, { force: true }),
+        `${name} added over capacity.`
+      ).catch(() => {});
+    });
+  };
+
   const changeGroup = (signup) => {
     const next = window.prompt(
       `Group for ${signup.candidate?.firstName ?? 'this candidate'} — a number and a letter, like 1A. Leave blank to remove them from a group.`,
@@ -465,6 +482,7 @@ export default function AdminInterviews() {
                         onRemoveInterviewer={removeInterviewer}
                         selfService={active.stats.bookableSessions > 0}
                         onChangeGroup={changeGroup}
+                        onPromote={promote}
                         onSetGroupSize={setGroupSize}
                         onRegroup={regroup}
                       />

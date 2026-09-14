@@ -144,3 +144,45 @@ describe('defaultSpecFor', () => {
     expect(defaultSpecFor('FINAL_ROUND').cadence.capacity).toBe(1);
   });
 });
+
+describe('planCadence — more than one interview at a time', () => {
+  it('makes a session per room at each sitting', () => {
+    // Three panels at 9, three at 10. Each is its own session because each has
+    // its own four candidates and its own interviewers.
+    const rows = planCadence(DAY, { start: '09:00', end: '11:00', minutes: 60, capacity: 4, parallel: 3 });
+    expect(rows).toHaveLength(6);
+    expect(rows.filter((r) => hhmm(r.startTime) === '09:00')).toHaveLength(3);
+    expect(rows.every((r) => r.candidateCapacity === 4)).toBe(true);
+  });
+
+  it('names the rooms so two sessions at the same hour are tellable apart', () => {
+    const rows = planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 2 });
+    expect(rows.map((r) => r.label)).toEqual(['Room 1', 'Room 2']);
+  });
+
+  it('uses the names given rather than inventing them', () => {
+    const rows = planCadence(DAY, {
+      start: '09:00', end: '10:00', minutes: 60, parallel: 2,
+      rooms: ['Anderson 1234', 'Covel B'],
+    });
+    expect(rows.map((r) => r.label)).toEqual(['Anderson 1234', 'Covel B']);
+  });
+
+  it('leaves a single session unnamed, because the time is its name', () => {
+    const rows = planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 1 });
+    expect(rows[0].label).toBeNull();
+  });
+
+  it('counts the day in sittings, not rows', () => {
+    // Four rooms must not cut the day to a quarter of its length.
+    const rows = planCadence(DAY, { start: '08:00', end: '17:00', minutes: 60, parallel: 4 });
+    var distinct = new Set(rows.map((r) => hhmm(r.startTime)));
+    expect(distinct.size).toBe(9);
+    expect(rows).toHaveLength(36);
+  });
+
+  it('treats a nonsense room count as one', () => {
+    expect(planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 0 })).toHaveLength(1);
+    expect(planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 'lots' })).toHaveLength(1);
+  });
+});

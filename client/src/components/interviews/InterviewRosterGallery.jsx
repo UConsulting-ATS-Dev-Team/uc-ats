@@ -50,7 +50,7 @@ const fullName = (candidate) => `${candidate?.firstName ?? ''} ${candidate?.last
  * it is the accessible path, the mobile path, and the one that still works when
  * a drag lands on the wrong column.
  */
-function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChangeGroup, dimmed, compact }) {
+function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChangeGroup, onPromote, heldSeatSlotId, heldSeatSlotLabel, dimmed, compact }) {
   const [anchor, setAnchor] = useState(null);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: signup.id,
@@ -105,7 +105,7 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChang
               color="warning"
               variant="outlined"
               icon={<HourglassIcon />}
-              label="Holding a seat elsewhere"
+              label={heldSeatSlotLabel ? `Also in ${heldSeatSlotLabel}` : 'Holding a seat elsewhere'}
               sx={{ mt: 0.5, height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
             />
           )}
@@ -129,8 +129,35 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChang
       </Stack>
 
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+        {/* A waitlisted candidate is waiting for THIS session while holding a
+            seat in another one. "Move to" the session they already hold is
+            nonsense, and the two things an admin actually wants - give them the
+            one they want, or take them off the queue - had no button at all. */}
+        {waiting && onPromote && (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null);
+              onPromote(signup);
+            }}
+          >
+            Give them this session now
+          </MenuItem>
+        )}
+        {waiting && (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null);
+              onRemove(signup);
+            }}
+          >
+            Take off the waitlist{heldElsewhere ? ' (keeps their other spot)' : ''}
+          </MenuItem>
+        )}
+        {waiting && <Divider />}
         {slots
           .filter((slot) => slot.id !== currentSlotId)
+          // Never offer the session they are already sitting in.
+          .filter((slot) => slot.id !== heldSeatSlotId)
           .map((slot) => (
             <MenuItem
               key={slot.id}
@@ -155,23 +182,27 @@ function CandidateCard({ signup, slots, currentSlotId, onMove, onRemove, onChang
             </MenuItem>
           </>
         )}
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            setAnchor(null);
-            onRemove(signup);
-          }}
-          sx={{ color: 'error.main' }}
-        >
-          Remove from interview
-        </MenuItem>
+        {!waiting && (
+          <>
+            <Divider />
+            <MenuItem
+              onClick={() => {
+                setAnchor(null);
+                onRemove(signup);
+              }}
+              sx={{ color: 'error.main' }}
+            >
+              Remove from interview
+            </MenuItem>
+          </>
+        )}
       </Menu>
     </Paper>
   );
 }
 
 /** One slot: heading, seat meter, confirmed candidates, then the waitlist tray. */
-function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGroup, showInterviewTitle, onAssignInterviewer, onRemoveInterviewer, onSetGroupSize, onRegroup }) {
+function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGroup, onPromote, heldSeatSlot, showInterviewTitle, onAssignInterviewer, onRemoveInterviewer, onSetGroupSize, onRegroup }) {
   const { setNodeRef, isOver } = useDroppable({ id: slot.id });
 
   const confirmed = slot.signups.filter((s) => s.status === 'CONFIRMED');
@@ -343,6 +374,9 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGr
                 onMove={onMove}
                 onRemove={onRemove}
                 onChangeGroup={onChangeGroup}
+                onPromote={onPromote}
+                heldSeatSlotId={heldSeatSlot(signup)?.id}
+                heldSeatSlotLabel={heldSeatSlot(signup) ? slotHeading(heldSeatSlot(signup)) : null}
               />
             ))}
           </Stack>
@@ -368,6 +402,7 @@ export default function InterviewRosterGallery({
   onAssignInterviewer,
   onRemoveInterviewer,
   onChangeGroup,
+  onPromote,
   onSetGroupSize,
   onRegroup,
   selfService = false,
@@ -383,6 +418,14 @@ export default function InterviewRosterGallery({
   // A round can span sibling interviews ("Coffee Chat - Round 1" and "Round 2"),
   // in which case each column needs to say which one it belongs to.
   const spansInterviews = new Set(slots.map((slot) => slot.interviewId).filter(Boolean)).size > 1;
+
+  // signupId -> the session that signup sits in, so a waitlist card can name
+  // the seat its owner is holding rather than just asserting there is one.
+  const slotOfSignup = useMemo(() => {
+    const map = new Map();
+    slots.forEach((slot) => slot.signups.forEach((s) => map.set(s.id, slot)));
+    return map;
+  }, [slots]);
 
   const needsPlacement = useMemo(
     () => slots.flatMap((slot) => slot.signups.filter((s) => s.status === 'NEEDS_PLACEMENT')),
@@ -480,6 +523,8 @@ export default function InterviewRosterGallery({
               onAssignInterviewer={onAssignInterviewer}
               onRemoveInterviewer={onRemoveInterviewer}
               onChangeGroup={onChangeGroup}
+              onPromote={onPromote}
+              heldSeatSlot={(signup) => (signup.heldSeatId ? slotOfSignup.get(signup.heldSeatId) : null)}
               onSetGroupSize={onSetGroupSize}
               onRegroup={onRegroup}
             />

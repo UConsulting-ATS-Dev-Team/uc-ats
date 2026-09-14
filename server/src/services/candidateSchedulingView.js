@@ -73,6 +73,15 @@ export async function getOwnSignups(applicationId, client = prisma) {
  */
 export async function getBookingOptions(application, cycleId, client = prisma) {
   const now = new Date();
+
+  // Rejected candidates are not scheduling anything. Eligibility used to be
+  // decided on currentRound alone, which left somebody who had just been turned
+  // down still looking at a booking page for the round they were cut from -
+  // and, if they booked, sitting in an interviewer's roster.
+  if (application.status === 'REJECTED') {
+    return { modifyCutoffHours: MODIFY_CUTOFF_HOURS, interviews: [], reason: 'NOT_ADVANCING' };
+  }
+
   const eligibleTypes = interviewTypesForRound(application.currentRound);
   if (eligibleTypes.length === 0) {
     return { modifyCutoffHours: MODIFY_CUTOFF_HOURS, interviews: [], reason: 'NOT_IN_A_SCHEDULING_ROUND' };
@@ -130,6 +139,8 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
 }
 
 export const EMPTY_REASONS = {
+  NOT_ADVANCING:
+    'This candidate is not moving forward in the cycle, so they are not offered any interview times.',
   NOT_IN_A_SCHEDULING_ROUND:
     'This candidate is not in a round that has interview scheduling. Only coffee chat and first round candidates see anything here.',
   NO_INTERVIEWS_FOR_ROUND: 'No interview has been created for this round in the active cycle.',

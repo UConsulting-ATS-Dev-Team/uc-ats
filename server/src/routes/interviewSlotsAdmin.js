@@ -27,7 +27,7 @@ import {
   getOwnSignups,
 } from '../services/candidateSchedulingView.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
-import { moveSignup, cancelSignup, placeCandidate } from '../services/interviewSignups.js';
+import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
 import {
   SLOT_NOTIFICATION_SUBJECTS,
   flushNotifications,
@@ -1029,6 +1029,22 @@ router.post('/interviews/slot-signups/:signupId/move', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to move that candidate');
+  }
+});
+
+// POST /api/admin/interviews/slot-signups/:signupId/promote   { force }
+// Give somebody the session they are waiting for, even if it is full.
+router.post('/interviews/slot-signups/:signupId/promote', async (req, res) => {
+  try {
+    const result = await promoteFromWaitlist({
+      signupId: req.params.signupId,
+      actorId: req.user.id,
+      force: req.body?.force === true,
+    });
+    await notifyPromotions([{ signupId: result.promoted.id }, ...result.promotions]);
+    res.json({ promoted: true, overCapacity: result.overCapacity, alsoPromoted: result.promotions.length });
+  } catch (error) {
+    fail(res, error, 'Failed to move that candidate off the waitlist');
   }
 });
 

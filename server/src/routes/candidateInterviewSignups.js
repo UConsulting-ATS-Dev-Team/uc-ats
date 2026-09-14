@@ -103,6 +103,11 @@ router.post('/', async (req, res) => {
     const { cycle, application } = await resolveOwnApplication(req);
     if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
+    // Belt and braces: the page does not offer times to a rejected candidate,
+    // but a stale tab or a replayed request must not get through either.
+    if (application.status === 'REJECTED') {
+      return res.status(403).json({ error: 'Interview scheduling is not open for your application.' });
+    }
 
     const result = await claimWithFallback({
       applicationId: application.id,

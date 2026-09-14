@@ -92,7 +92,9 @@ describe('InterviewRosterGallery', () => {
     expect(screen.getByText('9:00 AM - 11:00 AM')).toBeInTheDocument();
   });
 
-  it('marks a waitlisted candidate as holding a seat elsewhere', () => {
+  it('names the session a waitlisted candidate is already sitting in', () => {
+    // "Holding a seat elsewhere" leaves an admin to go and find where. The
+    // point of the chip is to answer that without looking.
     const roster = coffeeChatRoster();
     roster.slots[0].signups.push(
       signup('s4', 'WAITLISTED', candidate('a4', 'Katherine', 'Johnson'), { heldSeatId: 's3' })
@@ -100,7 +102,49 @@ describe('InterviewRosterGallery', () => {
     render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} />);
 
     expect(screen.getByText('Waitlist (1)')).toBeInTheDocument();
-    expect(screen.getByText('Holding a seat elsewhere')).toBeInTheDocument();
+    expect(screen.getByText('Also in Afternoon Block')).toBeInTheDocument();
+  });
+
+  describe('a waitlisted card offers the right actions', () => {
+    const withWaitlist = () => {
+      const roster = coffeeChatRoster();
+      roster.slots[0].signups.push(
+        signup('s4', 'WAITLISTED', candidate('a4', 'Katherine', 'Johnson'), { heldSeatId: 's3' })
+      );
+      return roster;
+    };
+
+    it('never offers to move them into the session they already hold', async () => {
+      // The bug this replaces: a candidate waitlisted for Morning while seated
+      // in Afternoon was offered "Move to Afternoon Session".
+      render(<InterviewRosterGallery roster={withWaitlist()} onMove={vi.fn()} onRemove={vi.fn()} onPromote={vi.fn()} />);
+      await userEvent.click(screen.getByLabelText('Actions for Katherine Johnson'));
+      expect(screen.queryByText('Move to Afternoon Block')).not.toBeInTheDocument();
+    });
+
+    it('offers to give them the session they are waiting for', async () => {
+      const onPromote = vi.fn();
+      render(<InterviewRosterGallery roster={withWaitlist()} onMove={vi.fn()} onRemove={vi.fn()} onPromote={onPromote} />);
+      await userEvent.click(screen.getByLabelText('Actions for Katherine Johnson'));
+      await userEvent.click(screen.getByText('Give them this session now'));
+      expect(onPromote).toHaveBeenCalledWith(expect.objectContaining({ id: 's4' }));
+    });
+
+    it('offers to drop the waitlist entry while keeping their other spot', async () => {
+      const onRemove = vi.fn();
+      render(<InterviewRosterGallery roster={withWaitlist()} onMove={vi.fn()} onRemove={onRemove} onPromote={vi.fn()} />);
+      await userEvent.click(screen.getByLabelText('Actions for Katherine Johnson'));
+      await userEvent.click(screen.getByText(/take off the waitlist \(keeps their other spot\)/i));
+      expect(onRemove).toHaveBeenCalledWith(expect.objectContaining({ id: 's4' }));
+    });
+
+    it('still offers a plain move for a confirmed candidate', async () => {
+      const onMove = vi.fn();
+      render(<InterviewRosterGallery roster={withWaitlist()} onMove={onMove} onRemove={vi.fn()} onPromote={vi.fn()} />);
+      await userEvent.click(screen.getByLabelText('Actions for Ada Lovelace'));
+      expect(screen.getByText('Move to Afternoon Block')).toBeInTheDocument();
+      expect(screen.queryByText('Give them this session now')).not.toBeInTheDocument();
+    });
   });
 
   it('raises the unscheduled overflow to the top of the page', () => {

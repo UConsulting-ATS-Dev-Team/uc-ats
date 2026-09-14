@@ -80,14 +80,21 @@ export function planCadence(day, cadence = {}) {
   if (end <= start) throw new Error('The day ends before it starts.');
   if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('Each session needs a length in minutes.');
 
+  // How many run side by side at each time.
+  const parallel = Math.max(1, Math.min(12, Number(cadence.parallel ?? 1) || 1));
+  const roomNames = (cadence.rooms ?? []).map((name) => String(name).trim()).filter(Boolean);
+
   const breaks = (cadence.breaks ?? [])
     .map((b) => ({ start: combine(day, b.start), end: combine(day, b.end) }))
     .filter((b) => b.start && b.end && b.end > b.start);
 
   const rows = [];
-  const MAX = 60;
+  // Bounded on sittings rather than rows, so asking for four parallel rooms
+  // does not quietly cut the day short.
+  const MAX_SITTINGS = 60;
+  let sittings = 0;
   let cursor = start;
-  while (cursor < end && rows.length < MAX) {
+  while (cursor < end && sittings < MAX_SITTINGS) {
     const next = new Date(cursor.getTime() + minutes * 60000);
     if (next > end) break;
 
@@ -100,13 +107,20 @@ export function planCadence(day, cadence = {}) {
       continue;
     }
 
-    rows.push({
-      label: null,
-      startTime: cursor,
-      endTime: next,
-      candidateCapacity: capacity,
-      interviewerCapacity: interviewers,
-    });
+    // More than one interview can run at the same hour - different rooms, or
+    // simply several panels going at once. Each is its own session, because
+    // each has its own four candidates and its own interviewers; sharing one
+    // session between two rooms would put eight people in a room built for four.
+    for (let room = 0; room < parallel; room += 1) {
+      rows.push({
+        label: parallel > 1 ? `${roomNames[room] ?? `Room ${room + 1}`}` : null,
+        startTime: cursor,
+        endTime: next,
+        candidateCapacity: capacity,
+        interviewerCapacity: interviewers,
+      });
+    }
+    sittings += 1;
     cursor = next;
   }
 
@@ -147,6 +161,7 @@ export function defaultSpecFor(interviewType) {
       minutes: 60,
       capacity: interviewType === 'ROUND_ONE' ? 4 : 1,
       interviewers: 2,
+      parallel: 1,
       breaks: [{ start: '12:00', end: '13:00' }],
     },
   };

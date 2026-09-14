@@ -580,6 +580,68 @@ export async function moveSignup({
 }
 
 /**
+ * Give a waitlisted candidate the session they were waiting for, now.
+ *
+ * The move endpoint cannot do this: their row already sits on that session, so
+ * "move" is a no-op and gets refused. What actually has to happen is a
+ * promotion out of order - release the seat they were holding elsewhere, then
+ * confirm them here, over capacity if an admin says so.
+ *
+ * This is the answer to "she is on the morning waitlist and I want her in the
+ * morning", which previously had no button at all.
+ */
+export async function promoteFromWaitlist({ signupId, actorId, force = false }) {
+  const now = new Date();
+
+  return withSerializableTransaction(prisma, async (tx) => {
+    const signup = await tx.interviewSlotSignup.findUnique({
+      where: { id: signupId },
+      include: { slot: true },
+    });
+    if (!signup) throw new SlotTransactionError(404, 'That booking no longer exists');
+    if (!['WAITLISTED', 'NEEDS_PLACEMENT'].includes(signup.status)) {
+      throw new SlotTransactionError(409, 'That candidate is not waiting for this session');
+    }
+
+    const confirmed = await countConfirmed(tx, signup.slotId);
+    const overCapacity =
+      signup.slot.candidateCapacity != null && confirmed >= signup.slot.candidateCapacity;
+    if (overCapacity && !force) throw new SlotTransactionError(409, 'OVER_CAPACITY');
+
+    // Release before confirming: for the instant between, they would hold two
+    // confirmed seats in one interview, which the partial unique index rejects.
+    let releasedSlotId = null;
+    if (signup.heldSeatId) {
+      const released = await tx.interviewSlotSignup.update({
+        where: { id: signup.heldSeatId },
+        data: { status: 'RELEASED', cancelledAt: now },
+        select: { id: true, slotId: true },
+      });
+      releasedSlotId = released.slotId;
+    }
+
+    const promoted = await tx.interviewSlotSignup.update({
+      where: { id: signupId },
+      data: {
+        status: 'CONFIRMED',
+        promotedAt: now,
+        waitlistedAt: null,
+        heldSeatId: null,
+        movedById: actorId,
+        movedAt: now,
+        groupLabel: await nextGroupLabel(tx, signup.slot),
+      },
+      select: SIGNUP_SELECT,
+    });
+
+    // The seat they gave up may be what somebody else was waiting for.
+    const promotions = releasedSlotId ? await drainWaitlist(tx, releasedSlotId, now) : [];
+
+    return { promoted, releasedSlotId, promotions, overCapacity };
+  });
+}
+
+/**
  * Place a candidate into a slot directly. The admin resolution path for a
  * NEEDS_PLACEMENT escalation, and the manual override generally.
  */
