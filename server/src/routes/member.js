@@ -1339,7 +1339,7 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
     // claim. The admin side was repointed here when the roster moved into real
     // tables and this one was missed, so an interviewer opening a session that
     // candidates had booked themselves was shown nobody to evaluate.
-    const applicationIds = await resolveGroupIds(id, groupIdArray);
+    const applicationIds = await resolveGroupIds(interviewId, groupIdArray);
 
     if (applicationIds.length === 0) {
       return res.json([]);
