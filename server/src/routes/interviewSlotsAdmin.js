@@ -28,6 +28,7 @@ import {
 } from '../services/interviewerAvailability.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
+import { sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
 import {
   SLOT_NOTIFICATION_SUBJECTS,
   flushNotifications,
@@ -1436,7 +1437,29 @@ async function notifyInterviewer(slotId, userId, type, { fromSlotName = null } =
   }
 }
 
+/**
+ * Tell a candidate their time changed - and only then.
+ *
+ * A candidate's email is about a time slot, never about a group. Coffee chat
+ * rotation groups (1A, 1B) live inside a sitting: shuffling somebody from 1A to
+ * 1B does not move them by a minute, and mailing "your time has been updated"
+ * for it makes people re-check a booking that has not changed. Group changes go
+ * through the group endpoint, which sends nothing at all; this guard covers the
+ * other way of arriving at the same place - a move between two slots that hold
+ * the same time, such as parallel groups at one hour.
+ */
 async function notifyMoved(result) {
+  // A move that changes nothing a candidate would act on, for somebody who
+  // already held a confirmed seat, is not news. Someone coming off a waitlist
+  // still hears, because their status genuinely changed.
+  if (result.fromStatus === 'CONFIRMED' && sameTimeAndPlace(result.fromSlot, result.target)) {
+    const promotionIds = await notifyPromotions(result.promotions, { flush: false });
+    flushNotifications(promotionIds, renderBody).catch((e) =>
+      console.error('[interviewSlotsAdmin] flush failed', e)
+    );
+    return;
+  }
+
   const entries = [];
   const moved = await prisma.interviewSlotSignup.findUnique({
     where: { id: result.moved.id },

@@ -27,6 +27,8 @@ import {
 } from '@mui/material';
 import {
   AdminPanelSettings as AdminIcon,
+  Check as CheckIcon,
+  ContentCopy as CopyIcon,
   RecordVoiceOver as InterviewerIcon,
 } from '@mui/icons-material';
 import apiClient from '../utils/api';
@@ -63,6 +65,16 @@ function Stat({ label, value, tone, hint }) {
   return hint ? <Tooltip title={hint}>{chip}</Tooltip> : chip;
 }
 
+/**
+ * Where a candidate books their own time.
+ *
+ * The same URL the decision emails carry: no round, no token, no per-candidate
+ * anything. The page is behind the candidate login and works out which round
+ * they are in from their own application, so one link serves everybody and
+ * pasting it to somebody who lost their email is safe.
+ */
+const SIGNUP_URL = `${window.location.origin}/interview-signup`;
+
 export default function AdminInterviews() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
@@ -81,6 +93,7 @@ export default function AdminInterviews() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState(0);
   const [view, setView] = useState('sessions');
   const [setupFor, setSetupFor] = useState(null);
@@ -263,6 +276,26 @@ export default function AdminInterviews() {
   const suppressed = data?.notifications?.SUPPRESSED ?? 0;
   const failed = data?.notifications?.FAILED ?? 0;
 
+  // The same link the decision emails carry. Candidates sign in and the page
+  // works out which round they are in, so there is nothing per-person to build -
+  // which is exactly what makes it safe to paste to anyone who says they never
+  // got the email.
+  // The tooltip carries describeChild so it becomes aria-describedby rather
+  // than the button's accessible name - without it a screen reader announces a
+  // bare URL instead of what the control does.
+  const copySignupLink = async () => {
+    try {
+      await navigator.clipboard.writeText(SIGNUP_URL);
+    } catch {
+      // Clipboard is blocked outside a secure context, and on a scheduling page
+      // "nothing happened" is worse than a prompt to copy by hand.
+      window.prompt('Copy this link:', SIGNUP_URL);
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
       <Container maxWidth={false} sx={{ py: 3 }}>
@@ -290,6 +323,17 @@ export default function AdminInterviews() {
                   <InterviewerIcon fontSize="small" sx={{ mr: 0.5 }} /> Interviewer
                 </ToggleButton>
               </ToggleButtonGroup>
+            )}
+            {mode === 'admin' && (
+              <Tooltip title={SIGNUP_URL} describeChild>
+                <Button
+                  startIcon={copied ? <CheckIcon /> : <CopyIcon />}
+                  color={copied ? 'success' : 'primary'}
+                  onClick={copySignupLink}
+                >
+                  {copied ? 'Copied' : 'Copy signup link'}
+                </Button>
+              </Tooltip>
             )}
             {mode === 'admin' && (
               <Button onClick={load} disabled={busy}>

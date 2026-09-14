@@ -7,8 +7,7 @@ import {
   nextInLine,
   planPromotions,
   nextLabelFrom,
-  seatsRemaining,
-} from './interviewSignupPolicy.js';
+  seatsRemaining, sameTimeAndPlace } from './interviewSignupPolicy.js';
 
 const slot = (over = {}) => ({
   id: 's1',
@@ -240,5 +239,53 @@ describe('nextLabelFrom — rotation groups', () => {
 
   it('keeps counting past nine rotations', () => {
     expect(nextLabelFrom([group('9A', 2), group('9B', 2)], 2)).toBe('10A');
+  });
+});
+
+describe('sameTimeAndPlace', () => {
+  const at = (start, end, location = 'Covel') => ({ startTime: start, endTime: end, location });
+
+  it('is true for two slots holding the same hour in the same room', () => {
+    // Two parallel first-round groups at 10:00, or a coffee chat rotation
+    // reshuffle: the candidate's time did not move, so nothing is emailed.
+    expect(
+      sameTimeAndPlace(
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'),
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z')
+      )
+    ).toBe(true);
+  });
+
+  it('compares instants, not strings', () => {
+    expect(
+      sameTimeAndPlace(
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'),
+        at(new Date('2026-10-06T17:00:00Z'), new Date('2026-10-06T18:00:00Z'))
+      )
+    ).toBe(true);
+  });
+
+  it('is false when the time really moved', () => {
+    expect(
+      sameTimeAndPlace(
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'),
+        at('2026-10-06T18:00:00Z', '2026-10-06T19:00:00Z')
+      )
+    ).toBe(false);
+  });
+
+  it('is false when only the room moved', () => {
+    // Same hour, different building - they need to know where to turn up.
+    expect(
+      sameTimeAndPlace(
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z', 'Covel'),
+        at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z', 'Kerckhoff')
+      )
+    ).toBe(false);
+  });
+
+  it('is false when either slot is missing', () => {
+    expect(sameTimeAndPlace(null, at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'))).toBe(false);
+    expect(sameTimeAndPlace(at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'), null)).toBe(false);
   });
 });

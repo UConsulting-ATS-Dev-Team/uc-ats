@@ -179,3 +179,22 @@ export function nextLabelFrom(existing, size) {
   const letterIndex = LETTERS.indexOf(last.letter);
   return letterIndex < 1 ? `${last.round}${LETTERS[letterIndex + 1]}` : `${last.round + 1}A`;
 }
+
+/**
+ * Do two slots hold the same time, in the same place?
+ *
+ * A candidate's email is about a time slot, never about a group. Coffee chat
+ * rotation groups (1A, 1B) live inside one sitting, and first round can run
+ * parallel groups at the same hour - so a move between slots is not always a
+ * move in time. Mailing "your time has been updated" when nothing moved makes
+ * people re-check a booking that is exactly as it was, and teaches them to
+ * ignore the mail that matters.
+ */
+export function sameTimeAndPlace(from, to) {
+  if (!from || !to) return false;
+  return (
+    new Date(from.startTime).getTime() === new Date(to.startTime).getTime() &&
+    new Date(from.endTime).getTime() === new Date(to.endTime).getTime() &&
+    (from.location ?? null) === (to.location ?? null)
+  );
+}

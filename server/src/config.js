@@ -73,10 +73,10 @@ const config = {
   /**
    * Whether interview scheduling emails actually leave the building.
    *
-   * Off by default, deliberately. This feature emails real candidates the
-   * moment somebody books, cancels or is promoted, and it is going to be poked
-   * at in a live cycle with real applicants in the database before anyone is
-   * ready for them to hear about it. Set SCHEDULING_EMAILS=on when you are.
+   * Off unless SCHEDULING_EMAILS=on, deliberately. This feature emails real
+   * candidates the moment somebody books, cancels or is promoted, and it gets
+   * poked at in a live cycle with real applicants in the database - so sending
+   * is opt-in rather than something a fresh checkout does by surprise.
    *
    * Suppression is recorded, not silent: notifications are still written, marked
    * SUPPRESSED, and can be sent later from the roster once this is switched on.

@@ -27,7 +27,7 @@ import {
   findOwnApplication,
 } from '../utils/applicationOwnership.js';
 import { MODIFY_CUTOFF_HOURS } from '../utils/schedulingWindows.js';
-import { getBookingOptions, getOwnSignups } from '../services/candidateSchedulingView.js';
+import { checkCanBookSlot, getBookingOptions, getOwnSignups } from '../services/candidateSchedulingView.js';
 import { cancelSignup, claimWithFallback, moveSignup } from '../services/interviewSignups.js';
 import {
   SLOT_NOTIFICATION_SUBJECTS,
@@ -103,11 +103,12 @@ router.post('/', async (req, res) => {
     const { cycle, application } = await resolveOwnApplication(req);
     if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
-    // Belt and braces: the page does not offer times to a rejected candidate,
-    // but a stale tab or a replayed request must not get through either.
-    if (application.status === 'REJECTED') {
-      return res.status(403).json({ error: 'Interview scheduling is not open for your application.' });
-    }
+    // The page only offers times for the round they are in, but the slotId
+    // arrives in the request body - so the round has to be enforced here, not
+    // just displayed. A stale tab, a replayed request or a guessed id all land
+    // on this line.
+    const denied = await checkCanBookSlot(application, slotId, cycle.id);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
 
     const result = await claimWithFallback({
       applicationId: application.id,
@@ -135,7 +136,8 @@ router.patch('/:id', async (req, res) => {
     const { slotId } = req.body ?? {};
     if (!slotId) return res.status(400).json({ error: 'A time slot is required' });
 
-    const { application } = await resolveOwnApplication(req);
+    const { cycle, application } = await resolveOwnApplication(req);
+    if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
 
     const owned = await prisma.interviewSlotSignup.findFirst({
@@ -143,6 +145,10 @@ router.patch('/:id', async (req, res) => {
       select: { id: true },
     });
     if (!owned) return res.status(404).json({ error: 'That booking is not yours' });
+
+    // Switching times is booking a different slot, so it gets the same guard.
+    const denied = await checkCanBookSlot(application, slotId, cycle.id);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
 
     const result = await moveSignup({ signupId: req.params.id, toSlotId: slotId });
     const ids = await queueForPromotions(result.promotions, result.moved?.id);
@@ -157,7 +163,8 @@ router.patch('/:id', async (req, res) => {
 // DELETE /api/my-interview-signups/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const { application } = await resolveOwnApplication(req);
+    const { cycle, application } = await resolveOwnApplication(req);
+    if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
 
     const owned = await prisma.interviewSlotSignup.findFirst({

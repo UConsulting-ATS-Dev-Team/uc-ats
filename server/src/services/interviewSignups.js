@@ -575,7 +575,10 @@ export async function moveSignup({
 
     const promotions = await drainWaitlist(tx, vacatedSlotId, now);
 
-    return { moved, vacatedSlotId, releasedSeatId, promotions, overCapacity, target };
+    // fromSlot travels with the result so callers can tell a real change of
+    // time from a reshuffle that lands on the same one - the difference between
+    // an email a candidate needs and one that worries them for nothing.
+    return { moved, vacatedSlotId, releasedSeatId, promotions, overCapacity, target, fromSlot: signup.slot, fromStatus: signup.status };
   });
 }
 

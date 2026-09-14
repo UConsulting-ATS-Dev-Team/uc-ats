@@ -138,3 +138,48 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
   };
 }
 
+
+/**
+ * May this application book this slot?
+ *
+ * The view above filters interviews to the round somebody is sitting in, but a
+ * filtered list is a courtesy, not a control: the booking endpoints take a
+ * slotId from the request body, and the signup link is a bare URL that anybody
+ * with a candidate login can open. Without this check a candidate still waiting
+ * on a coffee chat decision could post a first-round slot id and appear in an
+ * interviewer's roster for a round they were never advanced to.
+ *
+ * Returns null when allowed, or a { status, error } to answer with.
+ */
+export async function checkCanBookSlot(application, slotId, cycleId, client = prisma) {
+  if (application.status === 'REJECTED') {
+    return { status: 403, error: 'Interview scheduling is not open for your application.' };
+  }
+
+  const slot = await client.interviewSlot.findUnique({
+    where: { id: slotId },
+    select: {
+      id: true,
+      interview: { select: { cycleId: true, interviewType: true, status: true } },
+    },
+  });
+  if (!slot) return { status: 404, error: 'That time slot no longer exists' };
+
+  // A slot from another cycle is not theirs to take, and saying so precisely
+  // would confirm it exists.
+  if (slot.interview.cycleId !== cycleId) {
+    return { status: 403, error: 'That time slot is not open to you.' };
+  }
+  if (['CANCELLED', 'COMPLETED'].includes(slot.interview.status)) {
+    return { status: 409, error: 'That interview is no longer taking signups.' };
+  }
+
+  const eligibleTypes = interviewTypesForRound(application.currentRound);
+  if (!eligibleTypes.includes(slot.interview.interviewType)) {
+    return {
+      status: 403,
+      error: 'That interview is for a round you have not advanced to.',
+    };
+  }
+  return null;
+}
