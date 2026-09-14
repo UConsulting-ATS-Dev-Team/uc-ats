@@ -2691,7 +2691,10 @@ router.post('/test-email-notifications', async (req, res) => {
         candidateName,
         event.eventName,
         eventDate,
-        event.eventLocation
+        event.eventLocation,
+        // Same invite as the automatic confirmation, and the same UID, so a resend
+        // amends the entry the candidate already has rather than adding a second.
+        event
       );
     } else {
       result = await sendAttendanceConfirmation(

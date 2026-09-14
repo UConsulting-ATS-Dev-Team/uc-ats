@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
+import { eventInviteFor } from './eventInvites.js';
 
 // Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
 // are picked up automatically from the environment by the AWS SDK credential chain.
@@ -148,12 +149,27 @@ const sendEmail = async (to, subject, html, attachments = []) => {
   }
 };
 
-// Send RSVP confirmation email
-export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventName, eventDate, eventLocation) => {
+/**
+ * Send RSVP confirmation email.
+ *
+ * `event` is optional and carries the row itself - id, eventStartDate, eventEndDate.
+ * Given it, the confirmation also attaches a calendar invite, so the reader does not
+ * have to copy the date out of the email by hand. Left out, the mail goes exactly as
+ * it always has; every existing caller keeps working untouched.
+ */
+export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventName, eventDate, eventLocation, event = null) => {
   try {
     const emailContent = createRSVPConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
-    
+    const invite = event
+      ? eventInviteFor({ event, recipientEmail: candidateEmail, recipientName: candidateName })
+      : null;
+    const result = await sendEmail(
+      candidateEmail,
+      emailContent.subject,
+      emailContent.html,
+      invite ? [invite] : []
+    );
+
     if (result.success) {
       console.log(`RSVP confirmation email sent to ${candidateEmail} for event: ${eventName}`);
     } else {
