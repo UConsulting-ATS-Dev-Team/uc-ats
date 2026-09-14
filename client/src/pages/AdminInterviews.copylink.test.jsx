@@ -34,7 +34,6 @@ describe('AdminInterviews signup link', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.get.mockResolvedValue(overview);
-    localStorage.setItem('uc-ats:interviews-mode', 'admin');
   });
 
   it('copies the candidate signup link', async () => {

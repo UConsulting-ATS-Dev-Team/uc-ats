@@ -20,17 +20,10 @@ import {
   Stack,
   Tab,
   Tabs,
-  ToggleButton,
-  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
-import {
-  AdminPanelSettings as AdminIcon,
-  Check as CheckIcon,
-  ContentCopy as CopyIcon,
-  RecordVoiceOver as InterviewerIcon,
-} from '@mui/icons-material';
+import { Check as CheckIcon, ContentCopy as CopyIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
@@ -41,21 +34,17 @@ import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
 
 /**
- * Interviews - one page, two jobs.
+ * Interviews - one page, two audiences.
  *
  * This used to be two pages that both showed rosters, which left a permanent
- * "which one do I use" question. The split that actually matters is not
- * scheduling versus running, it is which hat you are wearing: an admin runs the
- * round, and the same person also sits in interviews like everyone else.
+ * "which one do I use" question. What you get here follows from your role
+ * rather than from a control: an admin sees the whole round - sessions,
+ * rosters, waitlists, what candidates see - and a member sees the staffing
+ * half, the sessions they can run.
  *
- * So there is one page with a toggle. Admin is the whole round - sessions,
- * rosters, waitlists, what candidates see. Interviewer is what a UC member
- * sees - the sessions you can staff and the ones you are on.
- *
- * Members only ever get the interviewer half; the toggle is not offered to them.
+ * An admin who wants to staff a session does it where every member does, on
+ * Interview RSVP; this page no longer offers a second way in.
  */
-
-const MODE_KEY = 'uc-ats:interviews-mode';
 
 /** One number and what it means. Reads as a sentence, not a dashboard tile. */
 function Stat({ label, value, tone, hint }) {
@@ -79,14 +68,7 @@ export default function AdminInterviews() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
 
-  const [mode, setMode] = useState(() => {
-    if (!isAdmin) return 'interviewer';
-    try {
-      return window.localStorage.getItem(MODE_KEY) || 'admin';
-    } catch {
-      return 'admin';
-    }
-  });
+  const mode = isAdmin ? 'admin' : 'interviewer';
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -99,14 +81,6 @@ export default function AdminInterviews() {
   const [setupFor, setSetupFor] = useState(null);
   const [assignFor, setAssignFor] = useState(null);
   const [staff, setStaff] = useState([]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(MODE_KEY, mode);
-    } catch {
-      // Remembering the last hat is a convenience, not a requirement.
-    }
-  }, [mode]);
 
   const load = useCallback(async () => {
     if (!isAdmin) {
@@ -309,21 +283,6 @@ export default function AdminInterviews() {
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
-            {isAdmin && (
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={mode}
-                onChange={(e, next) => next && setMode(next)}
-              >
-                <ToggleButton value="admin">
-                  <AdminIcon fontSize="small" sx={{ mr: 0.5 }} /> Admin
-                </ToggleButton>
-                <ToggleButton value="interviewer">
-                  <InterviewerIcon fontSize="small" sx={{ mr: 0.5 }} /> Interviewer
-                </ToggleButton>
-              </ToggleButtonGroup>
-            )}
             {mode === 'admin' && (
               <Tooltip title={SIGNUP_URL} describeChild>
                 <Button
@@ -349,10 +308,9 @@ export default function AdminInterviews() {
           </Alert>
         )}
 
-        {/* Interviewer: exactly what a UC member sees, no admin chrome. An
-            admin conducting an interview is a member conducting an interview,
-            so the start-interview flow is the same page rather than a second
-            implementation that can drift from it. */}
+        {/* What a UC member gets here: staffing signup, no admin chrome.
+            Same component the Interview RSVP page renders, so the two cannot
+            drift apart. */}
         {mode === 'interviewer' && (
           <>
             <Alert
