@@ -45,24 +45,20 @@ export default function InterviewStaffingSignup() {
       setError('');
       const [data, mine] = await Promise.all([
         apiClient.get('/member/interview-slots'),
-        // Every interview this member is on, sessions or not - an interview
-        // with no sessions yet is exactly the one whose availability decides
-        // how many sessions it gets, and it cannot appear in the claim list
-        // below because it has nothing to claim.
-        apiClient.get('/member/interviews').catch(() => []),
+        // NOT the assigned list. Availability is collected before anybody is
+        // placed, so filtering it by placement is circular - nobody is assigned
+        // yet, so nobody sees the form, so nobody ever gets assigned. This
+        // endpoint returns what the whole roster can answer.
+        apiClient.get('/member/interviews/open-for-availability').catch(() => []),
       ]);
       // Only coffee chats are claimed by the member. First round groups are
       // built by recruitment out of the availability collected above - a member
       // picking their own group there would decide the schedule before anyone
       // knows who is free, which is the thing availability exists to prevent.
       setInterviews((data.interviews || []).filter((i) => i.interviewType === 'COFFEE_CHAT'));
-      // Coffee chats are not asked about here. Their sittings already exist and
-      // members claim them outright below - asking "are you free for Morning
-      // Session?" next to a button that signs you up for Morning Session is the
-      // same question twice, and only one of them does anything.
-      setAvailabilityFor(
-        (mine || []).filter((i) => ['ROUND_ONE', 'FINAL_ROUND', 'ROUND_TWO'].includes(i.interviewType))
-      );
+      // The endpoint already excludes coffee chats, whose sittings exist and
+      // are claimed outright below.
+      setAvailabilityFor(mine || []);
     } catch (e) {
       setError(e.message || 'Failed to load interview sessions.');
     } finally {
@@ -119,13 +115,6 @@ export default function InterviewStaffingSignup() {
 
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>
-        Interview Signup
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Mark when you are free, and claim any coffee chat sittings you want to run.
-      </Typography>
-
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
@@ -156,6 +145,13 @@ export default function InterviewStaffingSignup() {
           </Stack>
         </Box>
       )}
+
+      <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+        Coffee chat sittings
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        These already exist, so claim the ones you want to run. You cannot take two that overlap.
+      </Typography>
 
       {interviews.length === 0 && (
         <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>

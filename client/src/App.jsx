@@ -21,6 +21,7 @@ import MemberDashboard from './pages/MemberDashboard';
 import DocumentGrading from './pages/DocumentGrading';
 import AdminDocumentGrading from './pages/AdminDocumentGrading';
 import AssignedInterviews from './pages/AssignedInterviews';
+import InterviewRSVP from './pages/InterviewRSVP';
 import AdminInterviews from './pages/AdminInterviews';
 import InterviewInterface from './pages/InterviewInterface';
 import MemberInterviewInterface from './pages/MemberInterviewInterface';
@@ -363,6 +364,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <AssignedInterviews />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/interview-rsvp"
+        element={
+          <ProtectedRoute>
+            <InterviewRSVP />
           </ProtectedRoute>
         }
       />

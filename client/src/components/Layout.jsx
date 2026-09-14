@@ -58,6 +58,7 @@ const ADMIN_NAV_SECTIONS = [
     section: 'Interviews',
     items: [
       { name: 'Interviews', href: '/admin/interviews', icon: ClockIcon },
+      { name: 'Interview RSVP', href: '/interview-rsvp', icon: CalendarDaysIcon },
       { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Question Bank', href: '/admin/question-bank', icon: QuestionMarkCircleIcon },
@@ -159,6 +160,7 @@ const Layout = ({ children }) => {
     ...(user?.role === 'MEMBER' ? [
       { name: 'Document Grading', href: '/document-grading', icon: DocumentTextIcon },
       { name: 'Events', href: '/events', icon: CalendarDaysIcon },
+      { name: 'Interview RSVP', href: '/interview-rsvp', icon: CalendarDaysIcon },
       { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },

@@ -14,17 +14,16 @@ vi.mock('./InterviewerAvailability', () => ({
   default: ({ interviewId }) => <div data-testid="availability">{interviewId}</div>,
 }));
 
-const mine = [
-  { id: 'cc1', title: 'W27 Coffee Chats', interviewType: 'COFFEE_CHAT' },
-  { id: 'fr1', title: 'W27 First Round', interviewType: 'ROUND_ONE' },
-];
+// What the open-for-availability endpoint returns: coffee chats are already
+// excluded server-side, since their sittings exist and are claimed outright.
+const askable = [{ id: 'fr1', title: 'W27 First Round', interviewType: 'ROUND_ONE' }];
 
 describe('InterviewStaffingSignup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.get.mockImplementation((url) =>
-      url === '/member/interviews'
-        ? Promise.resolve(mine)
+      url === '/member/interviews/open-for-availability'
+        ? Promise.resolve(askable)
         : Promise.resolve({
             interviews: [
               {
@@ -58,9 +57,9 @@ describe('InterviewStaffingSignup', () => {
   it('asks for availability only where the sessions do not exist yet', async () => {
     render(<InterviewStaffingSignup />);
 
-    // A coffee chat's sittings already exist and are claimed outright below, so
-    // asking "are you free for Morning Session?" there is the same question
-    // twice - and only one of the two does anything.
+    // The list is NOT the member's assigned interviews: availability is
+    // collected before anybody is placed, so filtering it by placement would be
+    // circular - nobody assigned, nobody sees the form, nobody ever assigned.
     await waitFor(() => expect(screen.getAllByTestId('availability')).toHaveLength(1));
     expect(screen.getByTestId('availability')).toHaveTextContent('fr1');
   });

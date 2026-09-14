@@ -17,7 +17,6 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
-import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
@@ -825,7 +824,6 @@ export default function AssignedInterviews() {
           and burying it at the bottom of the dashboard meant members could not
           find the thing recruitment had just emailed them about. */}
       <div style={{ padding: '0 24px 8px' }}>
-        <InterviewStaffingSignup />
       </div>
 
       {/* Main Content - Interview Cards Grid */}

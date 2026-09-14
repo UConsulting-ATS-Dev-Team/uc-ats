@@ -35,6 +35,42 @@ const fail = (res, error, fallback) => {
   return res.status(500).json({ error: fallback });
 };
 
+// GET /api/member/interviews/open-for-availability
+//
+// Interviews this member can be asked "when are you free?" about.
+//
+// Deliberately NOT filtered to what they are already assigned to. Availability
+// is collected before anybody is placed - that is its whole purpose, since how
+// many interviews run at once is decided by how many people can be there - so
+// gating the list on placement is circular: nobody is assigned yet, so nobody
+// sees the form, so nobody ever gets assigned. Recruitment emails all sixty
+// members and the question has to be answerable by all sixty.
+//
+// Coffee chats are excluded. Their sittings already exist and members claim
+// them outright, so availability would be the same question asked twice.
+router.get('/interviews/open-for-availability', async (req, res) => {
+  try {
+    if (!STAFF_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'Member access required' });
+    }
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.json([]);
+
+    const interviews = await prisma.interview.findMany({
+      where: {
+        cycleId: cycle.id,
+        interviewType: { in: ['ROUND_ONE', 'ROUND_TWO', 'FINAL_ROUND'] },
+        status: { notIn: ['CANCELLED', 'COMPLETED'] },
+      },
+      select: { id: true, title: true, interviewType: true, startDate: true, endDate: true },
+      orderBy: { startDate: 'asc' },
+    });
+    res.json(interviews);
+  } catch (error) {
+    fail(res, error, 'Failed to load interviews to give availability for');
+  }
+});
+
 // GET /api/member/interview-slots
 // Sessions in the active cycle, with who is staffing them and whether the caller is.
 router.get('/interview-slots', async (req, res) => {
