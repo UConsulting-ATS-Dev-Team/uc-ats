@@ -17,8 +17,111 @@ import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
+import { buildInvite, inviteUid, sequenceFrom, describeWhen } from './calendarInvite.js';
 
 const SEND_ATTEMPTS = 3;
+
+/**
+ * Which notification types carry a calendar invite, and which way round.
+ *
+ * Absent from this table means no invite at all, and each absence is deliberate:
+ * ADMIN_OVERFLOW_ALERT is about a candidate who could not be placed, so there is no
+ * time to send; AVAILABILITY_REQUEST is sent before any session exists, which is the
+ * whole reason InterviewSlotNotification.slotId is nullable.
+ */
+const INVITE_METHODS = {
+  CONFIRMATION: 'REQUEST',
+  WAITLIST_ADDED: 'REQUEST',
+  PROMOTED: 'REQUEST',
+  MOVED_BY_ADMIN: 'REQUEST',
+  INTERVIEWER_ASSIGNED: 'REQUEST',
+  INTERVIEWER_MOVED: 'REQUEST',
+  REMINDER: 'REQUEST',
+  FALLBACK_RELEASED: 'CANCEL',
+  CANCELLATION: 'CANCEL',
+  INTERVIEWER_REMOVED: 'CANCEL',
+};
+
+/**
+ * The stable identity of "this person's seat at this thing", which is what decides
+ * whether a later invite moves the existing calendar entry or adds a second one.
+ *
+ * Candidates key on the signup, because a move updates slotId on that same row - so
+ * the seat survives being moved and the entry follows it.
+ *
+ * Interviewers have no assignment id on the notification, so they key on the
+ * interview plus their address. That is exactly right for a move, which
+ * /slot-assignments/:id/move restricts to one interview ("Moving somebody between
+ * interviews is a different act anyway"), so the new time lands on the entry they
+ * already have. Known limitation: one interviewer staffing two sittings of the same
+ * interview collapses to a single entry. Fixing that properly means persisting the
+ * assignment id on the notification row.
+ */
+function calendarKeyFor(notification) {
+  if (notification.signupId) return inviteUid('signup', notification.signupId);
+  const interviewId = notification.interviewId ?? notification.slot?.interviewId;
+  if (!interviewId) return null;
+  return inviteUid('interviewer', `${interviewId}-${notification.recipient.toLowerCase()}`);
+}
+
+/**
+ * Build the .ics for one notification, or null when this one does not carry a time.
+ *
+ * Never throws: a booking that already committed must not be reported as failed
+ * because its invite could not be assembled. The email still goes without it.
+ *
+ * Note this reads the time from notification.slot rather than the rendered body -
+ * the CANCELLATION and INTERVIEWER_REMOVED templates deliberately strip the details
+ * card, but a CANCEL still has to name the event it is cancelling.
+ */
+export function inviteFor(notification) {
+  try {
+    const method = INVITE_METHODS[notification.type];
+    const slot = notification.slot;
+    if (!method || !slot?.startTime) return null;
+
+    const uid = calendarKeyFor(notification);
+    if (!uid) return null;
+
+    const interview = slot.interview ?? notification.interview;
+    const organizerEmail = (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
+    if (!organizerEmail) return null;
+
+    const where = slot.location || interview?.location || null;
+    const when = describeWhen(slot.startTime, slot.endTime);
+    const application = notification.signup?.application;
+
+    return buildInvite({
+      uid,
+      // Every notification is a fresh row, so queuedAt strictly increases per event.
+      // That makes it a better sequence source than any entity's updatedAt: an
+      // interviewer move changes the assignment, not the slot it points at.
+      sequence: sequenceFrom(notification.queuedAt),
+      method,
+      start: slot.startTime,
+      end: slot.endTime,
+      summary: interview?.title ?? 'UConsulting Interview',
+      description: [
+        slot.label ? `Session: ${slot.label}` : null,
+        when ? `When: ${when}` : null,
+        where ? `Where: ${where}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      location: where,
+      organizerEmail,
+      attendeeEmail: notification.recipient,
+      attendeeName: application ? `${application.firstName} ${application.lastName}`.trim() : undefined,
+    });
+  } catch (error) {
+    console.warn('[inviteFor] could not build a calendar invite; sending without one', {
+      notificationId: notification?.id,
+      type: notification?.type,
+      error: error?.message,
+    });
+    return null;
+  }
+}
 
 export const SLOT_NOTIFICATION_SUBJECTS = {
   CONFIRMATION: (interviewTitle) => `You're confirmed - ${interviewTitle}`,
@@ -136,9 +239,17 @@ async function sendOne(notificationId, renderBody) {
 
   try {
     const html = await renderBody(notification);
+    // Built once, outside the retry loop: it carries a DTSTAMP, and rebuilding it per
+    // attempt would send three subtly different files for one booking.
+    const invite = inviteFor(notification);
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt += 1) {
-      result = await sendEmail(notification.recipient, notification.subject, html);
+      result = await sendEmail(
+        notification.recipient,
+        notification.subject,
+        html,
+        invite ? [invite] : []
+      );
       if (result.success) break;
       if (attempt < SEND_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
