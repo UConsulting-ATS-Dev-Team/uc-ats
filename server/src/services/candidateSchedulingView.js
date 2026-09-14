@@ -138,12 +138,3 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
   };
 }
 
-export const EMPTY_REASONS = {
-  NOT_ADVANCING:
-    'This candidate is not moving forward in the cycle, so they are not offered any interview times.',
-  NOT_IN_A_SCHEDULING_ROUND:
-    'This candidate is not in a round that has interview scheduling. Only coffee chat and first round candidates see anything here.',
-  NO_INTERVIEWS_FOR_ROUND: 'No interview has been created for this round in the active cycle.',
-  NO_BOOKABLE_SESSIONS:
-    'The interviews for this round have no sessions with a seat count, so nothing is open to candidates yet.',
-};

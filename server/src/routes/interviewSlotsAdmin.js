@@ -26,11 +26,6 @@ import {
   coverageByTime,
   whoCanCover,
 } from '../services/interviewerAvailability.js';
-import {
-  EMPTY_REASONS,
-  getBookingOptions,
-  getOwnSignups,
-} from '../services/candidateSchedulingView.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
 import {
@@ -340,68 +335,6 @@ router.get('/scheduling/overview', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to load the scheduling overview');
-  }
-});
-
-// GET /api/admin/scheduling/preview?applicationId=...
-//
-// Exactly what that candidate is served, produced by the same functions their
-// own page calls. Not a mock-up of it: a preview built from a second query
-// would drift, and a preview that lies is worse than none.
-//
-// Read-only on purpose. This answers "what do they see"; changing anything for
-// them is done through the roster, where it is attributed to an admin.
-router.get('/scheduling/preview', async (req, res) => {
-  try {
-    const cycle = await resolveAdminCycle(prisma);
-    if (!cycle) return res.json({ cycle: null, candidates: [], view: null });
-
-    // Anyone in the cycle, not only those currently in a scheduling round.
-    //
-    // Narrowing this to rounds 2 and 3 made the picker empty the moment a cycle
-    // finished, which is exactly when someone wants to look at what the page
-    // did. Whoever is picked, getBookingOptions answers honestly and
-    // emptyExplanation says why they would see nothing - "not in a scheduling
-    // round" is a useful answer, an empty dropdown is not.
-    const candidates = await prisma.application.findMany({
-      where: { cycleId: cycle.id },
-      select: { id: true, firstName: true, lastName: true, email: true, currentRound: true, status: true },
-      orderBy: [{ currentRound: 'desc' }, { lastName: 'asc' }],
-      take: 500,
-    });
-    // Someone who can actually book leads the list, so the default preview is
-    // the interesting case when there is one.
-    candidates.sort((a, b) => {
-      const live = (x) => (['2', '3'].includes(String(x.currentRound)) && x.status !== 'REJECTED' ? 0 : 1);
-      return live(a) - live(b);
-    });
-
-    const applicationId = req.query.applicationId || candidates[0]?.id || null;
-    if (!applicationId) return res.json({ cycle, candidates, view: null });
-
-    const application = await prisma.application.findUnique({
-      where: { id: applicationId },
-      select: { id: true, firstName: true, lastName: true, email: true, currentRound: true, cycleId: true },
-    });
-    if (!application) return res.status(404).json({ error: 'Candidate not found' });
-
-    const [mine, options] = await Promise.all([
-      getOwnSignups(application.id),
-      getBookingOptions(application, cycle.id),
-    ]);
-
-    res.json({
-      cycle: { id: cycle.id, name: cycle.name },
-      candidates,
-      application,
-      view: { ...mine, ...options },
-      // Spelled out rather than left as an empty list, so an admin knows whether
-      // the page is empty because of the candidate or because of the setup.
-      emptyReason: options.reason,
-      emptyExplanation: options.reason ? EMPTY_REASONS[options.reason] : null,
-    });
-  } catch (error) {
-    fail(res, error, 'Failed to build the candidate preview');
   }
 });
 

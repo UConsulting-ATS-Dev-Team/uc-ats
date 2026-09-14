@@ -34,7 +34,6 @@ import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import InterviewRosterGallery from '../components/interviews/InterviewRosterGallery';
 import InterviewSlotSetup from '../components/interviews/InterviewSlotSetup';
-import CandidateSchedulingPreview from '../components/interviews/CandidateSchedulingPreview';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
@@ -510,7 +509,6 @@ export default function AdminInterviews() {
                     <Tabs value={view} onChange={(e, next) => setView(next)} sx={{ mb: 2 }}>
                       <Tab value="sessions" label="Sessions" />
                       <Tab value="interviewers" label="Interviewers" />
-                      <Tab value="candidate" label="Candidate view" />
                       <Tab value="manage" label="Manage interviews" />
                     </Tabs>
 
@@ -550,7 +548,6 @@ export default function AdminInterviews() {
                           ))}
                         </Stack>
                       ))}
-                    {view === 'candidate' && <CandidateSchedulingPreview />}
                     {view === 'manage' && <InterviewManageList cycle={data?.cycle} onChanged={load} />}
                   </>
                 )}
