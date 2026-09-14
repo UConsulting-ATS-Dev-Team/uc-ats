@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
   AlertTitle,
@@ -304,8 +305,27 @@ export default function AdminInterviews() {
           </Alert>
         )}
 
-        {/* Interviewer: exactly what a UC member sees, no admin chrome. */}
-        {mode === 'interviewer' && <InterviewStaffingSignup />}
+        {/* Interviewer: exactly what a UC member sees, no admin chrome. An
+            admin conducting an interview is a member conducting an interview,
+            so the start-interview flow is the same page rather than a second
+            implementation that can drift from it. */}
+        {mode === 'interviewer' && (
+          <>
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              action={
+                <Button size="small" component={RouterLink} to="/assigned-interviews">
+                  Go to my interviews
+                </Button>
+              }
+            >
+              To run an interview and fill in evaluations, use <strong>My Interviews</strong> — pick the
+              groups you are interviewing and the evaluation module opens.
+            </Alert>
+            <InterviewStaffingSignup />
+          </>
+        )}
 
         {mode === 'admin' && (
           <>

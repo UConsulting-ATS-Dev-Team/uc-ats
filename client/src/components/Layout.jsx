@@ -58,6 +58,7 @@ const ADMIN_NAV_SECTIONS = [
     section: 'Interviews',
     items: [
       { name: 'Interviews', href: '/admin/interviews', icon: ClockIcon },
+      { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Cases', href: '/cases', icon: PresentationChartBarIcon },
       { name: 'Question Bank', href: '/admin/question-bank', icon: QuestionMarkCircleIcon },
       { name: 'Recruitment Resources', href: '/interview-prep', icon: ClipboardDocumentListIcon },

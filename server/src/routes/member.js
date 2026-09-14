@@ -8,7 +8,8 @@ import { putResume, getResume, removeResume, storageErrorResponse } from '../ser
 import {
   expandGroupIdsForQuestions,
   interviewsAssignedTo,
-  resolveGroupIds
+  resolveGroupIds,
+  getRosterForInterview
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
@@ -632,12 +633,11 @@ router.get('/interviews', requireAuth, async (req, res) => {
       orderBy: { startDate: 'desc' }
     });
 
-    // Admins run the round, so they see all of it. A member sees only what they
-    // are on: an interview they are not interviewing for tells them nothing and
-    // exposes a roster of candidates they have no business reading.
-    if (req.user.role === 'ADMIN') {
-      return res.json(interviews);
-    }
+    // Everyone gets only what they are on, admins included. This endpoint feeds
+    // the page somebody conducts an interview from, and an admin standing at a
+    // table is a member standing at a table - they want their own sessions, not
+    // all forty. The whole picture lives on the Interviews page, which reads the
+    // admin overview instead.
     res.json(await interviewsAssignedTo(userId, interviews));
   } catch (error) {
     console.error('[GET /api/member/interviews]', {
@@ -720,18 +720,15 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Parse the configuration from description field
-    let config = {};
-    if (interview.description) {
-      try {
-        config = typeof interview.description === 'string' 
-          ? JSON.parse(interview.description) 
-          : interview.description;
-      } catch (e) {
-        console.warn('Failed to parse interview description:', e);
-        config = {};
-      }
-    }
+    // Built from sessions where the interview has them, and from the old JSON
+    // config where it does not. This is what populates the "which groups are
+    // you interviewing" picker, so reading only the config left that picker
+    // empty for any interview candidates had booked themselves into.
+    const config = (await getRosterForInterview(id)) ?? {
+      memberGroups: [],
+      applicationGroups: [],
+      groupAssignments: {}
+    };
     
     // Get group-scoped behavioral questions if groupIds provided
     if (groupIds) {

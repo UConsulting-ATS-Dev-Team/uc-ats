@@ -194,7 +194,12 @@ export async function getRosterForInterview(interviewId, client = prisma) {
   });
   if (!interview) return null;
 
-  if (interview.slots.length === 0) {
+  // Defensive: a caller may hand back a row whose slots were never loaded.
+  // Treating that as "no sessions" falls through to the legacy config, which is
+  // the same answer as an interview that genuinely has none.
+  const slots = interview.slots ?? [];
+
+  if (slots.length === 0) {
     const config = parseLegacyConfig(interview);
     return {
       source: 'legacy',
@@ -208,7 +213,7 @@ export async function getRosterForInterview(interviewId, client = prisma) {
   const memberGroups = [];
   const groupAssignments = {};
 
-  for (const slot of interview.slots) {
+  for (const slot of slots) {
     // The group id a client will send back. legacyGroupId when there is one, so
     // URLs and question rows minted before the backfill keep resolving.
     const groupId = slot.legacyGroupId ?? slot.id;

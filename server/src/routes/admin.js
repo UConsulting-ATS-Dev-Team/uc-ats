@@ -10,7 +10,7 @@ import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../servic
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
-  parseGraduationYear
+  parseGraduationYear,
 } from '../services/userDeactivation.js';
 import {
   getGroupMemberUsers,
@@ -73,7 +73,8 @@ import { processRoundDecisions } from '../services/decisionProcessing.js';
 import {
   canonicalGroupIdFor,
   expandGroupIdsForQuestions,
-  resolveGroupIds
+  resolveGroupIds,
+  getRosterForInterview
 } from '../services/interviewRoster.js';
 import { ROUNDS } from '../utils/roundProgression.js';
 
@@ -2162,18 +2163,15 @@ router.get('/interviews/:id/config', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Parse the configuration from description field
-    let config = {};
-    if (interview.description) {
-      try {
-        config = typeof interview.description === 'string' 
-          ? JSON.parse(interview.description) 
-          : interview.description;
-      } catch (e) {
-        console.warn('Failed to parse interview description:', e);
-        config = {};
-      }
-    }
+    // Built from sessions where the interview has them, and from the old JSON
+    // config where it does not. This is what populates the "which groups are
+    // you interviewing" picker, so reading only the config left that picker
+    // empty for any interview candidates had booked themselves into.
+    const config = (await getRosterForInterview(id)) ?? {
+      memberGroups: [],
+      applicationGroups: [],
+      groupAssignments: {}
+    };
     
     // Get group-scoped behavioral questions if groupIds provided
     if (groupIds) {
