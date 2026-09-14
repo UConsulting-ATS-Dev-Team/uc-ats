@@ -120,11 +120,13 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
   };
 
   const cadencePreview = useMemo(() => (mode === 'cadence' ? previewCadence(cadence) : []), [mode, cadence]);
-  const sessionCount = mode === 'blocks' ? blocks.length : cadencePreview.length;
+  const parallel = Math.max(1, Math.min(12, Number(cadence.parallel) || 1));
+  const sessionCount =
+    mode === 'blocks' ? blocks.length : cadencePreview.length * parallel;
   const seatCount =
     mode === 'blocks'
       ? blocks.reduce((n, b) => n + (Number(b.capacity) || 0), 0)
-      : cadencePreview.length * (Number(cadence.capacity) || 0);
+      : sessionCount * (Number(cadence.capacity) || 0);
 
   const updateBlock = (index, changes) =>
     setBlocks((current) => current.map((b, i) => (i === index ? { ...b, ...changes } : b)));
@@ -351,6 +353,22 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
                 onChange={(e) => setCadence({ ...cadence, interviewers: e.target.value })}
                 sx={{ width: 160 }}
               />
+              {/* Several panels often run at the same hour. Each is its own
+                  session, with its own candidates and its own interviewers. */}
+              <TextField
+                size="small"
+                select
+                label="Running at once"
+                value={cadence.parallel ?? 1}
+                onChange={(e) => setCadence({ ...cadence, parallel: e.target.value })}
+                sx={{ width: 160 }}
+              >
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <MenuItem key={n} value={n}>
+                    {n === 1 ? 'One at a time' : `${n} at once`}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Stack>
 
             <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', gap: 1 }}>
@@ -409,6 +427,13 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
             <Typography variant="subtitle2">
               {sessionCount} session{sessionCount === 1 ? '' : 's'}
             </Typography>
+            {mode === 'cadence' && parallel > 1 && (
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`${cadencePreview.length} times × ${parallel} at once`}
+              />
+            )}
             <Chip size="small" label={`${seatCount} candidate seats`} />
             {sessionCount === 0 && <Chip size="small" color="error" label="Nothing to create" />}
           </Stack>
@@ -418,7 +443,12 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
                   <Chip key={i} size="small" variant="outlined" label={`${b.label || `Session ${i + 1}`} · ${b.start}–${b.end}`} />
                 ))
               : cadencePreview.map((row, i) => (
-                  <Chip key={i} size="small" variant="outlined" label={`${asTime(row.start)}–${asTime(row.end)}`} />
+                  <Chip
+                    key={i}
+                    size="small"
+                    variant="outlined"
+                    label={`${asTime(row.start)}–${asTime(row.end)}${parallel > 1 ? ` ×${parallel}` : ''}`}
+                  />
                 ))}
           </Stack>
         </Paper>

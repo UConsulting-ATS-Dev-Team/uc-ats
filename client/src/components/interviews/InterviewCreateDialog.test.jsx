@@ -101,6 +101,37 @@ describe('InterviewCreateDialog', () => {
     expect(onCreated).toHaveBeenCalled();
   });
 
+  it('multiplies the day by how many run at once', async () => {
+    // Three panels an hour is three sessions an hour, each with its own four
+    // candidates - not one session holding twelve.
+    open();
+    await chooseRound('First Round');
+    expect(await screen.findByText('8 sessions')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText(/running at once/i));
+    await userEvent.click(await screen.findByRole('option', { name: '3 at once' }));
+
+    expect(await screen.findByText('24 sessions')).toBeInTheDocument();
+    expect(screen.getByText('96 candidate seats')).toBeInTheDocument();
+    expect(screen.getByText('8 times × 3 at once')).toBeInTheDocument();
+  });
+
+  it('sends the room count with the schedule', async () => {
+    open();
+    await chooseRound('First Round');
+    await userEvent.click(screen.getByLabelText(/running at once/i));
+    await userEvent.click(await screen.findByRole('option', { name: '2 at once' }));
+    await fillBasics();
+    await userEvent.click(screen.getByRole('button', { name: /^create with 16 sessions/i }));
+
+    await waitFor(() => {
+      expect(apiClient.post).toHaveBeenCalledWith(
+        '/admin/interviews/with-sessions',
+        expect.objectContaining({ sessions: expect.objectContaining({ cadence: expect.objectContaining({ parallel: 2 }) }) })
+      );
+    });
+  });
+
   it('will not create without the fields the server requires', async () => {
     open();
     expect(screen.getByRole('button', { name: /^create with/i })).toBeDisabled();

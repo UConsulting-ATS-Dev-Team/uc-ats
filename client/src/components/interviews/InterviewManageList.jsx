@@ -25,6 +25,7 @@ import {
   Add as AddIcon,
   CalendarMonth as CalendarIcon,
   Delete as DeleteIcon,
+  EditCalendar as EditIcon,
   Groups as GroupsIcon,
   HelpOutline as QuestionIcon,
   LocationOn as LocationIcon,
@@ -32,6 +33,7 @@ import {
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 import InterviewCreateDialog from './InterviewCreateDialog';
+import InterviewEditDialog from './InterviewEditDialog';
 import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
 
 /**
@@ -68,6 +70,7 @@ export default function InterviewManageList({ cycle, onChanged }) {
   const [error, setError] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [startFor, setStartFor] = useState(null);
   const [chosenSessions, setChosenSessions] = useState([]);
   const [questionsFor, setQuestionsFor] = useState(null);
@@ -276,6 +279,9 @@ export default function InterviewManageList({ cycle, onChanged }) {
                     >
                       Run a session
                     </Button>
+                    <Button size="small" startIcon={<EditIcon />} onClick={() => setEditing(interview)}>
+                      Edit times &amp; seats
+                    </Button>
                     <Button
                       size="small"
                       startIcon={<QuestionIcon />}
@@ -291,6 +297,16 @@ export default function InterviewManageList({ cycle, onChanged }) {
           </Stack>
         </Box>
       ))}
+
+      <InterviewEditDialog
+        open={Boolean(editing)}
+        interview={editing}
+        onClose={() => setEditing(null)}
+        onSaved={async () => {
+          await load();
+          onChanged?.();
+        }}
+      />
 
       <InterviewCreateDialog
         open={createOpen}
