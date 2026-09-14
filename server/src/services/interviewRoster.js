@@ -286,3 +286,56 @@ export async function interviewsAssignedTo(userId, interviews, client = prisma) 
 
   return interviews.filter((interview) => assigned.has(interview.id));
 }
+
+/**
+ * Everyone in an interview, however its roster is stored.
+ *
+ * Confirmed signups when it has sessions, the JSON config when it does not.
+ * Callers that just want "who is in this interview" - case assignment, for one -
+ * should not have to know which era an interview belongs to.
+ */
+export async function allApplicationIdsForInterview(interviewId, client = prisma) {
+  const signups = await client.interviewSlotSignup.findMany({
+    where: { interviewId, status: 'CONFIRMED' },
+    select: { applicationId: true },
+  });
+  if (signups.length > 0) return [...new Set(signups.map((row) => row.applicationId))];
+
+  const interview = await client.interview.findUnique({
+    where: { id: interviewId },
+    select: { description: true },
+  });
+  const config = parseLegacyConfig(interview);
+  const ids = new Set();
+  for (const group of config.applicationGroups ?? []) {
+    for (const applicationId of group.applicationIds ?? []) ids.add(applicationId);
+  }
+  return [...ids];
+}
+
+/**
+ * The group id a candidate sits under in this interview, or null if they are
+ * not in it at all.
+ *
+ * BehavioralQuestion.groupId is required, so writing a question about one
+ * candidate needs the group they belong to. With sessions that is the session
+ * they are booked into - under its legacy id where it has one, so questions
+ * written either side of the migration stay together.
+ */
+export async function groupIdForCandidate(interviewId, applicationId, client = prisma) {
+  const signup = await client.interviewSlotSignup.findFirst({
+    where: { interviewId, applicationId, status: 'CONFIRMED' },
+    select: { slot: { select: { id: true, legacyGroupId: true } } },
+  });
+  if (signup?.slot) return signup.slot.legacyGroupId ?? signup.slot.id;
+
+  const interview = await client.interview.findUnique({
+    where: { id: interviewId },
+    select: { description: true },
+  });
+  const config = parseLegacyConfig(interview);
+  const group = (config.applicationGroups ?? []).find((g) =>
+    Array.isArray(g.applicationIds) && g.applicationIds.includes(applicationId)
+  );
+  return group?.id ?? null;
+}

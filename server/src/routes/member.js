@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, removeResume, storageErrorResponse } from '../services/resumeStorage.js';
-import { interviewsAssignedTo } from '../services/interviewRoster.js';
+import {
+  expandGroupIdsForQuestions,
+  interviewsAssignedTo,
+  resolveGroupIds
+} from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
@@ -731,11 +735,10 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
     
     // Get group-scoped behavioral questions if groupIds provided
     if (groupIds) {
-      const groupIdArray = groupIds.split(',');
-      
-      // Note: groupIds are application group IDs, not review group IDs
-      // Access control is handled at the interview level, not the group level
-      console.log('Member - Loading behavioral questions for application groups:', groupIdArray);
+      // Read under both the session id and the group id it was backfilled from:
+      // questions written before the roster moved are keyed on the old one, and
+      // reading a single key makes half a group's questions vanish mid-interview.
+      const groupIdArray = await expandGroupIdsForQuestions(id, groupIds);
       
       try {
         const behavioralQuestions = await prisma.behavioralQuestion.findMany({
@@ -1335,32 +1338,20 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Parse interview configuration
-    let config = {};
-    try {
-      config = typeof interview.description === 'string' 
-        ? JSON.parse(interview.description) 
-        : interview.description || {};
-    } catch (e) {
-      console.warn('Failed to parse interview description:', e);
-    }
-    
-    // Get applications from selected groups
-    const applicationIds = new Set();
-    config.applicationGroups?.forEach(group => {
-      if (groupIdArray.includes(group.id)) {
-        group.applicationIds?.forEach(appId => applicationIds.add(appId));
-      }
-    });
-    
-    if (applicationIds.size === 0) {
+    // Sessions first, then the legacy JSON config for anything they do not
+    // claim. The admin side was repointed here when the roster moved into real
+    // tables and this one was missed, so an interviewer opening a session that
+    // candidates had booked themselves was shown nobody to evaluate.
+    const applicationIds = await resolveGroupIds(id, groupIdArray);
+
+    if (applicationIds.length === 0) {
       return res.json([]);
     }
-    
+
     // Fetch applications
     const applications = await prisma.application.findMany({
       where: {
-        id: { in: Array.from(applicationIds) }
+        id: { in: applicationIds }
       },
       select: {
         id: true,

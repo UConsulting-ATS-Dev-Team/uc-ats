@@ -20,6 +20,10 @@ vi.mock('../prismaClient.js', () => ({
     // group ids that no slot claims, which is the legacy path the roster service
     // falls back to, so behaviour here is unchanged from before slots existed.
     interviewSlot: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
+    // Consulted to work out which group a candidate sits in. Empty here, so the
+    // roster service falls through to the JSON config these tests are built on -
+    // which is the pre-sessions path, and still has to work.
+    interviewSlotSignup: { findFirst: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
     behavioralQuestion: {
       findMany: vi.fn(),
       findFirst: vi.fn(),

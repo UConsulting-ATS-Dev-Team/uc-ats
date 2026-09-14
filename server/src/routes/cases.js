@@ -1,4 +1,5 @@
 import express from 'express';
+import { allApplicationIdsForInterview } from '../services/interviewRoster.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -76,23 +77,11 @@ async function authorizeCaseRead(caseId, user) {
   return Boolean(link);
 }
 
-// Resolve the applicationIds belonging to a final-round interview from the JSON
-// config stored on Interview.description (applicationGroups), matching member.js.
+// Who is in an interview. Sessions where it has them, the old JSON config where
+// it does not - services/interviewRoster.js knows the difference so this does
+// not have to.
 function applicationIdsForInterview(interview) {
-  let config = {};
-  try {
-    config =
-      typeof interview.description === 'string'
-        ? JSON.parse(interview.description)
-        : interview.description || {};
-  } catch (e) {
-    config = {};
-  }
-  const ids = new Set();
-  config.applicationGroups?.forEach((group) => {
-    group.applicationIds?.forEach((appId) => ids.add(appId));
-  });
-  return Array.from(ids);
+  return allApplicationIdsForInterview(interview.id);
 }
 
 async function isLeadOrAdmin(interviewId, user) {
@@ -482,7 +471,7 @@ router.get('/assignments/for-interview', requireAdminOrMember, async (req, res) 
     const interview = await prisma.interview.findUnique({ where: { id: interviewId } });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
 
-    const appIds = applicationIdsForInterview(interview);
+    const appIds = await applicationIdsForInterview(interview);
     if (appIds.length === 0) return res.json([]);
 
     const [applications, assignments] = await Promise.all([
