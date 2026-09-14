@@ -31,6 +31,9 @@ import externalContainment from './middleware/externalContainment.js';
 import clientRoutes from './routes/client.js';
 import talentRoutes from './routes/talent.js';
 import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
+import candidateInterviewSignupRoutes from './routes/candidateInterviewSignups.js';
+import interviewSlotsAdminRoutes from './routes/interviewSlotsAdmin.js';
+import interviewSlotsMemberRoutes from './routes/interviewSlotsMember.js';
 import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
@@ -88,15 +91,20 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 // Ahead of the catch-all /api/admin mount, same as release-notes above.
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
+// Before the catch-all admin router so its slot routes are matched first.
+app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/review-teams', reviewTeamsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/interview-resources', interviewResourcesRoutes);
+// Before the catch-all member router so its slot routes are matched first.
+app.use('/api/member', requireAuth, interviewSlotsMemberRoutes);
 app.use('/api/member', memberRoutes);
 app.use('/api/member/help', requireAuth, memberHelpRoutes);
 app.use('/api/client', clientRoutes);
 app.use('/api/talent', talentRoutes);
 app.use('/api/candidate/onboarding', candidateOnboardingRoutes);
+app.use('/api/my-interview-signups', candidateInterviewSignupRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);

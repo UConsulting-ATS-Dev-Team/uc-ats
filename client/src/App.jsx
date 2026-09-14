@@ -24,7 +24,8 @@ import MemberDashboard from './pages/MemberDashboard';
 import DocumentGrading from './pages/DocumentGrading';
 import AdminDocumentGrading from './pages/AdminDocumentGrading';
 import AssignedInterviews from './pages/AssignedInterviews';
-import AdminAssignedInterviews from './pages/AdminAssignedInterviews';
+import InterviewRSVP from './pages/InterviewRSVP';
+import AdminInterviews from './pages/AdminInterviews';
 import InterviewInterface from './pages/InterviewInterface';
 import MemberInterviewInterface from './pages/MemberInterviewInterface';
 import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
@@ -43,6 +44,7 @@ import CandidateEvents from './pages/CandidateEvents';
 import MemberEvents from './pages/MemberEvents';
 import CandidateApplications from './pages/CandidateApplications';
 import CandidateGTKUC from './pages/CandidateGTKUC';
+import CandidateInterviewSignup from './pages/CandidateInterviewSignup';
 import ApplicantInformation from './pages/ApplicantInformation';
 import InterviewPreparation from './pages/InterviewPreparation';
 import InterviewDetail from './pages/InterviewDetail';
@@ -372,6 +374,15 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+
+      <Route
+        path="/interview-rsvp"
+        element={
+          <ProtectedRoute>
+            <InterviewRSVP />
+          </ProtectedRoute>
+        }
+      />
       
       <Route
         path="/candidates"
@@ -419,13 +430,20 @@ const AppRoutes = () => {
       />
       
       <Route
-        path="/admin/assigned-interviews"
+        path="/admin/interviews"
         element={
           <ProtectedRoute>
-            <AdminAssignedInterviews />
+            <AdminInterviews />
           </ProtectedRoute>
         }
       />
+
+      {/* Both pages folded into /admin/interviews. Redirects rather than
+          deletions, so bookmarks and older links keep working. */}
+      <Route path="/admin/assigned-interviews" element={<Navigate to="/admin/interviews" replace />} />
+      <Route path="/admin/interview-scheduling" element={<Navigate to="/admin/interviews" replace />} />
+
+
       
       
       <Route
@@ -506,6 +524,17 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <CandidateGTKUC />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Where the decision email's scheduling link lands. Auth-gated like every
+          other candidate page, so login preserves the destination. */}
+      <Route
+        path="/interview-signup"
+        element={
+          <ProtectedRoute>
+            <CandidateInterviewSignup />
           </ProtectedRoute>
         }
       />

@@ -10,7 +10,7 @@ import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../servic
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
-  parseGraduationYear
+  parseGraduationYear,
 } from '../services/userDeactivation.js';
 import {
   getGroupMemberUsers,
@@ -68,6 +68,14 @@ import {
   redactLockedApplications
 } from '../utils/lockedRecords.js';
 import { processRoundDecisions } from '../services/decisionProcessing.js';
+// The roster seam: slots are the source of truth where they exist, and the
+// legacy Interview.description blob everywhere else.
+import {
+  canonicalGroupIdFor,
+  expandGroupIdsForQuestions,
+  resolveGroupIds,
+  getRosterForInterview
+} from '../services/interviewRoster.js';
 import { ROUNDS } from '../utils/roundProgression.js';
 
 const router = express.Router();
@@ -2155,23 +2163,25 @@ router.get('/interviews/:id/config', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Parse the configuration from description field
-    let config = {};
-    if (interview.description) {
-      try {
-        config = typeof interview.description === 'string' 
-          ? JSON.parse(interview.description) 
-          : interview.description;
-      } catch (e) {
-        console.warn('Failed to parse interview description:', e);
-        config = {};
-      }
-    }
+    // Built from sessions where the interview has them, and from the old JSON
+    // config where it does not. This is what populates the "which groups are
+    // you interviewing" picker, so reading only the config left that picker
+    // empty for any interview candidates had booked themselves into.
+    const config = (await getRosterForInterview(id)) ?? {
+      memberGroups: [],
+      applicationGroups: [],
+      groupAssignments: {}
+    };
     
     // Get group-scoped behavioral questions if groupIds provided
     if (groupIds) {
       try {
-        const groupIdArray = groupIds.split(',');
+        // Read under both the slot id and the blob group id it was backfilled
+        // from. Questions written before the roster moved into real tables are
+        // keyed on the old id; reading only one key would make them vanish from
+        // a live interview, and nothing would fail loudly because groupId has no
+        // foreign key.
+        const groupIdArray = await expandGroupIdsForQuestions(id, groupIds);
         const behavioralQuestions = await prisma.behavioralQuestion.findMany({
           where: {
             interviewId: id,
@@ -2236,12 +2246,19 @@ router.patch('/interviews/:id/config', async (req, res) => {
     // Handle behavioral questions update
     if (type === 'behavioral_questions' && config.behavioralQuestions) {
       try {
-        const { groupId, questions } = config;
-        
-        if (!groupId || !questions) {
+        const { groupId: requestedGroupId, questions } = config;
+
+        if (!requestedGroupId || !questions) {
           return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
         }
-        
+
+        // Write under the id this group's existing questions already use: a
+        // backfilled slot keeps its legacyGroupId, a fresh slot uses its own.
+        // Without this, questions saved after the roster migration would land on
+        // a different key than the ones saved before it and the group's list
+        // would silently split in two.
+        const groupId = await canonicalGroupIdFor(id, requestedGroupId);
+
         console.log('Admin - Attempting to save behavioral questions:', {
           interviewId: id,
           groupId,
@@ -3096,32 +3113,19 @@ router.get('/interviews/:id/applications', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Parse interview configuration
-    let config = {};
-    try {
-      config = typeof interview.description === 'string' 
-        ? JSON.parse(interview.description) 
-        : interview.description || {};
-    } catch (e) {
-      console.warn('Failed to parse interview description:', e);
-    }
-    
-    // Get applications from selected groups
-    const applicationIds = new Set();
-    config.applicationGroups?.forEach(group => {
-      if (groupIdArray.includes(group.id)) {
-        group.applicationIds?.forEach(appId => applicationIds.add(appId));
-      }
-    });
-    
-    if (applicationIds.size === 0) {
+    // Slots first, then the legacy JSON blob for anything they do not claim.
+    // A group id here may be a slot id, the group id a slot was backfilled from,
+    // or a blob-only group - bookmarked URLs and past cycles contain all three.
+    const applicationIds = await resolveGroupIds(id, groupIdArray);
+
+    if (applicationIds.length === 0) {
       return res.json([]);
     }
-    
+
     // Fetch applications
     const applications = await prisma.application.findMany({
       where: {
-        id: { in: Array.from(applicationIds) }
+        id: { in: applicationIds }
       },
       select: {
         id: true,

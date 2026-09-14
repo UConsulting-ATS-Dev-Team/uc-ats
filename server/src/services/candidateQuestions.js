@@ -1,4 +1,5 @@
 import prisma from '../prismaClient.js';
+import { groupIdForCandidate } from './interviewRoster.js';
 
 // Round-one questions asked of a single candidate. They live in
 // behavioral_questions next to the group-wide list; applicationId is what
@@ -71,11 +72,12 @@ export async function createCandidateQuestion({ interviewId, applicationId, ques
   }
 
   // groupId is required on the row; take it from the group the candidate is
-  // actually assigned to in this interview, which also rejects outsiders.
-  const group = (parseConfig(interview.description).applicationGroups || []).find((g) =>
-    Array.isArray(g.applicationIds) && g.applicationIds.includes(applicationId)
-  );
-  if (!group) throw new CandidateQuestionError(400, 'That candidate is not part of this interview');
+  // actually in, which also rejects outsiders. Sessions answer this now, and
+  // the old JSON config still answers for interviews that predate them -
+  // reading only the config meant a first round built the new way could not
+  // have a candidate question written at all.
+  const groupId = await groupIdForCandidate(interviewId, applicationId);
+  if (!groupId) throw new CandidateQuestionError(400, 'That candidate is not part of this interview');
 
   const last = await prisma.behavioralQuestion.findFirst({
     where: { interviewId, applicationId },
@@ -86,7 +88,7 @@ export async function createCandidateQuestion({ interviewId, applicationId, ques
   const created = await prisma.behavioralQuestion.create({
     data: {
       interviewId,
-      groupId: group.id,
+      groupId,
       applicationId,
       questionText: text,
       order: last ? last.order + 1 : 0,

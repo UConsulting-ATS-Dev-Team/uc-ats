@@ -77,6 +77,28 @@ const config = {
 
   corsOrigin,
 
+  /**
+   * Where operational alerts addressed to recruitment go - currently the
+   * "every interview slot is full, this candidate needs placing by hand" case.
+   * Falls back to the reply-to address, which is already monitored by whoever
+   * answers candidate mail, so an unset variable degrades to the right inbox
+   * rather than to nobody.
+   */
+  recruitmentEmail: process.env.RECRUITMENT_EMAIL || process.env.EMAIL_REPLY_TO || process.env.EMAIL_USER || null,
+
+  /**
+   * Whether interview scheduling emails actually leave the building.
+   *
+   * Off unless SCHEDULING_EMAILS=on, deliberately. This feature emails real
+   * candidates the moment somebody books, cancels or is promoted, and it gets
+   * poked at in a live cycle with real applicants in the database - so sending
+   * is opt-in rather than something a fresh checkout does by surprise.
+   *
+   * Suppression is recorded, not silent: notifications are still written, marked
+   * SUPPRESSED, and can be sent later from the roster once this is switched on.
+   */
+  schedulingEmailsEnabled: String(process.env.SCHEDULING_EMAILS || '').toLowerCase() === 'on',
+
   form: formConfig,
 
   /** Fine-grained PAT with Issues write on the ATS repo */

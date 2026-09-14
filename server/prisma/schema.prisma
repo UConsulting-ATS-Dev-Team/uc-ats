@@ -60,6 +60,8 @@ model User {
   groupMemberships           GroupMember[]
   completedActionItems       InterviewActionItem[]           @relation("InterviewActionItemCompletion")
   interviewAssignments       InterviewAssignment[]           @relation("InterviewAssignment")
+  interviewSlotAssignments   InterviewSlotAssignment[]       @relation("InterviewSlotAssignment")
+  interviewerAvailability    InterviewerAvailability[]       @relation("InterviewerAvailability")
   interviewEvaluations       InterviewEvaluation[]           @relation("InterviewEvaluator")
   interviewResources         InterviewResource[]
   createdInterviews          Interview[]                     @relation("InterviewCreator")
@@ -310,6 +312,7 @@ model Application {
   resumeUploads         ResumeUpload[]
   clientAssignments     ClientResumeAssignment[]
   behavioralQuestions   BehavioralQuestion[]
+  slotSignups           InterviewSlotSignup[]
 
   @@map("applications")
 }
@@ -785,8 +788,248 @@ model Interview {
   creator               User                            @relation("InterviewCreator", fields: [createdBy], references: [id])
   cycle                 RecruitingCycle                 @relation(fields: [cycleId], references: [id])
   caseAssignments       CaseAssignment[]
+  slots                 InterviewSlot[]
+  availability          InterviewerAvailability[]
+  notifications         InterviewSlotNotification[]
 
   @@map("interviews")
+}
+
+/// When an interviewer says they are free, before anyone decides what the day
+/// looks like.
+///
+/// Deliberately not attached to a session. The whole point is that it comes
+/// first: recruitment cannot know whether first round needs two panels at 10:00
+/// or four until it knows how many people can be there at 10:00. Hanging this
+/// off InterviewSlot would require the sessions to exist before the information
+/// that decides how many there should be.
+///
+/// Stored as windows rather than ticked boxes for the same reason. "I can do
+/// 9 to 12" answers a question nobody has asked yet; "I can do the 10:00
+/// session" only answers it once that session exists. For a coffee chat, whose
+/// sessions are named and known up front, the page offers those as checkboxes
+/// and records the window behind them - one model, two ways of asking.
+model InterviewerAvailability {
+  id          String   @id @default(uuid())
+  interviewId String
+  userId      String
+  startTime   DateTime
+  endTime     DateTime
+  /// "Can only do the morning", "leaving at 3 for class" - the thing a
+  /// scheduling grid cannot express and an admin needs anyway.
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  user      User      @relation("InterviewerAvailability", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([interviewId, startTime])
+  @@index([userId])
+  @@map("interviewer_availability")
+}
+
+/// One bookable sitting of an interview.
+///
+/// An Interview is the whole day - one startDate, one endDate, one location.
+/// That is too coarse for anything a candidate picks: a coffee chat day has a
+/// morning and an afternoon block, and a first round day has group interviews
+/// every twenty minutes with four candidates each. A slot is that finer unit,
+/// and it is the thing capacity attaches to. (Interview.maxCandidates was never
+/// enforced anywhere and Interview.currentCandidates is unread; do not route
+/// capacity through either.)
+///
+/// A slot is also the interview's application group. BehavioralQuestion.groupId
+/// is an opaque String with no foreign key, and the ?groupIds= query contract is
+/// an opaque comma-separated list, so a slot id is already a legal group id -
+/// which is what lets slots replace the hand-built groups that used to live as
+/// JSON in Interview.description, without a rewrite of the grading path.
+///
+/// No cycleId. Cycle scoping goes through interview.cycleId, one indexed join,
+/// and a denormalised copy would need its own composite foreign key against
+/// Interview(id, cycleId) to stay honest - for a query shape nothing has.
+model InterviewSlot {
+  id                  String   @id @default(uuid())
+  interviewId         String
+  /// "Morning Block". Null renders as the time range, which is what a first
+  /// round slot wants and a coffee chat block does not.
+  label               String?
+  startTime           DateTime
+  endTime             DateTime
+  /// Overrides Interview.location for this sitting; null inherits it.
+  location            String?
+  /// Null means this slot is not open to candidate self-signup at all - an
+  /// interviewer-only sitting, or a round that still schedules by hand.
+  candidateCapacity   Int?
+  /// How many candidates share a rotation group in this session.
+  ///
+  /// Coffee chats run in small groups that move between interviewer tables
+  /// together - usually pairs, sometimes three or four. Set it and bookings are
+  /// labelled as they arrive, appending to the last group with room, so a label
+  /// never changes once a candidate has been told it. Null means no grouping,
+  /// which is first round: the session already is the group.
+  groupSize           Int?
+  /// How many interviewers this sitting wants. Staffing target, not a cap.
+  interviewerCapacity Int?
+  signupOpensAt       DateTime?
+  signupClosesAt      DateTime?
+  /// The applicationGroups[].id in Interview.description this slot was
+  /// backfilled from. Keeps existing BehavioralQuestion rows and bookmarked
+  /// ?groupIds= URLs resolving after the roster moves into real tables.
+  legacyGroupId       String?
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  interview     Interview                   @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  signups       InterviewSlotSignup[]
+  assignments   InterviewSlotAssignment[]
+  notifications InterviewSlotNotification[]
+
+  /// Target of the composite foreign keys on signups and assignments. Carrying
+  /// interviewId down onto the child rows is what lets the partial unique
+  /// indexes below be expressed at all - Postgres cannot enforce uniqueness
+  /// across a join.
+  @@unique([id, interviewId])
+  @@unique([interviewId, legacyGroupId])
+  @@index([interviewId, startTime])
+  @@map("interview_slots")
+}
+
+/// A candidate's place in a slot.
+///
+/// Status carries the whole lifecycle rather than splitting the waitlist into
+/// its own table, because a waitlisted candidate and the seat they are holding
+/// meanwhile are two facets of one position - linked by heldSeatId - and the
+/// invariant that matters ("one confirmed seat per candidate per interview")
+/// would be unenforceable if it had to span two tables.
+///
+/// The invariants live in Postgres as partial unique indexes, written by hand in
+/// the migration because Prisma cannot express a WHERE clause on an index:
+///
+///   one CONFIRMED row  per (interviewId, applicationId)
+///   one WAITLISTED row per (interviewId, applicationId)
+///
+/// Cancelled and released rows fall out of both, so a candidate who cancels can
+/// sign up again - unlike a plain @@unique([slotId, applicationId]), which would
+/// lock someone out of a slot permanently the first time an admin removed them.
+model InterviewSlotSignup {
+  id            String @id @default(uuid())
+  slotId        String
+  /// Denormalised from the slot, and kept honest by the composite foreign key.
+  /// Exists so the partial unique indexes above have a column to sit on.
+  interviewId   String
+  applicationId String
+
+  status       InterviewSlotSignupStatus @default(CONFIRMED)
+  /// Which rotation group this candidate is in, within their session.
+  ///
+  /// Coffee chats run as a rotation: a session holds forty people, who move
+  /// between interviewer tables in pairs labelled 1A, 1B, 2A and so on. At a
+  /// table the interviewer asks which group they are and pulls up exactly those
+  /// candidates, so the label is what identifies a pair - not an id anybody
+  /// types. Null for first round, where the session IS the group.
+  groupLabel   String?
+  signedUpAt   DateTime                  @default(now())
+  /// FCFS ordering key for promotion. Set only on WAITLISTED rows.
+  waitlistedAt DateTime?
+  /// On a WAITLISTED row: the CONFIRMED row in another slot this candidate is
+  /// holding while they wait. Released automatically when they are promoted, so
+  /// nobody is ever waitlisted without a seat somewhere. Unique because a seat
+  /// can back at most one waitlist entry.
+  heldSeatId   String?                   @unique
+  promotedAt   DateTime?
+
+  cancelledAt   DateTime?
+  /// Null when the candidate cancelled it themselves; set when an admin did.
+  cancelledById String?
+  cancelReason  String?
+  /// Set when an admin created this row directly rather than the candidate
+  /// booking it - the resolution path for a NEEDS_PLACEMENT escalation.
+  placedById    String?
+  movedById     String?
+  movedAt       DateTime?
+  moveReason    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  slot          InterviewSlot               @relation(fields: [slotId, interviewId], references: [id, interviewId], onDelete: Cascade)
+  application   Application                 @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  heldSeat      InterviewSlotSignup?        @relation("HeldSeat", fields: [heldSeatId], references: [id], onDelete: SetNull)
+  waitlistRow   InterviewSlotSignup?        @relation("HeldSeat")
+  notifications InterviewSlotNotification[]
+
+  /// The exact predicate the capacity count reads. Indexing it keeps Postgres
+  /// taking SIRead locks on index tuples rather than escalating to the page,
+  /// which is the difference between a serialisation failure that means
+  /// something and one that fires on unrelated rows.
+  @@index([slotId, status])
+  @@index([slotId, status, waitlistedAt])
+  @@index([slotId, groupLabel])
+  @@index([interviewId, status])
+  @@index([applicationId, status])
+  @@map("interview_slot_signups")
+}
+
+/// An interviewer staffing a slot (issue #63).
+///
+/// Replaces the memberGroups half of the Interview.description JSON. An
+/// interviewer sitting through three consecutive sessions is three rows, which
+/// is both what actually happens and more expressive than the old shape, because
+/// these carry the times.
+model InterviewSlotAssignment {
+  id          String          @id @default(uuid())
+  slotId      String
+  interviewId String
+  userId      String
+  role        InterviewerRole @default(INTERVIEWER)
+  signedUpAt  DateTime        @default(now())
+  removedBy   String?
+  removedAt   DateTime?
+
+  slot InterviewSlot @relation(fields: [slotId, interviewId], references: [id, interviewId], onDelete: Cascade)
+  user User          @relation("InterviewSlotAssignment", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([slotId, removedAt])
+  @@index([userId])
+  @@map("interview_slot_assignments")
+}
+
+/// Delivery record for one scheduling email.
+///
+/// Mirrors MeetingCommunication, with one difference that matters: rows are
+/// written QUEUED inside the transaction that caused them and flipped to
+/// SENT/FAILED after it commits. Sending inside the transaction would double-send
+/// on a serialisation retry; sending without a record first would make a crash
+/// between commit and send invisible. A row still QUEUED is a visible problem
+/// with a Resend button next to it.
+model InterviewSlotNotification {
+  id        String                        @id @default(uuid())
+  /// Null for a message about the interview rather than one session - asking
+  /// interviewers when they are free is the case, and it is deliberately sent
+  /// before any session exists.
+  slotId    String?
+  interviewId String?
+  signupId  String?
+  type      InterviewSlotNotificationType
+  recipient String
+  subject   String
+  status    String                        @default("QUEUED")
+  error     String?
+  attempts  Int                           @default(0)
+  queuedAt  DateTime                      @default(now())
+  sentAt    DateTime?
+
+  slot      InterviewSlot?       @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  interview Interview?           @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  signup    InterviewSlotSignup? @relation(fields: [signupId], references: [id], onDelete: SetNull)
+
+  @@index([slotId])
+  @@index([interviewId])
+  @@index([signupId])
+  @@index([status])
+  @@map("interview_slot_notifications")
 }
 
 model InterviewAssignment {
@@ -1240,6 +1483,43 @@ enum MeetingCommunicationType {
   CONFIRMATION
   HOST_NOTIFICATION
   CANCELLATION
+  REMINDER
+}
+
+/// Where a candidate stands in a slot.
+///
+/// CONFIRMED and WAITLISTED are the only two that hold a place; the rest are
+/// history. A candidate is never WAITLISTED without a CONFIRMED row elsewhere
+/// (see InterviewSlotSignup.heldSeatId) - except that when nothing is free
+/// anywhere, we refuse to invent a seat and file NEEDS_PLACEMENT instead, which
+/// alerts admins rather than leaving someone in silent limbo.
+enum InterviewSlotSignupStatus {
+  CONFIRMED
+  WAITLISTED
+  NEEDS_PLACEMENT
+  CANCELLED
+  /// A fallback seat given up automatically when its waitlist entry was promoted.
+  /// Distinct from CANCELLED so "the system moved me" and "I dropped out" do not
+  /// read the same in the audit trail.
+  RELEASED
+}
+
+enum InterviewSlotNotificationType {
+  CONFIRMATION
+  WAITLIST_ADDED
+  PROMOTED
+  FALLBACK_RELEASED
+  CANCELLATION
+  MOVED_BY_ADMIN
+  /// To interviewers, before a schedule exists: tell us when you are free.
+  AVAILABILITY_REQUEST
+  /// To an interviewer, once recruitment has placed them in a session.
+  INTERVIEWER_ASSIGNED
+  INTERVIEWER_MOVED
+  INTERVIEWER_REMOVED
+  /// To recruitment, not the candidate: every slot was full, somebody needs a
+  /// seat found for them by hand.
+  ADMIN_OVERFLOW_ALERT
   REMINDER
 }
 

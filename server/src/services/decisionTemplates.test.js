@@ -102,4 +102,44 @@ describe('rendering', () => {
       expect(html).toContain('follow up');
     });
   });
+
+  describe('scheduling link', () => {
+    const advanced = defaultDecisionTemplates('1').ADVANCED;
+
+    it('links a candidate to the round they are moving to', () => {
+      const { html } = renderDecisionEmail(advanced, recipient({ toRound: '2' }), {
+        ...context,
+        schedulingLinksByRound: { 2: 'https://ats.example/interview-signup' }
+      });
+      expect(html).toContain('href="https://ats.example/interview-signup"');
+      expect(html).toContain('first come, first served');
+    });
+
+    it('keeps the old promise when that round has no bookable times yet', () => {
+      // The fallback is what makes this safe to ship before any slots exist -
+      // and what stops an email linking to an empty page mid-cycle.
+      const { html } = renderDecisionEmail(advanced, recipient({ toRound: '2' }), {
+        ...context,
+        schedulingLinksByRound: {}
+      });
+      expect(html).toContain('Scheduling details are on their way');
+      expect(html).not.toContain('interview-signup');
+    });
+
+    it('shows a placeholder in a preview rather than a dead link', () => {
+      const { html } = renderDecisionEmail(advanced, recipient({ toRound: '2' }), {
+        ...context,
+        preview: true
+      });
+      expect(html).toContain('#scheduling-link-shown-when-sent');
+    });
+
+    it('does not link a round the candidate is not moving to', () => {
+      const { html } = renderDecisionEmail(advanced, recipient({ toRound: '3' }), {
+        ...context,
+        schedulingLinksByRound: { 2: 'https://ats.example/interview-signup' }
+      });
+      expect(html).toContain('Scheduling details are on their way');
+    });
+  });
 });
