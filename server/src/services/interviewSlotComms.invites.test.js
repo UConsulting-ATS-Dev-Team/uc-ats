@@ -135,6 +135,37 @@ describe('inviteFor - identity that decides move vs duplicate', () => {
   });
 });
 
+describe('inviteFor - staffing a session leaves the candidates alone', () => {
+  // Assigning an interviewer must not disturb any candidate's calendar entry. The
+  // routes already guarantee it - notifyInterviewer queues one notification, to the
+  // interviewer, with no signupId, and the assign/remove/claim paths touch no signup
+  // rows - but an invite addressed to the wrong UID would undo that silently.
+  const candidate = notification();
+  const interviewer = notification({
+    type: 'INTERVIEWER_ASSIGNED',
+    recipient: 'member@ucla.edu',
+    signupId: null,
+    signup: null,
+  });
+
+  it('gives the interviewer a UID disjoint from the candidate on the same session', () => {
+    expect(prop(inviteFor(interviewer), 'UID')).not.toBe(prop(inviteFor(candidate), 'UID'));
+  });
+
+  it('addresses the invite only to the interviewer', () => {
+    const attendees = lines(inviteFor(interviewer)).filter((l) => l.startsWith('ATTENDEE'));
+    expect(attendees).toHaveLength(1);
+    expect(attendees[0]).toContain('mailto:member@ucla.edu');
+    expect(attendees[0]).not.toContain('candidate@ucla.edu');
+  });
+
+  it('never names other interviewers on a candidate invite', () => {
+    const attendees = lines(inviteFor(candidate)).filter((l) => l.startsWith('ATTENDEE'));
+    expect(attendees).toHaveLength(1);
+    expect(attendees[0]).toContain('mailto:candidate@ucla.edu');
+  });
+});
+
 describe('inviteFor - content', () => {
   it('prefers the slot location over the interview default', () => {
     expect(prop(inviteFor(notification()), 'LOCATION')).toBe('LOCATION:Covel Commons');
