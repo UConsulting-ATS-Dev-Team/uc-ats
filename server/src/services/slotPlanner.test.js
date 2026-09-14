@@ -134,17 +134,27 @@ describe('defaultSpecFor', () => {
     expect(spec.blocks.map((b) => b.label)).toEqual(['Morning Session', 'Afternoon Session']);
   });
 
-  it('offers first round a day of group sittings with a lunch break', () => {
+  it('offers first round a time frame and no sessions', () => {
+    // Groups come after availability, not before it: how many run at once is
+    // decided by how many interviewers turn out to be free, so creating them
+    // up front asks the question before the answer exists.
     const spec = defaultSpecFor('ROUND_ONE');
-    expect(spec.mode).toBe('cadence');
-    expect(spec.cadence).toMatchObject({ start: '08:00', end: '17:00', capacity: 4 });
-    expect(spec.cadence.breaks).toHaveLength(1);
+    expect(spec.mode).toBe('range');
+    expect(spec.range).toEqual({ start: '08:00', end: '17:00' });
+    expect(spec.cadence).toBeUndefined();
   });
 
-  it('defaults the final round to one candidate a sitting', () => {
-    // Final round is one-on-one; the real data names those groups after the
-    // candidate, which is the same thing said badly.
-    expect(defaultSpecFor('FINAL_ROUND').cadence.capacity).toBe(1);
+  it('offers the final round a time frame too', () => {
+    expect(defaultSpecFor('FINAL_ROUND').mode).toBe('range');
+  });
+
+  it('still plans a schedule for anyone who asks for one', () => {
+    // Range is the default, not the only option - the cadence planner is
+    // untouched and is what "create the groups" uses later.
+    expect(planSessions({
+      day: '2026-10-06',
+      cadence: { start: '09:00', end: '11:00', minutes: 60, capacity: 4 },
+    })).toHaveLength(2);
   });
 });
 

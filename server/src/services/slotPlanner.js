@@ -156,8 +156,19 @@ export function defaultSpecFor(interviewType) {
       ],
     };
   }
-  // First round, final round and anything else run as a schedule: a day of
-  // short sittings, which is what those actually are.
+  // First round and final round start as a time frame and nothing else.
+  //
+  // The sequence recruitment actually runs is: say which hours the day covers,
+  // ask members when they can be there, and only then cut the day into groups -
+  // because how many groups run at once is decided by how many interviewers
+  // turn out to be free. Generating thirteen unnamed hourly sessions at
+  // creation puts that decision first, before the information that settles it,
+  // and leaves an admin filling in seats and interviewers for sessions that may
+  // not survive contact with the availability grid. The schedule mode below is
+  // still there for anyone who already knows their shape.
+  if (interviewType === 'ROUND_ONE' || interviewType === 'FINAL_ROUND') {
+    return { mode: 'range', range: { start: '08:00', end: '17:00' } };
+  }
   return {
     mode: 'cadence',
     cadence: {

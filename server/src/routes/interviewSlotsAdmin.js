@@ -36,6 +36,7 @@ import {
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import config from '../config.js';
+import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
 
 const router = express.Router();
 
@@ -497,10 +498,21 @@ router.post('/interviews/with-sessions', async (req, res) => {
       return res.status(400).json({ error: planError.message });
     }
 
-    // The interview spans its sessions. With none, fall back to the whole day,
-    // which is what Interview.startDate/endDate meant before slots existed.
-    const startDate = rows.length ? new Date(Math.min(...rows.map((r) => r.startTime))) : combine(day, '09:00');
-    const endDate = rows.length ? new Date(Math.max(...rows.map((r) => r.endTime))) : combine(day, '17:00');
+    // The interview spans its sessions. With none, it spans the range the admin
+    // gave - and that range is load-bearing, not cosmetic: it is exactly what
+    // the member availability form turns into hour ticks, and what the coverage
+    // grid counts across. A first round created as "we will be running 8 to 5,
+    // groups later" has to keep 8 to 5.
+    const range = sessions?.range ?? {};
+    const startDate = rows.length
+      ? new Date(Math.min(...rows.map((r) => r.startTime)))
+      : combine(day, range.start || '09:00');
+    const endDate = rows.length
+      ? new Date(Math.max(...rows.map((r) => r.endTime)))
+      : combine(day, range.end || '17:00');
+    if (!rows.length && !(endDate > startDate)) {
+      return res.status(400).json({ error: 'The end of the day must come after the start' });
+    }
 
     const interview = await prisma.interview.create({
       data: {
@@ -523,9 +535,108 @@ router.post('/interviews/with-sessions', async (req, res) => {
   }
 });
 
+// POST /api/admin/interviews/slot-assignments/:id/move   { slotId }
+//
+// Move an interviewer from one session to another.
+//
+// Not remove-then-add. That fires two contradictory emails a minute apart
+// ("you are off the 10am", "you are on the 11am") and throws away signedUpAt,
+// so somebody who volunteered on day one looks like a late addition. Updating
+// slotId in place keeps the row, its history, and sends one email that says
+// what actually happened.
+//
+// Availability is not consulted. An admin moving somebody usually knows
+// something the form does not - they asked in person, or the member's plans
+// changed - and the coverage grid already reports placements that sit outside
+// what a person said, which is the honest way to surface it.
+router.post('/interviews/slot-assignments/:id/move', async (req, res) => {
+  try {
+    const { slotId } = req.body ?? {};
+    if (!slotId) return res.status(400).json({ error: 'A destination session is required' });
+
+    const assignment = await prisma.interviewSlotAssignment.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, slotId: true, interviewId: true, userId: true, removedAt: true,
+        // Read the session they are leaving now - once slotId is updated there
+        // is no way back to it, and the email is the one place it still matters.
+        slot: { select: { label: true, startTime: true, endTime: true } },
+      },
+    });
+    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+    if (assignment.slotId === slotId) return res.json({ moved: false, unchanged: true });
+
+    const target = await prisma.interviewSlot.findUnique({
+      where: { id: slotId },
+      select: { id: true, interviewId: true, startTime: true, endTime: true },
+    });
+    if (!target) return res.status(404).json({ error: 'That session no longer exists' });
+    // The composite FK is on (slotId, interviewId), so a cross-interview move
+    // would write a row that does not join. Moving somebody between interviews
+    // is a different act anyway - take them off one and add them to the other.
+    if (target.interviewId !== assignment.interviewId) {
+      return res.status(400).json({ error: 'That session belongs to a different interview' });
+    }
+
+    // Already on the destination under an older row: fold into it rather than
+    // leaving two live assignments for one person on one session.
+    const existing = await prisma.interviewSlotAssignment.findFirst({
+      where: { slotId, userId: assignment.userId, id: { not: assignment.id } },
+      select: { id: true, removedAt: true },
+    });
+
+    const moved = await prisma.$transaction(async (tx) => {
+      if (existing) {
+        await tx.interviewSlotAssignment.update({
+          where: { id: assignment.id },
+          data: { removedAt: new Date(), removedBy: req.user.id },
+        });
+        return tx.interviewSlotAssignment.update({
+          where: { id: existing.id },
+          data: { removedAt: null, removedBy: null },
+        });
+      }
+      return tx.interviewSlotAssignment.update({
+        where: { id: assignment.id },
+        data: { slotId, removedAt: null, removedBy: null },
+      });
+    });
+
+    // Somebody else's session at the same time as this one. Reported, never
+    // blocked - but an admin who has just double-booked a person should see it
+    // before they close the page.
+    const clash = await prisma.interviewSlotAssignment.findFirst({
+      where: {
+        userId: assignment.userId,
+        removedAt: null,
+        id: { not: moved.id },
+        slot: { startTime: { lt: target.endTime }, endTime: { gt: target.startTime } },
+      },
+      select: { slot: { select: { id: true, label: true, startTime: true, endTime: true } } },
+    });
+
+    await notifyInterviewer(slotId, assignment.userId, 'INTERVIEWER_MOVED', {
+      // First-round sessions usually have no name, so the time is what
+      // identifies the one they are coming off.
+      fromSlotName:
+        assignment.slot?.label ||
+        (assignment.slot
+          ? `${formatEmailDateTime(assignment.slot.startTime)} - ${formatEmailTime(assignment.slot.endTime)}`
+          : null),
+    });
+    res.json({ moved: true, assignment: moved, clash: clash?.slot ?? null });
+  } catch (error) {
+    fail(res, error, 'Failed to move that member');
+  }
+});
+
 // POST /api/admin/interviews/slots/:slotId/interviewers   { userId, role }
 // Put a member on a session. First round is the case that needs it: an
 // interviewer assigned to a session sees those candidates and no others.
+//
+// Any active member can be placed here, whether or not they sent availability.
+// Availability is a convenience for the admin building the day, not a gate on
+// who may be put in a room.
 router.post('/interviews/slots/:slotId/interviewers', async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -779,11 +890,19 @@ router.get('/interviews/:id/availability', async (req, res) => {
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
 
-    const windows = await prisma.interviewerAvailability.findMany({
-      where: { interviewId: interview.id },
-      include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
-      orderBy: [{ userId: 'asc' }, { startTime: 'asc' }],
-    });
+    const [windows, staff] = await Promise.all([
+      prisma.interviewerAvailability.findMany({
+        where: { interviewId: interview.id },
+        include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
+        orderBy: [{ userId: 'asc' }, { startTime: 'asc' }],
+      }),
+      prisma.user.findMany({
+        where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true, fullName: true, email: true, role: true },
+        orderBy: { fullName: 'asc' },
+      }),
+    ]);
+    const answeredIds = new Set(windows.map((w) => w.userId));
 
     const minutes = Number(req.query.minutes) || 60;
     const perSession = Number(req.query.per) || 2;
@@ -839,6 +958,13 @@ router.get('/interviews/:id/availability', async (req, res) => {
         assigned: slot.assignments.map((a) => a.user),
       })),
       placements,
+      // Everybody who could be put on a session, not just the people who
+      // answered. Availability ranks the list; it does not decide who is on it.
+      // Recruitment routinely places somebody who never filled the form in -
+      // they said yes in a meeting, or they are exec and were always going to
+      // be there - and a picker that cannot express that sends admins back to
+      // the spreadsheet this feature exists to replace.
+      staff: staff.map((user) => ({ ...user, responded: answeredIds.has(user.id) })),
     });
   } catch (error) {
     fail(res, error, 'Failed to load interviewer availability');
@@ -1276,7 +1402,7 @@ router.get('/interviews/:id/roster/integrity', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 /** Tell an interviewer they have been put on, or taken off, a session. */
-async function notifyInterviewer(slotId, userId, type) {
+async function notifyInterviewer(slotId, userId, type, { fromSlotName = null } = {}) {
   try {
     const [user, slot] = await Promise.all([
       prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
@@ -1301,6 +1427,7 @@ async function notifyInterviewer(slotId, userId, type) {
       renderInterviewSlotEmail(n, {
         ctaUrl: `${config.clientUrl}/assigned-interviews`,
         ctaLabel: 'See my interviews',
+        fromSlotName,
       })
     ).catch((e) => console.error('[notifyInterviewer] flush failed', e));
   } catch (error) {

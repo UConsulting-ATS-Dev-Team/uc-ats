@@ -1504,6 +1504,7 @@ enum InterviewSlotNotificationType {
   AVAILABILITY_REQUEST
   /// To an interviewer, once recruitment has placed them in a session.
   INTERVIEWER_ASSIGNED
+  INTERVIEWER_MOVED
   INTERVIEWER_REMOVED
   /// To recruitment, not the candidate: every slot was full, somebody needs a
   /// seat found for them by hand.

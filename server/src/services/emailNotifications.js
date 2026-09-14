@@ -1513,6 +1513,13 @@ const SLOT_EMAIL_COPY = {
     heading: "You're interviewing",
     body: (ctx) => `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
   },
+  INTERVIEWER_MOVED: {
+    heading: 'Your interview session has changed',
+    body: (ctx) =>
+      `Recruitment has moved which ${ctx.interviewTitle} session you are running` +
+      (ctx.fromName ? ` - you were on ${ctx.fromName}.` : '.') +
+      ' Your new session is below. Please check it and update your calendar.',
+  },
   INTERVIEWER_REMOVED: {
     heading: 'You have been taken off a session',
     body: (ctx) => `You are no longer down to interview at this session for ${ctx.interviewTitle}.`,
@@ -1532,7 +1539,7 @@ const SLOT_EMAIL_COPY = {
  */
 export const renderInterviewSlotEmail = (
   notification,
-  { ctaUrl = null, ctaLabel = 'View or change your time', preferredSlotName = null } = {}
+  { ctaUrl = null, ctaLabel = 'View or change your time', preferredSlotName = null, fromSlotName = null } = {}
 ) => {
   const slot = notification.slot ?? {};
   // A message about the whole interview - "when are you free" - carries no
@@ -1543,6 +1550,7 @@ export const renderInterviewSlotEmail = (
 
   const ctx = {
     interviewTitle: interview.title || 'your interview',
+    fromName: fromSlotName,
     slotName: slot.label || formatEmailDateTime(slot.startTime),
     preferredName: preferredSlotName || 'your first choice',
     candidateName: [application.firstName, application.lastName].filter(Boolean).join(' ') || 'A candidate',

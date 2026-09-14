@@ -34,6 +34,12 @@ beforeEach(() => {
   apiClient.post = vi.fn().mockResolvedValue({ id: 'iv1' });
 });
 
+/** First round now opens as a bare time frame, so the schedule tests below
+ *  have to ask for the schedule explicitly. */
+const chooseSchedule = async () => {
+  await userEvent.click(await screen.findByRole('button', { name: 'A schedule' }));
+};
+
 describe('InterviewCreateDialog', () => {
   it('offers coffee chats two named sessions by default', () => {
     // The shape recruitment actually uses: a morning and an afternoon sitting
@@ -44,9 +50,38 @@ describe('InterviewCreateDialog', () => {
     expect(screen.getByText('2 sessions')).toBeInTheDocument();
   });
 
-  it('switches to a day schedule when the round is first round', async () => {
+  it('opens first round as a time frame with no sessions', async () => {
+    // Groups come after availability: how many run at once depends on how many
+    // interviewers are free, so creating thirteen unnamed hourly sessions up
+    // front asks the question before the answer exists.
     open();
     await chooseRound('First Round');
+
+    expect(await screen.findByText(/No sessions are created yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/candidate seats/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create the day' })).toBeInTheDocument();
+  });
+
+  it('sends just the time frame when no sessions are wanted', async () => {
+    open();
+    await chooseRound('First Round');
+    setValue(screen.getByLabelText(/day starts/i), '08:00');
+    setValue(screen.getByLabelText(/day ends/i), '17:00');
+    await fillBasics();
+    await userEvent.click(screen.getByRole('button', { name: 'Create the day' }));
+
+    await waitFor(() => {
+      expect(apiClient.post).toHaveBeenCalledWith(
+        '/admin/interviews/with-sessions',
+        expect.objectContaining({ sessions: { range: { start: '08:00', end: '17:00' } } })
+      );
+    });
+  });
+
+  it('switches to a day schedule when asked for one', async () => {
+    open();
+    await chooseRound('First Round');
+    await chooseSchedule();
 
     // 08:00-17:00 hourly with a 12-13 lunch is eight sittings, not nine.
     expect(await screen.findByText('8 sessions')).toBeInTheDocument();
@@ -60,6 +95,7 @@ describe('InterviewCreateDialog', () => {
   it('previews the schedule before anything is created', async () => {
     open();
     await chooseRound('First Round');
+    await chooseSchedule();
     const before = screen.getByText('8 sessions');
     expect(before).toBeInTheDocument();
 
@@ -106,6 +142,7 @@ describe('InterviewCreateDialog', () => {
     // candidates - not one session holding twelve.
     open();
     await chooseRound('First Round');
+    await chooseSchedule();
     expect(await screen.findByText('8 sessions')).toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText(/running at once/i));
@@ -119,6 +156,7 @@ describe('InterviewCreateDialog', () => {
   it('sends the room count with the schedule', async () => {
     open();
     await chooseRound('First Round');
+    await chooseSchedule();
     await userEvent.click(screen.getByLabelText(/running at once/i));
     await userEvent.click(await screen.findByRole('option', { name: '2 at once' }));
     await fillBasics();
@@ -140,6 +178,7 @@ describe('InterviewCreateDialog', () => {
   it('will not create a schedule that produces nothing', async () => {
     open();
     await chooseRound('First Round');
+    await chooseSchedule();
     await fillBasics();
 
     // Day ends before a single session could finish.

@@ -123,7 +123,13 @@ export default function InterviewerAvailability({ interviewId, onSaved }) {
   if (!data) return null;
 
   const sessions = data.interview.slots ?? [];
-  const bySession = sessions.length > 0;
+  // Branch on what the interview IS, not on whether sessions happen to exist
+  // yet. A coffee chat is two named sittings and always asks that way. A first
+  // round asks by the hour even once its groups are built: a member saying
+  // "I can be there 11 to 12" is not choosing to run group 1B, and showing
+  // them two identical "11:00 AM - 12:00 PM" cards for two parallel groups is
+  // a question about the schedule dressed up as a question about them.
+  const bySession = data.interview.interviewType === 'COFFEE_CHAT' && sessions.length > 0;
 
   const save = async () => {
     setBusy(true);

@@ -94,6 +94,14 @@ const asTime = (minutes) => {
   return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
 };
 
+/** "08:00" -> "8:00 AM", for reading back a time the admin just typed. */
+const formatHour = (value) => {
+  const [h, m] = String(value ?? '').split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return value || '—';
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
 export default function InterviewCreateDialog({ open, onClose, onCreated }) {
   const [interviewType, setInterviewType] = useState('COFFEE_CHAT');
   const [title, setTitle] = useState('');
@@ -101,6 +109,7 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
   const [location, setLocation] = useState('');
   const [dresscode, setDresscode] = useState('');
   const [mode, setMode] = useState('blocks');
+  const [range, setRange] = useState({ start: '08:00', end: '17:00' });
   const [blocks, setBlocks] = useState(defaultBlocks);
   const [cadence, setCadence] = useState(() => defaultCadence('COFFEE_CHAT'));
   const [saving, setSaving] = useState(false);
@@ -114,7 +123,11 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
       setMode('blocks');
       setBlocks(defaultBlocks());
     } else {
-      setMode('cadence');
+      // First and final round open as a time frame and nothing else. Groups
+      // come after availability - how many run at once depends on how many
+      // interviewers turn out to be free, so building them now asks the
+      // question before the answer exists.
+      setMode('range');
       setCadence(defaultCadence(next));
     }
   };
@@ -122,11 +135,13 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
   const cadencePreview = useMemo(() => (mode === 'cadence' ? previewCadence(cadence) : []), [mode, cadence]);
   const parallel = Math.max(1, Math.min(12, Number(cadence.parallel) || 1));
   const sessionCount =
-    mode === 'blocks' ? blocks.length : cadencePreview.length * parallel;
+    mode === 'range' ? 0 : mode === 'blocks' ? blocks.length : cadencePreview.length * parallel;
   const seatCount =
-    mode === 'blocks'
-      ? blocks.reduce((n, b) => n + (Number(b.capacity) || 0), 0)
-      : sessionCount * (Number(cadence.capacity) || 0);
+    mode === 'range'
+      ? 0
+      : mode === 'blocks'
+        ? blocks.reduce((n, b) => n + (Number(b.capacity) || 0), 0)
+        : sessionCount * (Number(cadence.capacity) || 0);
 
   const updateBlock = (index, changes) =>
     setBlocks((current) => current.map((b, i) => (i === index ? { ...b, ...changes } : b)));
@@ -141,7 +156,8 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
         location,
         dresscode,
         day,
-        sessions: mode === 'blocks' ? { blocks } : { cadence },
+        sessions:
+          mode === 'range' ? { range } : mode === 'blocks' ? { blocks } : { cadence },
       });
       onCreated?.(interview);
       reset();
@@ -161,7 +177,11 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
     setError('');
   };
 
-  const canSubmit = title && day && location && sessionCount > 0 && !saving;
+  // A time frame creates no sessions on purpose, so "nothing to create" is only
+  // an error in the modes that are supposed to produce something.
+  const rangeIsSane = range.start && range.end && range.start < range.end;
+  const canSubmit =
+    title && day && location && !saving && (mode === 'range' ? rangeIsSane : sessionCount > 0);
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
@@ -225,18 +245,45 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
             How the day runs
           </Typography>
           <ToggleButtonGroup exclusive size="small" value={mode} onChange={(e, next) => next && setMode(next)}>
+            <ToggleButton value="range">Just a time frame</ToggleButton>
             <ToggleButton value="blocks">Named sessions</ToggleButton>
             <ToggleButton value="cadence">A schedule</ToggleButton>
           </ToggleButtonGroup>
         </Stack>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {mode === 'blocks'
-            ? 'A few long sittings that candidates recognise by name — how coffee chats run.'
-            : 'Back-to-back sessions through the day — how first round runs. Candidates see the times.'}
+          {mode === 'range'
+            ? 'Say which hours the day covers and stop there. Members RSVP for each hour inside it, and you cut the day into groups afterwards — once you know how many interviewers you actually have.'
+            : mode === 'blocks'
+              ? 'A few long sittings that candidates recognise by name — how coffee chats run.'
+              : 'Back-to-back sessions through the day. Use this when you already know the shape.'}
         </Typography>
 
-        {mode === 'blocks' ? (
+        {mode === 'range' ? (
+          <Stack spacing={2}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                size="small"
+                type="time"
+                label="Day starts"
+                value={range.start}
+                onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))}
+              />
+              <TextField
+                size="small"
+                type="time"
+                label="Day ends"
+                value={range.end}
+                onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))}
+              />
+            </Stack>
+            <Alert severity="info">
+              No sessions are created yet. Members will be asked which hours between{' '}
+              <strong>{formatHour(range.start)}</strong> and <strong>{formatHour(range.end)}</strong> they can
+              interview. Build the groups from the Interviewers tab once their answers are in.
+            </Alert>
+          </Stack>
+        ) : mode === 'blocks' ? (
           <Stack spacing={1.5}>
             {blocks.map((block, index) => (
               <Stack key={index} direction="row" spacing={1} alignItems="center">
@@ -421,7 +468,10 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
           </Stack>
         )}
 
-        {/* Nine sessions is worth seeing before it happens, not after. */}
+        {/* Nine sessions is worth seeing before it happens, not after. A time
+            frame has nothing to preview - the Alert above already says what it
+            does, and "0 sessions, 0 seats" reads as a mistake. */}
+        {mode !== 'range' && (
         <Paper variant="outlined" sx={{ mt: 3, p: 2, bgcolor: 'action.hover' }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="subtitle2">
@@ -435,7 +485,9 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
               />
             )}
             <Chip size="small" label={`${seatCount} candidate seats`} />
-            {sessionCount === 0 && <Chip size="small" color="error" label="Nothing to create" />}
+            {sessionCount === 0 && mode !== 'range' && (
+              <Chip size="small" color="error" label="Nothing to create" />
+            )}
           </Stack>
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
             {mode === 'blocks'
@@ -452,11 +504,16 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
                 ))}
           </Stack>
         </Paper>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" onClick={submit} disabled={!canSubmit}>
-          {saving ? 'Creating…' : `Create with ${sessionCount} session${sessionCount === 1 ? '' : 's'}`}
+          {saving
+            ? 'Creating…'
+            : mode === 'range'
+              ? 'Create the day'
+              : `Create with ${sessionCount} session${sessionCount === 1 ? '' : 's'}`}
         </Button>
       </DialogActions>
     </Dialog>

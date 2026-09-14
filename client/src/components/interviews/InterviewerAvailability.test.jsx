@@ -74,6 +74,26 @@ describe('InterviewerAvailability', () => {
     ]);
   });
 
+  it('still asks first round by the hour once its groups exist', async () => {
+    apiClient.get.mockResolvedValue({
+      ...firstRound,
+      interview: {
+        ...firstRound.interview,
+        // Two parallel groups at the same hour - the case that used to render
+        // as two identical "11:00 AM - 12:00 PM" checkboxes.
+        slots: [
+          { id: 'g1', label: 'Group 1A', startTime: '2026-10-06T18:00:00.000Z', endTime: '2026-10-06T19:00:00.000Z' },
+          { id: 'g2', label: 'Group 1B', startTime: '2026-10-06T18:00:00.000Z', endTime: '2026-10-06T19:00:00.000Z' },
+        ],
+      },
+    });
+    render(<InterviewerAvailability interviewId="i1" />);
+
+    expect(await screen.findByText('9:00 AM - 10:00 AM')).toBeInTheDocument();
+    expect(screen.queryByText('Group 1A')).not.toBeInTheDocument();
+    expect(screen.queryByText('Group 1B')).not.toBeInTheDocument();
+  });
+
   it('asks a coffee chat by its named sessions, not by the hour', async () => {
     apiClient.get.mockResolvedValue({
       interview: {

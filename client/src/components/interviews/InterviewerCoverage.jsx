@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
   CircularProgress,
   Divider,
+  ListItemText,
+  Menu,
   MenuItem,
   Paper,
   Stack,
@@ -25,9 +28,11 @@ import { formatTime, formatTimeRange } from '../../utils/scheduleFormat';
  * needs one room at a time or four, and building the schedule first means
  * discovering the answer when somebody does not turn up.
  *
- * Placement sits underneath, and offers the people who said they could make
- * that time - so choosing an interviewer is choosing from the people who
- * already said yes, rather than from the whole roster and hoping.
+ * Placement sits underneath. It offers the people who said they could make that
+ * time first, because that is usually the right answer - but never only those
+ * people. Availability ranks the list; it does not decide who is on it. Plenty
+ * of real placements come from somebody saying yes in a meeting, and a picker
+ * that cannot express that sends admins back to the spreadsheet.
  */
 
 const fullName = (u) => u?.fullName ?? 'Unknown';
@@ -49,6 +54,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [asked, setAsked] = useState('');
+  const [moving, setMoving] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -98,6 +104,29 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
       setError(e.message || 'Failed to place that interviewer.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const move = async (assignmentId, slotId) => {
+    setBusy(true);
+    setError('');
+    setAsked('');
+    try {
+      const result = await apiClient.post(`/admin/interviews/slot-assignments/${assignmentId}/move`, { slotId });
+      // Double-booking is allowed - an admin may know something we do not - but
+      // it is never silent.
+      if (result.clash) {
+        setAsked(
+          `Moved. Heads up: they are also on ${result.clash.label || formatTimeRange(result.clash.startTime, result.clash.endTime)}, which overlaps.`
+        );
+      }
+      await load();
+      onChanged?.();
+    } catch (e) {
+      setError(e.message || 'Failed to move that interviewer.');
+    } finally {
+      setBusy(false);
+      setMoving(null);
     }
   };
 
@@ -157,7 +186,8 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
       {nobodyYet && (
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Nobody has said when they are free yet.</strong> Send the request above; members fill it
-          in from My Interviews. Until they do there is nothing to size the day against.
+          in from My Interviews. You can still place anyone onto a session in the meantime — availability
+          only decides who gets suggested first.
         </Alert>
       )}
 
@@ -299,7 +329,18 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                           color={placement?.conflict === 'OUTSIDE_AVAILABILITY' ? 'warning' : 'default'}
                           variant={placement?.conflict ? 'filled' : 'outlined'}
                           label={fullName(user)}
-                          onDelete={() => remove(placement?.assignmentId)}
+                          disabled={busy}
+                          // The whole chip opens the menu: moving somebody is at
+                          // least as common as taking them off, and a bare X
+                          // offers only the destructive half.
+                          onClick={(e) =>
+                            setMoving({
+                              anchor: e.currentTarget,
+                              assignmentId: placement?.assignmentId,
+                              fromId: session.id,
+                              name: fullName(user),
+                            })
+                          }
                         />
                       );
                     })}
@@ -311,29 +352,94 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                   </Stack>
 
                   <Divider sx={{ my: 1 }} />
-                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-                    {free.length > 0
-                      ? 'Said they can make this time:'
-                      : 'Nobody who is free for this time is left to place.'}
-                  </Typography>
-                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                    {free.map((i) => (
-                      <Chip
-                        key={i.user.id}
-                        size="small"
-                        variant="outlined"
-                        label={fullName(i.user)}
-                        onClick={() => place(session.id, i.user.id)}
-                        disabled={busy}
-                      />
-                    ))}
-                  </Stack>
+                  {free.length > 0 && (
+                    <>
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                        Said they can make this time:
+                      </Typography>
+                      <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                        {free.map((i) => (
+                          <Chip
+                            key={i.user.id}
+                            size="small"
+                            variant="outlined"
+                            label={fullName(i.user)}
+                            onClick={() => place(session.id, i.user.id)}
+                            disabled={busy}
+                          />
+                        ))}
+                      </Stack>
+                    </>
+                  )}
+
+                  {/* Anybody at all. The list above is a shortcut, not the rule:
+                      people who never answered are still on the roster, and exec
+                      who were always going to be there never fill the form in. */}
+                  <Autocomplete
+                    size="small"
+                    options={(data.staff ?? []).filter((u) => !assignedIds.includes(u.id))}
+                    getOptionLabel={(u) => fullName(u)}
+                    groupBy={(u) =>
+                      session.canCover.includes(u.id)
+                        ? 'Free at this time'
+                        : u.responded
+                          ? 'Said they are busy then'
+                          : 'Never sent availability'
+                    }
+                    value={null}
+                    blurOnSelect
+                    disabled={busy}
+                    onChange={(_, picked) => picked && place(session.id, picked.id)}
+                    renderOption={(props, u) => (
+                      <li {...props} key={u.id}>
+                        <ListItemText primary={fullName(u)} secondary={u.email} />
+                      </li>
+                    )}
+                    renderInput={(params) => (
+                      <TextField {...params} placeholder="Add anyone else…" variant="outlined" />
+                    )}
+                    sx={{ maxWidth: 320 }}
+                  />
                 </Paper>
               );
             })}
           </Stack>
         </>
       )}
+
+      {/* One menu for the whole section: move somebody to any other session, or
+          take them off. Moving is an update in place server-side, so it keeps
+          their history and sends one email instead of two contradictory ones. */}
+      <Menu anchorEl={moving?.anchor} open={Boolean(moving)} onClose={() => setMoving(null)}>
+        <MenuItem disabled>
+          <Typography variant="caption" color="text.secondary">
+            {moving?.name}
+          </Typography>
+        </MenuItem>
+        <Divider />
+        {data.sessions
+          .filter((s) => s.id !== moving?.fromId)
+          .map((s) => (
+            <MenuItem key={s.id} onClick={() => move(moving.assignmentId, s.id)}>
+              Move to {s.label || formatTimeRange(s.startTime, s.endTime)}
+            </MenuItem>
+          ))}
+        {data.sessions.length <= 1 && (
+          <MenuItem disabled>
+            <Typography variant="caption">Nowhere else to move them</Typography>
+          </MenuItem>
+        )}
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            remove(moving.assignmentId);
+            setMoving(null);
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          Take off this session
+        </MenuItem>
+      </Menu>
 
       {/* What everybody actually said, because a grid hides the exceptions. */}
       {data.interviewers.length > 0 && (
