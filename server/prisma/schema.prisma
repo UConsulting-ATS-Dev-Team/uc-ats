@@ -11,7 +11,13 @@ datasource db {
 model User {
   id                         String                          @id @default(uuid())
   email                      String                          @unique
-  password                   String
+  // Null means the account has no password at all, which is different from
+  // "wrong password" and has to stay tellable apart: it is what lets /login
+  // answer a Google-only account with "use Google" instead of the generic
+  // "invalid email or password". Accounts promoted by decisionProcessing get a
+  // random unusable hash rather than null - deliberately, since those people are
+  // expected to set a password through the reset flow.
+  password                   String?
   fullName                   String
   graduationClass            String?
   role                       UserRole                        @default(USER)
@@ -34,6 +40,11 @@ model User {
   // are role USER, but only the former has no Candidate row and lands on the
   // talent profile instead of the application list.
   isExternalTalent           Boolean                         @default(false)
+  // Google's `sub` claim - stable for the life of the Google account, and
+  // unlike the email it does not change when somebody renames their address.
+  // Matched before email for exactly that reason.
+  googleId                   String?                         @unique
+  googleLinkedAt             DateTime?
   profileImage               String?
   studentId                  String?                         @unique
   createdBehavioralQuestions BehavioralQuestion[]

@@ -220,6 +220,22 @@ The system follows a **recruiting cycle-based workflow**:
 - User cache with 5-minute TTL to reduce DB queries
 - Use `requireAuth` middleware for protected routes, `requireAdmin` for admin-only
 
+**Sign in with Google:**
+- `POST /api/auth/google` takes a Google Identity Services ID token and is resolved by
+  [server/src/services/googleAuth.js](server/src/services/googleAuth.js). No redirect leg,
+  no code exchange, and therefore no client secret.
+- Resolution order is `googleId` (Google's `sub`), then a **case-insensitive** email match,
+  then create. An unverified Google email (`email_verified !== true`) is refused outright —
+  honouring it would link anyone who can assert an address into the account holding it.
+- No match creates a talent-portal account (`role: USER`, `isExternalTalent: true`, no
+  `Candidate` row, `password: null`, pre-verified). Deliberately **not** gated on a ucla.edu
+  address, unlike `/register-external` — so a `source: 'PORTAL'` resume no longer implies a
+  verified UCLA student.
+- `User.password` is nullable: null means "signs in with Google", which is what lets `/login`
+  say so instead of "invalid password". Any new code reading `password` must handle null.
+- Email is stored lowercased everywhere, enforced by a unique index on `lower(email)`. Look
+  users up case-insensitively; `/register` and `/register-member` used to store raw case.
+
 ### Frontend Architecture
 
 **Entry Point:** [client/src/main.jsx](client/src/main.jsx) → [client/src/App.jsx](client/src/App.jsx)
@@ -307,6 +323,12 @@ Required in `server/.env`:
 > The real fix is to repair `DIRECT_URL` with the current password. Until someone does,
 > see "Applying a migration" below.
 - `GOOGLE_CLOUD_KEY_PATH` - Path to Google Cloud service account JSON
+- `GOOGLE_OAUTH_CLIENT_ID` - (Optional) OAuth client id for Sign in with Google. A
+  *different* credential from `GOOGLE_CLOUD_KEY_PATH`: that is a service account this
+  server acts as, this is the browser-facing client a person signs in through. Must
+  equal `VITE_GOOGLE_CLIENT_ID` in `client/.env` — the server checks it as the ID
+  token's audience. Unset means `POST /api/auth/google` answers 503 and the Google
+  button never renders; password sign-in is unaffected.
 - `JWT_SECRET` - Secret for JWT signing
 - `BASE_URL` - Server URL (http://localhost:3001 in dev)
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)

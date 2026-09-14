@@ -54,7 +54,32 @@ export const AuthProvider = ({ children }) => {
       return { success: true, user: data.user };
 
     } catch (error) {
-      return { success: false, error: error.message };
+      // serverMessage, not message: api.js appends " (Status: 401)" to the
+      // latter. The code matters here too - a Google-only account is refused
+      // with GOOGLE_ACCOUNT and a message worth showing verbatim.
+      return { success: false, error: error.serverMessage || error.message, code: error.code };
+    }
+  };
+
+  /**
+   * `credential` is the ID token Google Identity Services hands the button. The
+   * server decides whether it belongs to an existing account or a new one, so
+   * there is nothing different to do with the answer - only `isNewAccount` comes
+   * back extra, for callers that want to say hello differently.
+   */
+  const loginWithGoogle = async (credential) => {
+    try {
+      const data = await apiClient.post('/auth/google', { credential });
+
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+      setUser(data.user);
+      return { success: true, user: data.user, isNewAccount: data.isNewAccount };
+
+    } catch (error) {
+      // serverMessage, not message: api.js appends " (Status: 401)" to the
+      // latter, and these messages are written to be read by the person.
+      return { success: false, error: error.serverMessage || error.message, code: error.code };
     }
   };
 
@@ -68,7 +93,9 @@ export const AuthProvider = ({ children }) => {
       return { success: true };
 
     } catch (error) {
-      return { success: false, error: error.message };
+      // serverMessage, not message: api.js appends " (Status: 400)" to the
+      // latter, and this one is written to be read by the person signing up.
+      return { success: false, error: error.serverMessage || error.message, code: error.code };
     }
   };
 
@@ -87,7 +114,8 @@ export const AuthProvider = ({ children }) => {
       return { success: true, user: data.user };
 
     } catch (error) {
-      return { success: false, error: error.message };
+      // serverMessage, not message - see login() above.
+      return { success: false, error: error.serverMessage || error.message, code: error.code };
     }
   };
 
@@ -101,7 +129,8 @@ export const AuthProvider = ({ children }) => {
       return { success: true };
 
     } catch (error) {
-      return { success: false, error: error.message };
+      // serverMessage, not message - see login() above.
+      return { success: false, error: error.serverMessage || error.message, code: error.code };
     }
   };
 
@@ -133,6 +162,7 @@ export const AuthProvider = ({ children }) => {
     token,
     loading,
     login,
+    loginWithGoogle,
     register,
     registerExternal,
     registerMember,

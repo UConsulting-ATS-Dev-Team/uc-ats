@@ -182,6 +182,9 @@ const TalentProfile = () => {
   }
 
   const verified = Boolean(profile?.emailVerified);
+  // Derived, not state: saveProfile replaces `profile` from the response, so
+  // the prompt clears itself the moment the year is saved.
+  const needsGraduationYear = !profile?.graduationYear;
 
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default', py: 4 }}>
@@ -238,6 +241,17 @@ const TalentProfile = () => {
           </Alert>
         )}
 
+        {/* An account created by Google sign-in arrives already verified but
+            with no graduation year - Google does not know it, and there is no
+            signup form in that path to ask. Placed after the verification
+            warning so the two never both appear: a Google account is verified,
+            and a password account was asked for a year at signup. */}
+        {needsGraduationYear && (
+          <Alert severity="info" sx={{ mb: 3 }}>
+            One thing missing: add your graduation year below so partners can filter by class.
+          </Alert>
+        )}
+
         {/* ----------------------------------------------------------------- */}
         <Card variant="outlined" sx={{ mb: 3 }}>
           <CardContent>
@@ -263,6 +277,8 @@ const TalentProfile = () => {
                   label="Graduation year"
                   placeholder="2027"
                   value={profileForm.graduationYear}
+                  error={needsGraduationYear}
+                  helperText={needsGraduationYear ? 'Required' : ''}
                   onChange={(e) =>
                     setProfileForm({ ...profileForm, graduationYear: e.target.value })
                   }

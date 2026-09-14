@@ -24,6 +24,11 @@ import { resolveUserFromRequest } from './auth.js';
 // Endpoints a CLIENT legitimately needs outside the portal itself.
 const CLIENT_ALLOWED_EXACT = new Set([
   '/api/auth/login',
+  // Sign in with Google is a way in, like /login. It needs to be here because
+  // apiClient attaches the stored bearer token to every request, so a client
+  // whose session has not been cleared reaches this middleware as a CLIENT and
+  // would be turned away from the endpoint that signs them in.
+  '/api/auth/google',
   '/api/auth/verify',
   '/api/health'
 ]);

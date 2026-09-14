@@ -66,6 +66,29 @@ beforeEach(() => {
   mockMe({ profile: profile(), resume: null });
 });
 
+// An account created by Google sign-in lands here verified but with no
+// graduation year - there is no signup form in that path to have asked.
+describe('missing graduation year', () => {
+  it('asks for it, since nothing else in this page would', async () => {
+    mockMe({ profile: profile({ graduationYear: '' }), resume: null });
+
+    render(<TalentProfile />);
+
+    expect(await screen.findByText(/add your graduation year/i)).toBeInTheDocument();
+  });
+
+  it('stays quiet once it is there', async () => {
+    mockMe({ profile: profile({ graduationYear: '2027' }), resume: null });
+
+    render(<TalentProfile />);
+
+    // Full name is the one field unique to the details card - the resume form
+    // below has a graduation year of its own.
+    await waitFor(() => expect(screen.getByLabelText(/full name/i)).toHaveValue('Joski Bruin'));
+    expect(screen.queryByText(/add your graduation year/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('unverified account', () => {
   beforeEach(() => {
     mockMe({ profile: profile({ emailVerified: false, emailVerifiedAt: null }), resume: null });
