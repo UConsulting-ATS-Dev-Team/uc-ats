@@ -71,7 +71,9 @@ import {
   Clear as ClearIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
-  Sort as SortIcon
+  Sort as SortIcon,
+  HowToVote as HowToVoteIcon,
+  MenuBook as MenuBookIcon
 } from '@mui/icons-material';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
@@ -83,6 +85,14 @@ import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import { useCelebration } from '../context/CelebrationContext';
 import ApplicationDetail from './ApplicationDetail';
+import { useLiveVote } from '../context/LiveVoteContext';
+import liveVoteApi from '../utils/liveVoteApi';
+import StagingLiveVoteSetupDialog from '../components/staging/StagingLiveVoteSetupDialog';
+import RubricEditorDialog from '../components/staging/RubricEditorDialog';
+import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
+
+const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
+const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
 
 // Staging is a QA/admin console: refresh often enough for multiple operators to
 // converge, but keep the interval bounded and back off hard when the API is down.
@@ -476,6 +486,7 @@ export default function Staging() {
   const { user } = useAuth();
   const { triggerCelebration } = useCelebration();
   const isAdmin = user?.role === 'ADMIN';
+  const { activeSession: activeLiveVote, refresh: refreshLiveVote } = useLiveVote();
   
   const [candidates, setCandidates] = useState([]);
   const [events, setEvents] = useState([]);
@@ -501,6 +512,10 @@ export default function Staging() {
     firstRound: {},
     final: {}
   });
+  // Closed live vote ballots by round and application, for the chip beside each decision.
+  const [liveVoteResults, setLiveVoteResults] = useState(EMPTY_LIVE_VOTE_RESULTS);
+  const [liveVoteSetupOpen, setLiveVoteSetupOpen] = useState(false);
+  const [rubricEditorOpen, setRubricEditorOpen] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [decisionDialogOpen, setDecisionDialogOpen] = useState(false);
   const [finalDecisionDialogOpen, setFinalDecisionDialogOpen] = useState(false);
@@ -794,6 +809,7 @@ export default function Staging() {
     setEvents(data.eventsData || []);
     setReviewTeams(data.reviewTeamsData || []);
     setPerRoundDecisions(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} });
+    setLiveVoteResults(data.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS);
     setGradingCompleteByCandidate(data.gradingMap || {});
 
     calculateDemographics(candidatesData, false);
@@ -845,6 +861,7 @@ export default function Staging() {
       eventsData: snapshot.events || [],
       reviewTeamsData: snapshot.reviewTeams || [],
       perRoundDecisions: snapshot.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
+      liveVoteResults: snapshot.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS,
       gradingMap: buildGradingMap(adminApplicationsData)
     };
   }, []);
@@ -1771,6 +1788,27 @@ export default function Staging() {
                 <Tab label="First Round" />
                 <Tab label="Final Round" />
               </Tabs>
+              {isAdmin && (
+                <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mt: 2 }}>
+                  {activeLiveVote ? (
+                    <Button
+                      variant="contained"
+                      color="error"
+                      startIcon={<HowToVoteIcon />}
+                      onClick={() => navigate(`/live-vote/${activeLiveVote.id}`)}
+                    >
+                      Live vote in progress · Open
+                    </Button>
+                  ) : (
+                    <Button variant="contained" startIcon={<HowToVoteIcon />} onClick={() => setLiveVoteSetupOpen(true)}>
+                      Start Live Vote
+                    </Button>
+                  )}
+                  <Button variant="outlined" startIcon={<MenuBookIcon />} onClick={() => setRubricEditorOpen(true)}>
+                    Configure {PHASE_LABELS[tabToPhase(currentTab)]} rubric
+                  </Button>
+                </Stack>
+              )}
             </CardContent>
           </Card>
 
@@ -2209,6 +2247,7 @@ export default function Staging() {
                                 <MenuItem value="no">No</MenuItem>
                               </Select>
                             </FormControl>
+                            <LiveVoteResultChip ballots={liveVoteResults[tabToPhase(currentTab)]?.[candidate.id]} />
                           </TableCell>
                           <TableCell data-label="Actions">
                             <Button
@@ -2445,6 +2484,43 @@ export default function Staging() {
               </Button>
             </DialogActions>
           </Dialog>
+
+          {isAdmin && (
+            <>
+              <StagingLiveVoteSetupDialog
+                open={liveVoteSetupOpen}
+                phase={tabToPhase(currentTab)}
+                phaseLabel={PHASE_LABELS[tabToPhase(currentTab)]}
+                candidates={tabFilteredCandidates}
+                decisions={perRoundDecisions[tabToPhase(currentTab)]}
+                activeSession={activeLiveVote}
+                onClose={() => setLiveVoteSetupOpen(false)}
+                onLaunched={(sessionId) => {
+                  setLiveVoteSetupOpen(false);
+                  refreshLiveVote();
+                  navigate(`/live-vote/${sessionId}`);
+                }}
+                onOpenSession={(sessionId) => navigate(`/live-vote/${sessionId}`)}
+                onEndSession={async (sessionId) => {
+                  try {
+                    await liveVoteApi.end(sessionId);
+                    setSnackbar({ open: true, message: 'Live vote ended', severity: 'success' });
+                  } catch (error) {
+                    setSnackbar({ open: true, message: error.serverMessage || 'Failed to end the live vote', severity: 'error' });
+                  } finally {
+                    refreshLiveVote();
+                  }
+                }}
+              />
+              <RubricEditorDialog
+                open={rubricEditorOpen}
+                phase={tabToPhase(currentTab)}
+                phaseLabel={PHASE_LABELS[tabToPhase(currentTab)]}
+                onClose={() => setRubricEditorOpen(false)}
+                onSaved={() => setSnackbar({ open: true, message: 'Rubric saved', severity: 'success' })}
+              />
+            </>
+          )}
 
           {/* Stays open when processing queued emails, so the link to review them is not missed. */}
           <Snackbar

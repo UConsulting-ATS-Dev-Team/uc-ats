@@ -23,6 +23,11 @@ vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: currentUser }),
 }));
 
+let activeLiveVote = null;
+vi.mock('../context/LiveVoteContext', () => ({
+  useLiveVote: () => ({ activeSession: activeLiveVote }),
+}));
+
 const mockResume = (resume) => vi.spyOn(apiClient, 'get').mockResolvedValue({ resume });
 
 beforeEach(() => {
@@ -30,6 +35,7 @@ beforeEach(() => {
   navigate.mockClear();
   pathname = '/';
   currentUser = { id: 'member-1', role: 'MEMBER' };
+  activeLiveVote = null;
   sessionStorage.clear();
 });
 
@@ -80,6 +86,30 @@ describe('when it stays quiet', () => {
     render(<MemberTalentNetworkPrompt />);
     expect(screen.queryByText(title)).not.toBeInTheDocument();
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it('does not cover a live vote in progress', async () => {
+    pathname = '/live-vote/session-1';
+    const get = vi.spyOn(apiClient, 'get');
+    render(<MemberTalentNetworkPrompt />);
+    expect(screen.queryByText(title)).not.toBeInTheDocument();
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('waits while a live vote is running anywhere, and steps aside if one starts', async () => {
+    activeLiveVote = { id: 'session-1' };
+    const get = mockResume(null);
+    const { rerender } = render(<MemberTalentNetworkPrompt />);
+    expect(get).not.toHaveBeenCalled();
+
+    activeLiveVote = null;
+    rerender(<MemberTalentNetworkPrompt />);
+    await screen.findByText(title);
+
+    activeLiveVote = { id: 'session-2' };
+    rerender(<MemberTalentNetworkPrompt />);
+    await waitFor(() => expect(screen.queryByText(title)).not.toBeInTheDocument());
+    expect(sessionStorage.length).toBe(0);
   });
 
   it('stays quiet when the check fails rather than interrupting a broken page', async () => {

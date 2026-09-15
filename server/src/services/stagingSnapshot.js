@@ -719,7 +719,7 @@ export async function loadAdminApplications(client, { page, limit, cycle } = {})
  *   a could see, no matter which API instance served either read
  */
 export async function loadStagingSnapshot(client = prisma) {
-  return client.$transaction(
+  const snapshot = await client.$transaction(
     async (tx) => {
       // First statement in the transaction: this is both the snapshot's version and
       // the point in time the reads below are consistent as of.
@@ -751,4 +751,59 @@ export async function loadStagingSnapshot(client = prisma) {
       timeout: SNAPSHOT_TIMEOUT_MS
     }
   );
+
+  // Read after the transaction rather than inside it: a failed statement would
+  // abort the whole snapshot, and a database that has not had the live vote
+  // migration yet must still get a working Staging page. Closing a ballot bumps
+  // the change token, so a result that lands between the two reads is picked up
+  // on the next poll.
+  return { ...snapshot, liveVoteResults: await loadLiveVoteResults(client, snapshot.activeCycle) };
+}
+
+const emptyLiveVoteResults = () => ({ resume: {}, coffee: {}, firstRound: {}, final: {} });
+
+/**
+ * Closed live vote ballots in the cycle, as
+ * `{ [phase]: { [applicationId]: [{ roundNumber, closedAt, yesCount, noCount, decisionApplied }] } }`
+ * oldest first - the history behind the vote chip on each Staging row.
+ */
+export async function loadLiveVoteResults(client, cycle) {
+  const results = emptyLiveVoteResults();
+  if (!cycle) return results;
+
+  let ballots;
+  try {
+    ballots = await client.liveVoteBallot.findMany({
+      where: { status: 'CLOSED', session: { cycleId: cycle.id } },
+      select: {
+        roundNumber: true,
+        closedAt: true,
+        yesCount: true,
+        noCount: true,
+        decisionApplied: true,
+        session: { select: { id: true, phase: true } },
+        sessionCandidate: { select: { applicationId: true } }
+      },
+      orderBy: { closedAt: 'asc' }
+    });
+  } catch (error) {
+    // P2021: the table does not exist yet.
+    if (error?.code === 'P2021') return results;
+    throw error;
+  }
+
+  for (const ballot of ballots) {
+    const byApplication = results[ballot.session.phase];
+    if (!byApplication) continue;
+    const applicationId = ballot.sessionCandidate.applicationId;
+    (byApplication[applicationId] ||= []).push({
+      sessionId: ballot.session.id,
+      roundNumber: ballot.roundNumber,
+      closedAt: ballot.closedAt,
+      yesCount: ballot.yesCount ?? 0,
+      noCount: ballot.noCount ?? 0,
+      decisionApplied: ballot.decisionApplied ?? null
+    });
+  }
+  return results;
 }
