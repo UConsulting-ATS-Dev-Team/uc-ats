@@ -15,6 +15,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ExecUnlockProvider } from './context/ExecUnlockContext';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
+import { LiveVoteProvider } from './context/LiveVoteContext';
 import CandidateManagement from './pages/CandidateManagement';
 import CycleManagement from './pages/CycleManagement';
 import ForgotPassword from './pages/ForgotPassword';
@@ -32,6 +33,7 @@ import FirstRoundInterviewInterface from './pages/FirstRoundInterviewInterface';
 import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
+import LiveVote from './pages/LiveVote';
 import Cases from './pages/Cases';
 import TalentPoolPartnerNetwork from './pages/TalentPoolPartnerNetwork';
 import CaseTagging from './pages/CaseTagging';
@@ -164,6 +166,15 @@ const ProtectedRoute = ({ children }) => {
   }
 
   return <Layout>{children}</Layout>;
+};
+
+// Admin and member pages that candidates must not land on, even by URL.
+const StaffRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  if (!loading && user && user.role !== 'ADMIN' && user.role !== 'MEMBER') {
+    return <Navigate to="/" replace />;
+  }
+  return <ProtectedRoute>{children}</ProtectedRoute>;
 };
 
 /** Role-appropriate landing at /; signed-out visitors go to the login page. */
@@ -419,6 +430,15 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+
+      <Route
+        path="/live-vote/:sessionId"
+        element={
+          <StaffRoute>
+            <LiveVote />
+          </StaffRoute>
+        }
+      />
       
       <Route
         path="/interviews/:id"
@@ -660,7 +680,9 @@ export default function App() {
       <ExecUnlockProvider>
         <DataProvider>
           <CelebrationProvider>
-            <AppRoutes />
+            <LiveVoteProvider>
+              <AppRoutes />
+            </LiveVoteProvider>
           </CelebrationProvider>
         </DataProvider>
       </ExecUnlockProvider>

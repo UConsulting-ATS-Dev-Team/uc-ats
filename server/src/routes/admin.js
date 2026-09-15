@@ -77,6 +77,7 @@ import {
   getRosterForInterview
 } from '../services/interviewRoster.js';
 import { ROUNDS } from '../utils/roundProgression.js';
+import { roundForPhase, saveRoundDecision } from '../services/stagingDecisions.js';
 
 const router = express.Router();
 
@@ -2797,6 +2798,9 @@ async function redactStagingSnapshot(req, snapshot) {
     decisions: withoutSealed(snapshot.decisions),
     perRoundDecisions: Object.fromEntries(
       Object.entries(snapshot.perRoundDecisions).map(([round, decisions]) => [round, withoutSealed(decisions)])
+    ),
+    liveVoteResults: Object.fromEntries(
+      Object.entries(snapshot.liveVoteResults || {}).map(([phase, results]) => [phase, withoutSealed(results)])
     )
   };
 }
@@ -2979,97 +2983,35 @@ router.post('/save-decision', async (req, res) => {
   try {
     const { candidateId, decision, phase } = req.body;
 
-    console.log('Saving decision:', { candidateId, decision, phase });
-
     if (!candidateId) {
       return res.status(400).json({ error: 'Missing required field: candidateId' });
     }
 
-    // Find the application for this candidate in the active cycle
     const active = await resolveCycleForRequest(prisma, req);
     if (!active) {
       return res.status(400).json({ error: 'No active recruiting cycle' });
     }
 
-    // Find the application - the candidateId parameter is actually the application ID
-    const application = await prisma.application.findFirst({
-      where: {
-        id: candidateId, // Use the ID directly as it's the application ID
-        cycleId: active.id
-      }
-    });
-
-    if (!application) {
-      return res.status(404).json({ error: 'Application not found for this ID and cycle' });
-    }
-
-    console.log('Found application:', application.id, 'for candidate:', application.candidateId);
-
-    // Map phase to the correct decision field
-    const phaseToField = {
-      'resume': 'resumeDecision',
-      'coffee': 'coffeeChatDecision',
-      'firstRound': 'firstRoundDecision',
-      'final': 'finalRoundDecision'
-    };
-
-    const decisionField = phaseToField[phase] || 'resumeDecision';
-    const phaseLabel = {
-      'resume': 'Resume Review',
-      'coffee': 'Coffee Chat',
-      'firstRound': 'First Round',
-      'final': 'Final Round'
-    }[phase] || 'Resume Review';
-
-    // Get user ID if available (from authentication middleware)
-    const userId = req.user?.id || 'system';
-
-    console.log('Processing decision:', decision, 'for application:', application.id, 'phase:', phase, 'field:', decisionField);
-
-    // Build update data with the per-round decision field
-    let updateData = {
-      [decisionField]: decision || null,
-      // Keep updating approved for backward compatibility
-      approved: decision === 'yes' ? true : decision === 'no' ? false : null
-    };
-
-    // Add comment for tracking
-    const decisionLabel = decision === 'yes' ? 'Yes - Advanced' :
-                          decision === 'no' ? 'No - Not advanced' :
-                          decision === 'maybe_yes' ? 'Maybe - Yes (needs final decision)' :
-                          decision === 'maybe_no' ? 'Maybe - No (needs final decision)' :
-                          'Cleared';
-
-    updateData.comments = {
-      create: {
-        content: `${phaseLabel} decision: ${decisionLabel}`,
-        userId: userId
-      }
-    };
-
-    console.log('Update data:', updateData);
-
-    // Update the application
-    const updatedApplication = await prisma.application.update({
-      where: { id: application.id },
-      data: updateData
-    });
-
-    console.log('Decision saved successfully for application:', updatedApplication.id);
-    console.log('Updated application data:', {
-      id: updatedApplication.id,
-      [decisionField]: updatedApplication[decisionField],
-      approved: updatedApplication.approved,
-      status: updatedApplication.status
+    // candidateId is the application id - Staging rows are keyed by application.
+    // A missing or unknown phase has always meant resume review.
+    const application = await saveRoundDecision({
+      applicationId: candidateId,
+      cycleId: active.id,
+      phase: roundForPhase(phase) ? phase : 'resume',
+      decision,
+      userId: req.user?.id
     });
 
     res.json({
       success: true,
       message: 'Decision saved successfully',
-      application: updatedApplication
+      application
     });
 
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     console.error('[POST /api/admin/save-decision]', error);
     res.status(500).json({ error: 'Failed to save decision', details: error.message });
   }

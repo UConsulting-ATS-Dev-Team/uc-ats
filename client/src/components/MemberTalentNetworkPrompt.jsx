@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
+import { useLiveVote } from '../context/LiveVoteContext';
 
 // Asks a member to set up their Talent Partner Network resume.
 //
@@ -32,12 +33,19 @@ const MemberTalentNetworkPrompt = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const liveVoteId = useLiveVote().activeSession?.id ?? null;
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (user?.role !== 'MEMBER' || !user?.id) return;
-    // Never over the page it is asking them to visit.
+    // Never over the page it is asking them to visit, and never while a live vote
+    // is running: the room needs the join prompt and the ballot, not a resume
+    // reminder on top of them. It asks again once the vote is over.
     if (location.pathname === '/member/talent-network') return;
+    if (liveVoteId || location.pathname.startsWith('/live-vote/')) {
+      setOpen(false);
+      return;
+    }
 
     let dismissed = false;
     try {
@@ -62,7 +70,7 @@ const MemberTalentNetworkPrompt = () => {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, user?.role, location.pathname]);
+  }, [user?.id, user?.role, location.pathname, liveVoteId]);
 
   const dismiss = () => {
     try {

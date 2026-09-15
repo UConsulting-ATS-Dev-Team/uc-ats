@@ -85,8 +85,19 @@ const NEVER_LOCKED = () => false;
  * authoritative; a row without one falls back to studentId and email, the two
  * fields Candidate is unique on.
  */
-export async function lockedRowPredicate(req, rows, { refOf = defaultRefOf, client = prisma } = {}) {
-  if (isExecUnlocked(req) || !rows?.length) return NEVER_LOCKED;
+export async function lockedRowPredicate(req, rows, options) {
+  if (isExecUnlocked(req)) return NEVER_LOCKED;
+  return sealedRowPredicate(rows, options);
+}
+
+/**
+ * lockedRowPredicate without the executive unlock: which rows are sealed, full
+ * stop. For content that is shown to people other than the requester - a live
+ * vote puts a candidate in front of the whole room, and one admin's unlock says
+ * nothing about who else is watching.
+ */
+export async function sealedRowPredicate(rows, { refOf = defaultRefOf, client = prisma } = {}) {
+  if (!rows?.length) return NEVER_LOCKED;
 
   const refs = rows.map(refOf);
   const candidateIds = unique(refs.map((ref) => ref.candidateId));
@@ -147,15 +158,21 @@ export async function isApplicationLocked(req, applicationId, client = prisma) {
 
 /** The subset of `applicationIds` that belong to sealed candidates. */
 export async function lockedApplicationIds(req, applicationIds, client = prisma) {
+  if (isExecUnlocked(req)) return new Set();
+  return sealedApplicationIds(applicationIds, client);
+}
+
+/** lockedApplicationIds, ignoring any executive unlock - see sealedRowPredicate. */
+export async function sealedApplicationIds(applicationIds, client = prisma) {
   const ids = unique(applicationIds || []);
-  if (!ids.length || isExecUnlocked(req)) return new Set();
+  if (!ids.length) return new Set();
 
   const applications = await client.application.findMany({
     where: { id: { in: ids } },
     select: { id: true, candidateId: true, studentId: true, email: true }
   });
-  const isLocked = await lockedRowPredicate(req, applications, { client });
-  return new Set(applications.filter(isLocked).map((application) => application.id));
+  const isSealed = await sealedRowPredicate(applications, { client });
+  return new Set(applications.filter(isSealed).map((application) => application.id));
 }
 
 export async function isOwnCandidate(user, candidateId, client = prisma) {

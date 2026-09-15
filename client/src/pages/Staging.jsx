@@ -69,10 +69,11 @@ import {
   FilterList as FilterListIcon,
   Search as SearchIcon,
   Clear as ClearIcon,
-  Download as DownloadIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
-  Sort as SortIcon
+  Sort as SortIcon,
+  HowToVote as HowToVoteIcon,
+  MenuBook as MenuBookIcon
 } from '@mui/icons-material';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
@@ -84,6 +85,14 @@ import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import { useCelebration } from '../context/CelebrationContext';
 import ApplicationDetail from './ApplicationDetail';
+import { useLiveVote } from '../context/LiveVoteContext';
+import liveVoteApi from '../utils/liveVoteApi';
+import StagingLiveVoteSetupDialog from '../components/staging/StagingLiveVoteSetupDialog';
+import RubricEditorDialog from '../components/staging/RubricEditorDialog';
+import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
+
+const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
+const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
 
 // Staging is a QA/admin console: refresh often enough for multiple operators to
 // converge, but keep the interval bounded and back off hard when the API is down.
@@ -477,6 +486,7 @@ export default function Staging() {
   const { user } = useAuth();
   const { triggerCelebration } = useCelebration();
   const isAdmin = user?.role === 'ADMIN';
+  const { activeSession: activeLiveVote, refresh: refreshLiveVote } = useLiveVote();
   
   const [candidates, setCandidates] = useState([]);
   const [events, setEvents] = useState([]);
@@ -502,6 +512,10 @@ export default function Staging() {
     firstRound: {},
     final: {}
   });
+  // Closed live vote ballots by round and application, for the chip beside each decision.
+  const [liveVoteResults, setLiveVoteResults] = useState(EMPTY_LIVE_VOTE_RESULTS);
+  const [liveVoteSetupOpen, setLiveVoteSetupOpen] = useState(false);
+  const [rubricEditorOpen, setRubricEditorOpen] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [decisionDialogOpen, setDecisionDialogOpen] = useState(false);
   const [finalDecisionDialogOpen, setFinalDecisionDialogOpen] = useState(false);
@@ -795,6 +809,7 @@ export default function Staging() {
     setEvents(data.eventsData || []);
     setReviewTeams(data.reviewTeamsData || []);
     setPerRoundDecisions(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} });
+    setLiveVoteResults(data.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS);
     setGradingCompleteByCandidate(data.gradingMap || {});
 
     calculateDemographics(candidatesData, false);
@@ -846,6 +861,7 @@ export default function Staging() {
       eventsData: snapshot.events || [],
       reviewTeamsData: snapshot.reviewTeams || [],
       perRoundDecisions: snapshot.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
+      liveVoteResults: snapshot.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS,
       gradingMap: buildGradingMap(adminApplicationsData)
     };
   }, []);
@@ -1529,84 +1545,6 @@ export default function Staging() {
     }
   };
 
-  const handleExportDecisions = () => {
-    const dataSource = adminApplications || [];
-    
-    if (dataSource.length === 0) {
-      setSnackbar({ open: true, message: 'No candidate data available to export', severity: 'warning' });
-      return;
-    }
-    
-    let roundFilteredData = dataSource;
-    let roundName = 'All Rounds';
-
-    // Filter based on previous round decisions (or currentRound for backward compatibility)
-    if (currentTab === 0) {
-      // Resume Review: Show ALL applicants
-      roundFilteredData = dataSource;
-      roundName = 'Resume Review';
-    } else if (currentTab === 1) {
-      // Coffee Chat: Show only applicants who passed resume review
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'resume'));
-      roundName = 'Coffee Chat';
-    } else if (currentTab === 2) {
-      // First Round: Show only applicants who passed coffee chat
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'coffee'));
-      roundName = 'First Round';
-    } else if (currentTab === 3) {
-      // Final Round: Show only applicants who passed first round
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'firstRound'));
-      roundName = 'Final Round';
-    }
-    
-    if (roundFilteredData.length === 0) {
-      setSnackbar({ open: true, message: `No candidates found in ${roundName} round`, severity: 'warning' });
-      return;
-    }
-    
-    const exportDialog = window.confirm(
-      `Export ${roundName} Decisions:\n\nOK = Only candidates with Yes/No decisions\nCancel = All candidates`
-    );
-    
-    let candidatesToExport = roundFilteredData;
-    if (exportDialog) {
-      candidatesToExport = roundFilteredData.filter(app => {
-        const decision = getDecisionForTab(app.id, currentTab);
-        return decision === 'yes' || decision === 'no';
-      });
-    }
-
-    const csvHeaders = ['Name', 'Email', 'Student ID', 'Decision', 'Grad Year', 'Gender', 'Referral'];
-    const csvRows = candidatesToExport.map(app => {
-      const name = `${app.firstName || ''} ${app.lastName || ''}`.trim();
-      const email = app.email || '';
-      const studentId = app.studentId || '';
-      const roundDecision = getDecisionForTab(app.id, currentTab);
-      const decision = roundDecision === 'yes' ? 'Yes' : roundDecision === 'no' ? 'No' : 'Pending';
-      const gradYear = app.graduationYear || app.year || '';
-      const gender = app.gender || '';
-      const referral = app.hasReferral ? 'Yes' : 'No';
-
-      return [name, email, studentId, decision, gradYear, gender, referral];
-    });
-    
-    const csvContent = [csvHeaders, ...csvRows]
-      .map(row => row.map(field => `"${(field || '').toString().replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${roundName.replace(' ', '_')}_decisions_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setSnackbar({ open: true, message: `Exported ${candidatesToExport.length} candidates`, severity: 'success' });
-  };
-
   // First, filter candidates based on which tab we're on (previous round decisions)
   const tabFilteredCandidates = candidates.filter(candidate => {
     if (currentTab === 0) {
@@ -1835,13 +1773,6 @@ export default function Staging() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Button
-                variant="outlined"
-                startIcon={<DownloadIcon />}
-                onClick={handleExportDecisions}
-              >
-                Export Decisions
-              </Button>
               <Chip 
                 label={currentCycle ? `Current Cycle: ${currentCycle.name}` : 'No Active Cycle'}
                 color={currentCycle ? 'primary' : 'default'}
@@ -1857,6 +1788,27 @@ export default function Staging() {
                 <Tab label="First Round" />
                 <Tab label="Final Round" />
               </Tabs>
+              {isAdmin && (
+                <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mt: 2 }}>
+                  {activeLiveVote ? (
+                    <Button
+                      variant="contained"
+                      color="error"
+                      startIcon={<HowToVoteIcon />}
+                      onClick={() => navigate(`/live-vote/${activeLiveVote.id}`)}
+                    >
+                      Live vote in progress · Open
+                    </Button>
+                  ) : (
+                    <Button variant="contained" startIcon={<HowToVoteIcon />} onClick={() => setLiveVoteSetupOpen(true)}>
+                      Start Live Vote
+                    </Button>
+                  )}
+                  <Button variant="outlined" startIcon={<MenuBookIcon />} onClick={() => setRubricEditorOpen(true)}>
+                    Configure {PHASE_LABELS[tabToPhase(currentTab)]} rubric
+                  </Button>
+                </Stack>
+              )}
             </CardContent>
           </Card>
 
@@ -2295,6 +2247,7 @@ export default function Staging() {
                                 <MenuItem value="no">No</MenuItem>
                               </Select>
                             </FormControl>
+                            <LiveVoteResultChip ballots={liveVoteResults[tabToPhase(currentTab)]?.[candidate.id]} />
                           </TableCell>
                           <TableCell data-label="Actions">
                             <Button
@@ -2531,6 +2484,43 @@ export default function Staging() {
               </Button>
             </DialogActions>
           </Dialog>
+
+          {isAdmin && (
+            <>
+              <StagingLiveVoteSetupDialog
+                open={liveVoteSetupOpen}
+                phase={tabToPhase(currentTab)}
+                phaseLabel={PHASE_LABELS[tabToPhase(currentTab)]}
+                candidates={tabFilteredCandidates}
+                decisions={perRoundDecisions[tabToPhase(currentTab)]}
+                activeSession={activeLiveVote}
+                onClose={() => setLiveVoteSetupOpen(false)}
+                onLaunched={(sessionId) => {
+                  setLiveVoteSetupOpen(false);
+                  refreshLiveVote();
+                  navigate(`/live-vote/${sessionId}`);
+                }}
+                onOpenSession={(sessionId) => navigate(`/live-vote/${sessionId}`)}
+                onEndSession={async (sessionId) => {
+                  try {
+                    await liveVoteApi.end(sessionId);
+                    setSnackbar({ open: true, message: 'Live vote ended', severity: 'success' });
+                  } catch (error) {
+                    setSnackbar({ open: true, message: error.serverMessage || 'Failed to end the live vote', severity: 'error' });
+                  } finally {
+                    refreshLiveVote();
+                  }
+                }}
+              />
+              <RubricEditorDialog
+                open={rubricEditorOpen}
+                phase={tabToPhase(currentTab)}
+                phaseLabel={PHASE_LABELS[tabToPhase(currentTab)]}
+                onClose={() => setRubricEditorOpen(false)}
+                onSaved={() => setSnackbar({ open: true, message: 'Rubric saved', severity: 'success' })}
+              />
+            </>
+          )}
 
           {/* Stays open when processing queued emails, so the link to review them is not missed. */}
           <Snackbar

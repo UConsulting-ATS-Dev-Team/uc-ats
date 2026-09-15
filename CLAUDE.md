@@ -173,6 +173,8 @@ The system follows a **recruiting cycle-based workflow**:
   password rotation and the access log
 - `/api/master-communications/decision-batches` - Decision emails queued by Staging's
   Process All Decisions, reviewed and sent by an admin
+- `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
+  session is admin-only)
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -195,6 +197,23 @@ The system follows a **recruiting cycle-based workflow**:
   `DecisionMessage`s that an admin reviews and sends in Master Communications → Decisions
   ([server/src/services/decisionBatches.js](server/src/services/decisionBatches.js)).
 - Round order lives in [server/src/utils/roundProgression.js](server/src/utils/roundProgression.js).
+
+**Live votes:**
+- An admin starts a session from any Staging tab. Admins and members join from anywhere in
+  the app (`LiveVoteProvider` in [client/src/context/LiveVoteContext.jsx](client/src/context/LiveVoteContext.jsx)
+  shows the join popup), vote yes/no one candidate at a time, and any admin who has joined
+  closes votes and sets the round decision. Rules live in
+  [server/src/services/liveVotes.js](server/src/services/liveVotes.js); what a viewer may see
+  lives in [server/src/services/liveVoteState.js](server/src/services/liveVoteState.js).
+- Votes are anonymous to everyone: `live_vote_votes` stores an HMAC of (ballot, user) under
+  `LIVE_VOTE_SECRET` (falls back to `JWT_SECRET`), never a user id. An open ballot's yes/no
+  split is never sent to the client, only how many have voted.
+- Every session change bumps `LiveVoteSession.version` under a row lock. Clients poll state
+  and compare versions; a Supabase broadcast is only a content-free nudge to refetch, so
+  realtime is optional and polling alone works.
+- A decision set in a live vote goes through
+  [server/src/services/stagingDecisions.js](server/src/services/stagingDecisions.js), the same
+  write as Staging's inline decision picker, so it feeds decision processing unchanged.
 
 **Key Services:**
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table

@@ -23,6 +23,7 @@ vi.mock('../prismaClient.js', () => {
     groups: { findMany: vi.fn() },
     events: { findMany: vi.fn() },
     flaggedDocument: { findMany: vi.fn() },
+    liveVoteBallot: { findMany: vi.fn() },
     $queryRaw: vi.fn(),
   };
   // Interactive transactions hand the callback a client bound to the transaction; the
@@ -500,6 +501,7 @@ describe('GET /api/admin/users', () => {
       prisma.groups.findMany.mockResolvedValue([]);
       prisma.events.findMany.mockResolvedValue([]);
       prisma.flaggedDocument.findMany.mockResolvedValue([]);
+      prisma.liveVoteBallot.findMany.mockResolvedValue([]);
       prisma.$queryRaw.mockResolvedValue([{ version: 1000n }]);
     });
 
@@ -521,7 +523,8 @@ describe('GET /api/admin/users', () => {
         applications: [],
         events: [],
         reviewTeams: [],
-        perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} }
+        perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} },
+        liveVoteResults: { resume: {}, coffee: {}, firstRound: {}, final: {} }
       });
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
@@ -543,6 +546,29 @@ describe('GET /api/admin/users', () => {
       expect(first.snapshotVersion).toBe(1000);
       expect(second.snapshotVersion).toBe(1500);
       expect(second.snapshotVersion).toBeGreaterThan(first.snapshotVersion);
+    });
+
+    it('groups closed live vote ballots by round and application for the vote chip', async () => {
+      const closedAt = '2026-09-15T02:00:00.000Z';
+      prisma.liveVoteBallot.findMany.mockResolvedValue([
+        { roundNumber: 1, closedAt, yesCount: 4, noCount: 6, decisionApplied: null, session: { id: 's1', phase: 'final' }, sessionCandidate: { applicationId: 'app-1' } },
+        { roundNumber: 2, closedAt, yesCount: 8, noCount: 2, decisionApplied: 'yes', session: { id: 's1', phase: 'final' }, sessionCandidate: { applicationId: 'app-1' } }
+      ]);
+
+      const body = await (await getSnapshot()).json();
+
+      expect(body.liveVoteResults.final['app-1'].map((ballot) => [ballot.roundNumber, ballot.yesCount, ballot.decisionApplied]))
+        .toEqual([[1, 4, null], [2, 8, 'yes']]);
+      expect(prisma.liveVoteBallot.findMany.mock.calls[0][0].where).toEqual({ status: 'CLOSED', session: { cycleId: 'cycle-1' } });
+    });
+
+    it('still serves Staging on a database without the live vote tables', async () => {
+      prisma.liveVoteBallot.findMany.mockRejectedValue(Object.assign(new Error('missing table'), { code: 'P2021' }));
+
+      const res = await getSnapshot();
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).liveVoteResults).toEqual({ resume: {}, coffee: {}, firstRound: {}, final: {} });
     });
 
     it('serves the change token without touching the snapshot loaders', async () => {

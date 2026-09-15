@@ -69,6 +69,9 @@ class ApiClient {
       err.status = response.status;
       err.code = error.code;
       err.serverMessage = errorMessage;
+      // The whole parsed body, for endpoints that explain a refusal in more than
+      // a message (a live vote launch lists the candidates it rejected).
+      err.body = error;
       if (error.contactEmail) {
         err.contactEmail = error.contactEmail;
       }

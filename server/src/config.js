@@ -51,6 +51,11 @@ const config = {
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
 
+  // Keys live vote ballots to voters (see services/liveVotes.js). Optional: falls
+  // back to jwtSecret. Rotating it mid-session makes open ballots forget who has
+  // already voted, so change it between sessions.
+  liveVoteSecret: process.env.LIVE_VOTE_SECRET || process.env.JWT_SECRET,
+
   memberRegistrationToken: process.env.MEMBER_REGISTRATION_TOKEN,
 
   dbUrl: process.env.DATABASE_URL,

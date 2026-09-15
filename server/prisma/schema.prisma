@@ -91,6 +91,8 @@ model User {
   revokedClientResumes       ClientResumeAssignment[]        @relation("ClientAssignmentRevoker")
   clientAccessLogs           ClientResumeAccessLog[]         @relation("ClientAccessLogUser")
   announcementReads          MemberAnnouncementRead[]
+  createdLiveVoteSessions    LiveVoteSession[]               @relation("LiveVoteSessionCreator")
+  liveVoteParticipations     LiveVoteParticipant[]           @relation("LiveVoteParticipantUser")
 
   @@map("users")
 }
@@ -313,6 +315,7 @@ model Application {
   clientAssignments     ClientResumeAssignment[]
   behavioralQuestions   BehavioralQuestion[]
   slotSignups           InterviewSlotSignup[]
+  liveVoteEntries       LiveVoteSessionCandidate[]
 
   @@map("applications")
 }
@@ -398,6 +401,7 @@ model RecruitingCycle {
   messageLogs               MessageLog[]                     @relation("CycleLogs")
   scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
   helpAnnouncements         HelpAnnouncement[]
+  liveVoteSessions          LiveVoteSession[]
 
   @@map("recruiting_cycles")
 }
@@ -1834,4 +1838,148 @@ enum ClientAccessAction {
   VIEW
   VIEW_DENIED
   EXPORT
+}
+
+// ---------------------------------------------------------------------------
+// Live vote deliberations
+//
+// An admin opens a session on one Staging round, admins and members join from
+// anywhere in the app, and the room votes yes/no on one candidate at a time.
+// Votes are anonymous to everyone: the voter is stored only as an HMAC of
+// (ballot, user) under a server secret, which is enough to enforce one vote per
+// person and to answer "what did I vote" without letting a database reader
+// match a vote to a person.
+// ---------------------------------------------------------------------------
+
+enum LiveVoteSessionStatus {
+  LOBBY
+  ACTIVE
+  ENDED
+}
+
+enum LiveVoteBallotStatus {
+  OPEN
+  CLOSED
+}
+
+enum LiveVoteValue {
+  YES
+  NO
+}
+
+/// The default rubric for one Staging round, shown beside a live vote. Sessions
+/// copy it when they launch, so editing it never rewrites a past session.
+model DeliberationRubric {
+  id          String   @id @default(uuid())
+  /// 'resume' | 'coffee' | 'firstRound' | 'final' - see utils/roundProgression.js
+  phase       String   @unique
+  /// [{ id, title, description }]
+  criteria    Json     @default("[]")
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("deliberation_rubrics")
+}
+
+/// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the
+/// partial unique index `live_vote_sessions_single_open`, which Prisma cannot
+/// express and which lives in the migration SQL.
+model LiveVoteSession {
+  id           String                     @id @default(uuid())
+  cycleId      String
+  phase        String
+  status       LiveVoteSessionStatus      @default(LOBBY)
+  currentIndex Int?
+  /// Bumped by every change, votes included. Clients poll and compare it.
+  version      Int                        @default(0)
+  /// Rubric criteria as they were when the session launched.
+  rubric       Json                       @default("[]")
+  createdById  String
+  endedById    String?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime                   @default(now())
+  updatedAt    DateTime                   @updatedAt
+  cycle        RecruitingCycle            @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  createdBy    User                       @relation("LiveVoteSessionCreator", fields: [createdById], references: [id])
+  candidates   LiveVoteSessionCandidate[]
+  ballots      LiveVoteBallot[]
+  participants LiveVoteParticipant[]
+
+  @@index([cycleId, phase])
+  @@index([status])
+  @@map("live_vote_sessions")
+}
+
+model LiveVoteSessionCandidate {
+  id            String           @id @default(uuid())
+  sessionId     String
+  applicationId String
+  position      Int
+  session       LiveVoteSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  application   Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  ballots       LiveVoteBallot[]
+
+  @@unique([sessionId, applicationId])
+  @@unique([sessionId, position])
+  @@index([applicationId])
+  @@map("live_vote_session_candidates")
+}
+
+/// One round of voting on one candidate. Re-opening a vote adds roundNumber + 1
+/// and leaves earlier rounds as history. At most one OPEN ballot per session
+/// (partial unique index `live_vote_ballots_single_open`).
+model LiveVoteBallot {
+  id                 String                   @id @default(uuid())
+  sessionId          String
+  sessionCandidateId String
+  roundNumber        Int
+  status             LiveVoteBallotStatus     @default(OPEN)
+  openedAt           DateTime                 @default(now())
+  openedById         String
+  closedAt           DateTime?
+  closedById         String?
+  /// Frozen at close. Never read while the ballot is open.
+  yesCount           Int?
+  noCount            Int?
+  eligibleCount      Int?
+  /// The Staging decision an admin applied after this round, if any.
+  decisionApplied    String?
+  decidedById        String?
+  decidedAt          DateTime?
+  session            LiveVoteSession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionCandidate   LiveVoteSessionCandidate @relation(fields: [sessionCandidateId], references: [id], onDelete: Cascade)
+  votes              LiveVoteVote[]
+
+  @@unique([sessionCandidateId, roundNumber])
+  @@index([sessionId, status])
+  @@map("live_vote_ballots")
+}
+
+/// No user id and no timestamp, on purpose - see the section comment above.
+model LiveVoteVote {
+  id       String         @id @default(uuid())
+  ballotId String
+  voterKey String
+  value    LiveVoteValue
+  ballot   LiveVoteBallot @relation(fields: [ballotId], references: [id], onDelete: Cascade)
+
+  @@unique([ballotId, voterKey])
+  @@map("live_vote_votes")
+}
+
+model LiveVoteParticipant {
+  id         String          @id @default(uuid())
+  sessionId  String
+  userId     String
+  joinedAt   DateTime        @default(now())
+  lastSeenAt DateTime        @default(now())
+  leftAt     DateTime?
+  session    LiveVoteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user       User            @relation("LiveVoteParticipantUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, userId])
+  @@index([userId])
+  @@map("live_vote_participants")
 }
