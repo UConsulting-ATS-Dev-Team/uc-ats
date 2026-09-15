@@ -69,7 +69,6 @@ import {
   FilterList as FilterListIcon,
   Search as SearchIcon,
   Clear as ClearIcon,
-  Download as DownloadIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
   Sort as SortIcon
@@ -1529,84 +1528,6 @@ export default function Staging() {
     }
   };
 
-  const handleExportDecisions = () => {
-    const dataSource = adminApplications || [];
-    
-    if (dataSource.length === 0) {
-      setSnackbar({ open: true, message: 'No candidate data available to export', severity: 'warning' });
-      return;
-    }
-    
-    let roundFilteredData = dataSource;
-    let roundName = 'All Rounds';
-
-    // Filter based on previous round decisions (or currentRound for backward compatibility)
-    if (currentTab === 0) {
-      // Resume Review: Show ALL applicants
-      roundFilteredData = dataSource;
-      roundName = 'Resume Review';
-    } else if (currentTab === 1) {
-      // Coffee Chat: Show only applicants who passed resume review
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'resume'));
-      roundName = 'Coffee Chat';
-    } else if (currentTab === 2) {
-      // First Round: Show only applicants who passed coffee chat
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'coffee'));
-      roundName = 'First Round';
-    } else if (currentTab === 3) {
-      // Final Round: Show only applicants who passed first round
-      roundFilteredData = dataSource.filter(app => passedRound(app, 'firstRound'));
-      roundName = 'Final Round';
-    }
-    
-    if (roundFilteredData.length === 0) {
-      setSnackbar({ open: true, message: `No candidates found in ${roundName} round`, severity: 'warning' });
-      return;
-    }
-    
-    const exportDialog = window.confirm(
-      `Export ${roundName} Decisions:\n\nOK = Only candidates with Yes/No decisions\nCancel = All candidates`
-    );
-    
-    let candidatesToExport = roundFilteredData;
-    if (exportDialog) {
-      candidatesToExport = roundFilteredData.filter(app => {
-        const decision = getDecisionForTab(app.id, currentTab);
-        return decision === 'yes' || decision === 'no';
-      });
-    }
-
-    const csvHeaders = ['Name', 'Email', 'Student ID', 'Decision', 'Grad Year', 'Gender', 'Referral'];
-    const csvRows = candidatesToExport.map(app => {
-      const name = `${app.firstName || ''} ${app.lastName || ''}`.trim();
-      const email = app.email || '';
-      const studentId = app.studentId || '';
-      const roundDecision = getDecisionForTab(app.id, currentTab);
-      const decision = roundDecision === 'yes' ? 'Yes' : roundDecision === 'no' ? 'No' : 'Pending';
-      const gradYear = app.graduationYear || app.year || '';
-      const gender = app.gender || '';
-      const referral = app.hasReferral ? 'Yes' : 'No';
-
-      return [name, email, studentId, decision, gradYear, gender, referral];
-    });
-    
-    const csvContent = [csvHeaders, ...csvRows]
-      .map(row => row.map(field => `"${(field || '').toString().replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${roundName.replace(' ', '_')}_decisions_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setSnackbar({ open: true, message: `Exported ${candidatesToExport.length} candidates`, severity: 'success' });
-  };
-
   // First, filter candidates based on which tab we're on (previous round decisions)
   const tabFilteredCandidates = candidates.filter(candidate => {
     if (currentTab === 0) {
@@ -1835,13 +1756,6 @@ export default function Staging() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Button
-                variant="outlined"
-                startIcon={<DownloadIcon />}
-                onClick={handleExportDecisions}
-              >
-                Export Decisions
-              </Button>
               <Chip 
                 label={currentCycle ? `Current Cycle: ${currentCycle.name}` : 'No Active Cycle'}
                 color={currentCycle ? 'primary' : 'default'}
