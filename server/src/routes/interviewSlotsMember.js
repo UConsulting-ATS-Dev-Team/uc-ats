@@ -22,6 +22,7 @@ import {
   SlotTransactionError,
   withSerializableTransaction,
 } from '../utils/withSerializableTransaction.js';
+import { notifyInterviewer } from '../services/interviewerInvites.js';
 
 const router = express.Router();
 
@@ -188,6 +189,11 @@ router.post('/interview-slots/:id/claim', async (req, res) => {
       };
     });
 
+    // Outside the transaction, and deliberately after it: a member who claims a
+    // session wants it on their calendar as much as one an admin placed, and
+    // queueing inside the body would re-send on a serialisation retry.
+    await notifyInterviewer(id, userId, 'INTERVIEWER_ASSIGNED', { selfSignup: true });
+
     res.status(201).json(result);
   } catch (error) {
     fail(res, error, 'Failed to sign up for that session');
@@ -199,7 +205,7 @@ router.delete('/interview-slot-assignments/:id', async (req, res) => {
   try {
     const assignment = await prisma.interviewSlotAssignment.findUnique({
       where: { id: req.params.id },
-      select: { id: true, userId: true, removedAt: true },
+      select: { id: true, userId: true, removedAt: true, slotId: true },
     });
     if (!assignment) return res.status(404).json({ error: 'That signup no longer exists' });
 
@@ -216,6 +222,12 @@ router.delete('/interview-slot-assignments/:id', async (req, res) => {
       // worth keeping when an interview turns out to have been unstaffed.
       data: { removedAt: new Date(), removedBy: req.user.id },
     });
+
+    // A CANCEL for the entry we sent them. Without it, dropping out leaves the
+    // session sitting on their calendar - worse than never having invited them,
+    // because it reads as still being theirs to run.
+    await notifyInterviewer(assignment.slotId, assignment.userId, 'INTERVIEWER_REMOVED');
+
     res.json({ removed: true });
   } catch (error) {
     fail(res, error, 'Failed to cancel that signup');

@@ -36,6 +36,7 @@ import {
   queueNotificationsBulk,
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
+import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
 import config from '../config.js';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
 
@@ -420,50 +421,65 @@ router.post('/interviews/:id/adopt-sessions', async (req, res) => {
 
     const already = new Set(interview.slots.map((s) => s.legacyGroupId).filter(Boolean));
     let created = 0;
+    // Collected across the per-group transactions and sent once they have all
+    // committed. Queueing inside them would re-send every interviewer's invite
+    // on a serialisation retry, and a converted group is a roster being
+    // finalised - the moment the calendar entry is actually worth having.
+    const staffed = [];
 
-    for (const group of groups) {
-      if (already.has(group.id)) continue;
-      const applicationIds = [...new Set(group.applicationIds ?? [])];
-      const memberIds = [...new Set(membersByGroup.get(group.id) ?? [])];
+    try {
+      for (const group of groups) {
+        if (already.has(group.id)) continue;
+        const applicationIds = [...new Set(group.applicationIds ?? [])];
+        const memberIds = [...new Set(membersByGroup.get(group.id) ?? [])];
 
-      await prisma.$transaction(async (tx) => {
-        const slot = await tx.interviewSlot.create({
-          data: {
-            interviewId: id,
-            legacyGroupId: group.id,
-            label: group.name || 'Session',
-            notes: group.notes || null,
-            startTime: interview.startDate,
-            endTime: interview.endDate,
-            candidateCapacity: null,
-          },
-        });
-        for (const applicationId of applicationIds) {
-          // The partial unique index would reject a second confirmed seat, and a
-          // group listing someone twice is an artefact rather than an intent.
-          const existing = await tx.interviewSlotSignup.findFirst({
-            where: { interviewId: id, applicationId, status: 'CONFIRMED' },
-            select: { id: true },
-          });
-          if (existing) continue;
-          await tx.interviewSlotSignup.create({
+        await prisma.$transaction(async (tx) => {
+          const slot = await tx.interviewSlot.create({
             data: {
-              slotId: slot.id,
               interviewId: id,
-              applicationId,
-              status: 'CONFIRMED',
-              signedUpAt: interview.createdAt,
-              placedById: req.user.id,
+              legacyGroupId: group.id,
+              label: group.name || 'Session',
+              notes: group.notes || null,
+              startTime: interview.startDate,
+              endTime: interview.endDate,
+              candidateCapacity: null,
             },
           });
-        }
-        for (const userId of memberIds) {
-          await tx.interviewSlotAssignment.create({
-            data: { slotId: slot.id, interviewId: id, userId },
-          });
-        }
-        created += 1;
-      });
+          for (const applicationId of applicationIds) {
+            // The partial unique index would reject a second confirmed seat, and a
+            // group listing someone twice is an artefact rather than an intent.
+            const existing = await tx.interviewSlotSignup.findFirst({
+              where: { interviewId: id, applicationId, status: 'CONFIRMED' },
+              select: { id: true },
+            });
+            if (existing) continue;
+            await tx.interviewSlotSignup.create({
+              data: {
+                slotId: slot.id,
+                interviewId: id,
+                applicationId,
+                status: 'CONFIRMED',
+                signedUpAt: interview.createdAt,
+                placedById: req.user.id,
+              },
+            });
+          }
+          for (const userId of memberIds) {
+            await tx.interviewSlotAssignment.create({
+              data: { slotId: slot.id, interviewId: id, userId },
+            });
+            staffed.push({ slotId: slot.id, userId });
+          }
+          created += 1;
+        });
+      }
+    } finally {
+      // Whatever committed before a later group threw is real, and a retry skips
+      // it - `already` matches on legacyGroupId, so those sessions are never
+      // built again and their interviewers would never be told. Sending here
+      // covers the partial run. notifyInterviewersBulk swallows its own errors,
+      // so this cannot mask the failure that brought us here.
+      await notifyInterviewersBulk(staffed);
     }
 
     res.json({ created, skipped: groups.length - created });
@@ -1401,41 +1417,6 @@ router.get('/interviews/:id/roster/integrity', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-
-/** Tell an interviewer they have been put on, or taken off, a session. */
-async function notifyInterviewer(slotId, userId, type, { fromSlotName = null } = {}) {
-  try {
-    const [user, slot] = await Promise.all([
-      prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
-      prisma.interviewSlot.findUnique({
-        where: { id: slotId },
-        select: { id: true, interview: { select: { title: true } } },
-      }),
-    ]);
-    if (!user?.email || !slot) return;
-
-    const ids = await prisma.$transaction((tx) =>
-      queueNotifications(tx, [
-        {
-          slotId,
-          type,
-          recipient: user.email,
-          subject: SLOT_NOTIFICATION_SUBJECTS[type](slot.interview.title),
-        },
-      ])
-    );
-    flushNotifications(ids, (n) =>
-      renderInterviewSlotEmail(n, {
-        ctaUrl: `${config.clientUrl}/assigned-interviews`,
-        ctaLabel: 'See my interviews',
-        fromSlotName,
-      })
-    ).catch((e) => console.error('[notifyInterviewer] flush failed', e));
-  } catch (error) {
-    // Telling somebody is not worth failing the placement over.
-    console.error('[notifyInterviewer]', error);
-  }
-}
 
 /**
  * Tell a candidate their time changed - and only then.

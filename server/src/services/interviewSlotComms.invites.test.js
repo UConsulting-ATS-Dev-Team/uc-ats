@@ -183,6 +183,68 @@ describe('inviteFor - content', () => {
   });
 });
 
+describe('inviteFor - who the interviewer is seeing', () => {
+  // The whole point of the invite for an interviewer: they walk in knowing who is
+  // in front of them. Before this, the entry carried the time and the room and
+  // left the roster in the app.
+  const roster = [
+    { groupLabel: null, application: { firstName: 'Ada', lastName: 'Lovelace' } },
+    { groupLabel: null, application: { firstName: 'Grace', lastName: 'Hopper' } },
+  ];
+  const interviewer = (overrides = {}) =>
+    notification({
+      type: 'INTERVIEWER_ASSIGNED',
+      recipient: 'member@ucla.edu',
+      signupId: null,
+      signup: null,
+      candidateRoster: roster,
+      ...overrides,
+    });
+
+  it('names the candidates in the description', () => {
+    // The separating comma arrives escaped, as RFC 5545 requires inside a text
+    // value - a raw one would end the property and truncate the roster.
+    expect(prop(inviteFor(interviewer()), 'DESCRIPTION')).toContain(
+      'Candidates: Ada Lovelace\\, Grace Hopper'
+    );
+  });
+
+  it('keeps the time and place it already carried', () => {
+    const description = prop(inviteFor(interviewer()), 'DESCRIPTION');
+    expect(description).toContain('Session: Morning Block');
+    expect(description).toContain('Where: Covel Commons');
+  });
+
+  it('carries the roster on a move too, because the session changed and the people did not', () => {
+    expect(prop(inviteFor(interviewer({ type: 'INTERVIEWER_MOVED' })), 'DESCRIPTION')).toContain('Ada Lovelace');
+  });
+
+  it('names nobody on the way out', () => {
+    // A CANCEL exists to remove an entry. Listing the candidates on it tells
+    // somebody who is no longer running the session who was going to be in it.
+    const removed = prop(inviteFor(interviewer({ type: 'INTERVIEWER_REMOVED' })), 'DESCRIPTION');
+    expect(removed).not.toContain('Ada Lovelace');
+  });
+
+  it('never names candidates on a candidate\'s own invite', () => {
+    // The guard that matters: a candidate must not learn who else is in the round.
+    // Belt and braces - loadCandidateRoster already refuses to populate this for a
+    // candidate notification, and inviteFor refuses to read it if it somehow is.
+    const candidateInvite = inviteFor(notification({ candidateRoster: roster }));
+    expect(prop(candidateInvite, 'DESCRIPTION')).not.toContain('Grace Hopper');
+  });
+
+  it('omits the line for a session nobody has booked yet', () => {
+    const empty = prop(inviteFor(interviewer({ candidateRoster: [] })), 'DESCRIPTION');
+    expect(empty).not.toContain('Candidates:');
+    expect(empty).toContain('Session: Morning Block');
+  });
+
+  it('still builds when no roster was loaded at all', () => {
+    expect(inviteFor(interviewer({ candidateRoster: undefined }))).not.toBeNull();
+  });
+});
+
 describe('inviteFor - never breaks a send', () => {
   it('returns null rather than throwing on a malformed notification', () => {
     expect(inviteFor({})).toBeNull();
