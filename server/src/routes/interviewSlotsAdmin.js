@@ -427,53 +427,60 @@ router.post('/interviews/:id/adopt-sessions', async (req, res) => {
     // finalised - the moment the calendar entry is actually worth having.
     const staffed = [];
 
-    for (const group of groups) {
-      if (already.has(group.id)) continue;
-      const applicationIds = [...new Set(group.applicationIds ?? [])];
-      const memberIds = [...new Set(membersByGroup.get(group.id) ?? [])];
+    try {
+      for (const group of groups) {
+        if (already.has(group.id)) continue;
+        const applicationIds = [...new Set(group.applicationIds ?? [])];
+        const memberIds = [...new Set(membersByGroup.get(group.id) ?? [])];
 
-      await prisma.$transaction(async (tx) => {
-        const slot = await tx.interviewSlot.create({
-          data: {
-            interviewId: id,
-            legacyGroupId: group.id,
-            label: group.name || 'Session',
-            notes: group.notes || null,
-            startTime: interview.startDate,
-            endTime: interview.endDate,
-            candidateCapacity: null,
-          },
-        });
-        for (const applicationId of applicationIds) {
-          // The partial unique index would reject a second confirmed seat, and a
-          // group listing someone twice is an artefact rather than an intent.
-          const existing = await tx.interviewSlotSignup.findFirst({
-            where: { interviewId: id, applicationId, status: 'CONFIRMED' },
-            select: { id: true },
-          });
-          if (existing) continue;
-          await tx.interviewSlotSignup.create({
+        await prisma.$transaction(async (tx) => {
+          const slot = await tx.interviewSlot.create({
             data: {
-              slotId: slot.id,
               interviewId: id,
-              applicationId,
-              status: 'CONFIRMED',
-              signedUpAt: interview.createdAt,
-              placedById: req.user.id,
+              legacyGroupId: group.id,
+              label: group.name || 'Session',
+              notes: group.notes || null,
+              startTime: interview.startDate,
+              endTime: interview.endDate,
+              candidateCapacity: null,
             },
           });
-        }
-        for (const userId of memberIds) {
-          await tx.interviewSlotAssignment.create({
-            data: { slotId: slot.id, interviewId: id, userId },
-          });
-          staffed.push({ slotId: slot.id, userId });
-        }
-        created += 1;
-      });
+          for (const applicationId of applicationIds) {
+            // The partial unique index would reject a second confirmed seat, and a
+            // group listing someone twice is an artefact rather than an intent.
+            const existing = await tx.interviewSlotSignup.findFirst({
+              where: { interviewId: id, applicationId, status: 'CONFIRMED' },
+              select: { id: true },
+            });
+            if (existing) continue;
+            await tx.interviewSlotSignup.create({
+              data: {
+                slotId: slot.id,
+                interviewId: id,
+                applicationId,
+                status: 'CONFIRMED',
+                signedUpAt: interview.createdAt,
+                placedById: req.user.id,
+              },
+            });
+          }
+          for (const userId of memberIds) {
+            await tx.interviewSlotAssignment.create({
+              data: { slotId: slot.id, interviewId: id, userId },
+            });
+            staffed.push({ slotId: slot.id, userId });
+          }
+          created += 1;
+        });
+      }
+    } finally {
+      // Whatever committed before a later group threw is real, and a retry skips
+      // it - `already` matches on legacyGroupId, so those sessions are never
+      // built again and their interviewers would never be told. Sending here
+      // covers the partial run. notifyInterviewersBulk swallows its own errors,
+      // so this cannot mask the failure that brought us here.
+      await notifyInterviewersBulk(staffed);
     }
-
-    await notifyInterviewersBulk(staffed);
 
     res.json({ created, skipped: groups.length - created });
   } catch (error) {

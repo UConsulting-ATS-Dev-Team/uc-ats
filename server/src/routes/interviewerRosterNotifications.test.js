@@ -192,4 +192,24 @@ describe('adopting a round of legacy groups into sessions', () => {
     const [pairs] = notifyInterviewersBulk.mock.calls[0];
     expect(new Set(pairs.map((p) => p.slotId)).size).toBe(2);
   });
+  it('still invites the groups that committed when a later one fails', () => {
+    // `already` matches on legacyGroupId, so a retry skips the sessions that were
+    // built - without this, their interviewers are never told at all.
+    let call = 0;
+    prisma.$transaction.mockImplementation((fn) => {
+      call += 1;
+      if (call === 2) return Promise.reject(new Error('group two blew up'));
+      return fn(tx);
+    });
+
+    return request('/api/admin/interviews/int-1/adopt-sessions', { method: 'POST' }).then(() => {
+      expect(notifyInterviewersBulk).toHaveBeenCalledTimes(1);
+      const [pairs] = notifyInterviewersBulk.mock.calls[0];
+      expect(pairs).toEqual([
+        { slotId: 'slot-for-grp-1', userId: 'member-1' },
+        { slotId: 'slot-for-grp-1', userId: 'member-2' },
+      ]);
+    });
+  });
 });
+

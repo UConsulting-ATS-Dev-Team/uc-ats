@@ -238,14 +238,36 @@ export async function queueNotificationsBulk(entries) {
  * exactly what utils/lockedRecords leaves standing on a sealed row - nothing
  * here touches scores, evaluations or anything the person wrote.
  *
+ * Read at send time, and therefore gated at send time. A notification row
+ * outlives the assignment that caused it: FAILED, SUPPRESSED and stalled rows
+ * all stay resendable, and SUPPRESSED exists precisely to be sent later, once
+ * scheduling email is switched on. So the roster has to be checked against who
+ * is on the session *now*, not who was on it when the row was queued - otherwise
+ * pressing Resend on an old assignment mails the current candidate list to
+ * somebody who has since been taken off. Before this roster existed that resend
+ * was harmless; it is not any more.
+ *
  * Never throws: an invite missing its roster is worth sending, and an interviewer
- * with no email at all is not the better outcome.
+ * with no email at all is not the better outcome. A failed check is treated as
+ * "no roster" rather than "send it anyway".
  */
 export async function loadCandidateRoster(notification, client = prisma) {
   if (!INTERVIEWER_NOTIFICATION_TYPES.has(notification?.type)) return [];
   const slotId = notification.slotId ?? notification.slot?.id;
-  if (!slotId) return [];
+  if (!slotId || !notification.recipient) return [];
   try {
+    // Case-insensitively, because addresses are stored lowercased but a
+    // recipient recorded before that was enforced need not be.
+    const stillOn = await client.interviewSlotAssignment.findFirst({
+      where: {
+        slotId,
+        removedAt: null,
+        user: { email: { equals: notification.recipient, mode: 'insensitive' } },
+      },
+      select: { id: true },
+    });
+    if (!stillOn) return [];
+
     return await client.interviewSlotSignup.findMany({
       where: { slotId, status: 'CONFIRMED' },
       orderBy: [{ groupLabel: 'asc' }, { application: { lastName: 'asc' } }],
