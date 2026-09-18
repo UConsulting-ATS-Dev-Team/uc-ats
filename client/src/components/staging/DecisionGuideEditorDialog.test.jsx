@@ -1,6 +1,6 @@
-// The admin half: an inherited round is seeded with the words it is actually
-// showing rather than a blank box, saving sends what is on screen, and Reset is
-// only offered where there is something of its own to drop.
+// The admin half: an inherited field stays empty so it keeps inheriting, the
+// wording it inherits is visible as a placeholder, saving sends what is on
+// screen, and Reset is only offered where there is something of its own to drop.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -50,15 +50,66 @@ const open = (props = {}) => render(
 
 it('opens on the round the admin was looking at', async () => {
   open();
-  expect(await screen.findByDisplayValue('Shipped note.')).toBeInTheDocument();
-  expect(screen.getByText(/has no wording of its own/)).toHaveTextContent('First Round');
+  expect(await screen.findByText(/has no wording of its own/)).toHaveTextContent('First Round');
 });
 
-it('seeds an inherited round with the words it is showing, not a blank box', async () => {
+// The bug this guards: seeding an inherited field with the text it inherits
+// means the first save copies that text into the round, and later edits to
+// "All rounds" stop reaching it.
+it('leaves an inherited round\'s fields empty so they keep inheriting', async () => {
   open();
-  await screen.findByDisplayValue('Shipped note.');
+  await screen.findByText(/has no wording of its own/);
+
+  const fields = screen.getAllByRole('textbox');
+  expect(fields).toHaveLength(5);
+  for (const field of fields) expect(field).toHaveValue('');
+});
+
+it('shows the inherited wording as a placeholder so it is not invisible', async () => {
+  open();
+  await screen.findByText(/has no wording of its own/);
+
+  expect(screen.getByPlaceholderText('Shipped note.')).toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Default yes.')).toBeInTheDocument();
+});
+
+it('saves an untouched inherited round as blanks, not as a frozen copy', async () => {
+  const user = userEvent.setup();
+  open();
+  await screen.findByText(/has no wording of its own/);
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(decisionGuideApi.save).toHaveBeenCalledTimes(1));
+  const [, body] = decisionGuideApi.save.mock.calls[0];
+  expect(body.intro).toBe('');
+  expect(Object.values(body.criteria)).toEqual(['', '', '', '']);
+});
+
+it('copies the inherited wording in when the admin asks for it', async () => {
+  const user = userEvent.setup();
+  open();
+  await screen.findByText(/has no wording of its own/);
+  await user.click(screen.getByTestId('copy-inherited'));
+
+  expect(screen.getByDisplayValue('Shipped note.')).toBeInTheDocument();
   expect(screen.getByDisplayValue('Default yes.')).toBeInTheDocument();
-  expect(screen.getByDisplayValue('Default no.')).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(decisionGuideApi.save).toHaveBeenCalled());
+  expect(decisionGuideApi.save.mock.calls[0][1].intro).toBe('Shipped note.');
+});
+
+it('seeds a round that does have its own wording from what it stores', async () => {
+  decisionGuideApi.all.mockResolvedValue(payload({
+    customized: true,
+    stored: { intro: 'Ours.', criteria: { YES: 'Our yes.', MAYBE_YES: '', MAYBE_NO: '', NO: '' } }
+  }));
+  open();
+
+  expect(await screen.findByDisplayValue('Ours.')).toBeInTheDocument();
+  expect(screen.getByDisplayValue('Our yes.')).toBeInTheDocument();
+  // The three it never overrode stay empty and keep inheriting.
+  expect(screen.getByPlaceholderText('Default no.')).toHaveValue('');
 });
 
 it('sends the edited copy for the selected round only', async () => {
@@ -66,9 +117,8 @@ it('sends the edited copy for the selected round only', async () => {
   const onSaved = vi.fn();
   open({ onSaved });
 
-  const intro = await screen.findByDisplayValue('Shipped note.');
-  await user.clear(intro);
-  await user.type(intro, 'Our note.');
+  await screen.findByText(/has no wording of its own/);
+  await user.type(screen.getByPlaceholderText('Shipped note.'), 'Our note.');
   await user.click(screen.getByRole('button', { name: 'Save' }));
 
   await waitFor(() => expect(decisionGuideApi.save).toHaveBeenCalledTimes(1));
@@ -81,7 +131,7 @@ it('sends the edited copy for the selected round only', async () => {
 
 it('offers Reset only once a round has wording of its own', async () => {
   open();
-  await screen.findByDisplayValue('Shipped note.');
+  await screen.findByText(/has no wording of its own/);
   expect(screen.queryByRole('button', { name: /Reset/ })).not.toBeInTheDocument();
 
   decisionGuideApi.all.mockResolvedValue(payload({ customized: true, stored: { intro: 'Ours.', criteria: {} } }));
@@ -102,10 +152,9 @@ it('blocks a save that is over the length the server accepts', async () => {
   const user = userEvent.setup();
   open();
 
-  const intro = await screen.findByDisplayValue('Shipped note.');
-  await user.clear(intro);
+  await screen.findByText(/has no wording of its own/);
   // Typing 2001 characters takes far too long; paste instead.
-  await user.click(intro);
+  await user.click(screen.getByPlaceholderText('Shipped note.'));
   await user.paste('x'.repeat(2001));
 
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -118,7 +167,7 @@ it('surfaces a failed save instead of pretending it worked', async () => {
   const onSaved = vi.fn();
   open({ onSaved });
 
-  await screen.findByDisplayValue('Shipped note.');
+  await screen.findByText(/has no wording of its own/);
   await user.click(screen.getByRole('button', { name: 'Save' }));
 
   expect(await screen.findByText('Not allowed')).toBeInTheDocument();

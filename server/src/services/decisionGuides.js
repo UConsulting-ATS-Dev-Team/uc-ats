@@ -128,7 +128,7 @@ const storedGuide = (row) => {
  * last layer that had something to say about it, so a round can override the
  * note without restating all four decisions.
  */
-function resolveGuide({ phase, general, own }) {
+function resolveGuide({ phase, general, own, customized }) {
   const layers = [
     { source: 'default', guide: { intro: DEFAULT_GUIDE.intro, criteria: { ...DEFAULT_GUIDE.criteria } } },
     ...(general ? [{ source: GENERAL_PHASE, guide: general }] : []),
@@ -161,8 +161,13 @@ function resolveGuide({ phase, general, own }) {
       criteria: resolved.criteria[value] || '',
       source: resolved.criteriaSources[value] || 'default'
     })),
-    /** False while this round is still reading someone else's words. */
-    customized: Boolean(own)
+    /**
+     * Whether this phase has a row of its own, which is what Reset deletes.
+     * Not the same as `own` being set: the general phase layers itself in as
+     * `general` rather than as `own`, and reporting it uncustomized would hide
+     * Reset on the one guide every other round inherits from.
+     */
+    customized: Boolean(customized)
   };
 }
 
@@ -178,7 +183,12 @@ export async function getGuide({ client = prisma, phase = GENERAL_PHASE } = {}) 
   const byPhase = new Map(rows.map((row) => [row.phase, row]));
   const own = phase === GENERAL_PHASE ? null : storedGuide(byPhase.get(phase));
   return {
-    guide: resolveGuide({ phase, general: storedGuide(byPhase.get(GENERAL_PHASE)), own }),
+    guide: resolveGuide({
+      phase,
+      general: storedGuide(byPhase.get(GENERAL_PHASE)),
+      own,
+      customized: byPhase.has(phase)
+    }),
     updatedAt: byPhase.get(phase)?.updatedAt ?? null
   };
 }
@@ -193,7 +203,7 @@ export async function getGuides({ client = prisma } = {}) {
   for (const phase of GUIDE_PHASES) {
     const own = phase === GENERAL_PHASE ? null : storedGuide(byPhase.get(phase));
     guides[phase] = {
-      ...resolveGuide({ phase, general, own }),
+      ...resolveGuide({ phase, general, own, customized: byPhase.has(phase) }),
       /** Exactly what is stored for this phase, so the editor edits it and not the inherited text. */
       stored: storedGuide(byPhase.get(phase)),
       updatedAt: byPhase.get(phase)?.updatedAt ?? null

@@ -58,6 +58,36 @@ describe('DeliberationNotice', () => {
     expect(screen.queryByTestId('deliberation-notice')).not.toBeInTheDocument();
   });
 
+  // Assigned Interviews clears the phase when the evaluation modal closes. If
+  // the hook kept its state, the drawer stayed on screen with nothing behind it.
+  it('drops the guide and closes the panel when the phase goes away', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Harness />);
+
+    await user.click(await screen.findByTestId('open-decision-guide'));
+    await screen.findByTestId('decision-guide-panel');
+
+    rerender(<Harness phase={null} />);
+
+    await waitFor(() => expect(screen.queryByTestId('decision-guide-panel')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('deliberation-notice')).not.toBeInTheDocument();
+  });
+
+  it('does not show the previous round\'s copy while the next one loads', async () => {
+    let release;
+    decisionGuideApi.forPhase.mockReturnValueOnce(Promise.resolve({ guide }));
+    const { rerender } = render(<Harness />);
+    await screen.findByTestId('deliberation-notice');
+
+    decisionGuideApi.forPhase.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    rerender(<Harness phase="final" />);
+
+    await waitFor(() => expect(screen.queryByTestId('deliberation-notice')).not.toBeInTheDocument());
+
+    release({ guide: { ...guide, phase: 'final', phaseLabel: 'Final Round', intro: 'Final round note.' } });
+    expect(await screen.findByTestId('deliberation-notice')).toHaveTextContent('Final round note.');
+  });
+
   it('leaves the page alone when the guide cannot be loaded', async () => {
     decisionGuideApi.forPhase.mockRejectedValue(new Error('offline'));
     render(<Harness />);

@@ -21,10 +21,10 @@ import { DECISION_OPTIONS } from '../../utils/decisionOptions';
 // server/src/services/decisionGuides.js).
 //
 // A round starts out inheriting - from "All rounds" if an admin wrote one,
-// otherwise from the copy shipped with the app. The fields below are seeded
-// with whatever the round currently *shows*, so an admin editing an inherited
-// round starts from the real words rather than a blank box. Saving is what
-// turns that into the round's own wording; Reset puts it back to inheriting.
+// otherwise from the copy shipped with the app. Each field below holds only
+// what this round stores, and shows what it inherits as a placeholder. Typing
+// in a field gives the round its own wording for it; clearing it puts that one
+// field back to inheriting, and Reset drops the round's row entirely.
 
 const INTRO_MAX = 2000;
 const CRITERIA_MAX = 2000;
@@ -68,16 +68,32 @@ export default function DecisionGuideEditorDialog({ open, phase, onClose, onSave
     return () => { cancelled = true; };
   }, [open, phase]);
 
-  // Seed the form from what this phase stores, falling back to what it shows.
+  /** What this phase shows today, per field, whoever wrote it. */
+  const inherited = {
+    intro: current?.intro || '',
+    criteria: Object.fromEntries(DECISION_OPTIONS.map(({ value }) => [
+      value, current?.decisions?.find((entry) => entry.value === value)?.criteria || ''
+    ]))
+  };
+
+  // Seed from what this phase *stores*, never from what it inherits. An empty
+  // field is how a round keeps tracking the layer below, so pre-filling it with
+  // inherited text would silently freeze that text on the first save and cut
+  // the round off from later edits to "All rounds". The inherited words show as
+  // a placeholder, and the button below copies them in when that is the intent.
   useEffect(() => {
     if (!current) return;
     const stored = current.stored;
-    setIntro(stored?.intro || current.intro || '');
-    setCriteria(Object.fromEntries(DECISION_OPTIONS.map(({ value }) => {
-      const shown = current.decisions?.find((entry) => entry.value === value);
-      return [value, stored?.criteria?.[value] || shown?.criteria || ''];
-    })));
+    setIntro(stored?.intro || '');
+    setCriteria(Object.fromEntries(DECISION_OPTIONS.map(({ value }) => [
+      value, stored?.criteria?.[value] || ''
+    ])));
   }, [current]);
+
+  const startFromInherited = () => {
+    setIntro(inherited.intro);
+    setCriteria({ ...inherited.criteria });
+  };
 
   const phaseOptions = useMemo(
     () => (guides?.phases || []).map((value) => ({
@@ -144,7 +160,8 @@ export default function DecisionGuideEditorDialog({ open, phase, onClose, onSave
 
             <TextField
               label="About deliberation"
-              helperText={`Shown above the candidates. ${intro.length}/${INTRO_MAX}`}
+              placeholder={inherited.intro}
+              helperText={`Shown above the candidates. Empty keeps inheriting. ${intro.length}/${INTRO_MAX}`}
               value={intro}
               onChange={(event) => setIntro(event.target.value)}
               error={intro.length > INTRO_MAX}
@@ -159,7 +176,8 @@ export default function DecisionGuideEditorDialog({ open, phase, onClose, onSave
                 <TextField
                   key={value}
                   label={`When to pick "${label}"`}
-                  helperText={`${text.length}/${CRITERIA_MAX}`}
+                  placeholder={inherited.criteria[value]}
+                  helperText={`Empty keeps inheriting. ${text.length}/${CRITERIA_MAX}`}
                   value={text}
                   onChange={(event) => setCriteria((prev) => ({ ...prev, [value]: event.target.value }))}
                   error={text.length > CRITERIA_MAX}
@@ -170,10 +188,15 @@ export default function DecisionGuideEditorDialog({ open, phase, onClose, onSave
               );
             })}
 
-            <Typography variant="caption" color="text.secondary">
-              Leaving a field empty makes it fall back to the level below, so a round can change one decision
-              without restating the rest.
-            </Typography>
+            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
+              <Button size="small" onClick={startFromInherited} data-testid="copy-inherited">
+                Start from the wording shown
+              </Button>
+              <Typography variant="caption" color="text.secondary">
+                Greyed text is what this round shows now. Type over a field to give this round its own wording,
+                or leave it empty to keep following the level below.
+              </Typography>
+            </Stack>
           </Stack>
         )}
       </DialogContent>

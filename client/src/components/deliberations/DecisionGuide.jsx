@@ -34,6 +34,13 @@ export function useDecisionGuide(phase) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    // Drop the old round's copy before fetching the new one. Without this, a
+    // page that swaps phases shows the previous round's wording until the
+    // request lands, and one that clears the phase (Assigned Interviews closing
+    // an evaluation) leaves an open drawer with nothing behind it.
+    setGuide(null);
+    setOpen(false);
+
     if (!phase) return undefined;
     let cancelled = false;
     decisionGuideApi.forPhase(phase)

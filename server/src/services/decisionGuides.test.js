@@ -140,13 +140,37 @@ describe('resolution', () => {
     expect(criteriaFor(guide, 'YES').source).toBe('general');
   });
 
+  // Reset is offered on whatever has a row of its own. The general guide layers
+  // itself in as `general` rather than as `own`, so deriving customized from
+  // `own` reported it uncustomized and hid Reset on the one guide every round
+  // inherits from.
+  it('reports the general guide as customized once an admin has saved it', async () => {
+    expect((await getGuide({ client: db, phase: 'general' })).guide.customized).toBe(false);
+
+    await saveGuide({ client: db, phase: 'general', intro: 'House rules.', criteria: {}, user });
+
+    expect((await getGuide({ client: db, phase: 'general' })).guide.customized).toBe(true);
+    expect((await getGuides({ client: db })).guides.general.customized).toBe(true);
+    // Saving the base does not make the rounds look customized.
+    expect((await getGuides({ client: db })).guides.coffee.customized).toBe(false);
+  });
+
+  it('puts the general guide back to the shipped copy', async () => {
+    await saveGuide({ client: db, phase: 'general', intro: 'House rules.', criteria: { YES: 'General yes.' }, user });
+    const { guides } = await resetGuide({ client: db, phase: 'general' });
+
+    expect(guides.general.customized).toBe(false);
+    expect(guides.general.intro).toBe(DEFAULT_GUIDE.intro);
+    expect(criteriaFor(guides.coffee, 'YES').criteria).toBe(DEFAULT_GUIDE.criteria.YES);
+  });
+
   it('reads the general phase without inheriting from itself twice', async () => {
     await saveGuide({ client: db, phase: 'general', intro: 'House rules.', criteria: {}, user });
 
     const { guide } = await getGuide({ client: db, phase: 'general' });
     expect(guide.phaseLabel).toBe('All rounds');
     expect(guide.intro).toBe('House rules.');
-    expect(guide.customized).toBe(false);
+    expect(guide.introSource).toBe('general');
   });
 });
 
