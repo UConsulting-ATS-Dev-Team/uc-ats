@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
+import { describeRoster } from '../utils/candidateRoster.js';
 import { eventInviteFor } from './eventInvites.js';
 
 // Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
@@ -1527,7 +1528,10 @@ const SLOT_EMAIL_COPY = {
   },
   INTERVIEWER_ASSIGNED: {
     heading: "You're interviewing",
-    body: (ctx) => `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
+    body: (ctx) =>
+      ctx.selfSignup
+        ? `You signed up to run a ${ctx.interviewTitle} session. The details are below, and the invite attached goes straight on your calendar.`
+        : `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
   },
   INTERVIEWER_MOVED: {
     heading: 'Your interview session has changed',
@@ -1555,7 +1559,13 @@ const SLOT_EMAIL_COPY = {
  */
 export const renderInterviewSlotEmail = (
   notification,
-  { ctaUrl = null, ctaLabel = 'View or change your time', preferredSlotName = null, fromSlotName = null } = {}
+  {
+    ctaUrl = null,
+    ctaLabel = 'View or change your time',
+    preferredSlotName = null,
+    fromSlotName = null,
+    selfSignup = false,
+  } = {}
 ) => {
   const slot = notification.slot ?? {};
   // A message about the whole interview - "when are you free" - carries no
@@ -1570,6 +1580,7 @@ export const renderInterviewSlotEmail = (
     slotName: slot.label || formatEmailDateTime(slot.startTime),
     preferredName: preferredSlotName || 'your first choice',
     candidateName: [application.firstName, application.lastName].filter(Boolean).join(' ') || 'A candidate',
+    selfSignup,
   };
 
   const copy = SLOT_EMAIL_COPY[notification.type] ?? SLOT_EMAIL_COPY.CONFIRMATION;
@@ -1585,6 +1596,10 @@ export const renderInterviewSlotEmail = (
     : '';
   const where = escapeHtml(slot.location || interview.location || '');
   const blockLabel = slot.label ? escapeHtml(slot.label) : null;
+  // Who the interviewer is seeing. Arrives already narrowed to interviewer
+  // notifications, so a candidate's own email can never grow this line.
+  const roster = describeRoster(notification.candidateRoster);
+  const who = roster ? escapeHtml(roster) : null;
 
   return `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -1605,13 +1620,14 @@ export const renderInterviewSlotEmail = (
             ${blockLabel ? `<p style="color: #666; margin: 5px 0;"><strong>Session:</strong> ${blockLabel}</p>` : ''}
             <p style="color: #666; margin: 5px 0;"><strong>When:</strong> ${when}</p>
             ${where ? `<p style="color: #666; margin: 5px 0;"><strong>Where:</strong> ${where}</p>` : ''}
+            ${who ? `<p style="color: #666; margin: 5px 0;"><strong>Who you're seeing:</strong> ${who}</p>` : ''}
           </div>`
           }
 
           ${
             ctaUrl
               ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">View or change your time</a>
+            <a href="${ctaUrl}" style="background-color: #0C74C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">${escapeHtml(ctaLabel)}</a>
           </p>`
               : ''
           }

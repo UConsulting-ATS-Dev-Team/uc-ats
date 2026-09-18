@@ -18,6 +18,7 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
 import { buildInvite, inviteUid, sequenceFrom, describeWhen } from './calendarInvite.js';
+import { describeRoster } from '../utils/candidateRoster.js';
 
 const SEND_ATTEMPTS = 3;
 
@@ -41,6 +42,20 @@ const INVITE_METHODS = {
   CANCELLATION: 'CANCEL',
   INTERVIEWER_REMOVED: 'CANCEL',
 };
+
+/**
+ * Notifications addressed to an interviewer rather than a candidate.
+ *
+ * These are the ones that carry the candidate roster: an interviewer needs to
+ * know who they are seeing, and a candidate must never learn who else is in the
+ * round. Read as a set rather than by checking for a `signupId`, because a
+ * missing signup also describes a message that simply has no candidate.
+ */
+export const INTERVIEWER_NOTIFICATION_TYPES = new Set([
+  'INTERVIEWER_ASSIGNED',
+  'INTERVIEWER_MOVED',
+  'INTERVIEWER_REMOVED',
+]);
 
 /**
  * The stable identity of "this person's seat at this thing", which is what decides
@@ -90,6 +105,13 @@ export function inviteFor(notification) {
     const where = slot.location || interview?.location || null;
     const when = describeWhen(slot.startTime, slot.endTime);
     const application = notification.signup?.application;
+    // Who this interviewer is seeing. Only on a REQUEST: a CANCEL exists to
+    // remove an entry, and listing candidates on the way out tells somebody who
+    // is no longer running the session who was going to be in it.
+    const roster =
+      method === 'REQUEST' && INTERVIEWER_NOTIFICATION_TYPES.has(notification.type)
+        ? describeRoster(notification.candidateRoster)
+        : null;
 
     return buildInvite({
       uid,
@@ -105,6 +127,7 @@ export function inviteFor(notification) {
         slot.label ? `Session: ${slot.label}` : null,
         when ? `When: ${when}` : null,
         where ? `Where: ${where}` : null,
+        roster ? `Candidates: ${roster}` : null,
       ]
         .filter(Boolean)
         .join('\n'),
@@ -204,6 +227,43 @@ export async function queueNotificationsBulk(entries) {
 }
 
 /**
+ * The confirmed candidates in a session, for an interviewer's invite and email.
+ *
+ * A separate read rather than an include on the notification, because it is only
+ * ever wanted by the three interviewer notifications: folding it into the main
+ * query would make every candidate's own confirmation drag the whole session's
+ * roster along behind it.
+ *
+ * Names only. Firstname, lastname and the rotation label are identity, which is
+ * exactly what utils/lockedRecords leaves standing on a sealed row - nothing
+ * here touches scores, evaluations or anything the person wrote.
+ *
+ * Never throws: an invite missing its roster is worth sending, and an interviewer
+ * with no email at all is not the better outcome.
+ */
+export async function loadCandidateRoster(notification, client = prisma) {
+  if (!INTERVIEWER_NOTIFICATION_TYPES.has(notification?.type)) return [];
+  const slotId = notification.slotId ?? notification.slot?.id;
+  if (!slotId) return [];
+  try {
+    return await client.interviewSlotSignup.findMany({
+      where: { slotId, status: 'CONFIRMED' },
+      orderBy: [{ groupLabel: 'asc' }, { application: { lastName: 'asc' } }],
+      select: {
+        groupLabel: true,
+        application: { select: { firstName: true, lastName: true } },
+      },
+    });
+  } catch (error) {
+    console.warn('[loadCandidateRoster] could not read the roster; sending without it', {
+      slotId,
+      error: error?.message,
+    });
+    return [];
+  }
+}
+
+/**
  * Send one queued notification and record the outcome.
  *
  * Claims the row first with a conditional update, the same idiom
@@ -236,6 +296,10 @@ async function sendOne(notificationId, renderBody) {
       signup: { include: { application: { select: { firstName: true, lastName: true, email: true } } } },
     },
   });
+
+  // Read once and hung on the notification, so the email body and the .ics name
+  // the same people rather than querying for them twice.
+  notification.candidateRoster = await loadCandidateRoster(notification);
 
   try {
     const html = await renderBody(notification);
