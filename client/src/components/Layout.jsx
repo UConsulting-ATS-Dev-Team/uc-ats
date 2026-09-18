@@ -52,6 +52,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'Candidates', href: '/candidate-list', icon: UserGroupIcon },
       { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
+      { name: 'Referrals', href: '/admin/referrals', icon: UserPlusIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
     ],
   },

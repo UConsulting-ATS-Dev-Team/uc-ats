@@ -16,7 +16,7 @@ import { referralNameKey } from './referrals.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     application: { findMany: vi.fn(), create: vi.fn() },
-    candidate: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+    candidate: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
     referral: { findMany: vi.fn(), updateMany: vi.fn() }
   }
 }));
@@ -51,6 +51,8 @@ beforeEach(() => {
   prisma.application.create.mockResolvedValue({ id: 'app-1' });
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.create.mockResolvedValue(newCandidate);
+  // Only this applicant carries that name in the cycle, so claiming is safe.
+  prisma.candidate.findMany.mockResolvedValue([newCandidate]);
   prisma.referral.findMany.mockResolvedValue([]);
   prisma.referral.updateMany.mockResolvedValue({ count: 0 });
 });
@@ -82,12 +84,28 @@ describe('form sync claims pre-application referrals', () => {
   });
 
   it('claims for an applicant who already had a candidate record', async () => {
-    prisma.candidate.findFirst.mockResolvedValue({ id: 'cand-existing', ...applicant });
+    const existing = { id: 'cand-existing', ...applicant };
+    prisma.candidate.findFirst.mockResolvedValue(existing);
+    prisma.candidate.findMany.mockResolvedValue([existing]);
     prisma.referral.findMany.mockResolvedValue([{ id: 'ref-2' }]);
 
     await syncFormResponses();
 
     expect(prisma.referral.updateMany.mock.calls[0][0].data.candidateId).toBe('cand-existing');
+  });
+
+  it('holds back when a second applicant in the cycle has the same name', async () => {
+    prisma.candidate.findMany.mockResolvedValue([
+      newCandidate,
+      { id: 'cand-twin', firstName: 'Maria', lastName: 'OBrien' }
+    ]);
+    prisma.referral.findMany.mockResolvedValue([{ id: 'ref-4' }]);
+
+    await syncFormResponses();
+
+    // Better a referral an admin has to place than one silently placed wrong.
+    expect(prisma.referral.updateMany).not.toHaveBeenCalled();
+    expect(prisma.application.create).toHaveBeenCalled();
   });
 
   it('writes nothing when nobody referred this applicant', async () => {
@@ -110,7 +128,7 @@ describe('form sync claims pre-application referrals', () => {
   });
 
   it('still records the application when claiming blows up', async () => {
-    prisma.referral.findMany.mockRejectedValue(new Error('referrals table is on fire'));
+    prisma.candidate.findMany.mockRejectedValue(new Error('referrals lookup is on fire'));
 
     await syncFormResponses();
 

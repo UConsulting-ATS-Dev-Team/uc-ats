@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import MemberReferrals from './MemberReferrals';
 import apiClient from '../utils/api';
@@ -8,6 +8,8 @@ import apiClient from '../utils/api';
 vi.mock('../utils/api', () => ({
   default: { get: vi.fn(), post: vi.fn() }
 }));
+
+const karen = { id: 'cand-7', firstName: 'Karen', lastName: 'Filippelli', email: 'karen@ucla.edu' };
 
 const pending = {
   id: 'ref-1',
@@ -27,21 +29,35 @@ const attached = {
   cycle: { id: 'cycle-1', name: 'Fall 2026' }
 };
 
-const fillForm = async (user, { first = 'Karen', last = 'Filippelli', how = 'Classmate' } = {}) => {
-  if (first) await user.type(screen.getByLabelText(/first name/i), first);
-  if (last) await user.type(screen.getByLabelText(/last name/i), last);
-  if (how) await user.type(screen.getByLabelText(/how do you know them/i), how);
+// The page calls two endpoints: its own list, and the candidate search.
+const mockApi = ({ referrals = [], candidates = [] } = {}) => {
+  apiClient.get.mockImplementation((url) => {
+    if (url.startsWith('/member/referral-candidates')) return Promise.resolve(candidates);
+    return Promise.resolve(referrals);
+  });
+};
+
+const openPicker = async (user, text) => {
+  const input = screen.getByLabelText(/who are you referring/i);
+  await user.click(input);
+  await user.type(input, text);
+  return input;
+};
+
+const chooseOption = async (user, name) => {
+  const option = await screen.findByRole('option', { name });
+  await user.click(option);
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  apiClient.get.mockResolvedValue([]);
+  mockApi();
   apiClient.post.mockResolvedValue({ id: 'ref-new', candidateId: null });
 });
 
 describe('MemberReferrals', () => {
   it('shows a member their own referrals and whether each one landed', async () => {
-    apiClient.get.mockResolvedValue([attached, pending]);
+    mockApi({ referrals: [attached, pending] });
 
     render(<MemberReferrals />);
 
@@ -56,7 +72,82 @@ describe('MemberReferrals', () => {
     expect(await screen.findByText(/have not referred anyone yet/i)).toBeInTheDocument();
   });
 
-  it('will not submit without both names and a relationship', async () => {
+  it('waits for two letters before searching', async () => {
+    const user = userEvent.setup();
+    render(<MemberReferrals />);
+    await screen.findByText(/have not referred anyone yet/i);
+
+    await openPicker(user, 'k');
+
+    await waitFor(() =>
+      expect(
+        apiClient.get.mock.calls.filter(([url]) => url.startsWith('/member/referral-candidates'))
+      ).toHaveLength(0)
+    );
+  });
+
+  it('submits the picked candidate by id, with no typed name', async () => {
+    mockApi({ candidates: [karen] });
+    apiClient.post.mockResolvedValue({ id: 'ref-new', candidateId: 'cand-7' });
+    const user = userEvent.setup();
+    render(<MemberReferrals />);
+    await screen.findByText(/have not referred anyone yet/i);
+
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Karen Filippelli/);
+    await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.click(screen.getByRole('button', { name: /submit referral/i }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/member/referrals', {
+        relationship: 'Classmate',
+        candidateId: 'cand-7'
+      })
+    );
+    expect(await screen.findByText(/added to their profile/i)).toBeInTheDocument();
+  });
+
+  it('asks for a name only after Other is chosen', async () => {
+    mockApi({ candidates: [karen] });
+    const user = userEvent.setup();
+    render(<MemberReferrals />);
+    await screen.findByText(/have not referred anyone yet/i);
+
+    // Nothing picked yet, so there is nothing to type a name into.
+    expect(screen.queryByLabelText(/first name/i)).not.toBeInTheDocument();
+
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Other/);
+
+    expect(await screen.findByLabelText(/first name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/last name/i)).toBeInTheDocument();
+  });
+
+  it('submits a typed name under Other and says it will attach later', async () => {
+    mockApi({ candidates: [] });
+    const user = userEvent.setup();
+    render(<MemberReferrals />);
+    await screen.findByText(/have not referred anyone yet/i);
+
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Other/);
+    await user.type(await screen.findByLabelText(/first name/i), '  Karen ');
+    await user.type(screen.getByLabelText(/last name/i), ' Filippelli ');
+    await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.click(screen.getByRole('button', { name: /submit referral/i }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/member/referrals', {
+        relationship: 'Classmate',
+        referredFirstName: 'Karen',
+        referredLastName: 'Filippelli'
+      })
+    );
+    expect(await screen.findByText(/attach to their profile once they apply/i)).toBeInTheDocument();
+  });
+
+  it('will not submit until there is both a person and a relationship', async () => {
+    mockApi({ candidates: [karen] });
     const user = userEvent.setup();
     render(<MemberReferrals />);
     await screen.findByText(/have not referred anyone yet/i);
@@ -64,44 +155,30 @@ describe('MemberReferrals', () => {
     const submit = screen.getByRole('button', { name: /submit referral/i });
     expect(submit).toBeDisabled();
 
-    await fillForm(user, { how: '' });
-    expect(submit).toBeDisabled();
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Karen Filippelli/);
+    expect(submit).toBeDisabled(); // person, but no relationship
 
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
     expect(submit).toBeEnabled();
   });
 
-  it('submits the trimmed name and tells the member it will attach later', async () => {
+  it('will not submit Other with only half a name', async () => {
+    mockApi({ candidates: [] });
     const user = userEvent.setup();
     render(<MemberReferrals />);
     await screen.findByText(/have not referred anyone yet/i);
 
-    await fillForm(user);
-    await user.click(screen.getByRole('button', { name: /submit referral/i }));
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Other/);
+    await user.type(await screen.findByLabelText(/first name/i), 'Karen');
+    await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
 
-    await waitFor(() =>
-      expect(apiClient.post).toHaveBeenCalledWith('/member/referrals', {
-        referredFirstName: 'Karen',
-        referredLastName: 'Filippelli',
-        relationship: 'Classmate'
-      })
-    );
-    expect(await screen.findByText(/attach to their profile once they apply/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /submit referral/i })).toBeDisabled();
   });
 
-  it('says it matched immediately when the person had already applied', async () => {
-    apiClient.post.mockResolvedValue({ id: 'ref-new', candidateId: 'cand-7' });
-    const user = userEvent.setup();
-    render(<MemberReferrals />);
-    await screen.findByText(/have not referred anyone yet/i);
-
-    await fillForm(user);
-    await user.click(screen.getByRole('button', { name: /submit referral/i }));
-
-    expect(await screen.findByText(/matched to their application/i)).toBeInTheDocument();
-  });
-
-  it('surfaces the server\'s reason for refusing a duplicate', async () => {
+  it("surfaces the server's reason for refusing a duplicate", async () => {
+    mockApi({ candidates: [karen] });
     apiClient.post.mockRejectedValue({
       response: { data: { error: 'You have already referred this person for this cycle' } }
     });
@@ -109,21 +186,26 @@ describe('MemberReferrals', () => {
     render(<MemberReferrals />);
     await screen.findByText(/have not referred anyone yet/i);
 
-    await fillForm(user);
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Karen Filippelli/);
+    await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
     expect(await screen.findByText(/already referred this person/i)).toBeInTheDocument();
   });
 
   it('clears the form after a successful submission so the next one starts clean', async () => {
+    mockApi({ candidates: [karen] });
     const user = userEvent.setup();
     render(<MemberReferrals />);
     await screen.findByText(/have not referred anyone yet/i);
 
-    await fillForm(user);
+    await openPicker(user, 'kar');
+    await chooseOption(user, /Karen Filippelli/);
+    await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
-    await waitFor(() => expect(screen.getByLabelText(/first name/i)).toHaveValue(''));
-    expect(screen.getByLabelText(/last name/i)).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText(/how do you know them/i)).toHaveValue(''));
+    expect(screen.getByLabelText(/who are you referring/i)).toHaveValue('');
   });
 });

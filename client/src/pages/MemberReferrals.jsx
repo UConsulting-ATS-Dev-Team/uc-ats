@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -13,20 +14,27 @@ import {
 } from '@mui/material';
 import apiClient from '../utils/api';
 
-// Refer someone who has not applied yet.
+// Refer a candidate.
 //
-// Referring a person who already has an application happens on their
-// application page, where there is a record to attach to. This page is for the
-// other case, which used to have nowhere to go: a member vouches for someone
-// who has not filled in the form. All we ask for is a name, because a name is
-// all a member reliably knows. The referral waits, unattached, until form sync
-// sees an application under that name and claims it - within five minutes of
-// them applying, not instantly, since sync runs on a cron.
+// The member starts typing and picks the person out of this cycle's applicants,
+// which settles who the referral is about with no guessing at all. When the
+// person is not in the list yet, "Other" takes a typed name instead: the
+// referral waits unattached until form sync sees an application under that
+// name, and an admin can match it by hand if the name never lines up.
 //
 // If they never apply, the referral simply stays pending. That is the intended
 // end state, not a failure to handle.
 
+const OTHER = { id: '__other__', isOther: true };
+
 const EMPTY_FORM = { referredFirstName: '', referredLastName: '', relationship: '' };
+
+const candidateLabel = (option) => {
+  if (!option) return '';
+  if (option.isOther) return 'Other — not in this list';
+  const name = [option.firstName, option.lastName].filter(Boolean).join(' ');
+  return option.email ? `${name} (${option.email})` : name;
+};
 
 const MemberReferrals = () => {
   const [form, setForm] = useState(EMPTY_FORM);
@@ -35,6 +43,15 @@ const MemberReferrals = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Candidate picker
+  const [selected, setSelected] = useState(null);
+  const [search, setSearch] = useState('');
+  const [options, setOptions] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const searchSeq = useRef(0);
+
+  const isOther = selected?.isOther === true;
 
   const loadReferrals = useCallback(async () => {
     try {
@@ -51,8 +68,43 @@ const MemberReferrals = () => {
     loadReferrals();
   }, [loadReferrals]);
 
-  const canSubmit =
-    form.referredFirstName.trim() && form.referredLastName.trim() && form.relationship.trim();
+  // Debounced candidate search. Each run carries a sequence number so a slow
+  // response for an old query cannot overwrite the results of a newer one.
+  useEffect(() => {
+    const query = search.trim();
+    if (query.length < 2) {
+      setOptions([]);
+      setSearching(false);
+      return undefined;
+    }
+
+    const seq = ++searchSeq.current;
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const data = await apiClient.get(`/member/referral-candidates?q=${encodeURIComponent(query)}`);
+        if (seq !== searchSeq.current) return;
+        setOptions(Array.isArray(data) ? data : []);
+      } catch {
+        if (seq === searchSeq.current) setOptions([]);
+      } finally {
+        if (seq === searchSeq.current) setSearching(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // "Other" is always offered, so a member is never stuck when the person they
+  // want is not in the system yet.
+  const pickerOptions = useMemo(() => [...options, OTHER], [options]);
+
+  const canSubmit = Boolean(
+    form.relationship.trim() &&
+      (isOther
+        ? form.referredFirstName.trim() && form.referredLastName.trim()
+        : selected?.id)
+  );
 
   const handleChange = (field) => (event) => {
     setForm((prev) => ({ ...prev, [field]: event.target.value }));
@@ -67,14 +119,20 @@ const MemberReferrals = () => {
     setSuccess('');
     try {
       const created = await apiClient.post('/member/referrals', {
-        referredFirstName: form.referredFirstName.trim(),
-        referredLastName: form.referredLastName.trim(),
-        relationship: form.relationship.trim()
+        relationship: form.relationship.trim(),
+        ...(isOther
+          ? {
+              referredFirstName: form.referredFirstName.trim(),
+              referredLastName: form.referredLastName.trim()
+            }
+          : { candidateId: selected.id })
       });
       setForm(EMPTY_FORM);
+      setSelected(null);
+      setSearch('');
       setSuccess(
         created?.candidateId
-          ? 'Referral submitted and matched to their application.'
+          ? 'Referral submitted and added to their profile.'
           : 'Referral submitted. It will attach to their profile once they apply.'
       );
       await loadReferrals();
@@ -92,36 +150,67 @@ const MemberReferrals = () => {
           Refer a Candidate
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
-          Vouch for someone you think should be in this recruiting cycle. You do not need to wait
-          for them to apply — submit their name now and the referral attaches to their profile on
-          its own once their application comes through.
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Already looking at their application? Add the referral on that page instead.
+          Vouch for someone you think should be in this recruiting cycle. Start typing and pick
+          them from the list. If they have not applied yet, choose Other and enter their name —
+          the referral attaches to their profile on its own once their application comes through.
         </Typography>
       </Box>
 
       <Paper variant="outlined" sx={{ p: 3, mb: 4 }}>
         <Box component="form" onSubmit={handleSubmit}>
           <Stack spacing={2}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                label="First name"
-                value={form.referredFirstName}
-                onChange={handleChange('referredFirstName')}
-                required
-                fullWidth
-                inputProps={{ maxLength: 120 }}
-              />
-              <TextField
-                label="Last name"
-                value={form.referredLastName}
-                onChange={handleChange('referredLastName')}
-                required
-                fullWidth
-                inputProps={{ maxLength: 120 }}
-              />
-            </Stack>
+            <Autocomplete
+              value={selected}
+              onChange={(_event, value) => setSelected(value)}
+              inputValue={search}
+              onInputChange={(_event, value) => setSearch(value)}
+              options={pickerOptions}
+              getOptionLabel={candidateLabel}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+              filterOptions={(opts) => opts}
+              loading={searching}
+              noOptionsText={search.trim().length < 2 ? 'Type at least two letters' : 'No matches'}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Who are you referring?"
+                  required
+                  placeholder="Start typing a name"
+                  helperText="Pick them from the list, or choose Other if they have not applied yet"
+                  InputProps={{
+                    ...params.InputProps,
+                    endAdornment: (
+                      <>
+                        {searching ? <CircularProgress size={18} /> : null}
+                        {params.InputProps.endAdornment}
+                      </>
+                    )
+                  }}
+                />
+              )}
+            />
+
+            {isOther && (
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <TextField
+                  label="First name"
+                  value={form.referredFirstName}
+                  onChange={handleChange('referredFirstName')}
+                  required
+                  fullWidth
+                  inputProps={{ maxLength: 120 }}
+                />
+                <TextField
+                  label="Last name"
+                  value={form.referredLastName}
+                  onChange={handleChange('referredLastName')}
+                  required
+                  fullWidth
+                  inputProps={{ maxLength: 120 }}
+                />
+              </Stack>
+            )}
+
             <TextField
               label="How do you know them?"
               value={form.relationship}

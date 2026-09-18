@@ -16,7 +16,7 @@ import { sendMeetingCancellationEmail } from '../services/emailNotifications.js'
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
-import { createPreApplicationReferral, referredDisplayName } from '../services/referrals.js';
+import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -2348,14 +2348,54 @@ const MAX_REFERRAL_FIELD = 120;
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
+// Typeahead for the referral form: people already in this cycle, so a member
+// picks the real person instead of spelling their name and hoping it matches.
+// Members can already see this cycle's applicants (`/all-applications`), so
+// this exposes nothing new - and sealed records are left out entirely, since
+// they belong to people who are already members.
+router.get('/referral-candidates', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const query = trimmed(req.query?.q);
+    if (query.length < 2) return res.json([]);
+
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) return res.json([]);
+
+    const candidates = await prisma.candidate.findMany({
+      where: {
+        recordsLockedAt: null,
+        applications: { some: { cycleId: cycle.id } },
+        OR: [
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { email: { contains: query, mode: 'insensitive' } }
+        ]
+      },
+      select: { id: true, firstName: true, lastName: true, email: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      take: 20
+    });
+
+    res.json(candidates);
+  } catch (error) {
+    console.error('[GET /api/member/referral-candidates]', error);
+    res.status(500).json({ error: 'Failed to search candidates' });
+  }
+});
+
 router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
+    const candidateId = trimmed(req.body?.candidateId);
     const referredFirstName = trimmed(req.body?.referredFirstName);
     const referredLastName = trimmed(req.body?.referredLastName);
     const relationship = trimmed(req.body?.relationship);
 
-    if (!referredFirstName || !referredLastName) {
-      return res.status(400).json({ error: "The referred person's first and last name are both required" });
+    // Either they picked someone out of the list, or they typed a name under
+    // "Other". Nothing else is a referral.
+    if (!candidateId && (!referredFirstName || !referredLastName)) {
+      return res
+        .status(400)
+        .json({ error: "Pick a candidate, or enter the referred person's first and last name" });
     }
     if (!relationship) {
       return res.status(400).json({ error: 'Relationship is required' });
@@ -2373,15 +2413,18 @@ router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) =>
       return res.status(409).json({ error: 'There is no active recruiting cycle to refer someone into' });
     }
 
-    const { duplicate, referral } = await createPreApplicationReferral({
+    const { duplicate, notFound, sealed, referral } = await createMemberReferral({
       referrerName: req.user.fullName || req.user.email,
       relationship,
       referredFirstName,
       referredLastName,
+      candidateId: candidateId || null,
       cycleId: cycle.id,
       referredByUserId: req.user.id
     });
 
+    if (notFound) return res.status(404).json({ error: 'That candidate no longer exists' });
+    if (sealed) return res.status(409).json({ error: 'That person is already a member' });
     if (duplicate) {
       return res.status(409).json({ error: 'You have already referred this person for this cycle' });
     }

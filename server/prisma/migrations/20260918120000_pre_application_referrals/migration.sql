@@ -38,3 +38,10 @@ CREATE INDEX IF NOT EXISTS "referrals_referredByUserId_idx" ON "referrals"("refe
 -- The lookup form sync runs on every new application: unclaimed referrals in
 -- this cycle whose normalized name matches the candidate's.
 CREATE INDEX IF NOT EXISTS "referrals_cycleId_referredNameKey_idx" ON "referrals"("cycleId", "referredNameKey");
+
+-- One member cannot refer the same person twice in a cycle. This is the check
+-- that actually holds; the application-level lookup races with itself under
+-- concurrent submissions. Postgres treats NULLs as distinct, so MANUAL
+-- referrals (which have no referredNameKey) are untouched by this.
+CREATE UNIQUE INDEX IF NOT EXISTS "referrals_referredByUserId_cycleId_referredNameKey_key"
+  ON "referrals"("referredByUserId", "cycleId", "referredNameKey");

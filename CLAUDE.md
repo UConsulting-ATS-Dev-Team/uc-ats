@@ -228,24 +228,36 @@ The system follows a **recruiting cycle-based workflow**:
 **Referrals:**
 - A `Referral` arrives one of two ways, tracked by `Referral.source`. `MANUAL` is added on
   an application page (`/api/applications/:id/referral`) and has a `candidateId` from the
-  start. `PRE_APPLICATION` is submitted by a member at `POST /api/member/referrals` for
-  someone who has not applied, and carries only a name — `candidateId` is null until it is
-  claimed.
-- Matching is by **name only**, because a first and last name is all a referring member is
-  expected to know. `referralNameKey()` in
+  start. `PRE_APPLICATION` is submitted by a member at `POST /api/member/referrals`.
+- The member-facing form is a typeahead over this cycle's applicants
+  (`GET /api/member/referral-candidates?q=`). **Picking a person sets `candidateId`
+  outright, so there is no name matching at all** — that is the path to prefer. A member
+  who cannot find them picks "Other" and types a name, and only then does the referral wait
+  with `candidateId` null.
+- For the "Other" path, matching is by **name only**, because a first and last name is all
+  a referring member is expected to know. `referralNameKey()` in
   [server/src/services/referrals.js](server/src/services/referrals.js) stores a normalized
   `first|last` key with accents, case, spacing and punctuation stripped, so "O'Brien",
-  "OBrien" and "o brien" all match. Both writes and lookups go through it; nothing else
-  should reimplement the normalization.
+  "OBrien" and "o brien" all match. It uses `\p{L}`/`\p{N}`, not `a-z`, so a name in a
+  non-Latin script does not normalize to nothing. Both writes and lookups go through it;
+  nothing else should reimplement the normalization.
 - Form sync claims pending referrals in
   [server/src/services/syncResponses.js](server/src/services/syncResponses.js), **after**
   `application.create` succeeds — a response that fails to insert must not leave a referral
   claiming someone applied. A claim failure is logged and swallowed; losing an application
   to a referral bug is not acceptable. So a referral attaches within one cron tick (≤5 min)
   of the person applying, not instantly.
+- **Nothing is claimed when two applicants in the cycle share a normalized name.** A name
+  is all the "Other" path has, so the referral is left pending for an admin rather than
+  guessed at. A referral sitting unclaimed is a question someone can answer; one stapled to
+  the wrong applicant is a false endorsement nobody notices.
 - A referral is only claimed within its own cycle (or if filed without one). If the person
-  never applies it stays pending forever, which is the intended end state — admins see the
-  queue at `GET /api/admin/referrals?status=PENDING`.
+  never applies it stays pending forever, which is the intended end state. Admins work the
+  queue at `/admin/referrals` (`GET /api/admin/referrals?status=PENDING`) and attach one by
+  hand with `PATCH /api/admin/referrals/:id`.
+- One member cannot refer the same person twice in a cycle. The unique index on
+  (`referredByUserId`, `cycleId`, `referredNameKey`) is what enforces it; the service's
+  lookup races with itself, so it also treats `P2002` as the duplicate it is.
 - Both kinds coexist on a candidate. The application page reads `GET /:id/referrals`
   (plural) for the whole list, while the manual add and remove still own exactly one
   `MANUAL` referral per candidate per cycle and never touch a member's submission.

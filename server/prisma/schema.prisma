@@ -767,6 +767,10 @@ model Referral {
   cycle             RecruitingCycle? @relation(fields: [cycleId], references: [id])
   referredBy        User?            @relation("ReferralSubmitter", fields: [referredByUserId], references: [id])
 
+  // One member cannot refer the same person twice in a cycle. Postgres lets
+  // repeated NULLs through, so MANUAL referrals (no referredNameKey) are
+  // unaffected by this.
+  @@unique([referredByUserId, cycleId, referredNameKey])
   @@index([candidateId])
   @@index([cycleId])
   @@index([referredByUserId])

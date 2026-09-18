@@ -1160,11 +1160,14 @@ router.get('/:id/referral', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    // Get referral for this candidate in this cycle
+    // Scoped to MANUAL so this reads back exactly what the POST and DELETE
+    // below manage. Without the filter it could return a member's submission,
+    // which those two will not touch. Use `/:id/referrals` for the full list.
     const referral = await prisma.referral.findFirst({
       where: {
         candidateId: application.candidateId,
-        cycleId: application.cycleId
+        cycleId: application.cycleId,
+        source: 'MANUAL'
       }
     });
 

@@ -14,7 +14,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
     recruitingCycle: { findFirst: vi.fn() },
-    candidate: { findFirst: vi.fn(), findMany: vi.fn() },
+    candidate: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
     referral: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() }
   }
 }));
@@ -68,6 +68,7 @@ beforeEach(() => {
   prisma.recruitingCycle.findFirst.mockResolvedValue(activeCycle);
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.findMany.mockResolvedValue([]);
+  prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.referral.findFirst.mockResolvedValue(null);
   prisma.referral.findMany.mockResolvedValue([]);
   prisma.referral.create.mockImplementation(({ data }) => ({ id: 'ref-new', ...data }));
@@ -91,7 +92,7 @@ describe('POST /api/member/referrals gating', () => {
 });
 
 describe('POST /api/member/referrals validation', () => {
-  it('refuses a half name, which could never be matched', async () => {
+  it('refuses a half name when nobody was picked from the list', async () => {
     for (const body of [
       { ...validBody, referredLastName: '' },
       { ...validBody, referredFirstName: '   ' },
@@ -101,6 +102,49 @@ describe('POST /api/member/referrals validation', () => {
       expect(res.status).toBe(400);
     }
     expect(prisma.referral.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a picked candidate with no typed name at all', async () => {
+    prisma.candidate.findUnique.mockResolvedValue({
+      id: 'cand-7',
+      firstName: 'Karen',
+      lastName: 'Filippelli',
+      recordsLockedAt: null
+    });
+
+    const res = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { candidateId: 'cand-7', relationship: 'Classmate' }
+    });
+
+    expect(res.status).toBe(201);
+    expect(prisma.referral.create.mock.calls[0][0].data.candidateId).toBe('cand-7');
+  });
+
+  it('reports a picked candidate that no longer exists', async () => {
+    const res = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { candidateId: 'gone', relationship: 'Classmate' }
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('refuses to refer someone whose record is sealed', async () => {
+    prisma.candidate.findUnique.mockResolvedValue({
+      id: 'cand-8',
+      firstName: 'Michael',
+      lastName: 'Scott',
+      recordsLockedAt: new Date()
+    });
+
+    const res = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { candidateId: 'cand-8', relationship: 'Teammate' }
+    });
+    expect(res.status).toBe(409);
   });
 
   it('requires a relationship, so the referral says something', async () => {
@@ -167,14 +211,37 @@ describe('POST /api/member/referrals records the submission', () => {
     expect(data.relationship).toBe('Classmate');
   });
 
-  it('attaches straight away when that person already applied', async () => {
-    prisma.candidate.findFirst.mockResolvedValue({ id: 'cand-7' });
+  it('leaves an "Other" submission pending for sync or an admin', async () => {
+    prisma.candidate.findMany.mockResolvedValue([
+      { id: 'cand-7', firstName: 'Karen', lastName: 'Filippelli' }
+    ]);
     const res = await request('/api/member/referrals', { user: memberUser, method: 'POST', body: validBody });
     expect(res.status).toBe(201);
 
     const { data } = prisma.referral.create.mock.calls[0][0];
-    expect(data.candidateId).toBe('cand-7');
-    expect(data.claimedAt).toBeInstanceOf(Date);
+    expect(data.candidateId).toBeNull();
+    expect(data.claimedAt).toBeNull();
+  });
+});
+
+describe('GET /api/member/referral-candidates', () => {
+  it('needs at least two letters before it searches', async () => {
+    const res = await request('/api/member/referral-candidates?q=a', { user: memberUser });
+    expect(await res.json()).toEqual([]);
+    expect(prisma.candidate.findMany).not.toHaveBeenCalled();
+  });
+
+  it('searches this cycle only, and leaves sealed records out', async () => {
+    await request('/api/member/referral-candidates?q=kar', { user: memberUser });
+
+    const { where } = prisma.candidate.findMany.mock.calls[0][0];
+    expect(where.recordsLockedAt).toBeNull();
+    expect(where.applications).toEqual({ some: { cycleId: activeCycle.id } });
+  });
+
+  it('refuses a candidate', async () => {
+    const res = await request('/api/member/referral-candidates?q=kar', { user: candidateUser });
+    expect(res.status).toBe(403);
   });
 });
 
