@@ -22,10 +22,22 @@ export default function ImessageSendDialog({ open, onClose, title, subtitle, ini
     setError('');
     setMemberIds(initialMemberIds);
     const query = cycleId ? `?cycleId=${cycleId}` : '';
+    // Close and reopen quickly for another team and the first request can resolve
+    // last, leaving the previous cycle's templates on screen. Picking one then
+    // sends the wrong body and logs a templateId from the wrong cycle, so a
+    // response that outlived its open is dropped rather than applied.
+    let cancelled = false;
     apiClient
       .get(`/master-communications/templates${query}`)
-      .then((data) => setTemplates((Array.isArray(data) ? data : []).filter((t) => t.channel === 'imessage')))
-      .catch((e) => setError(e.message || 'Failed to load templates'));
+      .then((data) => {
+        if (cancelled) return;
+        setTemplates((Array.isArray(data) ? data : []).filter((t) => t.channel === 'imessage'));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e.message || 'Failed to load templates');
+      });
+    return () => { cancelled = true; };
     // Seeded on open only; the caller rebuilds initialMemberIds on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, cycleId]);

@@ -101,17 +101,24 @@ export default function ImessageComposer({
   const handleSend = async () => {
     if (!reachable.length || !text) return;
     setSending(true);
+    // Two members can hold the same number, and Messages collapses them into one
+    // address. Count the conversation from the addresses that actually go into
+    // the link, not from how many people were ticked, or the confirmation claims
+    // a recipient the chat does not contain.
+    const addresses = [...new Set(reachable.map((m) => m.phoneNumber))];
     // Open Messages first: that is the send. The log is bookkeeping and must not
     // stand between the admin and the conversation if it fails.
-    window.location.href = buildImessageUrl(reachable.map((m) => m.phoneNumber), text);
+    window.location.href = buildImessageUrl(addresses, text);
     try {
       await apiClient.post('/master-communications/imessage/log', {
+        // The people picked, deliberately, not the addresses. History should say
+        // who an admin meant to reach even where two of them share a phone.
         recipientIds: reachable.map((m) => m.id),
         body: text,
         templateId: selectedTemplate || undefined,
         cycleId: cycleId || undefined,
       });
-      onSuccess(`Opened Messages with ${reachable.length} recipient${reachable.length === 1 ? '' : 's'}`);
+      onSuccess(`Opened Messages with ${addresses.length} recipient${addresses.length === 1 ? '' : 's'}`);
       onSent();
     } catch (e) {
       onError(`Messages opened, but the send was not logged: ${e.message || 'unknown error'}`);

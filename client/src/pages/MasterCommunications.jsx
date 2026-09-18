@@ -1009,7 +1009,18 @@ const MasterCommunications = () => {
             {logs.map((l) => (
               <TableRow key={l.id}>
                 <TableCell>{new Date(l.sentAt).toLocaleString()}</TableCell>
-                <TableCell>{l.channel}</TableCell>
+                <TableCell>
+                  {l.channel}
+                  {/* An iMessage row records that Messages was opened with these
+                      people in it, which is the last thing this app can observe.
+                      Whether the admin then pressed Send happens in an app we
+                      cannot see, so the history must not claim it went out. */}
+                  {l.channel === 'imessage' && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      opened, not confirmed sent
+                    </Typography>
+                  )}
+                </TableCell>
                 <TableCell>{l.recipientCount}</TableCell>
                 <TableCell>{l.template?.name || '-'}</TableCell>
                 <TableCell>{l.subject || '-'}</TableCell>
