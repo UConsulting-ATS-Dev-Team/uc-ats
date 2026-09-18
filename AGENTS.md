@@ -74,8 +74,8 @@ Run all three before opening a PR. From the repo root:
 
 ```bash
 npm run install:all          # once, or after a dependency change
-cd client && npm test        # vitest run
-cd server && npm test        # vitest run
+npm --prefix client test     # vitest run
+npm --prefix server test     # vitest run
 npm run build                # client production build
 ```
 
