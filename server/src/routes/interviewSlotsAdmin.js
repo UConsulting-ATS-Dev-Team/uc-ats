@@ -876,7 +876,7 @@ router.get('/interviews/:id/availability', async (req, res) => {
     const interview = await prisma.interview.findUnique({
       where: { id: req.params.id },
       select: {
-        id: true, title: true, interviewType: true, startDate: true, endDate: true,
+        id: true, title: true, interviewType: true, startDate: true, endDate: true, cycleId: true,
         slots: {
           orderBy: { startTime: 'asc' },
           select: {
@@ -940,7 +940,7 @@ router.get('/interviews/:id/availability', async (req, res) => {
     res.json({
       interview: {
         id: interview.id, title: interview.title, interviewType: interview.interviewType,
-        startDate: interview.startDate, endDate: interview.endDate,
+        startDate: interview.startDate, endDate: interview.endDate, cycleId: interview.cycleId,
       },
       cadence: { minutes, interviewersPerSession: perSession },
       coverage: grid,

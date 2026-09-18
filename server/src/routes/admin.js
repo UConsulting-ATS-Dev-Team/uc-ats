@@ -571,6 +571,7 @@ router.get('/users', async (req, res) => {
         role: true,
         graduationClass: true,
         profileImage: true,
+        phoneNumber: true,
         isActive: true,
         deactivatedAt: true
       },

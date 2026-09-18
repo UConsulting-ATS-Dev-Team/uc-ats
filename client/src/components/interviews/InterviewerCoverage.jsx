@@ -15,9 +15,11 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Warning as WarningIcon } from '@mui/icons-material';
+import { Sms as SmsIcon, Warning as WarningIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 import { formatTime, formatTimeRange } from '../../utils/scheduleFormat';
+import ImessageSendDialog from '../communications/ImessageSendDialog';
 
 /**
  * Who can interview when, and what that means for the day.
@@ -54,6 +56,12 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   const [error, setError] = useState('');
   const [asked, setAsked] = useState('');
   const [moving, setMoving] = useState(null);
+  // The session whose interviewers are being messaged, if any.
+  const [texting, setTexting] = useState(null);
+  // /admin/interviews is reachable by MEMBER, but both iMessage endpoints are
+  // requireAdmin. Without this the button opens a dialog that 403s.
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
 
   const load = useCallback(async () => {
     try {
@@ -379,16 +387,28 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
 
               return (
                 <Paper key={session.id} variant="outlined" sx={{ p: 1.75 }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1, gap: 1, flexWrap: 'wrap' }}>
                     <Typography variant="body2" fontWeight={700}>
                       {session.label || formatTimeRange(session.startTime, session.endTime)}
                     </Typography>
-                    <Chip
-                      size="small"
-                      color={short ? 'warning' : 'default'}
-                      variant={short ? 'filled' : 'outlined'}
-                      label={`${session.assigned.length}${session.interviewerCapacity != null ? ` / ${session.interviewerCapacity}` : ''} interviewers`}
-                    />
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      {isAdmin && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<SmsIcon fontSize="small" />}
+                        onClick={() => setTexting(session)}
+                      >
+                        Send iMessage to interviewers
+                      </Button>
+                      )}
+                      <Chip
+                        size="small"
+                        color={short ? 'warning' : 'default'}
+                        variant={short ? 'filled' : 'outlined'}
+                        label={`${session.assigned.length}${session.interviewerCapacity != null ? ` / ${session.interviewerCapacity}` : ''} interviewers`}
+                      />
+                    </Stack>
                   </Stack>
 
                   <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
@@ -514,6 +534,20 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
           Take off this session
         </MenuItem>
       </Menu>
+
+      <ImessageSendDialog
+        open={Boolean(texting)}
+        onClose={() => setTexting(null)}
+        title="Send iMessage to interviewers"
+        subtitle={
+          texting
+            ? `${data.interview.title} · ${texting.label || formatTimeRange(texting.startTime, texting.endTime)}`
+            : ''
+        }
+        initialMemberIds={texting?.assigned.map((u) => u.id) ?? []}
+        cycleId={data.interview.cycleId}
+        onSent={setAsked}
+      />
 
       {/* What everybody actually said, because a grid hides the exceptions. */}
       {data.interviewers.length > 0 && (

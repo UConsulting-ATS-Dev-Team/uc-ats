@@ -4,10 +4,13 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import InterviewerCoverage from './InterviewerCoverage';
 import apiClient from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 
 vi.mock('../../utils/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
+
+vi.mock('../../context/AuthContext', () => ({ useAuth: vi.fn() }));
 
 const rsvped = { id: 'u1', fullName: 'Ada Reyes', email: 'ada@test.local', role: 'MEMBER' };
 const silent = { id: 'u2', fullName: 'Ben Ortiz', email: 'ben@test.local', role: 'MEMBER' };
@@ -70,6 +73,7 @@ const sessionCard = (label) =>
 describe('InterviewerCoverage hour grid', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuth.mockReturnValue({ user: { id: 'admin-1', role: 'ADMIN' } });
     apiClient.get.mockResolvedValue(payload);
     apiClient.post.mockResolvedValue({});
   });
@@ -108,6 +112,7 @@ describe('InterviewerCoverage hour grid', () => {
 describe('InterviewerCoverage placement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuth.mockReturnValue({ user: { id: 'admin-1', role: 'ADMIN' } });
     apiClient.get.mockResolvedValue(payload);
     apiClient.post.mockResolvedValue({ moved: true, clash: null });
     apiClient.delete.mockResolvedValue({ removed: true });
@@ -166,5 +171,48 @@ describe('InterviewerCoverage placement', () => {
     await waitFor(() =>
       expect(apiClient.delete).toHaveBeenCalledWith('/admin/interviews/slot-assignments/a1')
     );
+  });
+
+  it('hides the iMessage button from members', async () => {
+    // /admin/interviews has no role restriction, so members render this page.
+    // Both endpoints behind the dialog are requireAdmin, so an ungated button
+    // would open a dialog that only produces 403s.
+    useAuth.mockReturnValue({ user: { id: 'member-1', role: 'MEMBER' } });
+    const { unmount } = render(<InterviewerCoverage interviewId="i1" />);
+    await screen.findByText('Place interviewers');
+
+    expect(
+      screen.queryByRole('button', { name: /Send iMessage to interviewers/i })
+    ).toBeNull();
+    // This file has no auto-cleanup, so leaving the member-rendered tree in the
+    // document would make the next test's session card the stale one.
+    unmount();
+  });
+
+  it('opens an iMessage to a session with its interviewers already in the chat', async () => {
+    apiClient.get.mockImplementation((url) => {
+      if (url.includes('/imessage/members')) {
+        return Promise.resolve({
+          members: [
+            { ...rsvped, phoneNumber: '+13105551234' },
+            { ...silent, phoneNumber: '+13105555678' },
+          ],
+        });
+      }
+      if (url.includes('/templates')) return Promise.resolve([]);
+      return Promise.resolve(payload);
+    });
+    render(<InterviewerCoverage interviewId="i1" />);
+    await screen.findByText('Place interviewers');
+
+    await userEvent.click(
+      await sessionCard('Group 1A').findByRole('button', { name: /Send iMessage to interviewers/i })
+    );
+
+    const dialog = within(await screen.findByRole('dialog'));
+    // Ada is on 1A; Ben is not, but can be added before sending.
+    expect(await dialog.findByText('Ada Reyes')).toBeInTheDocument();
+    expect(dialog.queryByText('Ben Ortiz')).not.toBeInTheDocument();
+    expect(dialog.getByText('1 recipient')).toBeInTheDocument();
   });
 });

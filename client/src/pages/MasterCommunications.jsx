@@ -31,7 +31,6 @@ import {
 import {
   Send as SendIcon,
   Save as SaveIcon,
-  ContentCopy as ContentCopyIcon,
   Preview as PreviewIcon,
   Delete as DeleteIcon,
   FormatBold as FormatBoldIcon,
@@ -43,6 +42,7 @@ import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DecisionBatchPanel from '../components/communications/DecisionBatchPanel';
+import ImessageComposer from '../components/communications/ImessageComposer';
 
 const CHANNELS = [
   { key: 'email', label: 'Email' },
@@ -112,6 +112,8 @@ const MasterCommunications = () => {
   const [eventRsvpId, setEventRsvpId] = useState('');
   const [eventAttendedId, setEventAttendedId] = useState('');
   const [roles, setRoles] = useState(['MEMBER']);
+  // iMessage recipients, picked by name rather than filtered.
+  const [imessageMemberIds, setImessageMemberIds] = useState([]);
 
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -130,7 +132,6 @@ const MasterCommunications = () => {
   const [sending, setSending] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const filteredEvents = useMemo(
     () => events.filter((e) => selectedCycles.length === 0 || selectedCycles.includes(e.cycleId)),
@@ -231,11 +232,12 @@ const MasterCommunications = () => {
     // Body is deliberately not required. Saving is for work in progress, and
     // refusing an empty one would throw away the audience and filters that were
     // just assembled.
+    const isImessage = channel === 'imessage';
     const payload = {
       name: draftName.trim(),
       channel,
-      audience,
-      filters: buildFilters(),
+      audience: isImessage ? 'members' : audience,
+      filters: isImessage ? { memberIds: imessageMemberIds } : buildFilters(),
       subject: channel === 'email' ? subject : '',
       body,
       cycleId: primaryCycle || null,
@@ -272,6 +274,7 @@ const MasterCommunications = () => {
     setDecision(filters.decision || '');
     setEventRsvpId(filters.eventRsvpId || '');
     setEventAttendedId(filters.eventAttendedId || '');
+    setImessageMemberIds(filters.memberIds || []);
     if (filters.cycleIds?.length) setSelectedCycles(filters.cycleIds);
 
     const channelTab = CHANNELS.findIndex((c) => c.key === draft.channel);
@@ -327,22 +330,6 @@ const MasterCommunications = () => {
       setPreview(result);
     } catch (e) {
       setError(e.message || 'Failed to load preview');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePacket = async () => {
-    clearMessages();
-    setLoading(true);
-    setPreview(null);
-    try {
-      const result = await apiClient.post('/master-communications/packet', {
-        filters: buildFilters(),
-      });
-      setPreview(result);
-    } catch (e) {
-      setError(e.message || 'Failed to build iMessage packet');
     } finally {
       setLoading(false);
     }
@@ -491,15 +478,6 @@ const MasterCommunications = () => {
     }
   };
 
-  const handleCopyPacket = () => {
-    if (!preview?.recipients?.length) return;
-    const text = preview.recipients.map((r) => r.label).join('\n');
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
   const onSelectTemplate = (id) => {
     setSelectedTemplate(id);
     const t = templates.find((x) => x.id === id);
@@ -515,7 +493,6 @@ const MasterCommunications = () => {
   );
 
   const audienceOptions = useMemo(() => {
-    if (channel === 'imessage') return [{ value: 'applicants', label: 'Applicants' }];
     if (channel === 'slack') return [
       { value: 'members', label: 'Members' },
       { value: 'admins', label: 'Admins' },
@@ -673,20 +650,18 @@ const MasterCommunications = () => {
 
   const renderMessageComposer = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
-      {channel !== 'imessage' && (
-        <TextField
-          select
-          fullWidth
-          label="Use Template"
-          value={selectedTemplate}
-          onChange={(e) => onSelectTemplate(e.target.value)}
-        >
-          <MenuItem value=""><em>None / Custom</em></MenuItem>
-          {channelTemplates.map((t) => (
-            <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
-          ))}
-        </TextField>
-      )}
+      <TextField
+        select
+        fullWidth
+        label="Use Template"
+        value={selectedTemplate}
+        onChange={(e) => onSelectTemplate(e.target.value)}
+      >
+        <MenuItem value=""><em>None / Custom</em></MenuItem>
+        {channelTemplates.map((t) => (
+          <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+        ))}
+      </TextField>
 
       {channel === 'email' && (
         <TextField
@@ -698,78 +673,119 @@ const MasterCommunications = () => {
         />
       )}
 
-      {channel !== 'imessage' && (
-        <TextField
-          inputRef={messageRef}
-          label="Message (Markdown supported)"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          fullWidth
-          multiline
-          rows={8}
-          required
-        />
-      )}
+      <TextField
+        inputRef={messageRef}
+        label="Message (Markdown supported)"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        fullWidth
+        multiline
+        rows={8}
+        required
+      />
 
-      {channel !== 'imessage' && (
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-          <Tooltip title="Bold">
-            <IconButton size="small" onClick={() => insertMarkdown('**', '**')}>
-              <FormatBoldIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Italic">
-            <IconButton size="small" onClick={() => insertMarkdown('*', '*')}>
-              <FormatItalicIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Bulleted list">
-            <IconButton size="small" onClick={() => insertMarkdown('- ', '')}>
-              <FormatListBulletedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Link">
-            <IconButton size="small" onClick={() => insertMarkdown('[', '](url)')}>
-              <LinkIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Typography variant="caption" color="text.secondary">
-            Use **bold**, *italic*, - lists, [links](url). Line breaks are preserved.
-          </Typography>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+        <Tooltip title="Bold">
+          <IconButton size="small" onClick={() => insertMarkdown('**', '**')}>
+            <FormatBoldIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Italic">
+          <IconButton size="small" onClick={() => insertMarkdown('*', '*')}>
+            <FormatItalicIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Bulleted list">
+          <IconButton size="small" onClick={() => insertMarkdown('- ', '')}>
+            <FormatListBulletedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Link">
+          <IconButton size="small" onClick={() => insertMarkdown('[', '](url)')}>
+            <LinkIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Typography variant="caption" color="text.secondary">
+          Use **bold**, *italic*, - lists, [links](url). Line breaks are preserved.
+        </Typography>
+      </Stack>
+
+      <Box>
+        <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+          Click a field to insert it into the message:
+        </Typography>
+        <Stack direction="row" spacing={1} flexWrap="wrap">
+          {(MERGE_FIELDS[audience] || []).map((field) => (
+            <Chip
+              key={field}
+              label={`{{${field}}}`}
+              size="small"
+              onClick={() => insertMergeField(field, 'body')}
+              sx={{ cursor: 'pointer' }}
+            />
+          ))}
         </Stack>
-      )}
+      </Box>
 
-      {channel !== 'imessage' && (
-        <Box>
-          <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-            Click a field to insert it into the message:
-          </Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap">
-            {(MERGE_FIELDS[audience] || []).map((field) => (
-              <Chip
-                key={field}
-                label={`{{${field}}}`}
-                size="small"
-                onClick={() => insertMergeField(field, 'body')}
-                sx={{ cursor: 'pointer' }}
-              />
-            ))}
-          </Stack>
-        </Box>
-      )}
+      <TextField
+        label="Schedule for later (optional)"
+        type="datetime-local"
+        value={scheduledAt}
+        onChange={(e) => setScheduledAt(e.target.value)}
+        fullWidth
+        InputLabelProps={{ shrink: true }}
+        inputProps={{ step: 60 }}
+      />
+    </Stack>
+  );
 
-      {channel !== 'imessage' && (
-        <TextField
-          label="Schedule for later (optional)"
-          type="datetime-local"
-          value={scheduledAt}
-          onChange={(e) => setScheduledAt(e.target.value)}
-          fullWidth
-          InputLabelProps={{ shrink: true }}
-          inputProps={{ step: 60 }}
-        />
+  // Assembling an audience is the slow part, so drafts are offered on every
+  // channel regardless of how the message eventually goes out.
+  const renderDraftControls = () => (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', mb: 1 }}>
+      <TextField
+        size="small"
+        label="Draft name"
+        placeholder="TPN launch"
+        value={draftName}
+        onChange={(e) => setDraftName(e.target.value)}
+        sx={{ maxWidth: 260 }}
+      />
+      <Button variant="outlined" onClick={saveDraft} disabled={!draftName.trim()}>
+        {openDraftId ? 'Update draft' : 'Save draft'}
+      </Button>
+      {openDraftId && (
+        <Button
+          size="small"
+          onClick={() => {
+            // Leaves the composer as it is and stops further saves from
+            // overwriting the draft that was opened.
+            setOpenDraftId(null);
+            setDraftName('');
+            setSuccess('Detached from draft — saving now creates a new one');
+          }}
+        >
+          Detach
+        </Button>
       )}
     </Stack>
+  );
+
+  const renderImessageTab = () => (
+    <ImessageComposer
+      body={body}
+      onBodyChange={setBody}
+      templates={channelTemplates}
+      selectedTemplate={selectedTemplate}
+      onSelectTemplate={onSelectTemplate}
+      memberIds={imessageMemberIds}
+      onMemberIdsChange={setImessageMemberIds}
+      cycleId={primaryCycle}
+      draftControls={renderDraftControls()}
+      onSent={() => primaryCycle && fetchLogs(primaryCycle)}
+      onError={(message) => { setSuccess(''); setError(message); }}
+      onSuccess={(message) => { setError(''); setSuccess(message); }}
+    />
   );
 
   const renderSendTab = () => (
@@ -787,124 +803,57 @@ const MasterCommunications = () => {
           {loading ? <CircularProgress size={20} /> : 'Preview Recipients'}
         </Button>
 
-        {/* Available on every channel, including iMessage: assembling an
-            audience is the slow part, and it is worth keeping regardless of how
-            the message eventually goes out. */}
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', mb: 1 }}>
-          <TextField
-            size="small"
-            label="Draft name"
-            placeholder="TPN launch"
-            value={draftName}
-            onChange={(e) => setDraftName(e.target.value)}
-            sx={{ maxWidth: 260 }}
-          />
-          <Button variant="outlined" onClick={saveDraft} disabled={!draftName.trim()}>
-            {openDraftId ? 'Update draft' : 'Save draft'}
-          </Button>
-          {openDraftId && (
-            <Button
-              size="small"
-              onClick={() => {
-                // Leaves the composer as it is and stops further saves from
-                // overwriting the draft that was opened.
-                setOpenDraftId(null);
-                setDraftName('');
-                setSuccess('Detached from draft — saving now creates a new one');
-              }}
-            >
-              Detach
-            </Button>
-          )}
-        </Stack>
+        {renderDraftControls()}
 
-        {channel !== 'imessage' && (
-          <>
-            <Button
-              variant="contained"
-              startIcon={<SendIcon />}
-              onClick={handleOpenSend}
-              disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
-            >
-              Send {channel === 'email' ? 'Email' : 'Slack'}
-            </Button>
-            {channel === 'email' && (
-              <Button
-                variant="outlined"
-                startIcon={testing ? <CircularProgress size={20} /> : <SendIcon />}
-                onClick={handleSendTest}
-                disabled={testing || !body || !subject || selectedCycles.length === 0}
-              >
-                {user?.email ? `Send Test to ${user.email}` : 'Send Test to Me'}
-              </Button>
-            )}
-            <Button
-              variant="outlined"
-              color="secondary"
-              startIcon={scheduling ? <CircularProgress size={20} /> : <SaveIcon />}
-              onClick={handleSchedule}
-              disabled={!body || (channel === 'email' && !subject) || !scheduledAt || selectedCycles.length === 0}
-            >
-              Schedule
-            </Button>
-          </>
-        )}
-
-        {channel === 'imessage' && (
+        <Button
+          variant="contained"
+          startIcon={<SendIcon />}
+          onClick={handleOpenSend}
+          disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
+        >
+          Send {channel === 'email' ? 'Email' : 'Slack'}
+        </Button>
+        {channel === 'email' && (
           <Button
-            variant="contained"
-            startIcon={<PreviewIcon />}
-            onClick={handlePacket}
-            disabled={selectedCycles.length === 0}
+            variant="outlined"
+            startIcon={testing ? <CircularProgress size={20} /> : <SendIcon />}
+            onClick={handleSendTest}
+            disabled={testing || !body || !subject || selectedCycles.length === 0}
           >
-            Generate iMessage Packet
+            {user?.email ? `Send Test to ${user.email}` : 'Send Test to Me'}
           </Button>
         )}
+        <Button
+          variant="outlined"
+          color="secondary"
+          startIcon={scheduling ? <CircularProgress size={20} /> : <SaveIcon />}
+          onClick={handleSchedule}
+          disabled={!body || (channel === 'email' && !subject) || !scheduledAt || selectedCycles.length === 0}
+        >
+          Schedule
+        </Button>
       </Box>
 
       {preview && (
         <Paper sx={{ mt: 3, p: 2 }}>
           <Typography variant="h6" gutterBottom>
-            {channel === 'imessage' ? 'iMessage GC Packet' : `Recipients: ${preview.count}`}
+            Recipients: {preview.count}
           </Typography>
 
           {preview.count === 0 ? (
             <Alert severity="warning">No recipients match the selected filters.</Alert>
           ) : (
             <>
-              {channel === 'imessage' ? (
-                <>
-                  <Box sx={{ mb: 1 }}>
-                    <Button
-                      size="small"
-                      startIcon={<ContentCopyIcon />}
-                      onClick={handleCopyPacket}
-                    >
-                      {copied ? 'Copied!' : 'Copy to Clipboard'}
-                    </Button>
-                  </Box>
-                  <List dense>
-                    {preview.recipients.map((r, i) => (
-                      <ListItem key={`${r.phoneNumber}-${i}`} divider>
-                        <ListItemText primary={r.label} />
-                      </ListItem>
-                    ))}
-                  </List>
-                </>
-              ) : (
-                <>
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    A sample of up to 10 matching recipients:
-                  </Typography>
-                  <List dense>
-                    {preview.sample.map((r) => (
-                      <ListItem key={r.id} divider>
-                        <ListItemText primary={`${r.fullName} (${r.email})`} />
-                      </ListItem>
-                    ))}
-                  </List>
-                </>
-              )}
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                A sample of up to 10 matching recipients:
+              </Typography>
+              <List dense>
+                {preview.sample.map((r) => (
+                  <ListItem key={r.id} divider>
+                    <ListItemText primary={`${r.fullName} (${r.email})`} />
+                  </ListItem>
+                ))}
+              </List>
             </>
           )}
         </Paper>
@@ -1060,7 +1009,18 @@ const MasterCommunications = () => {
             {logs.map((l) => (
               <TableRow key={l.id}>
                 <TableCell>{new Date(l.sentAt).toLocaleString()}</TableCell>
-                <TableCell>{l.channel}</TableCell>
+                <TableCell>
+                  {l.channel}
+                  {/* An iMessage row records that Messages was opened with these
+                      people in it, which is the last thing this app can observe.
+                      Whether the admin then pressed Send happens in an app we
+                      cannot see, so the history must not claim it went out. */}
+                  {l.channel === 'imessage' && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      opened, not confirmed sent
+                    </Typography>
+                  )}
+                </TableCell>
                 <TableCell>{l.recipientCount}</TableCell>
                 <TableCell>{l.template?.name || '-'}</TableCell>
                 <TableCell>{l.subject || '-'}</TableCell>
@@ -1149,7 +1109,7 @@ const MasterCommunications = () => {
 
           <TabPanel value={tab} index={0}>{renderSendTab()}</TabPanel>
           <TabPanel value={tab} index={1}>{renderSendTab()}</TabPanel>
-          <TabPanel value={tab} index={2}>{renderSendTab()}</TabPanel>
+          <TabPanel value={tab} index={2}>{renderImessageTab()}</TabPanel>
           <TabPanel value={tab} index={3}>{renderDraftsTab()}</TabPanel>
           <TabPanel value={tab} index={4}>{renderTemplatesTab()}</TabPanel>
           <TabPanel value={tab} index={5}>{renderLogsTab()}</TabPanel>

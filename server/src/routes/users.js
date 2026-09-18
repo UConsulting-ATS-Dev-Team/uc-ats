@@ -8,6 +8,7 @@ import { dirname } from 'path';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
+import { normalizePhoneNumber } from '../utils/phone.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -202,7 +203,7 @@ router.patch('/:id/role', requireAuth, async (req, res) => {
 router.patch('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { fullName, graduationClass, email } = req.body;
+    const { fullName, graduationClass, email, phoneNumber } = req.body;
     
     // Check if user is admin or updating their own data
     if (req.user.role !== 'ADMIN' && req.user.id !== id) {
@@ -213,6 +214,27 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (fullName) updateData.fullName = fullName;
     if (graduationClass !== undefined) updateData.graduationClass = graduationClass;
     if (email) updateData.email = email;
+    if (phoneNumber !== undefined) {
+      // Admins only, even on your own record. An admin picks iMessage recipients
+      // by name and never sees the number behind them, so a member who can write
+      // their own phoneNumber can point an admin's message at a third party and
+      // the composer will address it there without anyone noticing. The number is
+      // a communication destination the org trusts, not a profile field its owner
+      // gets to assert. Set it in User Management or through the roster import.
+      if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({ error: 'Only an admin can change a phone number.' });
+      }
+      // Empty clears it; anything else must parse, since iMessage dials it as-is.
+      if (phoneNumber === null || String(phoneNumber).trim() === '') {
+        updateData.phoneNumber = null;
+      } else {
+        const normalized = normalizePhoneNumber(phoneNumber);
+        if (!normalized) {
+          return res.status(400).json({ error: 'Phone number is not valid' });
+        }
+        updateData.phoneNumber = normalized;
+      }
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id },
@@ -223,6 +245,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
         fullName: true,
         graduationClass: true,
         profileImage: true,
+        phoneNumber: true,
         role: true,
         createdAt: true
       }

@@ -3,7 +3,20 @@ import prisma from '../prismaClient.js';
 import { sendEmail } from './emailNotifications.js';
 import { sendSlackMessage } from './slackService.js';
 
-const VALID_CHANNELS = ['email', 'slack', 'imessage'];
+// Channels the server delivers itself. iMessage is absent on purpose: it leaves
+// from the admin's Messages app, so it can be neither sent nor scheduled here.
+const SERVER_SENT_CHANNELS = ['email', 'slack'];
+
+function assertServerSentChannel(channel) {
+  if (SERVER_SENT_CHANNELS.includes(channel)) return;
+  const err = new Error(
+    channel === 'imessage'
+      ? 'iMessage is sent from the Messages app, not by the server'
+      : `Unsupported channel: ${channel}`
+  );
+  err.status = 400;
+  throw err;
+}
 
 const ROUND_DECISION_FIELDS = {
   COFFEE_CHAT: 'coffeeChatDecision',
@@ -273,12 +286,6 @@ export async function resolveRecipients({ audience, filters = {} }) {
   throw err;
 }
 
-function formatImessagePacket(recipients) {
-  return recipients
-    .filter((r) => r.phoneNumber)
-    .map((r) => ({ fullName: r.fullName, phoneNumber: r.phoneNumber, label: `${r.fullName} — ${r.phoneNumber}` }));
-}
-
 async function logMessage({ templateId, channel, recipientCount, subject, body, sentBy, cycleId }) {
   try {
     const log = await prisma.messageLog.create({
@@ -305,10 +312,49 @@ export async function previewMasterCommunication({ audience, filters }) {
   };
 }
 
-export async function buildImessagePacket({ filters }) {
-  const recipients = await resolveRecipients({ audience: 'applicants', filters });
-  const withPhone = recipients.filter((r) => r.phoneNumber);
-  return { count: withPhone.length, recipients: formatImessagePacket(withPhone) };
+// iMessage is sent from the admin's own Messages app (an sms:// link opened in
+// the browser), so the server never delivers it. It only lists who can be
+// reached and records that a send happened.
+
+export async function listImessageMembers() {
+  return prisma.user.findMany({
+    // Same active-staff rule as the members audience in resolveRecipients.
+    where: { role: { in: ['ADMIN', 'MEMBER'] }, isActive: true },
+    select: { id: true, fullName: true, email: true, role: true, profileImage: true, phoneNumber: true },
+    orderBy: { fullName: 'asc' },
+  });
+}
+
+export async function logImessageSend({ recipientIds, body, templateId, cycleId, sentBy }) {
+  if (!Array.isArray(recipientIds) || recipientIds.length === 0) {
+    const err = new Error('recipientIds must be a non-empty array');
+    err.status = 400;
+    throw err;
+  }
+  if (!body || typeof body !== 'string') {
+    const err = new Error('body is required');
+    err.status = 400;
+    throw err;
+  }
+  const logId = await logMessage({
+    templateId: templateId || null,
+    channel: 'imessage',
+    recipientCount: new Set(recipientIds).size,
+    body,
+    sentBy,
+    cycleId: cycleId || null,
+  });
+  // logMessage swallows its own write failure and answers null, which is right
+  // for email: the mail already went out and failing the request would be a lie
+  // in the other direction. iMessage is the opposite. The client has already
+  // opened Messages by the time it calls this, so the log is the only record
+  // the send ever happened, and a silent 201 loses it for good.
+  if (logId == null) {
+    const err = new Error('Messages opened, but the send could not be logged');
+    err.status = 500;
+    throw err;
+  }
+  return { logId };
 }
 
 export async function sendMasterCommunication({
@@ -321,18 +367,9 @@ export async function sendMasterCommunication({
   cycleId,
   templateId,
 }) {
-  if (!VALID_CHANNELS.includes(channel)) {
-    const err = new Error(`Unsupported channel: ${channel}`);
-    err.status = 400;
-    throw err;
-  }
+  assertServerSentChannel(channel);
 
   const recipients = await resolveRecipients({ audience, filters });
-
-  if (channel === 'imessage') {
-    const withPhone = recipients.filter((r) => r.phoneNumber);
-    return { channel, audience, count: withPhone.length, recipients: formatImessagePacket(withPhone) };
-  }
 
   if (channel === 'slack') {
     const hasNonUser = recipients.some((r) => r.audience !== 'user');
@@ -380,6 +417,7 @@ export async function scheduleMessage({
     err.status = 400;
     throw err;
   }
+  assertServerSentChannel(channel);
   return prisma.messageSchedule.create({
     data: {
       channel,

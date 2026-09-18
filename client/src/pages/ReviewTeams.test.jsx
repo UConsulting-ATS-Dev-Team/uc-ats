@@ -314,3 +314,35 @@ describe('ReviewTeams member management', () => {
     });
   });
 });
+
+describe('ReviewTeams iMessage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('opens an iMessage to a team with its members already in the chat', async () => {
+    useAuth.mockReturnValue({ user: adminUser });
+    mockApiClient({
+      '/master-communications/imessage/members': {
+        members: mockUsers.map((u) => ({ ...u, phoneNumber: '+13105551234' })),
+      },
+    });
+
+    renderWithRouter(<ReviewTeams />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Send iMessage to team' }));
+
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(await dialog.findByText('Alice Smith')).toBeInTheDocument();
+    expect(dialog.queryByText('Bob Jones')).not.toBeInTheDocument();
+    expect(dialog.getByText('1 recipient')).toBeInTheDocument();
+  });
+
+  it('is not offered to members', async () => {
+    useAuth.mockReturnValue({ user: memberUser });
+    mockApiClient();
+
+    renderWithRouter(<ReviewTeams />);
+    await screen.findByText('Team Alpha');
+    expect(screen.queryByRole('button', { name: 'Send iMessage to team' })).not.toBeInTheDocument();
+  });
+});

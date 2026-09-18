@@ -47,6 +47,10 @@ model User {
   googleLinkedAt             DateTime?
   profileImage               String?
   studentId                  String?                         @unique
+  // E.164 (+13105551234), for Master Communications iMessage to members. Filled
+  // from the roster CSV by scripts/import-member-phones-from-csv.js - applicants'
+  // numbers live on Application.phoneNumber and are never copied here.
+  phoneNumber                String?
   createdBehavioralQuestions BehavioralQuestion[]
   comments                   Comment[]
   coverLetterScores          CoverLetterScore[]
