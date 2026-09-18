@@ -7,7 +7,7 @@
 // somebody who has since been taken off it.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { loadCandidateRoster } from './interviewSlotComms.js';
+import { loadCandidateRoster, stillAssigned } from './interviewSlotComms.js';
 
 const signups = [
   { groupLabel: null, application: { firstName: 'Ada', lastName: 'Lovelace' } },
@@ -76,5 +76,24 @@ describe('loadCandidateRoster', () => {
   it('needs both a session and a recipient', async () => {
     await expect(loadCandidateRoster(assigned({ slotId: null }), client)).resolves.toEqual([]);
     await expect(loadCandidateRoster(assigned({ recipient: null }), client)).resolves.toEqual([]);
+  });
+});
+
+describe('stillAssigned', () => {
+  // Shared by the roster read and by the guard between send retries, which is why
+  // it is its own export: a retry can be tens of seconds behind the read that
+  // built the message, and an admin can take somebody off inside that.
+  it('is true while the assignment stands', async () => {
+    await expect(stillAssigned(assigned(), client)).resolves.toBe(true);
+  });
+
+  it('is false once it has been removed', async () => {
+    client.interviewSlotAssignment.findFirst.mockResolvedValue(null);
+    await expect(stillAssigned(assigned(), client)).resolves.toBe(false);
+  });
+
+  it('is false with nothing to check against', async () => {
+    await expect(stillAssigned({ recipient: 'a@b.c' }, client)).resolves.toBe(false);
+    await expect(stillAssigned({ slotId: 'slot-1' }, client)).resolves.toBe(false);
   });
 });

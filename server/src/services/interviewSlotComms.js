@@ -251,22 +251,28 @@ export async function queueNotificationsBulk(entries) {
  * with no email at all is not the better outcome. A failed check is treated as
  * "no roster" rather than "send it anyway".
  */
+export async function stillAssigned(notification, client = prisma) {
+  const slotId = notification?.slotId ?? notification?.slot?.id;
+  if (!slotId || !notification?.recipient) return false;
+  // Case-insensitively, because addresses are stored lowercased but a recipient
+  // recorded before that was enforced need not be.
+  const row = await client.interviewSlotAssignment.findFirst({
+    where: {
+      slotId,
+      removedAt: null,
+      user: { email: { equals: notification.recipient, mode: 'insensitive' } },
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
 export async function loadCandidateRoster(notification, client = prisma) {
   if (!INTERVIEWER_NOTIFICATION_TYPES.has(notification?.type)) return [];
   const slotId = notification.slotId ?? notification.slot?.id;
   if (!slotId || !notification.recipient) return [];
   try {
-    // Case-insensitively, because addresses are stored lowercased but a
-    // recipient recorded before that was enforced need not be.
-    const stillOn = await client.interviewSlotAssignment.findFirst({
-      where: {
-        slotId,
-        removedAt: null,
-        user: { email: { equals: notification.recipient, mode: 'insensitive' } },
-      },
-      select: { id: true },
-    });
-    if (!stillOn) return [];
+    if (!(await stillAssigned(notification, client))) return [];
 
     return await client.interviewSlotSignup.findMany({
       where: { slotId, status: 'CONFIRMED' },
@@ -330,6 +336,27 @@ async function sendOne(notificationId, renderBody) {
     const invite = inviteFor(notification);
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt += 1) {
+      // A retry is not the microsecond behind the roster check that the first
+      // attempt is: a mail server that hangs before failing puts tens of seconds
+      // between them, and an admin can take somebody off a session inside that.
+      // Re-checked only when there is actually a roster to disclose, and only on
+      // a retry, so the ordinary path costs nothing extra.
+      //
+      // The last gap - between this send returning and the message reaching a
+      // mailbox - cannot be closed. Database state and delivered mail are not
+      // atomic, and nothing recalls a message already handed to the mail server.
+      // What is closable is the part measured in seconds.
+      if (attempt > 1 && notification.candidateRoster?.length && !(await stillAssigned(notification))) {
+        await prisma.interviewSlotNotification.update({
+          where: { id: notificationId },
+          data: {
+            status: 'SUPPRESSED',
+            error: 'Taken off this session before the email could be re-sent',
+          },
+        });
+        return { notificationId, suppressed: true };
+      }
+
       result = await sendEmail(
         notification.recipient,
         notification.subject,
