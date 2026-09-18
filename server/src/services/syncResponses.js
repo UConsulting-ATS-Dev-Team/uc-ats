@@ -4,6 +4,7 @@ import { getResponses } from './google/forms.js'
 import { transformFormResponse } from '../utils/dataMapper.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
+import { claimReferralsForCandidate } from './referrals.js'
 
 export default async function syncFormResponses() {
   try {
@@ -130,6 +131,28 @@ export default async function syncFormResponses() {
         // against the same candidate submitting twice by cycle with the same responseID
         await prisma.application.create({ data: dataToCreate });
         successCount++;
+
+        // A member may have referred this person by name before they applied.
+        // Now that the application is actually on file, those referrals have
+        // someone to point at.
+        //
+        // This runs after the application is written, not before: a response
+        // that fails to insert must not leave a referral claiming that someone
+        // applied when nothing was recorded. And a failure here must not cost
+        // us an application we already saved, so it is logged and swallowed -
+        // an unclaimed referral is visible and fixable, a lost application is
+        // not.
+        try {
+          const claimed = await claimReferralsForCandidate({
+            candidate,
+            cycleId: activeCycle.id
+          });
+          if (claimed.length > 0) {
+            console.log(`Claimed ${claimed.length} pre-application referral(s) for candidate id=${candidate.id}`);
+          }
+        } catch (referralError) {
+          console.error(`Failed to claim referrals for candidate id=${candidate.id}:`, referralError);
+        }
 
       } catch (error) {
         console.error(`Error processing response ${response.responseId}:`, error);

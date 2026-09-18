@@ -68,6 +68,7 @@ import {
   redactLockedApplications
 } from '../utils/lockedRecords.js';
 import { processRoundDecisions } from '../services/decisionProcessing.js';
+import { referredDisplayName } from '../services/referrals.js';
 // The roster seam: slots are the source of truth where they exist, and the
 // legacy Interview.description blob everywhere else.
 import {
@@ -5534,6 +5535,58 @@ router.delete('/interview-questions/:id', async (req, res) => {
       return res.status(404).json({ error: 'Interview question not found' });
     }
     res.status(500).json({ error: 'Failed to delete interview question' });
+  }
+});
+
+// -------------------- Referrals --------------------
+
+// Every referral in a cycle, including the ones still waiting for their person
+// to apply. `status=PENDING` is the queue worth watching: a member vouched for
+// someone who has not shown up yet, and nobody has to do anything about it
+// until they do.
+router.get('/referrals', async (req, res) => {
+  try {
+    const { status } = req.query || {};
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) {
+      return res.json([]);
+    }
+
+    const where = { cycleId: cycle.id };
+    if (status === 'PENDING') where.candidateId = null;
+    if (status === 'ATTACHED') where.candidateId = { not: null };
+
+    const referrals = await prisma.referral.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        candidate: { select: { id: true, firstName: true, lastName: true, email: true } },
+        referredBy: { select: { id: true, fullName: true, email: true } }
+      }
+    });
+
+    // A sealed candidate keeps their name on the row and loses the link
+    // through to their record, which enforces its own seal anyway.
+    const isLocked = await lockedRowPredicate(req, referrals);
+
+    res.json(
+      referrals.map((referral) => ({
+        id: referral.id,
+        referrerName: referral.referrerName,
+        relationship: referral.relationship,
+        source: referral.source,
+        referredName: referredDisplayName(referral),
+        referredBy: referral.referredBy,
+        createdAt: referral.createdAt,
+        claimedAt: referral.claimedAt,
+        status: referral.candidateId ? 'ATTACHED' : 'PENDING',
+        candidateId: isLocked(referral) ? null : referral.candidateId,
+        locked: isLocked(referral)
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/admin/referrals]', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
   }
 });
 

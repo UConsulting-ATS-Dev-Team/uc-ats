@@ -159,7 +159,7 @@ The system follows a **recruiting cycle-based workflow**:
 **Route Organization:**
 - `/api/auth` - Authentication (login, signup, password reset)
 - `/api/admin` - Admin-only operations (cycle mgmt, interviews, user mgmt, document grading)
-- `/api/member` - Member role operations (interview assignments, document grading)
+- `/api/member` - Member role operations (interview assignments, document grading, referrals)
 - `/api/talent` - External talent portal: a self-registered UCLA student's own profile,
   resume and Talent Partner Network consent. Gated on `role === 'USER' &&
   isExternalTalent`; the upload and consent routes additionally require
@@ -225,7 +225,33 @@ The system follows a **recruiting cycle-based workflow**:
   [server/src/services/stagingDecisions.js](server/src/services/stagingDecisions.js), the same
   write as Staging's inline decision picker, so it feeds decision processing unchanged.
 
+**Referrals:**
+- A `Referral` arrives one of two ways, tracked by `Referral.source`. `MANUAL` is added on
+  an application page (`/api/applications/:id/referral`) and has a `candidateId` from the
+  start. `PRE_APPLICATION` is submitted by a member at `POST /api/member/referrals` for
+  someone who has not applied, and carries only a name — `candidateId` is null until it is
+  claimed.
+- Matching is by **name only**, because a first and last name is all a referring member is
+  expected to know. `referralNameKey()` in
+  [server/src/services/referrals.js](server/src/services/referrals.js) stores a normalized
+  `first|last` key with accents, case, spacing and punctuation stripped, so "O'Brien",
+  "OBrien" and "o brien" all match. Both writes and lookups go through it; nothing else
+  should reimplement the normalization.
+- Form sync claims pending referrals in
+  [server/src/services/syncResponses.js](server/src/services/syncResponses.js), **after**
+  `application.create` succeeds — a response that fails to insert must not leave a referral
+  claiming someone applied. A claim failure is logged and swallowed; losing an application
+  to a referral bug is not acceptable. So a referral attaches within one cron tick (≤5 min)
+  of the person applying, not instantly.
+- A referral is only claimed within its own cycle (or if filed without one). If the person
+  never applies it stays pending forever, which is the intended end state — admins see the
+  queue at `GET /api/admin/referrals?status=PENDING`.
+- Both kinds coexist on a candidate. The application page reads `GET /:id/referrals`
+  (plural) for the whole list, while the manual add and remove still own exactly one
+  `MANUAL` referral per candidate per cycle and never touch a member's submission.
+
 **Key Services:**
+- [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
 - [server/src/services/syncEventResponses.js](server/src/services/syncEventResponses.js) - Syncs event RSVP/attendance forms
 - [server/src/services/emailNotifications.js](server/src/services/emailNotifications.js) - Nodemailer integration for notifications
