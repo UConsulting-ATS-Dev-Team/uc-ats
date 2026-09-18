@@ -150,7 +150,10 @@ describe('claimReferralsForCandidate', () => {
   });
 
   it('claims every pending referral that matches the name', async () => {
-    client.referral.findMany.mockResolvedValue([{ id: 'ref-1' }, { id: 'ref-2' }]);
+    // First call is the pending read, second is the read-back of what moved.
+    client.referral.findMany
+      .mockResolvedValueOnce([{ id: 'ref-1' }, { id: 'ref-2' }])
+      .mockResolvedValueOnce([{ id: 'ref-1' }, { id: 'ref-2' }]);
     client.referral.updateMany.mockResolvedValue({ count: 2 });
 
     const claimed = await claimReferralsForCandidate({ candidate, cycleId: 'cycle-1', client });
@@ -187,6 +190,20 @@ describe('claimReferralsForCandidate', () => {
 
     expect(claimed).toEqual([]);
     expect(client.referral.updateMany.mock.calls[0][0].where.candidateId).toBeNull();
+  });
+
+  it('reports only the referrals that actually moved', async () => {
+    // Two were pending at the read; an admin placed one of them in between, so
+    // the conditional update caught a single row.
+    client.referral.findMany
+      .mockResolvedValueOnce([{ id: 'ref-1' }, { id: 'ref-2' }])
+      .mockResolvedValueOnce([{ id: 'ref-2' }]);
+    client.referral.updateMany.mockResolvedValue({ count: 1 });
+
+    const claimed = await claimReferralsForCandidate({ candidate, cycleId: 'cycle-1', client });
+
+    // Not ['ref-1'], which is what slicing the pre-read list would have given.
+    expect(claimed).toEqual(['ref-2']);
   });
 
   it('claims nothing when another applicant in the cycle shares the name', async () => {

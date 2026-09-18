@@ -113,7 +113,16 @@ export async function claimReferralsForCandidate({ candidate, cycleId, client = 
       }
     });
 
-    return count > 0 ? ids : [];
+    if (count === 0) return [];
+    // `count` can be short of `ids.length` when an admin placed one of these in
+    // between, and it does not say which ones moved. Read back the referrals
+    // that actually point at this candidate, so the caller's log names what
+    // really happened rather than what was attempted.
+    const claimed = await tx.referral.findMany({
+      where: { id: { in: ids }, candidateId: candidate.id },
+      select: { id: true }
+    });
+    return claimed.map((referral) => referral.id);
   };
 
   return typeof client.$transaction === 'function' ? client.$transaction(run) : run(client);
