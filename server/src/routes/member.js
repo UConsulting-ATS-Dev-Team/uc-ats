@@ -42,6 +42,7 @@ import {
 // confirm/update modal before the member can open slots.
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 import { candidateQuestionHandlers } from '../services/candidateQuestions.js';
+import { nudgeSessionQuestions } from '../services/realtime.js';
 import {
   guardApplication,
   guardCandidate,
@@ -2155,6 +2156,7 @@ router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requ
       }
     });
 
+    nudgeSessionQuestions(interviewId, { at: question.updatedAt });
     res.status(201).json(question);
   } catch (error) {
     console.error('[POST /api/member/interviews/:interviewId/session-questions/bank]', error);
@@ -2170,6 +2172,15 @@ async function canAccessInterview(req, interviewId) {
     where: { interviewId, userId: req.user.id }
   });
   return Boolean(assignment);
+}
+
+// A reorder rewrites every row, so the nudge carries the newest stamp of the batch -
+// anything less and a client would re-fetch rows it already holds on its next poll.
+function newestUpdatedAt(rows) {
+  return rows.reduce(
+    (newest, row) => (!newest || row.updatedAt > newest ? row.updatedAt : newest),
+    null
+  );
 }
 
 router.post('/interviews/:interviewId/session-questions', requireAuth, requireAdminOrMember, async (req, res) => {
@@ -2204,6 +2215,7 @@ router.post('/interviews/:interviewId/session-questions', requireAuth, requireAd
       }
     });
 
+    nudgeSessionQuestions(interviewId, { at: question.updatedAt });
     res.status(201).json(question);
   } catch (error) {
     console.error('[POST /api/member/interviews/:interviewId/session-questions]', error);
@@ -2270,6 +2282,7 @@ router.delete('/interviews/:interviewId/session-questions/:id', requireAuth, req
       data: { deletedAt: new Date() }
     });
 
+    nudgeSessionQuestions(interviewId, { at: updated.updatedAt });
     res.json(updated);
   } catch (error) {
     console.error('[DELETE /api/member/interviews/:interviewId/session-questions/:id]', error);
@@ -2322,6 +2335,7 @@ router.patch('/interviews/:interviewId/session-questions/reorder', requireAuth, 
       )
     );
 
+    nudgeSessionQuestions(interviewId, { at: newestUpdatedAt(questions) });
     res.json(questions);
   } catch (error) {
     console.error('[PATCH /api/member/interviews/:interviewId/session-questions/reorder]', error);

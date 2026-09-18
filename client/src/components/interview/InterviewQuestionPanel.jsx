@@ -10,9 +10,16 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../supabaseClient';
 import './InterviewQuestionPanel.css';
 
-const POLL_INTERVAL_MS = 10000;
+// Polling is the fallback, not the transport. A Supabase broadcast says "this interview's
+// questions changed" and the list is refetched at once; these intervals only cover the
+// case where that nudge never arrives - env vars unset, socket blocked, subscription
+// dropped. Matches the live vote rooms, which treat Supabase the same way.
+const POLL_MS = { realtime: 30000, polling: 10000 };
+
+const questionsChannel = (interviewId) => `interview-questions:${interviewId}`;
 
 const ROUND_LABELS = {
   COFFEE_CHAT: 'Coffee Chat',
@@ -57,6 +64,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   const [bank, setBank] = useState([]);
   const [facets, setFacets] = useState({ categories: [], rounds: [] });
 
+  const [connected, setConnected] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [loadingBank, setLoadingBank] = useState(false);
   const [error, setError] = useState(null);
@@ -70,6 +78,11 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
 
   const questionMap = useRef(new Map());
   const watermark = useRef(null);
+
+  // Question prep only belongs to the structured rounds, and there is nothing to sync
+  // without an interview. Every effect below is inert otherwise, because the hooks still
+  // run on a coffee chat where the panel itself renders nothing.
+  const active = Boolean(interviewId) && QUESTION_ROUNDS.has(round);
 
   useEffect(() => {
     if (round && !roundFilter) setRoundFilter(round);
@@ -145,13 +158,44 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     return undefined;
   }, [open, tab, loadBank]);
 
-  // Polling only runs while the panel is open - a closed panel has nothing to show, and
-  // this is the fallback sync path, not a live socket.
+  // The fallback poll still only runs while the panel is open, but it can be slow now
+  // that a broadcast carries the urgent case. It stays at the old ten seconds whenever
+  // the subscription is not up, which is the whole point of keeping it.
   useEffect(() => {
     if (!open) return undefined;
-    const timer = setInterval(() => loadSession(), POLL_INTERVAL_MS);
+    const timer = setInterval(() => loadSession(), connected ? POLL_MS.realtime : POLL_MS.polling);
     return () => clearInterval(timer);
-  }, [open, loadSession]);
+  }, [open, connected, loadSession]);
+
+  const loadSessionRef = useRef(loadSession);
+  loadSessionRef.current = loadSession;
+
+  // Subscribed only while the panel is open, for the same reason the poll is: a closed
+  // panel deliberately fetches nothing, and a nudge it cannot act on is a wasted socket.
+  // The full read on open is what catches whatever was missed in the meantime.
+  useEffect(() => {
+    if (!open || !active || !supabase) return undefined;
+    const channel = supabase.channel(questionsChannel(interviewId));
+
+    channel.on('broadcast', { event: 'questions:changed' }, ({ payload }) => {
+      if (payload?.interviewId !== interviewId) return;
+      // Anyone holding the anon key can post here, so a nudge is only ever a reason to
+      // re-read through the authenticated API - never data in its own right. The worst a
+      // forged one buys is a redundant GET.
+      if (payload.at && watermark.current && new Date(payload.at) <= new Date(watermark.current)) {
+        return;
+      }
+      loadSessionRef.current?.();
+    });
+
+    channel.subscribe((status) => setConnected(status === 'SUBSCRIBED'));
+
+    return () => {
+      setConnected(false);
+      try { channel.unsubscribe(); } catch { /* already gone */ }
+      try { supabase.removeChannel(channel); } catch { /* already gone */ }
+    };
+  }, [open, active, interviewId]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -259,7 +303,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   const canRemove = (question) =>
     user?.role === 'ADMIN' || question.addedBy === user?.id;
 
-  if (!interviewId || !QUESTION_ROUNDS.has(round)) return null;
+  if (!active) return null;
 
   return (
     <>

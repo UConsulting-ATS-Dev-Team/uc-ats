@@ -60,3 +60,23 @@ export function nudgeLiveVote(sessionId, { version, kind = 'control' }) {
 export function nudgeLiveVotesGlobal({ sessionId, status }) {
   void broadcast(LIVE_VOTES_CHANNEL, 'session:changed', { sessionId, status });
 }
+
+// Live interview questions. An interviewer adding, removing or reordering a question
+// nudges the other panelists to refetch. Content-free like the live vote nudges: the
+// channel is joined in the browser with the anon key, so the prompts themselves stay
+// behind the authenticated API and only "something changed, at this time" goes out.
+//
+// `at` is the newest updatedAt the write produced. A client whose watermark already
+// covers it has nothing to fetch - which is how the interviewer who made the change
+// skips their own echo, since the broadcast comes from the server rather than from
+// their browser and Supabase's `self: false` cannot exclude them.
+
+export const interviewQuestionsChannel = (interviewId) => `interview-questions:${interviewId}`;
+
+export function nudgeSessionQuestions(interviewId, { at } = {}) {
+  if (!interviewId) return;
+  void broadcast(interviewQuestionsChannel(interviewId), 'questions:changed', {
+    interviewId,
+    at: at instanceof Date ? at.toISOString() : at ?? null
+  });
+}

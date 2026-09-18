@@ -8,6 +8,45 @@ vi.mock('../../utils/api', () => ({
 }));
 vi.mock('../../context/AuthContext', () => ({ useAuth: vi.fn() }));
 
+// One fake Supabase channel, inspected by the broadcast tests below. `vi.hoisted` because
+// the mock factory is hoisted above every other statement in this file.
+const realtime = vi.hoisted(() => {
+  const state = { name: null, handler: null, subscribed: null, unsubscribed: 0, removed: 0 };
+  state.channel = {
+    on: (_type, _filter, handler) => {
+      state.handler = handler;
+      return state.channel;
+    },
+    subscribe: (cb) => {
+      state.subscribed = cb;
+      return state.channel;
+    },
+    unsubscribe: () => {
+      state.unsubscribed += 1;
+    },
+  };
+  state.reset = () => {
+    state.name = null;
+    state.handler = null;
+    state.subscribed = null;
+    state.unsubscribed = 0;
+    state.removed = 0;
+  };
+  return state;
+});
+
+vi.mock('../../supabaseClient', () => ({
+  supabase: {
+    channel: (name) => {
+      realtime.name = name;
+      return realtime.channel;
+    },
+    removeChannel: () => {
+      realtime.removed += 1;
+    },
+  },
+}));
+
 import apiClient from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 
@@ -64,6 +103,7 @@ const openPanel = async () => {
 describe('InterviewQuestionPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    realtime.reset();
     useAuth.mockReturnValue({ user: me });
     mockGets();
   });
@@ -238,5 +278,50 @@ describe('InterviewQuestionPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Interview questions' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Not assigned to this interview');
+  });
+
+  describe('realtime nudges', () => {
+    const nudge = async (payload) => {
+      await act(async () => {
+        realtime.handler({ payload });
+      });
+    };
+
+    it('subscribes to this interview’s channel only while the panel is open', async () => {
+      renderPanel();
+      expect(realtime.name).toBeNull();
+
+      await openPanel();
+      expect(realtime.name).toBe('interview-questions:int-1');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close questions' }));
+      await waitFor(() => expect(realtime.unsubscribed).toBe(1));
+      expect(realtime.removed).toBe(1);
+    });
+
+    it('refetches when a nudge reports a change newer than the watermark', async () => {
+      renderPanel();
+      await openPanel();
+      const before = apiClient.get.mock.calls.length;
+
+      await nudge({ interviewId: 'int-1', at: '2026-08-27T10:05:00.000Z' });
+
+      await waitFor(() => expect(apiClient.get.mock.calls.length).toBe(before + 1));
+      // Incremental, not a full reload: the watermark from the open is still good.
+      expect(apiClient.get.mock.calls.at(-1)[0]).toContain('since=');
+    });
+
+    it('ignores its own echo, and nudges for other interviews', async () => {
+      renderPanel();
+      await openPanel();
+      const before = apiClient.get.mock.calls.length;
+
+      // The server broadcasts, so the interviewer who added the question is sent their
+      // own nudge. Their watermark already covers it.
+      await nudge({ interviewId: 'int-1', at: theirs.updatedAt });
+      await nudge({ interviewId: 'int-2', at: '2026-08-27T11:00:00.000Z' });
+
+      expect(apiClient.get.mock.calls.length).toBe(before);
+    });
   });
 });
