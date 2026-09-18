@@ -17,19 +17,42 @@ export const MAX_LEAD_TIME_HOURS = 720;
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
+// Prisma's code for "the table is not there". This project applies migrations by
+// hand (see CLAUDE.md), so the code can reach a database that has not had this
+// one run yet. Reads fall back to the default rather than taking the whole case
+// book down; writes still fail, loudly, because a setting that cannot be saved
+// must not look saved.
+const MISSING_TABLE = 'P2021';
+
+function isMissingTable(error) {
+  return error?.code === MISSING_TABLE;
+}
+
+async function readSetting() {
+  try {
+    return await prisma.caseVisibilitySetting.findUnique({
+      where: { id: SETTING_ID },
+      select: { leadTimeHours: true, updatedAt: true, updatedById: true },
+    });
+  } catch (error) {
+    if (isMissingTable(error)) {
+      console.error(
+        '[caseVisibility] case_visibility_settings is missing — run the migration. ' +
+          `Falling back to ${DEFAULT_LEAD_TIME_HOURS}h until it exists.`
+      );
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function getLeadTimeHours() {
-  const row = await prisma.caseVisibilitySetting.findUnique({
-    where: { id: SETTING_ID },
-    select: { leadTimeHours: true },
-  });
+  const row = await readSetting();
   return row?.leadTimeHours ?? DEFAULT_LEAD_TIME_HOURS;
 }
 
 export async function getVisibilitySetting() {
-  const row = await prisma.caseVisibilitySetting.findUnique({
-    where: { id: SETTING_ID },
-    select: { leadTimeHours: true, updatedAt: true, updatedById: true },
-  });
+  const row = await readSetting();
   return {
     leadTimeHours: row?.leadTimeHours ?? DEFAULT_LEAD_TIME_HOURS,
     updatedAt: row?.updatedAt ?? null,

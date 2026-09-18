@@ -9,6 +9,7 @@ import {
   MAX_LEAD_TIME_HOURS,
   authorizeCaseRead,
   getLeadTimeHours,
+  getVisibilitySetting,
   setLeadTimeHours,
   unlockTimeFor,
 } from './caseVisibility.js';
@@ -186,6 +187,43 @@ describe('getLeadTimeHours', () => {
   it('keeps a stored 0 rather than treating it as missing', async () => {
     leadTimeIs(0);
     await expect(getLeadTimeHours()).resolves.toBe(0);
+  });
+});
+
+describe('when the settings table has not been migrated yet', () => {
+  const missingTable = Object.assign(new Error('table does not exist'), { code: 'P2021' });
+
+  it('keeps the case book working on the default rather than 500ing every read', async () => {
+    prisma.caseVisibilitySetting.findUnique.mockRejectedValue(missingTable);
+    assignedTo(hoursFromNow(DEFAULT_LEAD_TIME_HOURS + 1));
+
+    const verdict = await authorizeCaseRead('case-1', MEMBER, NOW);
+
+    expect(verdict.reason).toBe('LOCKED');
+    expect(verdict.unlocksAt.toISOString()).toBe(hoursFromNow(1).toISOString());
+  });
+
+  it('still gates: a member far out is locked, not waved through', async () => {
+    prisma.caseVisibilitySetting.findUnique.mockRejectedValue(missingTable);
+    assignedTo(hoursFromNow(48));
+
+    expect((await authorizeCaseRead('case-1', MEMBER, NOW)).allowed).toBe(false);
+  });
+
+  it('reports the default through getVisibilitySetting', async () => {
+    prisma.caseVisibilitySetting.findUnique.mockRejectedValue(missingTable);
+
+    await expect(getVisibilitySetting()).resolves.toMatchObject({
+      leadTimeHours: DEFAULT_LEAD_TIME_HOURS,
+    });
+  });
+
+  it('does not swallow a real database failure', async () => {
+    prisma.caseVisibilitySetting.findUnique.mockRejectedValue(
+      Object.assign(new Error('connection refused'), { code: 'P1001' })
+    );
+
+    await expect(getLeadTimeHours()).rejects.toThrow('connection refused');
   });
 });
 
