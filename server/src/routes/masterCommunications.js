@@ -9,7 +9,8 @@ import {
   createTemplate,
   listLogs,
   previewMasterCommunication,
-  buildImessagePacket,
+  listImessageMembers,
+  logImessageSend,
   sendMasterCommunication,
   sendTestCommunication,
   scheduleMessage,
@@ -316,14 +317,29 @@ router.post('/test', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/packet', requireAuth, requireAdmin, async (req, res) => {
+// ---------------------------------------------------------------------------
+// iMessage (members only)
+// ---------------------------------------------------------------------------
+// The message itself leaves from the admin's Messages app via an sms:// link;
+// these routes only supply the people and record the send.
+
+router.get('/imessage/members', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { filters } = req.body || {};
-    const packet = await buildImessagePacket({ filters });
-    res.json(packet);
+    res.json({ members: await listImessageMembers() });
   } catch (err) {
-    console.error('[POST /api/master-communications/packet]', err);
-    res.status(err.status || 500).json({ error: err.message || 'Failed to build iMessage packet' });
+    console.error('[GET /api/master-communications/imessage/members]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to load members' });
+  }
+});
+
+router.post('/imessage/log', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { recipientIds, body, templateId, cycleId } = req.body || {};
+    const result = await logImessageSend({ recipientIds, body, templateId, cycleId, sentBy: req.user.id });
+    res.status(201).json(result);
+  } catch (err) {
+    if (!err.status) console.error('[POST /api/master-communications/imessage/log]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to log iMessage' });
   }
 });
 

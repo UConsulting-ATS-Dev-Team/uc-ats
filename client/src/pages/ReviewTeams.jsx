@@ -57,6 +57,8 @@ import {
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import ImessageSendDialog from '../components/communications/ImessageSendDialog';
+import { Sms as SmsIcon } from '@mui/icons-material';
 
 // Draggable Application Component
 function DraggableApplication({ application, teamId, onRemove, onClick, isDragging, editMode }) {
@@ -211,6 +213,8 @@ export default function ReviewTeams() {
   const [contributionsByTeam, setContributionsByTeam] = useState({});
   const [reminderPending, setReminderPending] = useState(new Set());
   const [reminderResult, setReminderResult] = useState({});
+  // The team being messaged over iMessage, if any. Admin-only.
+  const [textingTeam, setTextingTeam] = useState(null);
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -775,16 +779,28 @@ export default function ReviewTeams() {
                 <PencilIcon style={{ width: '1rem', height: '1rem' }} />
               </IconButton>
             </Stack>
-            <Chip
-              label={`${team.applications?.length || 0} applications`}
-              size="small"
-              variant="outlined"
-              sx={{
-                borderColor: 'primary.main',
-                color: 'primary.main',
-                fontWeight: 500
-              }}
-            />
+            <Stack direction="row" alignItems="center" spacing={1}>
+              {user.role === 'ADMIN' && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<SmsIcon fontSize="small" />}
+                  onClick={() => setTextingTeam(team)}
+                >
+                  Send iMessage to team
+                </Button>
+              )}
+              <Chip
+                label={`${team.applications?.length || 0} applications`}
+                size="small"
+                variant="outlined"
+                sx={{
+                  borderColor: 'primary.main',
+                  color: 'primary.main',
+                  fontWeight: 500
+                }}
+              />
+            </Stack>
           </Stack>
 
           {/* Collapsible Content */}
@@ -1420,6 +1436,21 @@ export default function ReviewTeams() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {user.role === 'ADMIN' && (
+        <ImessageSendDialog
+          open={Boolean(textingTeam)}
+          onClose={() => setTextingTeam(null)}
+          title="Send iMessage to team"
+          subtitle={textingTeam ? `${textingTeam.name}${textingTeam.cycleName ? ` · ${textingTeam.cycleName}` : ''}` : ''}
+          initialMemberIds={textingTeam?.members.map((member) => member.id) ?? []}
+          cycleId={textingTeam?.cycleId}
+          onSent={(message) => {
+            setSuccess(message);
+            setTimeout(() => setSuccess(''), 3000);
+          }}
+        />
+      )}
     </Box>
     </AccessControl>
   );

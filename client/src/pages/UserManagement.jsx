@@ -88,7 +88,8 @@ const UserManagement = () => {
   const [editForm, setEditForm] = useState({
     fullName: '',
     graduationClass: '',
-    email: ''
+    email: '',
+    phoneNumber: ''
   });
 
   const [imageFile, setImageFile] = useState(null);
@@ -178,7 +179,7 @@ const UserManagement = () => {
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError('Failed to update user');
+      setError(err.message || 'Failed to update user');
       console.error('Error updating user:', err);
     }
   };
@@ -264,7 +265,8 @@ const UserManagement = () => {
     setEditForm({
       fullName: user.fullName,
       graduationClass: user.graduationClass || '',
-      email: user.email
+      email: user.email,
+      phoneNumber: user.phoneNumber || ''
     });
     setShowEditModal(true);
   };
@@ -878,6 +880,15 @@ const UserManagement = () => {
                   label="Graduation Class"
                   value={editForm.graduationClass}
                   onChange={(e) => setEditForm({...editForm, graduationClass: e.target.value})}
+                />
+                <TextField
+                  fullWidth
+                  label="Phone Number"
+                  type="tel"
+                  placeholder="(310) 555-1234"
+                  helperText="Used for iMessage from Master Communications"
+                  value={editForm.phoneNumber}
+                  onChange={(e) => setEditForm({...editForm, phoneNumber: e.target.value})}
                 />
               </Stack>
             </DialogContent>

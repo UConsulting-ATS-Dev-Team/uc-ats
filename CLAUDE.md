@@ -198,6 +198,16 @@ The system follows a **recruiting cycle-based workflow**:
   ([server/src/services/decisionBatches.js](server/src/services/decisionBatches.js)).
 - Round order lives in [server/src/utils/roundProgression.js](server/src/utils/roundProgression.js).
 
+**iMessage (Master Communications):**
+- Members only. An admin picks people by name and writes plain text; Send opens one group
+  conversation in their own Messages app through an `sms://open?addresses=…&body=…` link
+  ([client/src/utils/imessage.js](client/src/utils/imessage.js)). The server never delivers
+  or schedules an iMessage — it lists reachable members (`GET /imessage/members`) and logs
+  the send (`POST /imessage/log`).
+- Numbers live on `User.phoneNumber` (E.164). Bulk-load them from a roster CSV with
+  `node scripts/import-member-phones-from-csv.js <csv>` (dry run; add `--apply` to write),
+  or edit one in User Management.
+
 **Live votes:**
 - An admin starts a session from any Staging tab. Admins and members join from anywhere in
   the app (`LiveVoteProvider` in [client/src/context/LiveVoteContext.jsx](client/src/context/LiveVoteContext.jsx)
