@@ -66,9 +66,11 @@ import {
   lockedRowPredicate,
   redactApplication,
   redactCandidate,
-  redactLockedApplications
+  redactLockedApplications,
+  sendRecordLocked
 } from '../utils/lockedRecords.js';
 import { processRoundDecisions } from '../services/decisionProcessing.js';
+import { referredDisplayName, attachReferralToCandidate } from '../services/referrals.js';
 // The roster seam: slots are the source of truth where they exist, and the
 // legacy Interview.description blob everywhere else.
 import {
@@ -5521,6 +5523,114 @@ router.delete('/interview-questions/:id', async (req, res) => {
       return res.status(404).json({ error: 'Interview question not found' });
     }
     res.status(500).json({ error: 'Failed to delete interview question' });
+  }
+});
+
+// -------------------- Referrals --------------------
+
+// Every referral in a cycle, including the ones still waiting for their person
+// to apply. `status=PENDING` is the queue worth watching: a member vouched for
+// someone who has not shown up yet, and nobody has to do anything about it
+// until they do.
+router.get('/referrals', async (req, res) => {
+  try {
+    const { status } = req.query || {};
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) {
+      return res.json([]);
+    }
+
+    const where = { cycleId: cycle.id };
+    if (status === 'PENDING') where.candidateId = null;
+    if (status === 'ATTACHED') where.candidateId = { not: null };
+
+    const referrals = await prisma.referral.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        candidate: { select: { id: true, firstName: true, lastName: true, email: true } },
+        referredBy: { select: { id: true, fullName: true, email: true } }
+      }
+    });
+
+    // A sealed candidate keeps their name on the row and loses the link
+    // through to their record, which enforces its own seal anyway.
+    const isLocked = await lockedRowPredicate(req, referrals);
+
+    res.json(
+      referrals.map((referral) => ({
+        id: referral.id,
+        referrerName: referral.referrerName,
+        relationship: referral.relationship,
+        source: referral.source,
+        referredName: referredDisplayName(referral),
+        referredBy: referral.referredBy,
+        createdAt: referral.createdAt,
+        claimedAt: referral.claimedAt,
+        status: referral.candidateId ? 'ATTACHED' : 'PENDING',
+        candidateId: isLocked(referral) ? null : referral.candidateId,
+        locked: isLocked(referral)
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/admin/referrals]', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
+  }
+});
+
+// Match a pending referral to a candidate by hand. This is the escape hatch for
+// everything name matching will not decide on its own: a member picked "Other"
+// for someone already in the system, the name was spelled differently enough to
+// miss, or two applicants share it and the claim was held back on purpose.
+router.patch('/referrals/:id', async (req, res) => {
+  try {
+    const candidateId = typeof req.body?.candidateId === 'string' ? req.body.candidateId.trim() : '';
+    if (!candidateId) {
+      return res.status(400).json({ error: 'candidateId is required' });
+    }
+
+    const { notFound, sealed, referral } = await attachReferralToCandidate({
+      referralId: req.params.id,
+      candidateId
+    });
+
+    if (notFound === 'referral') return res.status(404).json({ error: 'Referral not found' });
+    if (notFound === 'candidate') return res.status(404).json({ error: 'Candidate not found' });
+    if (sealed) return sendRecordLocked(res);
+
+    res.json(referral);
+  } catch (error) {
+    console.error('[PATCH /api/admin/referrals/:id]', error);
+    res.status(500).json({ error: 'Failed to attach referral' });
+  }
+});
+
+// Candidate search for the admin matcher. Unlike the member-facing one this is
+// not scoped to a cycle: a referral may well belong to someone who applied in a
+// different one.
+router.get('/referral-candidates', async (req, res) => {
+  try {
+    const query = typeof req.query?.q === 'string' ? req.query.q.trim() : '';
+    if (query.length < 2) return res.json([]);
+
+    const candidates = await prisma.candidate.findMany({
+      where: {
+        recordsLockedAt: null,
+        OR: [
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { email: { contains: query, mode: 'insensitive' } }
+        ]
+      },
+      select: { id: true, firstName: true, lastName: true, email: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      take: 20
+    });
+
+    res.json(candidates);
+  } catch (error) {
+    console.error('[GET /api/admin/referral-candidates]', error);
+    res.status(500).json({ error: 'Failed to search candidates' });
   }
 });
 

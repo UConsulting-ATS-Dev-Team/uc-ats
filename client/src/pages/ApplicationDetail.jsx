@@ -68,8 +68,11 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const commentsEndRef = useRef(null);
 
-  // Referral state
-  const [referral, setReferral] = useState(null);
+  // Referral state. `referrals` is every referral for this person in this
+  // cycle: the one added on this page, plus any a member submitted by name
+  // before the application arrived. Only the manual one is editable here.
+  const [referrals, setReferrals] = useState([]);
+  const manualReferral = referrals.find((r) => r.source === 'MANUAL') || null;
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
   const [referralForm, setReferralForm] = useState({ referrerName: '', relationship: '' });
   const [isSubmittingReferral, setIsSubmittingReferral] = useState(false);
@@ -133,15 +136,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
   };
 
   // Referral functions
-  const fetchReferral = async () => {
+  const fetchReferrals = async () => {
     try {
-      const referralData = await apiClient.get(`/applications/${id}/referral`);
-      setReferral(referralData);
+      const referralData = await apiClient.get(`/applications/${id}/referrals`);
+      setReferrals(Array.isArray(referralData) ? referralData : []);
     } catch (e) {
       if (e.response?.status !== 404) {
-        console.error('Error fetching referral:', e);
+        console.error('Error fetching referrals:', e);
       }
-      setReferral(null);
+      setReferrals([]);
     }
   };
 
@@ -153,7 +156,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
     setIsSubmittingReferral(true);
     try {
       const newReferral = await apiClient.post(`/applications/${id}/referral`, referralForm);
-      setReferral(newReferral);
+      setReferrals((prev) => [...prev, newReferral]);
       setIsReferralModalOpen(false);
       setReferralForm({ referrerName: '', relationship: '' });
       // Refresh average grades to show the bonus
@@ -173,7 +176,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
 
     try {
       await apiClient.delete(`/applications/${id}/referral`);
-      setReferral(null);
+      // Only the manual referral is removed; member submissions stay.
+      setReferrals((prev) => prev.filter((r) => r.source !== 'MANUAL'));
       // Refresh average grades to remove the bonus
       await logAverageGrades();
     } catch (e) {
@@ -413,7 +417,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           fetchVideoScores(appData.candidateId, appData.cycleId),
           fetchEventData(),
           fetchInterviewEvaluations(),
-          fetchReferral()
+          fetchReferrals()
         ]);
         
       } catch (err) {
@@ -1290,7 +1294,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
               Referral Information
             </h3>
-            {!referral && !readOnly && (
+            {!manualReferral && !readOnly && (
               <button
                 onClick={() => setIsReferralModalOpen(true)}
                 style={{
@@ -1309,35 +1313,44 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             )}
           </div>
           
-          {referral ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                  {referral.referrerName}
+          {referrals.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {referrals.map((item) => (
+                <div
+                  key={item.id}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <div>
+                    <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                      {item.referrerName}
+                    </div>
+                    <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '4px' }}>
+                      {item.relationship}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                      {item.source === 'PRE_APPLICATION'
+                        ? `Submitted ${new Date(item.createdAt).toLocaleDateString()} before this application`
+                        : `Added ${new Date(item.createdAt).toLocaleDateString()}`}
+                    </div>
+                  </div>
+                  {item.source === 'MANUAL' && !readOnly && (
+                    <button
+                      onClick={removeReferral}
+                      style={{
+                        padding: '6px 12px',
+                        backgroundColor: '#dc2626',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '0.875rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '4px' }}>
-                  {referral.relationship}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                  Added {new Date(referral.createdAt).toLocaleDateString()}
-                </div>
-              </div>
-              {!readOnly && (
-              <button
-                onClick={removeReferral}
-                style={{
-                  padding: '6px 12px',
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontSize: '0.875rem',
-                  cursor: 'pointer'
-                }}
-              >
-                Remove
-              </button>
-              )}
+              ))}
             </div>
           ) : (
             <div style={{ color: '#6b7280', fontSize: '0.875rem', fontStyle: 'italic' }}>
