@@ -225,6 +225,20 @@ The system follows a **recruiting cycle-based workflow**:
   [server/src/services/stagingDecisions.js](server/src/services/stagingDecisions.js), the same
   write as Staging's inline decision picker, so it feeds decision processing unchanged.
 
+**Case book time restriction:**
+- A member may open a case only once they are close to the interview they run it in.
+  The window is one global number of hours, held in the `CaseVisibilitySetting`
+  singleton and edited by an admin on the Cases page.
+- Every read of case content goes through `authorizeCaseRead()` in
+  [server/src/services/caseVisibility.js](server/src/services/caseVisibility.js), which
+  answers `{ allowed }`, `FORBIDDEN` or `LOCKED` with the unlock time. The routes turn
+  that into 403 for a case that is not theirs and **423 `CASE_LOCKED`** for one that is
+  theirs but early. Any new route serving case pages or detail must go through it.
+- Admins are exempt, so they can build and assign cases ahead of time. Case *titles* are
+  not gated: the assignment picker still lists them.
+- Larger numbers mean earlier access. 0 opens the case exactly at the interview start;
+  720 (30 days) is effectively no restriction.
+
 **Key Services:**
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
 - [server/src/services/syncEventResponses.js](server/src/services/syncEventResponses.js) - Syncs event RSVP/attendance forms

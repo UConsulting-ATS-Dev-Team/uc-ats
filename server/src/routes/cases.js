@@ -8,6 +8,13 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
+import {
+  authorizeCaseRead,
+  getVisibilitySetting,
+  setLeadTimeHours,
+  CASE_LOCKED_CODE,
+  MAX_LEAD_TIME_HOURS,
+} from '../services/caseVisibility.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -62,19 +69,19 @@ async function ensureDir(dir) {
   await fsPromises.mkdir(dir, { recursive: true });
 }
 
-// A MEMBER may read a case only if they are assigned (InterviewAssignment) to an
-// interview that has this case assigned. Admins may read any case.
-async function authorizeCaseRead(caseId, user) {
-  if (user.role === 'ADMIN') return true;
-  if (user.role !== 'MEMBER') return false;
-  const link = await prisma.caseAssignment.findFirst({
-    where: {
-      caseId,
-      interview: { assignments: { some: { userId: user.id } } },
-    },
-    select: { id: true },
-  });
-  return Boolean(link);
+// Who may read a case, and when, lives in services/caseVisibility.js. This turns
+// its verdict into a response: 403 for a case that is not theirs at all, 423 +
+// CASE_LOCKED for one that is theirs but has not unlocked yet. The client tells
+// them apart by the code, never by the message (client/src/utils/caseLock.js).
+function denyCaseRead(res, verdict) {
+  if (verdict.reason === 'LOCKED') {
+    return res.status(423).json({
+      error: 'This case unlocks closer to the interview.',
+      code: CASE_LOCKED_CODE,
+      unlocksAt: verdict.unlocksAt.toISOString(),
+    });
+  }
+  return res.status(403).json({ error: 'Forbidden' });
 }
 
 // Who is in an interview. Sessions where it has them, the old JSON config where
@@ -147,6 +154,36 @@ router.get('/active', requireAdminOrMember, async (req, res) => {
   }
 });
 
+/* -------------------------------------------------------------------------- */
+/* Case book time restriction                                                 */
+/* -------------------------------------------------------------------------- */
+// NOTE: these must stay above `/:id` below, or Express matches
+// "visibility-setting" as a case id.
+
+// Members read it so the viewer can explain the wait; only admins may change it.
+router.get('/visibility-setting', requireAdminOrMember, async (req, res) => {
+  try {
+    res.json(await getVisibilitySetting());
+  } catch (error) {
+    console.error('[GET /api/cases/visibility-setting]', error);
+    res.status(500).json({ error: 'Failed to read case visibility setting' });
+  }
+});
+
+router.patch('/visibility-setting', requireAdmin, async (req, res) => {
+  try {
+    const { leadTimeHours } = req.body;
+    const updated = await setLeadTimeHours(leadTimeHours, req.user.id);
+    res.json(updated);
+  } catch (error) {
+    if (error.code === 'INVALID_LEAD_TIME') {
+      return res.status(400).json({ error: error.message, max: MAX_LEAD_TIME_HOURS });
+    }
+    console.error('[PATCH /api/cases/visibility-setting]', error);
+    res.status(500).json({ error: 'Failed to update case visibility setting' });
+  }
+});
+
 // Create a case; optionally store the original PDF.
 router.post('/', requireAdmin, pdfUpload.single('pdf'), async (req, res) => {
   try {
@@ -192,8 +229,8 @@ router.post('/', requireAdmin, pdfUpload.single('pdf'), async (req, res) => {
 router.get('/:id', requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
-    const allowed = await authorizeCaseRead(id, req.user);
-    if (!allowed) return res.status(403).json({ error: 'Forbidden' });
+    const verdict = await authorizeCaseRead(id, req.user);
+    if (!verdict.allowed) return denyCaseRead(res, verdict);
 
     const found = await prisma.case.findUnique({
       where: { id },
@@ -387,8 +424,8 @@ router.delete('/:id/pages/:pageId', requireAdmin, async (req, res) => {
 router.get('/:id/pages/:pageId/image', async (req, res) => {
   try {
     const { id, pageId } = req.params;
-    const allowed = await authorizeCaseRead(id, req.user);
-    if (!allowed) return res.status(403).json({ error: 'Forbidden' });
+    const verdict = await authorizeCaseRead(id, req.user);
+    if (!verdict.allowed) return denyCaseRead(res, verdict);
 
     const page = await prisma.casePage.findFirst({
       where: { id: pageId, caseId: id },

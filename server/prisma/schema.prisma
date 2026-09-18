@@ -1374,6 +1374,20 @@ model CaseAssignment {
   @@map("case_assignments")
 }
 
+/// id "singleton". How many hours before an interview's startDate a MEMBER may
+/// read that interview's assigned case content. ADMIN is exempt. Larger means
+/// EARLIER access: 0 unlocks exactly at the start time, 720 (30 days) is
+/// effectively no restriction. Read through
+/// server/src/services/caseVisibility.js, never directly.
+model CaseVisibilitySetting {
+  id            String   @id @default("singleton")
+  leadTimeHours Int      @default(2)
+  updatedById   String?
+  updatedAt     DateTime @updatedAt
+
+  @@map("case_visibility_settings")
+}
+
 model HelpAnnouncement {
   id          String                @id @default(uuid())
   title       String

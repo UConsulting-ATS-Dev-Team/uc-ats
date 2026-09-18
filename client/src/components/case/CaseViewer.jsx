@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import apiClient from '../../utils/api';
 import { setPreviewActive as setGlobalPreview } from '../../utils/previewMode';
 import CasePageImage from './CasePageImage';
+import { isCaseLockedError, caseUnlocksAt, formatUnlockWait } from '../../utils/caseLock';
 import './CaseViewer.css';
 
 // Arc injects `--arc-*` CSS custom properties on the root. Arc handles
@@ -53,6 +54,9 @@ export default function CaseViewer({
   const [currentPageId, setCurrentPageId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Set when the server says this case is ours but has not unlocked yet
+  // (423 CASE_LOCKED). Holds the unlock time so we can say how long.
+  const [locked, setLocked] = useState(null);
   const [switching, setSwitching] = useState(false);
   const [pickerValue, setPickerValue] = useState('');
   const [confirmSwitch, setConfirmSwitch] = useState(null);
@@ -72,17 +76,28 @@ export default function CaseViewer({
       setCaseData(null);
       setPages([]);
       setCurrentPageId(null);
+      setLocked(null);
       return;
     }
     setLoading(true);
     setError('');
+    setLocked(null);
     try {
       const data = await apiClient.get(`/cases/${id}`);
       setCaseData(data);
       setPages(data.pages || []);
       setCurrentPageId(data.pages?.[0]?.id || null);
     } catch (e) {
-      setError(e.message || 'Failed to load case');
+      // Too early is not an error the member can act on, so it gets its own
+      // state and its own panel rather than a red message.
+      if (isCaseLockedError(e)) {
+        setLocked({ unlocksAt: caseUnlocksAt(e) });
+        setCaseData(null);
+        setPages([]);
+        setCurrentPageId(null);
+      } else {
+        setError(e.message || 'Failed to load case');
+      }
     } finally {
       setLoading(false);
     }
@@ -258,6 +273,38 @@ export default function CaseViewer({
 
   const exhibits = pages.filter((p) => p.pageType === 'EXHIBIT');
   const guides = pages.filter((p) => p.pageType === 'INTERVIEWER_ONLY');
+
+  // --- Assigned, but not yet unlocked ---------------------------------------
+  // Deliberately shows no page count, no description and no images: the whole
+  // point is that nothing about the case is readable yet.
+  if (locked) {
+    const wait = formatUnlockWait(locked.unlocksAt);
+    return (
+      <div className="case-viewer case-viewer--empty">
+        <p className="case-viewer__empty-title">Case opens closer to the interview</p>
+        <p className="case-viewer__empty-sub">
+          {assignment?.caseTitle ? `“${assignment.caseTitle}”` : 'This case'} unlocks
+          {wait ? ` ${wait}` : ' shortly'}
+          {locked.unlocksAt
+            ? ` — ${locked.unlocksAt.toLocaleString([], {
+                weekday: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}`
+            : ''}
+          .
+        </p>
+        <p className="case-viewer__empty-sub">
+          Cases stay closed until shortly before you run them, so they do not leak to candidates.
+        </p>
+        <div className="case-viewer__picker">
+          <button className="case-viewer__btn" onClick={() => loadCase(caseId)} disabled={loading}>
+            {loading ? 'Checking…' : 'Check again'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // --- No case assigned: inline picker --------------------------------------
   if (!caseId) {

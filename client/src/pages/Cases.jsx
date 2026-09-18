@@ -44,6 +44,94 @@ const STATUS_COLORS = {
 
 const FINAL_ROUND_TYPES = ['FINAL_ROUND', 'ROUND_TWO'];
 
+const MAX_LEAD_TIME_HOURS = 720;
+
+// How long before an interview its assigned case becomes readable by the
+// members running it. Admin-only; the server enforces it in
+// services/caseVisibility.js and answers 423 CASE_LOCKED until then.
+function CaseVisibilityControl() {
+  const [hours, setHours] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    apiClient
+      .get('/cases/visibility-setting')
+      .then((data) => {
+        if (!mounted) return;
+        setHours(String(data.leadTimeHours));
+        setLoaded(true);
+      })
+      .catch((e) => {
+        if (mounted) setError(e.message || 'Failed to load the case visibility setting');
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const save = async () => {
+    const parsed = Number(hours);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_LEAD_TIME_HOURS) {
+      setError(`Enter a whole number of hours between 0 and ${MAX_LEAD_TIME_HOURS}.`);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const updated = await apiClient.patch('/cases/visibility-setting', { leadTimeHours: parsed });
+      setHours(String(updated.leadTimeHours));
+      setNotice('Saved. This applies to every case from the next time a member opens one.');
+    } catch (e) {
+      setError(e.message || 'Failed to save the case visibility setting');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        Case book time restriction
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Members can open a case only this many hours before the interview they are running it in.
+        Admins are never restricted. Use 0 to open it exactly at the start time, or{' '}
+        {MAX_LEAD_TIME_HOURS} (30 days) for effectively no restriction.
+      </Typography>
+      {error && (
+        <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>
+          {error}
+        </Alert>
+      )}
+      {notice && (
+        <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>
+          {notice}
+        </Alert>
+      )}
+      <Stack direction="row" spacing={1.5} alignItems="center">
+        <TextField
+          label="Hours before"
+          type="number"
+          size="small"
+          value={hours}
+          disabled={!loaded || busy}
+          onChange={(e) => setHours(e.target.value)}
+          inputProps={{ min: 0, max: MAX_LEAD_TIME_HOURS, step: 1 }}
+          sx={{ width: 160 }}
+        />
+        <Button variant="outlined" onClick={save} disabled={!loaded || busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+      </Stack>
+    </Paper>
+  );
+}
+
 function CaseLibraryTab({ onChanged }) {
   const navigate = useNavigate();
   const [cases, setCases] = useState([]);
@@ -99,6 +187,8 @@ function CaseLibraryTab({ onChanged }) {
           {error}
         </Alert>
       )}
+
+      <CaseVisibilityControl />
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="body2" color="text.secondary">
