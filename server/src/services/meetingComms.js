@@ -7,6 +7,8 @@ export const MEETING_COMM_SUBJECTS = {
   HOST_NOTIFICATION: (candidateName) => `New GTKUC Signup - ${candidateName} signed up for your slot`,
   CANCELLATION: 'Meeting Cancelled - Get to Know UC',
   CANCELLATION_TO_HOST: 'Get to Know UC - Meeting Cancelled',
+  RESCHEDULED: 'Meeting Rescheduled - Get to Know UC',
+  RESCHEDULED_TO_HOST: 'Get to Know UC - Meeting Rescheduled',
   REMINDER: 'Reminder - Get to Know UC',
 };
 

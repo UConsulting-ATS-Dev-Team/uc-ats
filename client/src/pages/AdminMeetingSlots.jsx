@@ -143,6 +143,8 @@ export default function AdminMeetingSlots() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState('');
+  const [formInitial, setFormInitial] = useState(null);
+  const [editingSignupCount, setEditingSignupCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => { api.setToken(token); }, [token]);
@@ -315,19 +317,27 @@ export default function AdminMeetingSlots() {
 
     setEditingId(null);
     setForm({ ...emptyForm, memberId: user?.id || '' });
+    setFormInitial(null);
+    setEditingSignupCount(0);
     setFormError('');
     setFormOpen(true);
   };
 
   const openEdit = (slot) => {
-    setEditingId(slot.id);
-    setForm({
+    const initial = {
       memberId: slot.member?.id || slot.memberId || '',
       location: slot.location || '',
       startTime: toLocalInput(slot.startTime),
       endTime: slot.endTime ? toLocalInput(slot.endTime) : '',
       capacity: slot.capacity ?? 2
-    });
+    };
+
+    setEditingId(slot.id);
+    setForm(initial);
+    // Kept so submit can tell a reschedule (which emails everyone who booked,
+    // plus the host) from a capacity or host change (which emails nobody).
+    setFormInitial(initial);
+    setEditingSignupCount(slot.signups?.length || 0);
     setFormError('');
     setFormOpen(true);
   };
@@ -353,6 +363,22 @@ export default function AdminMeetingSlots() {
       }
     }
 
+    // Moving a slot that people have booked emails them; changing capacity or
+    // reassigning the host does not. Only the first is worth a confirmation.
+    const moved = editingId && formInitial && (
+      form.startTime !== formInitial.startTime ||
+      form.endTime !== formInitial.endTime ||
+      form.location !== formInitial.location
+    );
+
+    if (moved && editingSignupCount > 0) {
+      const confirmed = window.confirm(
+        `This will email ${editingSignupCount} signed-up candidate(s) and the host member ` +
+        'the new time and location. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
     try {
       setSubmitting(true);
       setFormError('');
@@ -364,8 +390,13 @@ export default function AdminMeetingSlots() {
         capacity: Number.isFinite(Number(form.capacity)) ? parseInt(form.capacity, 10) : 2
       };
       if (editingId) {
-        await api.put(`/admin/meeting-slots/${editingId}`, payload);
-        flash('Meeting slot updated.');
+        const updated = await api.put(`/admin/meeting-slots/${editingId}`, payload);
+        const emailed = updated?.notified?.candidates || 0;
+        flash(
+          emailed > 0
+            ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
+            : 'Meeting slot updated.'
+        );
       } else {
         await api.post('/admin/meeting-slots', payload);
         flash('Meeting slot created.');
@@ -570,6 +601,12 @@ export default function AdminMeetingSlots() {
         <form onSubmit={submitForm}>
           <DialogContent dividers>
             {formError && <Alert severity="error" sx={{ mb: 2 }}>{formError}</Alert>}
+            {editingId && editingSignupCount > 0 && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                {editingSignupCount} candidate(s) have signed up for this slot. Rescheduling it
+                keeps their spot. They and the host member get an email with the new details.
+              </Alert>
+            )}
             <Stack spacing={2.5} sx={{ mt: 1 }}>
               <FormControl fullWidth>
                 <InputLabel id="host-label">Host (UC member)</InputLabel>

@@ -55,6 +55,8 @@ export default function MemberMeetingSlots() {
   const [editingSlot, setEditingSlot] = useState(null);
   const [editForm, setEditForm] = useState({ location: '', startTime: '', endTime: '', capacity: 2 });
   const [editDateError, setEditDateError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [editInitial, setEditInitial] = useState(null);
   const [profileState, setProfileState] = useState(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
 
@@ -309,18 +311,25 @@ export default function MemberMeetingSlots() {
     const startTimeFormatted = formatForInput(startDate);
     const endTimeFormatted = endDate ? formatForInput(endDate) : '';
     
-    setEditForm({
+    const initial = {
       location: slot.location,
       startTime: startTimeFormatted,
       endTime: endTimeFormatted,
       capacity: slot.capacity
-    });
+    };
+
+    setEditForm(initial);
+    // Kept so submit can tell a reschedule (which emails everyone who booked)
+    // from a capacity tweak (which does not). Comparing the form against the
+    // slot's UTC timestamps would mean redoing this conversion to compare.
+    setEditInitial(initial);
     setEditDateError('');
   };
 
   const cancelEdit = () => {
     setEditingSlot(null);
     setEditForm({ location: '', startTime: '', endTime: '', capacity: 2 });
+    setEditInitial(null);
     setEditDateError('');
   };
 
@@ -342,15 +351,41 @@ export default function MemberMeetingSlots() {
       return;
     }
     
+    // A time or location change is the one edit that invalidates what signed-up
+    // candidates already have in their calendars, so it is the one worth a
+    // confirmation. Changing capacity alone emails nobody.
+    const signupCount = editingSlot.signups?.length || 0;
+    const moved = editInitial && (
+      editForm.startTime !== editInitial.startTime ||
+      editForm.endTime !== editInitial.endTime ||
+      editForm.location !== editInitial.location
+    );
+
+    if (moved && signupCount > 0) {
+      const confirmed = window.confirm(
+        `This will email ${signupCount} signed-up candidate(s) the new time and location. Continue?`
+      );
+      if (!confirmed) return;
+    }
+
     try {
       setSubmitting(true);
       setError('');
+      setNotice('');
       setEditDateError('');
-      
-      
+
       const response = await api.put(`/member/meeting-slots/${editingSlot.id}`, editForm);
       setEditingSlot(null);
       setEditForm({ location: '', startTime: '', endTime: '', capacity: 2 });
+      setEditInitial(null);
+
+      const emailed = response?.notified?.candidates || 0;
+      setNotice(
+        emailed > 0
+          ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
+          : 'Meeting slot updated.'
+      );
+
       await load();
     } catch (e) {
       setError(e.message || 'Failed to update meeting slot');
@@ -536,6 +571,12 @@ export default function MemberMeetingSlots() {
         </Alert>
       )}
 
+      {notice && (
+        <Alert severity="success" sx={{ mb: 3 }} onClose={() => setNotice('')}>
+          {notice}
+        </Alert>
+      )}
+
       <GtkucProfileModal
         open={profileModalOpen}
         state={profileState}
@@ -659,7 +700,14 @@ export default function MemberMeetingSlots() {
           <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark' }}>
             Edit Meeting Slot
           </Typography>
-          
+
+          {editingSlot.signups?.length > 0 && (
+            <Alert severity="info" sx={{ mb: 3 }}>
+              {editingSlot.signups.length} candidate(s) have signed up for this slot. You can still
+              reschedule it. They keep their spot, and we email them the new time and location.
+            </Alert>
+          )}
+
           <Box component="form" onSubmit={onUpdate}>
             <Grid container spacing={3}>
               <Grid item xs={12} md={3}>

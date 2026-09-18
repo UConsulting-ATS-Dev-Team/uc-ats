@@ -14,6 +14,7 @@ import {
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import {
@@ -1048,50 +1049,41 @@ router.get('/meeting-slots', requireAuth, async (req, res) => {
   }
 });
 
-// Member: update a meeting slot
+// Member: update own meeting slot, including rescheduling one that people have
+// already booked. This used to refuse any time change once a slot had signups,
+// which blocked the only case where rescheduling matters; anyone who could no
+// longer make their own slot had to delete it and lose the bookings. Moving it
+// now emails every signed-up candidate the new time (see meetingSlotUpdates).
 router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { location, startTime, endTime, capacity } = req.body || {};
-    
-    // Check if the slot belongs to this member
+
+    // Ownership is the route's business; the service does the rest.
     const existingSlot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { signups: true }
+      select: { memberId: true }
     });
-    
+
     if (!existingSlot) {
       return res.status(404).json({ error: 'Meeting slot not found' });
     }
-    
+
     if (existingSlot.memberId !== req.user.id) {
       return res.status(403).json({ error: 'Not authorized to update this meeting slot' });
     }
-    
-    // Check if there are existing signups and the new time conflicts
-    if (existingSlot.signups.length > 0) {
-      // If there are signups, only allow updating location and capacity
-      if (startTime || endTime) {
-        return res.status(400).json({ 
-          error: 'Cannot change time of meeting slot with existing signups. Only location and capacity can be updated.' 
-        });
-      }
-    }
-    
-    const updateData = {};
-    if (location !== undefined) updateData.location = location;
-    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
-    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
-    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
-    
-    const updatedSlot = await prisma.meetingSlot.update({
-      where: { id },
-      data: updateData,
-      include: { signups: true }
+
+    const { slot, notified } = await updateMeetingSlot({
+      slotId: id,
+      patch: { location, startTime, endTime, capacity },
+      actorId: req.user.id
     });
-    
-    res.json(updatedSlot);
+
+    res.json({ ...slot, notified });
   } catch (error) {
+    if (error instanceof SlotUpdateError) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('[PUT /api/member/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
   }
