@@ -391,18 +391,24 @@ export default function AdminMeetingSlots() {
       };
       if (editingId) {
         const updated = await api.put(`/admin/meeting-slots/${editingId}`, payload);
-        // notified.candidates counts deliveries, not attempts, so a shortfall
-        // means somebody still has the old time and has to be told by hand.
-        const emailed = updated?.notified?.candidates || 0;
-        if (moved && editingSignupCount > 0 && emailed < editingSignupCount) {
-          setError(
-            `Slot moved, but only ${emailed} of ${editingSignupCount} candidate(s) could be emailed. ` +
-            'Contact the rest directly.'
-          );
+        // The server reports deliveries alongside what it expected to send.
+        // Anyone it could not reach still has the old time and needs telling
+        // by hand, so a shortfall is a warning rather than a success message.
+        const n = updated?.notified || {};
+        const missed = [];
+        if ((n.candidatesExpected || 0) > (n.candidates || 0)) {
+          missed.push(`${(n.candidatesExpected || 0) - (n.candidates || 0)} of ${n.candidatesExpected} candidate(s)`);
+        }
+        if (n.hostExpected && !n.host) {
+          missed.push('the host member');
+        }
+
+        if (missed.length > 0) {
+          setError(`Slot moved, but ${missed.join(' and ')} could not be emailed. Contact them directly.`);
         } else {
           flash(
-            emailed > 0
-              ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
+            n.candidates > 0
+              ? `Meeting slot updated. ${n.candidates} signed-up candidate(s) emailed the new details.`
               : 'Meeting slot updated.'
           );
         }

@@ -164,7 +164,9 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
     return tx.meetingSlot.update({ where: { id: slotId }, data, include: SLOT_INCLUDE });
   });
 
-  const notified = { candidates: 0, host: false };
+  // Delivered alongside expected, so a page can report a shortfall without
+  // knowing any of the rules about who gets mail and when.
+  const notified = { candidates: 0, candidatesExpected: 0, host: false, hostExpected: false };
 
   // Capacity and host changes are invisible to a candidate's calendar, so they
   // are not worth an email. Time and location are the whole point of one.
@@ -215,7 +217,9 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
   // Count what was delivered, not what was attempted. The edit pages report
   // this number back to whoever made the change, so it has to be true.
   notified.candidates = candidateResults.filter((r) => r.status === 'fulfilled' && r.value?.ok).length;
+  notified.candidatesExpected = updated.signups.length;
   notified.host = Boolean(hostResult?.ok);
+  notified.hostExpected = shouldNotifyHost;
 
   return { slot: updated, notified, changed: { time: timeChanged, location: locationChanged } };
 }

@@ -379,13 +379,17 @@ export default function MemberMeetingSlots() {
       setEditForm({ location: '', startTime: '', endTime: '', capacity: 2 });
       setEditInitial(null);
 
-      // notified.candidates counts deliveries, not attempts, so a shortfall
-      // means somebody is still holding the old time and has to be told by hand.
-      const emailed = response?.notified?.candidates || 0;
-      if (moved && signupCount > 0 && emailed < signupCount) {
+      // The server reports deliveries alongside what it expected to send.
+      // Anyone it could not reach is still holding the old time and needs
+      // telling by hand, so a shortfall is a warning rather than a success.
+      const n = response?.notified || {};
+      const expected = n.candidatesExpected || 0;
+      const emailed = n.candidates || 0;
+
+      if (expected > emailed) {
         setError(
-          `Slot moved, but only ${emailed} of ${signupCount} candidate(s) could be emailed. ` +
-          'Contact the rest directly.'
+          `Slot moved, but ${expected - emailed} of ${expected} candidate(s) could not be emailed. ` +
+          'Contact them directly.'
         );
       } else {
         setNotice(

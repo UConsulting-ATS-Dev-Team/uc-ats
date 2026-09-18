@@ -147,7 +147,13 @@ describe('member rescheduling their own GTKUC slot', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.notified).toEqual({ candidates: 2, host: false });
+    expect(body.notified).toEqual({
+      candidates: 2,
+      candidatesExpected: 2,
+      host: false,
+      // The host is the one making the change, so no host mail was due.
+      hostExpected: false
+    });
 
     expect(prisma.meetingSlot.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -365,13 +371,18 @@ describe('reschedule notification failures', () => {
     expect(await res.json()).toMatchObject({ notified: { candidates: 1 } });
   });
 
-  it('reports the host as not notified when their email is refused', async () => {
+  // hostExpected true with host false is what lets the admin page warn that the
+  // host still has the old time. Without the expected flag the page would see
+  // host: false and could not tell a refused email from one never due.
+  it('reports the host as expected but not notified when their email is refused', async () => {
     emails.sendMeetingRescheduleToMember.mockResolvedValueOnce({ success: false, error: 'SES rejected' });
 
     const res = await move(adminUser, '/api/admin/meeting-slots/slot-1');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ notified: { candidates: 2, host: false } });
+    expect(await res.json()).toMatchObject({
+      notified: { candidates: 2, candidatesExpected: 2, host: false, hostExpected: true }
+    });
   });
 
   it('still saves the move and logs the failure when a send throws outright', async () => {
