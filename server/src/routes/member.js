@@ -14,8 +14,10 @@ import {
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
+import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -1048,50 +1050,41 @@ router.get('/meeting-slots', requireAuth, async (req, res) => {
   }
 });
 
-// Member: update a meeting slot
+// Member: update own meeting slot, including rescheduling one that people have
+// already booked. This used to refuse any time change once a slot had signups,
+// which blocked the only case where rescheduling matters; anyone who could no
+// longer make their own slot had to delete it and lose the bookings. Moving it
+// now emails every signed-up candidate the new time (see meetingSlotUpdates).
 router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { location, startTime, endTime, capacity } = req.body || {};
-    
-    // Check if the slot belongs to this member
+
+    // Ownership is the route's business; the service does the rest.
     const existingSlot = await prisma.meetingSlot.findUnique({
       where: { id },
-      include: { signups: true }
+      select: { memberId: true }
     });
-    
+
     if (!existingSlot) {
       return res.status(404).json({ error: 'Meeting slot not found' });
     }
-    
+
     if (existingSlot.memberId !== req.user.id) {
       return res.status(403).json({ error: 'Not authorized to update this meeting slot' });
     }
-    
-    // Check if there are existing signups and the new time conflicts
-    if (existingSlot.signups.length > 0) {
-      // If there are signups, only allow updating location and capacity
-      if (startTime || endTime) {
-        return res.status(400).json({ 
-          error: 'Cannot change time of meeting slot with existing signups. Only location and capacity can be updated.' 
-        });
-      }
-    }
-    
-    const updateData = {};
-    if (location !== undefined) updateData.location = location;
-    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
-    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
-    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
-    
-    const updatedSlot = await prisma.meetingSlot.update({
-      where: { id },
-      data: updateData,
-      include: { signups: true }
+
+    const { slot, notified } = await updateMeetingSlot({
+      slotId: id,
+      patch: { location, startTime, endTime, capacity },
+      actorId: req.user.id
     });
-    
-    res.json(updatedSlot);
+
+    res.json({ ...slot, notified });
   } catch (error) {
+    if (error instanceof SlotUpdateError) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('[PUT /api/member/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
   }
@@ -2334,6 +2327,142 @@ router.patch('/interviews/:interviewId/session-questions/reorder', requireAuth, 
   } catch (error) {
     console.error('[PATCH /api/member/interviews/:interviewId/session-questions/reorder]', error);
     res.status(500).json({ error: 'Failed to reorder interview questions' });
+  }
+});
+
+// -------------------- Referrals --------------------
+//
+// Refer someone who has not applied yet. Referring a person who already has an
+// application is done on their application page instead; both end up in the
+// same table and on the same profile.
+
+const MAX_REFERRAL_FIELD = 120;
+
+const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
+
+// Typeahead for the referral form: people already in this cycle, so a member
+// picks the real person instead of spelling their name and hoping it matches.
+// Members can already see this cycle's applicants (`/all-applications`), so
+// this exposes nothing new - and sealed records are left out entirely, since
+// they belong to people who are already members.
+router.get('/referral-candidates', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const query = trimmed(req.query?.q);
+    if (query.length < 2) return res.json([]);
+
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) return res.json([]);
+
+    const candidates = await prisma.candidate.findMany({
+      where: {
+        recordsLockedAt: null,
+        applications: { some: { cycleId: cycle.id } },
+        OR: [
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { email: { contains: query, mode: 'insensitive' } }
+        ]
+      },
+      select: { id: true, firstName: true, lastName: true, email: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      take: 20
+    });
+
+    res.json(candidates);
+  } catch (error) {
+    console.error('[GET /api/member/referral-candidates]', error);
+    res.status(500).json({ error: 'Failed to search candidates' });
+  }
+});
+
+router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const candidateId = trimmed(req.body?.candidateId);
+    const referredFirstName = trimmed(req.body?.referredFirstName);
+    const referredLastName = trimmed(req.body?.referredLastName);
+    const relationship = trimmed(req.body?.relationship);
+
+    // Either they picked someone out of the list, or they typed a name under
+    // "Other". Nothing else is a referral.
+    if (!candidateId && (!referredFirstName || !referredLastName)) {
+      return res
+        .status(400)
+        .json({ error: "Pick a candidate, or enter the referred person's first and last name" });
+    }
+    if (!relationship) {
+      return res.status(400).json({ error: 'Relationship is required' });
+    }
+    if (
+      referredFirstName.length > MAX_REFERRAL_FIELD ||
+      referredLastName.length > MAX_REFERRAL_FIELD ||
+      relationship.length > MAX_REFERRAL_FIELD
+    ) {
+      return res.status(400).json({ error: `Each field must be ${MAX_REFERRAL_FIELD} characters or fewer` });
+    }
+
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) {
+      return res.status(409).json({ error: 'There is no active recruiting cycle to refer someone into' });
+    }
+
+    const { duplicate, notFound, sealed, referral } = await createMemberReferral({
+      referrerName: req.user.fullName || req.user.email,
+      relationship,
+      referredFirstName,
+      referredLastName,
+      candidateId: candidateId || null,
+      cycleId: cycle.id,
+      referredByUserId: req.user.id
+    });
+
+    if (notFound) return res.status(404).json({ error: 'That candidate no longer exists' });
+    if (sealed) return res.status(409).json({ error: 'That person is already a member' });
+    if (duplicate) {
+      return res.status(409).json({ error: 'You have already referred this person for this cycle' });
+    }
+
+    res.status(201).json(referral);
+  } catch (error) {
+    console.error('[POST /api/member/referrals]', error);
+    res.status(500).json({ error: 'Failed to submit referral' });
+  }
+});
+
+// The referrals this member submitted, newest first, with whether each one has
+// found its person yet.
+router.get('/referrals', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const referrals = await prisma.referral.findMany({
+      where: { referredByUserId: req.user.id },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        candidate: { select: { id: true, firstName: true, lastName: true } },
+        cycle: { select: { id: true, name: true } }
+      }
+    });
+
+    // A member sees that their own referral landed, never anything about how a
+    // sealed candidate is being evaluated. Identity is all that survives.
+    const isLocked = await lockedRowPredicate(req, referrals);
+
+    res.json(
+      referrals.map((referral) => ({
+        id: referral.id,
+        relationship: referral.relationship,
+        referredFirstName: referral.referredFirstName,
+        referredLastName: referral.referredLastName,
+        referredName: referredDisplayName(referral),
+        createdAt: referral.createdAt,
+        claimedAt: referral.claimedAt,
+        status: referral.candidateId ? 'ATTACHED' : 'PENDING',
+        cycle: referral.cycle,
+        // Only a link to the person; the profile behind it enforces its own seal.
+        candidateId: isLocked(referral) ? null : referral.candidateId
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/member/referrals]', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
   }
 });
 

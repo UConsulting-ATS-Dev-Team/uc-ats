@@ -53,6 +53,8 @@ import InterviewDetail from './pages/InterviewDetail';
 import CoffeeChatsPublic from './pages/CoffeeChatsPublic';
 import MemberMeetingSlots from './pages/MemberMeetingSlots';
 import MemberTalentNetwork from './pages/MemberTalentNetwork';
+import MemberReferrals from './pages/MemberReferrals';
+import AdminReferrals from './pages/AdminReferrals';
 import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import MemberHelp from './pages/MemberHelp';
@@ -599,6 +601,25 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MemberMeetingSlots />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Members refer candidates; admins match the ones that could not attach */}
+      <Route
+        path="/member/referrals"
+        element={
+          <ProtectedRoute>
+            <MemberReferrals />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/referrals"
+        element={
+          <ProtectedRoute>
+            <AdminReferrals />
           </ProtectedRoute>
         }
       />

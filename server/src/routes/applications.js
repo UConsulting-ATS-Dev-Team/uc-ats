@@ -140,6 +140,7 @@ router.get('/', requireAdminOrMember);
 router.get('/candidate/:candidateId/latest', requireAdminOrMember);
 router.get('/:id/events', requireAdminOrMember);
 router.all('/:id/referral', requireAdminOrMember);
+router.all('/:id/referrals', requireAdminOrMember);
 
 // Create manual application
 router.post('/manual', requireAdmin, async (req, res) => {
@@ -1107,6 +1108,42 @@ router.get('/:id/events', requireAuth, async (req, res) => {
 });
 
 // Referral endpoints
+//
+// Two ways a referral gets here, one list out. `/:id/referral` (singular) is
+// the manual add on this page and still owns exactly one MANUAL referral per
+// candidate per cycle. `/:id/referrals` (plural) is what the page reads: every
+// referral for this person in this cycle, including ones a member submitted by
+// name before the application existed and form sync later claimed.
+
+// All referrals for an application's candidate in its cycle
+router.get('/:id/referrals', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const application = await prisma.application.findUnique({
+      where: { id },
+      select: { candidateId: true, cycleId: true }
+    });
+
+    if (!application || !application.candidateId) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const referrals = await prisma.referral.findMany({
+      where: {
+        candidateId: application.candidateId,
+        cycleId: application.cycleId
+      },
+      orderBy: { createdAt: 'asc' },
+      include: { referredBy: { select: { id: true, fullName: true, email: true } } }
+    });
+
+    res.json(referrals);
+  } catch (error) {
+    console.error('Error fetching referrals:', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
+  }
+});
 
 // Get referral for an application
 router.get('/:id/referral', requireAuth, async (req, res) => {
@@ -1123,11 +1160,14 @@ router.get('/:id/referral', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    // Get referral for this candidate in this cycle
+    // Scoped to MANUAL so this reads back exactly what the POST and DELETE
+    // below manage. Without the filter it could return a member's submission,
+    // which those two will not touch. Use `/:id/referrals` for the full list.
     const referral = await prisma.referral.findFirst({
       where: {
         candidateId: application.candidateId,
-        cycleId: application.cycleId
+        cycleId: application.cycleId,
+        source: 'MANUAL'
       }
     });
 
@@ -1158,16 +1198,19 @@ router.post('/:id/referral', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    // Check if referral already exists for this candidate in this cycle
+    // One manual referral per candidate per cycle, as before. Referrals a
+    // member submitted by name and sync later claimed are not counted here:
+    // they arrived by a different door and must not block this one.
     const existingReferral = await prisma.referral.findFirst({
       where: {
         candidateId: application.candidateId,
-        cycleId: application.cycleId
+        cycleId: application.cycleId,
+        source: 'MANUAL'
       }
     });
 
     if (existingReferral) {
-      return res.status(400).json({ error: 'This application already has a referral' });
+      return res.status(400).json({ error: 'This application already has a manually added referral' });
     }
 
     // Create the referral with cycle association
@@ -1175,6 +1218,8 @@ router.post('/:id/referral', requireAuth, async (req, res) => {
       data: {
         referrerName,
         relationship,
+        source: 'MANUAL',
+        referredByUserId: req.user?.id ?? null,
         candidateId: application.candidateId,
         cycleId: application.cycleId
       }
@@ -1202,16 +1247,19 @@ router.delete('/:id/referral', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    // Delete the referral for this candidate in this cycle only
+    // Only the manual referral, and only in this cycle. A referral a member
+    // submitted before this person applied is that member's submission, not
+    // this page's to throw away.
     const deletedReferral = await prisma.referral.deleteMany({
       where: {
         candidateId: application.candidateId,
-        cycleId: application.cycleId
+        cycleId: application.cycleId,
+        source: 'MANUAL'
       }
     });
 
     if (deletedReferral.count === 0) {
-      return res.status(404).json({ error: 'No referral found for this application' });
+      return res.status(404).json({ error: 'No manually added referral found for this application' });
     }
 
     res.json({ message: 'Referral removed successfully' });

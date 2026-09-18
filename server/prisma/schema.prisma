@@ -88,6 +88,7 @@ model User {
   scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
   talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
   createdTalentPartners      TalentPartnerClient[]           @relation("TalentPartnerClientCreator")
+  submittedReferrals         Referral[]                      @relation("ReferralSubmitter")
   memberResumes              MemberResume[]
   externalResumes            ExternalResume[]
   createdClientBatches       ClientAssignmentBatch[]         @relation("ClientBatchCreator")
@@ -736,16 +737,44 @@ model RoundTwo {
   @@map("round_two")
 }
 
-model Referral {
-  id           String           @id @default(uuid())
-  referrerName String
-  relationship String
-  candidateId  String
-  createdAt    DateTime         @default(now())
-  cycleId      String?
-  candidate    Candidate        @relation(fields: [candidateId], references: [id])
-  cycle        RecruitingCycle? @relation(fields: [cycleId], references: [id])
+enum ReferralSource {
+  MANUAL
+  PRE_APPLICATION
+}
 
+// A referral is either attached to a Candidate from the start (MANUAL, added on
+// an application page) or submitted by name before the person has applied
+// (PRE_APPLICATION, candidateId null until form sync finds them). Both shapes
+// live here so a candidate's profile reads one list.
+model Referral {
+  id                String           @id @default(uuid())
+  referrerName      String
+  relationship      String
+  candidateId       String?
+  createdAt         DateTime         @default(now())
+  cycleId           String?
+  source            ReferralSource   @default(MANUAL)
+  // Who was referred, as the referring member typed it. First and last name is
+  // all a member is expected to know about someone who has not applied yet.
+  referredFirstName String?
+  referredLastName  String?
+  // Normalized "first|last" used to match against a Candidate on form sync.
+  // Derived from the names above on write; never set by a client.
+  referredNameKey   String?
+  referredByUserId  String?
+  claimedAt         DateTime?
+  candidate         Candidate?       @relation(fields: [candidateId], references: [id])
+  cycle             RecruitingCycle? @relation(fields: [cycleId], references: [id])
+  referredBy        User?            @relation("ReferralSubmitter", fields: [referredByUserId], references: [id])
+
+  // One member cannot refer the same person twice in a cycle. Postgres lets
+  // repeated NULLs through, so MANUAL referrals (no referredNameKey) are
+  // unaffected by this.
+  @@unique([referredByUserId, cycleId, referredNameKey])
+  @@index([candidateId])
+  @@index([cycleId])
+  @@index([referredByUserId])
+  @@index([cycleId, referredNameKey])
   @@map("referrals")
 }
 
@@ -1505,6 +1534,7 @@ enum MeetingCommunicationType {
   CONFIRMATION
   HOST_NOTIFICATION
   CANCELLATION
+  RESCHEDULED
   REMINDER
 }
 

@@ -24,6 +24,7 @@ import {
   ChevronRightIcon,
   EnvelopeIcon,
   BriefcaseIcon,
+  UserPlusIcon,
   QuestionMarkCircleIcon,
   ClockIcon,
 } from '@heroicons/react/24/outline';
@@ -51,6 +52,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'Candidates', href: '/candidate-list', icon: UserGroupIcon },
       { name: 'Document Grading', href: '/admin-document-grading', icon: DocumentTextIcon },
       { name: 'Review Teams', href: '/review-teams', icon: UserGroupIcon },
+      { name: 'Referrals', href: '/admin/referrals', icon: UserPlusIcon },
       { name: 'Staging', href: '/staging', icon: UserGroupIcon },
     ],
   },
@@ -164,6 +166,7 @@ const Layout = ({ children }) => {
       { name: 'My Interviews', href: '/assigned-interviews', icon: UserGroupIcon2 },
       { name: 'Applications', href: '/candidates', icon: DocumentTextIcon },
       { name: 'Get to Know UC', href: '/member/meeting-slots', icon: ChatBubbleLeftRightIcon },
+      { name: 'Refer a Candidate', href: '/member/referrals', icon: UserPlusIcon },
       { name: 'Talent Network', href: '/member/talent-network', icon: BriefcaseIcon },
       { name: 'Help', href: '/help', icon: QuestionMarkCircleIcon },
       { name: 'Message an Admin', href: '#', icon: ChatBubbleOvalLeftEllipsisIcon, isAction: true },

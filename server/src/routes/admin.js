@@ -7,6 +7,7 @@ import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEven
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
@@ -65,9 +66,11 @@ import {
   lockedRowPredicate,
   redactApplication,
   redactCandidate,
-  redactLockedApplications
+  redactLockedApplications,
+  sendRecordLocked
 } from '../utils/lockedRecords.js';
 import { processRoundDecisions } from '../services/decisionProcessing.js';
+import { referredDisplayName, attachReferralToCandidate } from '../services/referrals.js';
 // The roster seam: slots are the source of truth where they exist, and the
 // legacy Interview.description blob everywhere else.
 import {
@@ -4691,42 +4694,28 @@ router.post('/meeting-slots', async (req, res) => {
 });
 
 // Admin: update any meeting slot (full override — including host and time).
+//
+// Rescheduling here used to write the new time and say nothing, so signed-up
+// candidates and the host member kept a calendar entry for a meeting that had
+// moved. It now goes through the same service as the member route, which emails
+// them; an admin changing only capacity or the host still sends nothing.
 router.put('/meeting-slots/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { memberId, location, startTime, endTime, capacity } = req.body || {};
 
-    const existingSlot = await prisma.meetingSlot.findUnique({ where: { id } });
-    if (!existingSlot) {
-      return res.status(404).json({ error: 'Meeting slot not found' });
-    }
-
-    if (memberId !== undefined && memberId !== existingSlot.memberId) {
-      const host = await prisma.user.findUnique({ where: { id: memberId } });
-      if (!host) {
-        return res.status(400).json({ error: 'Host member not found' });
-      }
-    }
-
-    const updateData = {};
-    if (memberId !== undefined) updateData.memberId = memberId;
-    if (location !== undefined) updateData.location = location;
-    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
-    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
-    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
-
-    const updatedSlot = await prisma.meetingSlot.update({
-      where: { id },
-      data: updateData,
-      include: {
-        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
-        signups: { orderBy: { createdAt: 'asc' } },
-        communications: { orderBy: { sentAt: 'desc' } }
-      }
+    const { slot, notified } = await updateMeetingSlot({
+      slotId: id,
+      patch: { memberId, location, startTime, endTime, capacity },
+      actorId: req.user.id,
+      allowHostChange: true
     });
 
-    res.json(updatedSlot);
+    res.json({ ...slot, notified });
   } catch (error) {
+    if (error instanceof SlotUpdateError) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('[PUT /api/admin/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
   }
@@ -5534,6 +5523,114 @@ router.delete('/interview-questions/:id', async (req, res) => {
       return res.status(404).json({ error: 'Interview question not found' });
     }
     res.status(500).json({ error: 'Failed to delete interview question' });
+  }
+});
+
+// -------------------- Referrals --------------------
+
+// Every referral in a cycle, including the ones still waiting for their person
+// to apply. `status=PENDING` is the queue worth watching: a member vouched for
+// someone who has not shown up yet, and nobody has to do anything about it
+// until they do.
+router.get('/referrals', async (req, res) => {
+  try {
+    const { status } = req.query || {};
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) {
+      return res.json([]);
+    }
+
+    const where = { cycleId: cycle.id };
+    if (status === 'PENDING') where.candidateId = null;
+    if (status === 'ATTACHED') where.candidateId = { not: null };
+
+    const referrals = await prisma.referral.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        candidate: { select: { id: true, firstName: true, lastName: true, email: true } },
+        referredBy: { select: { id: true, fullName: true, email: true } }
+      }
+    });
+
+    // A sealed candidate keeps their name on the row and loses the link
+    // through to their record, which enforces its own seal anyway.
+    const isLocked = await lockedRowPredicate(req, referrals);
+
+    res.json(
+      referrals.map((referral) => ({
+        id: referral.id,
+        referrerName: referral.referrerName,
+        relationship: referral.relationship,
+        source: referral.source,
+        referredName: referredDisplayName(referral),
+        referredBy: referral.referredBy,
+        createdAt: referral.createdAt,
+        claimedAt: referral.claimedAt,
+        status: referral.candidateId ? 'ATTACHED' : 'PENDING',
+        candidateId: isLocked(referral) ? null : referral.candidateId,
+        locked: isLocked(referral)
+      }))
+    );
+  } catch (error) {
+    console.error('[GET /api/admin/referrals]', error);
+    res.status(500).json({ error: 'Failed to fetch referrals' });
+  }
+});
+
+// Match a pending referral to a candidate by hand. This is the escape hatch for
+// everything name matching will not decide on its own: a member picked "Other"
+// for someone already in the system, the name was spelled differently enough to
+// miss, or two applicants share it and the claim was held back on purpose.
+router.patch('/referrals/:id', async (req, res) => {
+  try {
+    const candidateId = typeof req.body?.candidateId === 'string' ? req.body.candidateId.trim() : '';
+    if (!candidateId) {
+      return res.status(400).json({ error: 'candidateId is required' });
+    }
+
+    const { notFound, sealed, referral } = await attachReferralToCandidate({
+      referralId: req.params.id,
+      candidateId
+    });
+
+    if (notFound === 'referral') return res.status(404).json({ error: 'Referral not found' });
+    if (notFound === 'candidate') return res.status(404).json({ error: 'Candidate not found' });
+    if (sealed) return sendRecordLocked(res);
+
+    res.json(referral);
+  } catch (error) {
+    console.error('[PATCH /api/admin/referrals/:id]', error);
+    res.status(500).json({ error: 'Failed to attach referral' });
+  }
+});
+
+// Candidate search for the admin matcher. Unlike the member-facing one this is
+// not scoped to a cycle: a referral may well belong to someone who applied in a
+// different one.
+router.get('/referral-candidates', async (req, res) => {
+  try {
+    const query = typeof req.query?.q === 'string' ? req.query.q.trim() : '';
+    if (query.length < 2) return res.json([]);
+
+    const candidates = await prisma.candidate.findMany({
+      where: {
+        recordsLockedAt: null,
+        OR: [
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { email: { contains: query, mode: 'insensitive' } }
+        ]
+      },
+      select: { id: true, firstName: true, lastName: true, email: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      take: 20
+    });
+
+    res.json(candidates);
+  } catch (error) {
+    console.error('[GET /api/admin/referral-candidates]', error);
+    res.status(500).json({ error: 'Failed to search candidates' });
   }
 });
 
