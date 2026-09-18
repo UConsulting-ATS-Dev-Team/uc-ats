@@ -20,6 +20,13 @@ import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import CandidateQuestionList from '../components/interview/CandidateQuestionList';
 import useCandidateQuestions from '../hooks/useCandidateQuestions';
+import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import {
+  DecisionGuideButton,
+  DecisionGuidePanel,
+  DeliberationNotice,
+  useDecisionGuide
+} from '../components/deliberations/DecisionGuide';
 import '../styles/FirstRoundInterviewInterface.css';
 
 export default function FirstRoundInterviewInterface() {
@@ -46,12 +53,11 @@ export default function FirstRoundInterviewInterface() {
   const applicationIds = useMemo(() => applications.map((application) => application.id), [applications]);
   const candidateQuestions = useCandidateQuestions(interviewId, applicationIds, '/member');
 
-  const decisionOptions = [
-    { value: 'YES', label: 'Yes', color: 'green' },
-    { value: 'MAYBE_YES', label: 'Maybe-Yes', color: 'light-green' },
-    { value: 'MAYBE_NO', label: 'Maybe-No', color: 'orange' },
-    { value: 'NO', label: 'No', color: 'red' }
-  ];
+  // Null until the interview loads, so the guide is fetched once for the round
+  // it actually belongs to rather than twice.
+  const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide(
+    interview ? guidePhaseForInterviewType(interview.interviewType) : null
+  );
 
   const rotations = [
     { id: 'behaviorals', title: 'Behaviorals', icon: CheckIcon },
@@ -802,6 +808,8 @@ export default function FirstRoundInterviewInterface() {
           </div>
         </div>
 
+        {currentRotation === 2 && <DeliberationNotice guide={guide} onOpen={openGuide} />}
+
         {/* Applications Grid - Interviewees in rows, Questions in columns */}
         <div className="applications-grid-container">
           <div 
@@ -869,6 +877,7 @@ export default function FirstRoundInterviewInterface() {
               <>
                 <div className="header-cell question-header">
                   <span>Initial Decision</span>
+                  <DecisionGuideButton guide={guide} onClick={openGuide} />
                 </div>
                 <div className="header-cell question-header">
                   <span>Post Grading Notes</span>
@@ -1131,7 +1140,7 @@ export default function FirstRoundInterviewInterface() {
                       <div className={`grid-cell question-cell ${colorClass}`}>
                         <div className="question-card">
                           <div className="decision-options">
-                            {decisionOptions.map(option => (
+                            {DECISION_OPTIONS.map(option => (
                               <label key={option.value} className="decision-option">
                                 <input
                                   type="radio"
@@ -1218,6 +1227,7 @@ export default function FirstRoundInterviewInterface() {
           round={interview?.interviewType}
           interviewTitle={interview?.title}
         />
+        <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} />
       </div>
     </AccessControl>
   );

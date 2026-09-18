@@ -53,13 +53,6 @@ export default function FinalRoundInterviewInterface() {
     setCaseAssignments((prev) => ({ ...prev, [applicationId]: assignment }));
   };
 
-  const decisionOptions = [
-    { value: 'YES', label: 'Yes', color: 'green' },
-    { value: 'MAYBE_YES', label: 'Maybe-Yes', color: 'light-green' },
-    { value: 'MAYBE_NO', label: 'Maybe-No', color: 'orange' },
-    { value: 'NO', label: 'No', color: 'red' }
-  ];
-
   // Behavioral questions will be loaded from interview configuration
   const [behavioralQuestions, setBehavioralQuestions] = useState([]);
 

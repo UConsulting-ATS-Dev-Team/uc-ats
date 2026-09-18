@@ -10,6 +10,13 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
+import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import {
+  DecisionGuideButton,
+  DecisionGuidePanel,
+  DeliberationNotice,
+  useDecisionGuide
+} from '../components/deliberations/DecisionGuide';
 import '../styles/InterviewInterface.css';
 
 export default function InterviewInterface() {
@@ -34,12 +41,11 @@ export default function InterviewInterface() {
   const [showNextActionModal, setShowNextActionModal] = useState(false);
 
 
-  const decisionOptions = [
-    { value: 'YES', label: 'Yes', color: 'green' },
-    { value: 'MAYBE_YES', label: 'Maybe-Yes', color: 'light-green' },
-    { value: 'MAYBE_NO', label: 'Maybe-No', color: 'orange' },
-    { value: 'NO', label: 'No', color: 'red' }
-  ];
+  // Null until the interview loads, so the guide is fetched once for the round
+  // it actually belongs to rather than twice.
+  const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide(
+    interview ? guidePhaseForInterviewType(interview.interviewType) : null
+  );
 
   useEffect(() => {
     const loadData = async () => {
@@ -390,6 +396,8 @@ export default function InterviewInterface() {
         </div>
       </div>
 
+      <DeliberationNotice guide={guide} onOpen={openGuide} />
+
       {/* Applications Grid */}
       <div className="applications-grid">
         {applications.map(application => {
@@ -495,9 +503,12 @@ export default function InterviewInterface() {
 
               {/* Decision Section */}
               <div className="evaluation-section">
-                <h4 className="section-title">Initial Decision</h4>
+                <h4 className="section-title">
+                  Initial Decision
+                  <DecisionGuideButton guide={guide} onClick={openGuide} />
+                </h4>
                 <div className="decision-options">
-                  {decisionOptions.map(option => (
+                  {DECISION_OPTIONS.map(option => (
                     <label key={option.value} className="decision-option">
                       <input
                         type="radio"
@@ -647,6 +658,7 @@ export default function InterviewInterface() {
         round={interview?.interviewType}
         interviewTitle={interview?.title}
       />
+      <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} />
     </div>
     </AccessControl>
   );

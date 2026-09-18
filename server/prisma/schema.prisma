@@ -1930,6 +1930,22 @@ model DeliberationRubric {
   @@map("deliberation_rubrics")
 }
 
+/// Admin-editable copy explaining what each InterviewDecision means, shown to a
+/// reviewer while they pick one. `phase` is a round from roundProgression.js, or
+/// 'general' for the base every round inherits from.
+model DecisionGuide {
+  id          String   @id @default(uuid())
+  /// 'general' | 'resume' | 'coffee' | 'firstRound' | 'final'
+  phase       String   @unique
+  /// { intro, criteria: { YES, MAYBE_YES, MAYBE_NO, NO } } - empty strings inherit.
+  guide       Json     @default("{}")
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("decision_guides")
+}
+
 /// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the
 /// partial unique index `live_vote_sessions_single_open`, which Prisma cannot
 /// express and which lives in the migration SQL.

@@ -20,6 +20,8 @@ import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
+import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import { DecisionGuideButton, DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component
@@ -213,12 +215,15 @@ export default function AssignedInterviews() {
   const [behavioralQuestionsConfig, setBehavioralQuestionsConfig] = useState([]);
   const [showBehavioralQuestionsConfig, setShowBehavioralQuestionsConfig] = useState(false);
 
-  const decisionOptions = [
-    { value: 'YES', label: 'Yes', color: 'green' },
-    { value: 'MAYBE_YES', label: 'Maybe-Yes', color: 'light-green' },
-    { value: 'MAYBE_NO', label: 'Maybe-No', color: 'orange' },
-    { value: 'NO', label: 'No', color: 'red' }
-  ];
+  // The decision here is edited after the fact, in a modal, so the guide is the
+  // help icon beside the field rather than a standing note. Null until a row is
+  // being edited - there is no round to ask about before then.
+  const editingInterviewType = editingEvaluation
+    ? interviews.find((interview) => interview.id === editingEvaluation.interviewId)?.interviewType
+    : null;
+  const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide(
+    editingEvaluation ? guidePhaseForInterviewType(editingInterviewType) : null
+  );
 
   // Load applications for a specific group
   const loadGroupApplications = async (interviewId, groupId) => {
@@ -1241,9 +1246,12 @@ export default function AssignedInterviews() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Decision</label>
+                <label className="form-label">
+                  Decision
+                  <DecisionGuideButton guide={guide} onClick={openGuide} />
+                </label>
                 <div className="decision-options">
-                  {decisionOptions.map(option => (
+                  {DECISION_OPTIONS.map(option => (
                     <label key={option.value} className="decision-option">
                       <input
                         type="radio"
@@ -1290,6 +1298,7 @@ export default function AssignedInterviews() {
           </div>
         </div>
       )}
+      <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} />
     </div>
     </AccessControl>
   );
