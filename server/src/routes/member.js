@@ -43,6 +43,7 @@ import {
 // confirm/update modal before the member can open slots.
 import { loadGtkucProfileState } from '../utils/gtkucProfileState.js';
 import { candidateQuestionHandlers } from '../services/candidateQuestions.js';
+import { getRoundOneHistory } from '../services/roundOneHistory.js';
 import { nudgeSessionQuestions } from '../services/realtime.js';
 import {
   guardApplication,
@@ -1307,6 +1308,25 @@ router.post(
 );
 router.patch('/interviews/:id/candidate-questions/:questionId', requireAuth, requireAdminOrMember, candidateQuestionHandlers.update);
 router.delete('/interviews/:id/candidate-questions/:questionId', requireAuth, requireAdminOrMember, candidateQuestionHandlers.remove);
+
+// What this candidate was asked in round one, for whoever is writing their
+// questions for a later round (see services/roundOneHistory.js). Read-only, and
+// sealed before anything is read: the guard answers 423 for a sealed candidate,
+// which the client turns into the usual locked-record placeholder.
+router.get(
+  '/applications/:id/round-one-history',
+  requireAuth,
+  requireAdminOrMember,
+  guardApplication((req) => req.params.id),
+  async (req, res) => {
+    try {
+      res.json(await getRoundOneHistory(req.params.id));
+    } catch (error) {
+      console.error('[GET /api/member/applications/:id/round-one-history]', error);
+      res.status(500).json({ error: 'Failed to fetch round one history' });
+    }
+  }
+);
 
 // Get applications for interview groups (member version)
 router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
