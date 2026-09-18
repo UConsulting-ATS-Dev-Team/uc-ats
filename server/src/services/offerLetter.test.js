@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Every case below describes what happens with no Supabase configured, so the
+// answer has to come from the test rather than from whatever is in the runner's
+// .env. Reading the real client made these pass in CI, where the vars are
+// absent, and fail on any machine set up to run the app.
+vi.mock('../supabaseClient.js', () => ({
+  default: { storage: {} },
+  isSupabaseAvailable: () => false,
+}));
+
 import {
   DEFAULT_TEMPLATE,
   generateOfferLetterPdf,
