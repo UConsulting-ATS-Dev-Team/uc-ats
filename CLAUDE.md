@@ -175,6 +175,8 @@ The system follows a **recruiting cycle-based workflow**:
   Process All Decisions, reviewed and sent by an admin
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
   session is admin-only)
+- `/api/decision-guides` - What each interview decision means, shown to reviewers
+  (ADMIN/MEMBER read, admin-only write)
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -207,6 +209,22 @@ The system follows a **recruiting cycle-based workflow**:
 - Numbers live on `User.phoneNumber` (E.164). Bulk-load them from a roster CSV with
   `node scripts/import-member-phones-from-csv.js <csv>` (dry run; add `--apply` to write),
   or edit one in User Management.
+
+**Decision guide:**
+- The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
+  interview: a note on what deliberation is for, plus one description per decision. Admins
+  edit it from Staging ("Edit decision guide"); nothing about it is hard-coded in the pages.
+- [server/src/services/decisionGuides.js](server/src/services/decisionGuides.js) resolves it in
+  layers, field by field: built-in defaults, then the `general` guide, then the round's own.
+  An empty field falls through rather than showing a blank, so a round can override one
+  decision without restating the rest. `source` on each decision says which layer answered.
+- Phases are the four rounds from `roundProgression.js` plus `general`. An interview with no
+  round of its own (DELIBERATIONS) reads `general` - see `guidePhaseForInterviewType` in
+  [client/src/utils/decisionOptions.js](client/src/utils/decisionOptions.js), which is also
+  the one place the four decision options are defined for the interview pages.
+- `InterviewDecision` also has `UNSURE`, which no picker offers and the guide deliberately
+  does not document. Adding it to the form means adding it to `DECISION_VALUES` in the
+  service and `DECISION_OPTIONS` in the client.
 
 **Live votes:**
 - An admin starts a session from any Staging tab. Admins and members join from anywhere in

@@ -73,7 +73,8 @@ import {
   ArrowDownward as ArrowDownwardIcon,
   Sort as SortIcon,
   HowToVote as HowToVoteIcon,
-  MenuBook as MenuBookIcon
+  MenuBook as MenuBookIcon,
+  HelpOutline as HelpOutlineIcon
 } from '@mui/icons-material';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
@@ -89,6 +90,7 @@ import { useLiveVote } from '../context/LiveVoteContext';
 import liveVoteApi from '../utils/liveVoteApi';
 import StagingLiveVoteSetupDialog from '../components/staging/StagingLiveVoteSetupDialog';
 import RubricEditorDialog from '../components/staging/RubricEditorDialog';
+import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditorDialog';
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
 
 const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
@@ -516,6 +518,7 @@ export default function Staging() {
   const [liveVoteResults, setLiveVoteResults] = useState(EMPTY_LIVE_VOTE_RESULTS);
   const [liveVoteSetupOpen, setLiveVoteSetupOpen] = useState(false);
   const [rubricEditorOpen, setRubricEditorOpen] = useState(false);
+  const [decisionGuideOpen, setDecisionGuideOpen] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [decisionDialogOpen, setDecisionDialogOpen] = useState(false);
   const [finalDecisionDialogOpen, setFinalDecisionDialogOpen] = useState(false);
@@ -1807,6 +1810,9 @@ export default function Staging() {
                   <Button variant="outlined" startIcon={<MenuBookIcon />} onClick={() => setRubricEditorOpen(true)}>
                     Configure {PHASE_LABELS[tabToPhase(currentTab)]} rubric
                   </Button>
+                  <Button variant="outlined" startIcon={<HelpOutlineIcon />} onClick={() => setDecisionGuideOpen(true)}>
+                    Edit decision guide
+                  </Button>
                 </Stack>
               )}
             </CardContent>
@@ -2518,6 +2524,12 @@ export default function Staging() {
                 phaseLabel={PHASE_LABELS[tabToPhase(currentTab)]}
                 onClose={() => setRubricEditorOpen(false)}
                 onSaved={() => setSnackbar({ open: true, message: 'Rubric saved', severity: 'success' })}
+              />
+              <DecisionGuideEditorDialog
+                open={decisionGuideOpen}
+                phase={tabToPhase(currentTab)}
+                onClose={() => setDecisionGuideOpen(false)}
+                onSaved={() => setSnackbar({ open: true, message: 'Decision guide saved', severity: 'success' })}
               />
             </>
           )}
