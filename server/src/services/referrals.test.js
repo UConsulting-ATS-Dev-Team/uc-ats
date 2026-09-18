@@ -15,20 +15,28 @@ import {
   candidateIdsMatchingName
 } from './referrals.js';
 
-const makeClient = () => ({
-  referral: {
-    findMany: vi.fn().mockResolvedValue([]),
-    findFirst: vi.fn().mockResolvedValue(null),
-    findUnique: vi.fn().mockResolvedValue(null),
-    updateMany: vi.fn().mockResolvedValue({ count: 0 }),
-    update: vi.fn(),
-    create: vi.fn()
-  },
-  candidate: {
-    findMany: vi.fn().mockResolvedValue([]),
-    findUnique: vi.fn().mockResolvedValue(null)
-  }
-});
+const makeClient = () => {
+  const client = {
+    referral: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      update: vi.fn(),
+      create: vi.fn()
+    },
+    candidate: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null)
+    },
+    // The claim runs in one transaction under an advisory lock; the double just
+    // hands the same client back so the calls stay observable.
+    $executeRaw: vi.fn().mockResolvedValue(1),
+    $transaction: vi.fn((fn) => fn(client))
+  };
+  return client;
+};
 
 describe('referralNameKey', () => {
   it('is stable across the things people actually vary', () => {
@@ -143,6 +151,7 @@ describe('claimReferralsForCandidate', () => {
 
   it('claims every pending referral that matches the name', async () => {
     client.referral.findMany.mockResolvedValue([{ id: 'ref-1' }, { id: 'ref-2' }]);
+    client.referral.updateMany.mockResolvedValue({ count: 2 });
 
     const claimed = await claimReferralsForCandidate({ candidate, cycleId: 'cycle-1', client });
 
@@ -156,9 +165,28 @@ describe('claimReferralsForCandidate', () => {
       select: { id: true }
     });
     const update = client.referral.updateMany.mock.calls[0][0];
-    expect(update.where).toEqual({ id: { in: ['ref-1', 'ref-2'] } });
+    expect(update.where).toEqual({ id: { in: ['ref-1', 'ref-2'] }, candidateId: null });
     expect(update.data.candidateId).toBe('cand-1');
     expect(update.data.claimedAt).toBeInstanceOf(Date);
+  });
+
+  it('takes a lock on the name before deciding anything', async () => {
+    await claimReferralsForCandidate({ candidate, cycleId: 'cycle-1', client });
+
+    expect(client.$transaction).toHaveBeenCalled();
+    // Overlapping sync runs must not both conclude the name is unambiguous.
+    expect(client.$executeRaw).toHaveBeenCalled();
+  });
+
+  it('will not overwrite a referral an admin placed since the read', async () => {
+    client.referral.findMany.mockResolvedValue([{ id: 'ref-1' }]);
+    // The conditional update matched nothing: somebody got there first.
+    client.referral.updateMany.mockResolvedValue({ count: 0 });
+
+    const claimed = await claimReferralsForCandidate({ candidate, cycleId: 'cycle-1', client });
+
+    expect(claimed).toEqual([]);
+    expect(client.referral.updateMany.mock.calls[0][0].where.candidateId).toBeNull();
   });
 
   it('claims nothing when another applicant in the cycle shares the name', async () => {
@@ -218,11 +246,22 @@ describe('createMemberReferral', () => {
 
   describe('the member picked someone out of the list', () => {
     beforeEach(() => {
-      client.candidate.findUnique.mockResolvedValue({
+      client.candidate.findFirst.mockResolvedValue({
         id: 'cand-7',
         firstName: 'Karen',
         lastName: 'Filippelli',
         recordsLockedAt: null
+      });
+    });
+
+    it('only accepts a candidate who applied in this cycle', async () => {
+      // The id comes from a request body, so it need not be one the typeahead
+      // would ever have offered.
+      await createMemberReferral({ ...typedName, candidateId: 'cand-7' }, client);
+
+      expect(client.candidate.findFirst.mock.calls[0][0].where).toEqual({
+        id: 'cand-7',
+        applications: { some: { cycleId: 'cycle-1' } }
       });
     });
 
@@ -246,14 +285,14 @@ describe('createMemberReferral', () => {
     });
 
     it('reports a candidate that has since been deleted', async () => {
-      client.candidate.findUnique.mockResolvedValue(null);
+      client.candidate.findFirst.mockResolvedValue(null);
       const { notFound } = await createMemberReferral({ ...typedName, candidateId: 'gone' }, client);
       expect(notFound).toBe(true);
       expect(client.referral.create).not.toHaveBeenCalled();
     });
 
     it('refuses a sealed record, who is already a member', async () => {
-      client.candidate.findUnique.mockResolvedValue({
+      client.candidate.findFirst.mockResolvedValue({
         id: 'cand-8',
         firstName: 'Michael',
         lastName: 'Scott',

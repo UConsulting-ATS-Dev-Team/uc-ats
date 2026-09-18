@@ -233,7 +233,8 @@ The system follows a **recruiting cycle-based workflow**:
   (`GET /api/member/referral-candidates?q=`). **Picking a person sets `candidateId`
   outright, so there is no name matching at all** — that is the path to prefer. A member
   who cannot find them picks "Other" and types a name, and only then does the referral wait
-  with `candidateId` null.
+  with `candidateId` null. A submitted `candidateId` is re-checked against the cycle
+  server-side; it arrives in a request body, so it need not be one the typeahead offered.
 - For the "Other" path, matching is by **name only**, because a first and last name is all
   a referring member is expected to know. `referralNameKey()` in
   [server/src/services/referrals.js](server/src/services/referrals.js) stores a normalized
@@ -251,6 +252,16 @@ The system follows a **recruiting cycle-based workflow**:
   is all the "Other" path has, so the referral is left pending for an admin rather than
   guessed at. A referral sitting unclaimed is a question someone can answer; one stapled to
   the wrong applicant is a false endorsement nobody notices.
+- An "Other" submission never attaches at submit time, even when the typed name matches an
+  applicant exactly. The member just said that person was not in the list, so a match is
+  either someone they scrolled past or a different person with the same name.
+- The whole claim (ambiguity check, read, update) runs in one transaction under
+  `pg_advisory_xact_lock(hashtext(nameKey))`. Sync runs every five minutes and a slow run
+  can overlap the next; without the lock two same-named applicants can each be checked
+  before the other's application commits, and both pass a check that should fail for both.
+- **An admin's manual match outranks sync.** The claim's `updateMany` stays conditional on
+  `candidateId` still being null, so a referral placed by hand between the read and the
+  write is never quietly moved.
 - A referral is only claimed within its own cycle (or if filed without one). If the person
   never applies it stays pending forever, which is the intended end state. Admins work the
   queue at `/admin/referrals` (`GET /api/admin/referrals?status=PENDING`) and attach one by

@@ -13,13 +13,16 @@ import { resolveCandidateCycle } from './activeCycle.js';
 import syncFormResponses from './syncResponses.js';
 import { referralNameKey } from './referrals.js';
 
-vi.mock('../prismaClient.js', () => ({
-  default: {
+vi.mock('../prismaClient.js', () => {
+  const client = {
     application: { findMany: vi.fn(), create: vi.fn() },
     candidate: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
-    referral: { findMany: vi.fn(), updateMany: vi.fn() }
-  }
-}));
+    referral: { findMany: vi.fn(), updateMany: vi.fn() },
+    $executeRaw: vi.fn(),
+    $transaction: vi.fn((fn) => fn(client))
+  };
+  return { default: client };
+});
 vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
@@ -54,7 +57,9 @@ beforeEach(() => {
   // Only this applicant carries that name in the cycle, so claiming is safe.
   prisma.candidate.findMany.mockResolvedValue([newCandidate]);
   prisma.referral.findMany.mockResolvedValue([]);
-  prisma.referral.updateMany.mockResolvedValue({ count: 0 });
+  prisma.referral.updateMany.mockResolvedValue({ count: 1 });
+  prisma.$executeRaw.mockResolvedValue(1);
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
 describe('form sync claims pre-application referrals', () => {
@@ -74,7 +79,8 @@ describe('form sync claims pre-application referrals', () => {
     });
 
     const { where, data } = prisma.referral.updateMany.mock.calls[0][0];
-    expect(where).toEqual({ id: { in: ['ref-1'] } });
+    // Still conditional on being unclaimed, so an admin's own match survives.
+    expect(where).toEqual({ id: { in: ['ref-1'] }, candidateId: null });
     expect(data.candidateId).toBe('cand-1');
     expect(data.cycleId).toBe(activeCycle.id);
     expect(data.claimedAt).toBeInstanceOf(Date);

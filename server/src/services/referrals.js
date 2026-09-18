@@ -66,42 +66,57 @@ export async function claimReferralsForCandidate({ candidate, cycleId, client = 
   const nameKey = referralNameKey(candidate?.firstName, candidate?.lastName);
   if (!nameKey || !candidate?.id) return [];
 
-  // Two applicants in one cycle can share a name, and a name is the only thing
-  // a pre-application referral has to go on. When that happens there is no way
-  // to tell which of them the member meant, so nothing is claimed: the referral
-  // stays pending and visible in the admin queue. A referral sitting unclaimed
-  // is a question someone can answer. A referral silently stapled to the wrong
-  // applicant is a false endorsement nobody will ever notice.
-  const sharingName = await candidateIdsMatchingName({ nameKey, cycleId, client });
-  if (sharingName.filter((id) => id !== candidate.id).length > 0) {
-    console.warn(
-      `Not claiming referrals for candidate id=${candidate.id}: ${sharingName.length} candidates in cycle ${cycleId} share that name`
-    );
-    return [];
-  }
+  const run = async (tx) => {
+    // Everything that decides a name is unambiguous, and everything that acts
+    // on that decision, happens under one lock keyed on the name. Sync runs
+    // every five minutes and a slow run can overlap the next: without this,
+    // two applicants called John Smith can each be checked before the other's
+    // application is committed, and both pass a check that should have failed
+    // for both.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${nameKey}))`;
 
-  const pending = await client.referral.findMany({
-    where: {
-      candidateId: null,
-      referredNameKey: nameKey,
-      ...(cycleId ? { OR: [{ cycleId }, { cycleId: null }] } : {})
-    },
-    select: { id: true }
-  });
-
-  if (!pending.length) return [];
-
-  const ids = pending.map((referral) => referral.id);
-  await client.referral.updateMany({
-    where: { id: { in: ids } },
-    data: {
-      candidateId: candidate.id,
-      claimedAt: new Date(),
-      ...(cycleId ? { cycleId } : {})
+    // Two applicants in one cycle can share a name, and a name is the only
+    // thing an "Other" referral has to go on. When that happens there is no way
+    // to tell which of them the member meant, so nothing is claimed: the
+    // referral stays pending and visible in the admin queue. A referral sitting
+    // unclaimed is a question someone can answer. A referral silently stapled
+    // to the wrong applicant is a false endorsement nobody will ever notice.
+    const sharingName = await candidateIdsMatchingName({ nameKey, cycleId, client: tx });
+    if (sharingName.filter((id) => id !== candidate.id).length > 0) {
+      console.warn(
+        `Not claiming referrals for candidate id=${candidate.id}: ${sharingName.length} candidates in cycle ${cycleId} share that name`
+      );
+      return [];
     }
-  });
 
-  return ids;
+    const pending = await tx.referral.findMany({
+      where: {
+        candidateId: null,
+        referredNameKey: nameKey,
+        ...(cycleId ? { OR: [{ cycleId }, { cycleId: null }] } : {})
+      },
+      select: { id: true }
+    });
+
+    if (!pending.length) return [];
+
+    const ids = pending.map((referral) => referral.id);
+    // `candidateId: null` again, not just the ids: an admin may have placed one
+    // of these by hand since the read above. Their answer outranks this one,
+    // and sync must not quietly move an endorsement they already settled.
+    const { count } = await tx.referral.updateMany({
+      where: { id: { in: ids }, candidateId: null },
+      data: {
+        candidateId: candidate.id,
+        claimedAt: new Date(),
+        ...(cycleId ? { cycleId } : {})
+      }
+    });
+
+    return count > 0 ? ids : [];
+  };
+
+  return typeof client.$transaction === 'function' ? client.$transaction(run) : run(client);
 }
 
 const referralInclude = { candidate: { select: { id: true, firstName: true, lastName: true } } };
@@ -124,9 +139,16 @@ export async function createMemberReferral(
   { referrerName, relationship, referredFirstName, referredLastName, candidateId, cycleId, referredByUserId },
   client = prisma
 ) {
+  // Scoped to the cycle, exactly like the typeahead that produced this id. The
+  // id arrives in a request body, so nothing stops a member from sending one
+  // the search box would never have offered them - a candidate from another
+  // cycle, attached to a referral labelled with this one.
   const chosen = candidateId
-    ? await client.candidate.findUnique({
-        where: { id: candidateId },
+    ? await client.candidate.findFirst({
+        where: {
+          id: candidateId,
+          ...(cycleId ? { applications: { some: { cycleId } } } : {})
+        },
         select: { id: true, firstName: true, lastName: true, recordsLockedAt: true }
       })
     : null;

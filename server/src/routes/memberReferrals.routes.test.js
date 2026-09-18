@@ -105,7 +105,7 @@ describe('POST /api/member/referrals validation', () => {
   });
 
   it('accepts a picked candidate with no typed name at all', async () => {
-    prisma.candidate.findUnique.mockResolvedValue({
+    prisma.candidate.findFirst.mockResolvedValue({
       id: 'cand-7',
       firstName: 'Karen',
       lastName: 'Filippelli',
@@ -132,7 +132,7 @@ describe('POST /api/member/referrals validation', () => {
   });
 
   it('refuses to refer someone whose record is sealed', async () => {
-    prisma.candidate.findUnique.mockResolvedValue({
+    prisma.candidate.findFirst.mockResolvedValue({
       id: 'cand-8',
       firstName: 'Michael',
       lastName: 'Scott',
