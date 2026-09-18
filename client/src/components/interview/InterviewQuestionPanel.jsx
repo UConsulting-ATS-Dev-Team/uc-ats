@@ -193,13 +193,18 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     if (state.timer) return;
     state.timer = setTimeout(async () => {
       state.timer = null;
+      // Closing the panel swaps in a fresh state object. Anything still holding the old
+      // one is a leftover from a panel that is no longer open, and a closed panel starts
+      // no reads - not the queued one here, and not the follow-up below, which reschedules
+      // through this same function and would otherwise land on the replacement.
+      if (nudge.current !== state) return;
       state.inFlight = true;
       state.pending = false;
       try {
         await loadSessionRef.current?.();
       } finally {
         state.inFlight = false;
-        if (state.pending) refetchFromNudge();
+        if (state.pending && nudge.current === state) refetchFromNudge();
       }
     }, NUDGE_COALESCE_MS);
   }, []);
