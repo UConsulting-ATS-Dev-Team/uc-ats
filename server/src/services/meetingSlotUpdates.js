@@ -34,6 +34,23 @@ const SLOT_INCLUDE = {
   communications: { orderBy: { sentAt: 'desc' } },
 };
 
+/**
+ * Turn a refused delivery back into a throw.
+ *
+ * The senders in emailNotifications catch provider errors themselves and resolve
+ * with `{ success: false, error }`. sendAndLogMeetingCommunication only logs
+ * FAILED when the function it is given throws, so without this a rejected email
+ * would be logged as SENT and counted as a notified recipient, and the edit page
+ * would tell the person their candidates had been emailed when none of them had.
+ */
+const sendOrThrow = async (send) => {
+  const result = await send();
+  if (result && result.success === false) {
+    throw new Error(result.error || 'email send failed');
+  }
+  return result;
+};
+
 /** Compare two nullable timestamps that may arrive as Date or string. */
 const sameInstant = (a, b) => {
   if (!a && !b) return true;
@@ -64,8 +81,30 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
 
   const data = {};
   if (patch.location !== undefined) data.location = patch.location;
-  if (patch.startTime !== undefined) data.startTime = localInputToUTC(patch.startTime);
-  if (patch.endTime !== undefined) data.endTime = patch.endTime ? localInputToUTC(patch.endTime) : null;
+
+  // localInputToUTC returns null for anything that is not exactly
+  // YYYY-MM-DDTHH:mm, so the conversion has to be checked rather than assigned.
+  // Unchecked, a malformed start is masked by the fallback to the existing start
+  // during validation and then fails Prisma's required column as a 500, and a
+  // malformed end silently clears the end time instead of being refused.
+  if (patch.startTime !== undefined) {
+    const startTime = localInputToUTC(patch.startTime);
+    if (!startTime) {
+      throw new SlotUpdateError(400, 'Invalid start time');
+    }
+    data.startTime = startTime;
+  }
+  if (patch.endTime !== undefined) {
+    if (patch.endTime) {
+      const endTime = localInputToUTC(patch.endTime);
+      if (!endTime) {
+        throw new SlotUpdateError(400, 'Invalid end time');
+      }
+      data.endTime = endTime;
+    } else {
+      data.endTime = null;
+    }
+  }
   if (patch.capacity !== undefined) {
     data.capacity = Number.isInteger(patch.capacity) ? patch.capacity : existing.capacity;
   }
@@ -100,10 +139,19 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
     throw new SlotUpdateError(400, 'A meeting cannot be rescheduled into the past');
   }
 
-  // Count signups inside the transaction: a booking landing between the check
-  // and the write is exactly how capacity ends up below the number of people
-  // already holding a place.
+  // Capacity must not drop below the number of people already holding a place.
+  //
+  // The row lock serializes this against anything else that takes it, so two
+  // simultaneous edits to the same slot cannot both pass the check. It does not
+  // make the guard airtight: booking a slot (POST /api/my-meeting-signups) takes
+  // no lock and the database has no constraint tying capacity to the signup
+  // count, so a booking that commits between this count and the update is still
+  // invisible here. That same gap is what lets a slot be overbooked in the first
+  // place, and closing it properly means locking the slot on the booking path
+  // too. Treat this as a guard against the common case, not a guarantee.
   const updated = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM meeting_slots WHERE id = ${slotId} FOR UPDATE`;
+
     const signupCount = await tx.meetingSignup.count({ where: { slotId } });
     if (nextCapacity < signupCount) {
       throw new SlotUpdateError(
@@ -128,9 +176,9 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
   const previous = { location: existing.location, startTime: existing.startTime, endTime: existing.endTime };
   const hostName = updated.member?.fullName || 'UC Consulting Member';
 
-  const sends = updated.signups.map((signup) =>
+  const candidateSends = updated.signups.map((signup) =>
     sendAndLogMeetingCommunication(
-      () => sendMeetingRescheduleEmail(signup.email, signup.fullName, hostName, next, previous),
+      () => sendOrThrow(() => sendMeetingRescheduleEmail(signup.email, signup.fullName, hostName, next, previous)),
       {
         slotId: updated.id,
         signupId: signup.id,
@@ -143,13 +191,12 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
 
   // The host hears about it only when somebody else moved their slot. A member
   // rescheduling their own does not need mail telling them what they just did.
-  const notifyHost = Boolean(updated.member?.email) && updated.memberId !== actorId;
-  if (notifyHost) {
-    sends.push(
-      sendAndLogMeetingCommunication(
-        () => sendMeetingRescheduleToMember(updated.member.email, hostName, next, previous, {
+  const shouldNotifyHost = Boolean(updated.member?.email) && updated.memberId !== actorId;
+  const hostSend = shouldNotifyHost
+    ? sendAndLogMeetingCommunication(
+        () => sendOrThrow(() => sendMeetingRescheduleToMember(updated.member.email, hostName, next, previous, {
           signupCount: updated.signups.length,
-        }),
+        })),
         {
           slotId: updated.id,
           signupId: null,
@@ -158,13 +205,17 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
           subject: MEETING_COMM_SUBJECTS.RESCHEDULED_TO_HOST,
         }
       )
-    );
-  }
+    : null;
 
-  await Promise.allSettled(sends);
+  const [candidateResults, hostResult] = await Promise.all([
+    Promise.allSettled(candidateSends),
+    hostSend ? hostSend.catch(() => ({ ok: false })) : Promise.resolve(null),
+  ]);
 
-  notified.candidates = updated.signups.length;
-  notified.host = notifyHost;
+  // Count what was delivered, not what was attempted. The edit pages report
+  // this number back to whoever made the change, so it has to be true.
+  notified.candidates = candidateResults.filter((r) => r.status === 'fulfilled' && r.value?.ok).length;
+  notified.host = Boolean(hostResult?.ok);
 
   return { slot: updated, notified, changed: { time: timeChanged, location: locationChanged } };
 }

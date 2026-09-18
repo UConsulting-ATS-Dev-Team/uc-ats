@@ -15,16 +15,19 @@ import adminRoutes from './admin.js';
 vi.mock('../prismaClient.js', () => {
   const meetingSlot = { findUnique: vi.fn(), update: vi.fn() };
   const meetingSignup = { count: vi.fn() };
+  // The row lock the service takes before counting signups.
+  const $queryRaw = vi.fn().mockResolvedValue([{ id: 'slot-1' }]);
   return {
     default: {
       user: { findUnique: vi.fn() },
       meetingSlot,
       meetingSignup,
+      $queryRaw,
       meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }) },
       // The service uses the callback form; hand the callback the same mocks so
       // assertions can read the write that happened inside it.
       $transaction: vi.fn((arg) =>
-        typeof arg === 'function' ? arg({ meetingSlot, meetingSignup }) : Promise.all(arg)
+        typeof arg === 'function' ? arg({ meetingSlot, meetingSignup, $queryRaw }) : Promise.all(arg)
       )
     }
   };
@@ -335,22 +338,108 @@ describe('admin rescheduling any GTKUC slot', () => {
 
 describe('reschedule notification failures', () => {
   const NEW_START = futureISO(33, 17);
+  const NEW_END = futureISO(33, 18);
 
-  it('still saves the move and logs the failure when a send throws', async () => {
-    emails.sendMeetingRescheduleEmail.mockRejectedValueOnce(new Error('SES refused'));
+  const move = (user, path) => request(path, {
+    user,
+    method: 'PUT',
+    body: { startTime: localInput(NEW_START), endTime: localInput(NEW_END) }
+  });
 
-    const res = await request('/api/member/meeting-slots/slot-1', {
-      user: hostMember,
-      method: 'PUT',
-      body: { startTime: localInput(NEW_START), endTime: localInput(futureISO(33, 18)) }
-    });
+  // The senders catch provider errors and resolve with { success: false }
+  // rather than throwing, so this is the shape a real refused delivery takes.
+  it('logs a refused delivery as FAILED and leaves it out of the notified count', async () => {
+    emails.sendMeetingRescheduleEmail.mockResolvedValueOnce({ success: false, error: 'SES rejected' });
+
+    const res = await move(hostMember, '/api/member/meeting-slots/slot-1');
 
     expect(res.status).toBe(200);
     expect(prisma.meetingSlot.update).toHaveBeenCalled();
     expect(prisma.meetingCommunication.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ type: 'RESCHEDULED', status: 'FAILED', error: 'SES refused' })
+        data: expect.objectContaining({ type: 'RESCHEDULED', status: 'FAILED', error: 'SES rejected' })
       })
     );
+
+    // One of the two candidates was not reached, and the count says so.
+    expect(await res.json()).toMatchObject({ notified: { candidates: 1 } });
+  });
+
+  it('reports the host as not notified when their email is refused', async () => {
+    emails.sendMeetingRescheduleToMember.mockResolvedValueOnce({ success: false, error: 'SES rejected' });
+
+    const res = await move(adminUser, '/api/admin/meeting-slots/slot-1');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ notified: { candidates: 2, host: false } });
+  });
+
+  it('still saves the move and logs the failure when a send throws outright', async () => {
+    emails.sendMeetingRescheduleEmail.mockRejectedValueOnce(new Error('socket hang up'));
+
+    const res = await move(hostMember, '/api/member/meeting-slots/slot-1');
+
+    expect(res.status).toBe(200);
+    expect(prisma.meetingSlot.update).toHaveBeenCalled();
+    expect(prisma.meetingCommunication.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'RESCHEDULED', status: 'FAILED', error: 'socket hang up' })
+      })
+    );
+    expect(await res.json()).toMatchObject({ notified: { candidates: 1 } });
+  });
+});
+
+describe('malformed times', () => {
+  // localInputToUTC returns null for anything that is not YYYY-MM-DDTHH:mm.
+  it('refuses a malformed start time instead of failing the write', async () => {
+    const res = await request('/api/member/meeting-slots/slot-1', {
+      user: hostMember,
+      method: 'PUT',
+      body: { startTime: 'next tuesday' }
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/invalid start time/i);
+    expect(prisma.meetingSlot.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed end time instead of silently clearing it', async () => {
+    const res = await request('/api/member/meeting-slots/slot-1', {
+      user: hostMember,
+      method: 'PUT',
+      body: { endTime: 'half past four' }
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/invalid end time/i);
+    expect(prisma.meetingSlot.update).not.toHaveBeenCalled();
+  });
+
+  it('still allows clearing the end time with an empty value', async () => {
+    const res = await request('/api/member/meeting-slots/slot-1', {
+      user: hostMember,
+      method: 'PUT',
+      body: { endTime: null }
+    });
+
+    expect(res.status).toBe(200);
+    expect(prisma.meetingSlot.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ endTime: null }) })
+    );
+  });
+});
+
+describe('capacity guard locking', () => {
+  it('takes a row lock on the slot before counting signups', async () => {
+    await request('/api/member/meeting-slots/slot-1', {
+      user: hostMember,
+      method: 'PUT',
+      body: { capacity: 3 }
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    const sqlParts = prisma.$queryRaw.mock.calls[0][0];
+    expect(sqlParts.join('?')).toMatch(/FOR UPDATE/i);
   });
 });

@@ -391,12 +391,21 @@ export default function AdminMeetingSlots() {
       };
       if (editingId) {
         const updated = await api.put(`/admin/meeting-slots/${editingId}`, payload);
+        // notified.candidates counts deliveries, not attempts, so a shortfall
+        // means somebody still has the old time and has to be told by hand.
         const emailed = updated?.notified?.candidates || 0;
-        flash(
-          emailed > 0
-            ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
-            : 'Meeting slot updated.'
-        );
+        if (moved && editingSignupCount > 0 && emailed < editingSignupCount) {
+          setError(
+            `Slot moved, but only ${emailed} of ${editingSignupCount} candidate(s) could be emailed. ` +
+            'Contact the rest directly.'
+          );
+        } else {
+          flash(
+            emailed > 0
+              ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
+              : 'Meeting slot updated.'
+          );
+        }
       } else {
         await api.post('/admin/meeting-slots', payload);
         flash('Meeting slot created.');

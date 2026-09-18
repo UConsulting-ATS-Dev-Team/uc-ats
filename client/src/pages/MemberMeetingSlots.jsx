@@ -379,12 +379,21 @@ export default function MemberMeetingSlots() {
       setEditForm({ location: '', startTime: '', endTime: '', capacity: 2 });
       setEditInitial(null);
 
+      // notified.candidates counts deliveries, not attempts, so a shortfall
+      // means somebody is still holding the old time and has to be told by hand.
       const emailed = response?.notified?.candidates || 0;
-      setNotice(
-        emailed > 0
-          ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
-          : 'Meeting slot updated.'
-      );
+      if (moved && signupCount > 0 && emailed < signupCount) {
+        setError(
+          `Slot moved, but only ${emailed} of ${signupCount} candidate(s) could be emailed. ` +
+          'Contact the rest directly.'
+        );
+      } else {
+        setNotice(
+          emailed > 0
+            ? `Meeting slot updated. ${emailed} signed-up candidate(s) emailed the new details.`
+            : 'Meeting slot updated.'
+        );
+      }
 
       await load();
     } catch (e) {
