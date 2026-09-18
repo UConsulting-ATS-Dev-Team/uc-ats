@@ -1,0 +1,206 @@
+/* Round One history panel, shown read-only inside a later round's interview
+   card. Kept in its own file rather than FinalRoundInterviewInterface.css so the
+   panel travels with its component. */
+
+.r1-history {
+  border: 1px solid var(--border-light);
+  border-radius: var(--border-radius);
+  background: var(--bg-white);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.r1-history__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--bg-gray-lighter);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.r1-history__toggle:hover {
+  background: var(--bg-gray-light);
+}
+
+.r1-history__toggle:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+.r1-history__chevron,
+.r1-history__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.r1-history__chevron {
+  transition: transform 0.15s ease;
+}
+
+.r1-history__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.r1-history__label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.r1-history__summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.r1-history__body {
+  padding: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.r1-history__disclaimer {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: var(--status-info-bg);
+  border-left: 3px solid var(--status-info-border);
+  border-radius: 4px;
+  color: var(--status-info-text);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.r1-history__empty,
+.r1-history__empty-inline,
+.r1-history__no-note,
+.r1-history__error {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.r1-history__error {
+  color: var(--status-error-text);
+  font-style: normal;
+}
+
+.r1-history__interview + .r1-history__interview {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-light);
+}
+
+.r1-history__interview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.r1-history__interview-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.r1-history__interview-date {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+
+.r1-history__questions,
+.r1-history__notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.r1-history__question + .r1-history__question {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-light);
+}
+
+.r1-history__question-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.r1-history__question-text {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.r1-history__scope {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.r1-history__note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  background: var(--bg-gray-lighter);
+  border-radius: 4px;
+}
+
+.r1-history__note-author {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.r1-history__note-text,
+.r1-history__extra-line {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.r1-history__extras {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+
+.r1-history__extra + .r1-history__extra {
+  margin-top: 10px;
+}
+
+.r1-history__extra-line {
+  margin-top: 2px;
+}
+
+.r1-history__extra-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
