@@ -7,6 +7,7 @@ import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEven
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
@@ -4691,42 +4692,28 @@ router.post('/meeting-slots', async (req, res) => {
 });
 
 // Admin: update any meeting slot (full override — including host and time).
+//
+// Rescheduling here used to write the new time and say nothing, so signed-up
+// candidates and the host member kept a calendar entry for a meeting that had
+// moved. It now goes through the same service as the member route, which emails
+// them; an admin changing only capacity or the host still sends nothing.
 router.put('/meeting-slots/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { memberId, location, startTime, endTime, capacity } = req.body || {};
 
-    const existingSlot = await prisma.meetingSlot.findUnique({ where: { id } });
-    if (!existingSlot) {
-      return res.status(404).json({ error: 'Meeting slot not found' });
-    }
-
-    if (memberId !== undefined && memberId !== existingSlot.memberId) {
-      const host = await prisma.user.findUnique({ where: { id: memberId } });
-      if (!host) {
-        return res.status(400).json({ error: 'Host member not found' });
-      }
-    }
-
-    const updateData = {};
-    if (memberId !== undefined) updateData.memberId = memberId;
-    if (location !== undefined) updateData.location = location;
-    if (startTime !== undefined) updateData.startTime = localInputToUTC(startTime);
-    if (endTime !== undefined) updateData.endTime = endTime ? localInputToUTC(endTime) : null;
-    if (capacity !== undefined) updateData.capacity = Number.isInteger(capacity) ? capacity : existingSlot.capacity;
-
-    const updatedSlot = await prisma.meetingSlot.update({
-      where: { id },
-      data: updateData,
-      include: {
-        member: { select: { id: true, fullName: true, email: true, profileImage: true, graduationClass: true, role: true } },
-        signups: { orderBy: { createdAt: 'asc' } },
-        communications: { orderBy: { sentAt: 'desc' } }
-      }
+    const { slot, notified } = await updateMeetingSlot({
+      slotId: id,
+      patch: { memberId, location, startTime, endTime, capacity },
+      actorId: req.user.id,
+      allowHostChange: true
     });
 
-    res.json(updatedSlot);
+    res.json({ ...slot, notified });
   } catch (error) {
+    if (error instanceof SlotUpdateError) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('[PUT /api/admin/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
   }

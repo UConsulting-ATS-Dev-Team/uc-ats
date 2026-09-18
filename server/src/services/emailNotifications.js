@@ -1397,6 +1397,180 @@ export const sendMeetingCancellationToMember = async (memberEmail, memberName, l
   }
 };
 
+// ---------------------------------------------------------------------------
+// GTKUC slot rescheduled
+// ---------------------------------------------------------------------------
+
+// Render the "what changed" pair of boxes: the new details, then the old ones
+// beneath as muted context. Both the candidate and host variants use it, so a
+// reschedule reads the same whoever receives it.
+//
+// `next` and `previous` are each { location, startTime, endTime }. Only the
+// fields that actually differ are listed under "Previously", because repeating
+// an unchanged location under a strikethrough heading reads like it moved too.
+const renderRescheduleDetails = (next, previous) => {
+  const changedRows = [];
+  if (String(previous.startTime) !== String(next.startTime) || String(previous.endTime) !== String(next.endTime)) {
+    changedRows.push(
+      `<p style="color: #6c757d; margin: 8px 0;"><s>${formatEmailDateTime(previous.startTime)}` +
+      `${previous.endTime ? ` (until ${formatEmailTime(previous.endTime)})` : ''}</s></p>`
+    );
+  }
+  if (previous.location !== next.location) {
+    changedRows.push(`<p style="color: #6c757d; margin: 8px 0;"><s>${escapeHtml(previous.location)}</s></p>`);
+  }
+
+  return `
+          <div style="background-color: #d1e7dd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #198754;">
+            <h4 style="color: #0f5132; margin: 0 0 15px 0;">New Meeting Details</h4>
+            <p style="color: #0f5132; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(next.startTime)}</p>
+            ${next.endTime ? `<p style="color: #0f5132; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(next.startTime)} - ${formatEmailTime(next.endTime)}</p>` : ''}
+            <p style="color: #0f5132; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(next.location)}</p>
+          </div>
+
+          ${changedRows.length ? `
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #6c757d; margin: 0 0 15px 0;">Previously</h4>
+            ${changedRows.join('\n            ')}
+          </div>` : ''}`;
+};
+
+// Reschedule notice directed at a signed-up CANDIDATE.
+const createMeetingRescheduleEmail = (candidateName, memberName, next, previous) => {
+  candidateName = escapeHtml(candidateName);
+  memberName = escapeHtml(memberName);
+
+  return {
+    subject: 'Meeting Rescheduled - Get to Know UC',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
+          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">Your Meeting Has Moved</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Hi ${candidateName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Your Get to Know UC meeting with ${memberName} has been rescheduled. Your spot is
+            still held - you do not need to sign up again. Please check the new details below
+            and update your calendar.
+          </p>
+${renderRescheduleDetails(next, previous)}
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">If the new time doesn't work</h4>
+            <p style="color: #666; margin: 8px 0;">• Cancel or rebook your meeting in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
+            <p style="color: #666; margin: 8px 0;">• If it is too close to the start time to change it yourself, email recruitment</p>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+// Send the reschedule notice to a signed-up candidate.
+export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous) => {
+  try {
+    const emailContent = createMeetingRescheduleEmail(candidateName, memberName, next, previous);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Meeting reschedule email sent to ${candidateEmail} for moved meeting with ${memberName}`);
+    } else {
+      console.error(`Failed to send meeting reschedule email to ${candidateEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendMeetingRescheduleEmail:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Reschedule notice directed at the HOST member. Sent only when somebody other
+// than the host moved the slot, so a member never gets mail about their own edit.
+const createMeetingRescheduleMemberEmail = (memberName, next, previous, options = {}) => {
+  memberName = escapeHtml(memberName);
+  const signupCount = Number.isInteger(options.signupCount) ? options.signupCount : null;
+
+  const impactLine = signupCount
+    ? `<p style="color: #666; margin: 8px 0;">• ${signupCount} signed-up candidate(s) have been emailed the new time</p>`
+    : `<p style="color: #666; margin: 8px 0;">• Nobody has signed up for this slot yet, so no candidates were emailed</p>`;
+
+  return {
+    subject: 'Get to Know UC - Meeting Rescheduled',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
+          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin-bottom: 20px;">One of Your Slots Has Moved</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Hi ${memberName},
+          </p>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            An administrator has rescheduled one of your Get to Know UC meeting slots.
+            Please check the new details below and update your calendar.
+          </p>
+${renderRescheduleDetails(next, previous)}
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
+            ${impactLine}
+            <p style="color: #666; margin: 8px 0;">• Manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
+          </div>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
+            Best regards,<br>
+            UConsulting Recruitment Team
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+// Send the reschedule notice to the HOST member.
+export const sendMeetingRescheduleToMember = async (memberEmail, memberName, next, previous, options = {}) => {
+  try {
+    const emailContent = createMeetingRescheduleMemberEmail(memberName, next, previous, options);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Meeting reschedule email sent to host member ${memberEmail}`);
+    } else {
+      console.error(`Failed to send meeting reschedule email to host member ${memberEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendMeetingRescheduleToMember:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Reviewer grading reminder email templates
 
 const createReviewerReminderEmail = (reviewerName, teamName, cycleName, progress) => {
