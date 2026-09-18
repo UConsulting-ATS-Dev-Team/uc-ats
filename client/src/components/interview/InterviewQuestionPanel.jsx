@@ -19,6 +19,11 @@ import './InterviewQuestionPanel.css';
 // dropped. Matches the live vote rooms, which treat Supabase the same way.
 const POLL_MS = { realtime: 30000, polling: 10000 };
 
+// A broadcast is an untrusted trigger - anyone holding the anon key can post one - so a
+// burst of them must not become a burst of authenticated reads. Nudges collapse onto a
+// single trailing refetch, and a read already in flight absorbs whatever lands during it.
+const NUDGE_COALESCE_MS = 500;
+
 const questionsChannel = (interviewId) => `interview-questions:${interviewId}`;
 
 const ROUND_LABELS = {
@@ -65,6 +70,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   const [facets, setFacets] = useState({ categories: [], rounds: [] });
 
   const [connected, setConnected] = useState(false);
+  const [delivered, setDelivered] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [loadingBank, setLoadingBank] = useState(false);
   const [error, setError] = useState(null);
@@ -158,17 +164,45 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     return undefined;
   }, [open, tab, loadBank]);
 
-  // The fallback poll still only runs while the panel is open, but it can be slow now
-  // that a broadcast carries the urgent case. It stays at the old ten seconds whenever
-  // the subscription is not up, which is the whole point of keeping it.
+  // The fallback poll still only runs while the panel is open, and it slows down only
+  // once a nudge has actually arrived. Subscribing proves the browser reached Supabase,
+  // not that the server can publish: if the server's own credentials are missing or a
+  // send fails, `broadcast()` returns quietly while the client sits happily SUBSCRIBED.
+  // Waiting for delivery means a panel with no working realtime keeps the interval it
+  // had before this existed, rather than a slower one.
   useEffect(() => {
     if (!open) return undefined;
-    const timer = setInterval(() => loadSession(), connected ? POLL_MS.realtime : POLL_MS.polling);
+    const interval = connected && delivered ? POLL_MS.realtime : POLL_MS.polling;
+    const timer = setInterval(() => loadSession(), interval);
     return () => clearInterval(timer);
-  }, [open, connected, loadSession]);
+  }, [open, connected, delivered, loadSession]);
 
   const loadSessionRef = useRef(loadSession);
   loadSessionRef.current = loadSession;
+
+  const nudge = useRef({ timer: null, inFlight: false, pending: false });
+
+  const refetchFromNudge = useCallback(() => {
+    const state = nudge.current;
+    // A read is already running. Let it finish and follow it with exactly one more - it
+    // may have started before the change this nudge is about.
+    if (state.inFlight) {
+      state.pending = true;
+      return;
+    }
+    if (state.timer) return;
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      state.inFlight = true;
+      state.pending = false;
+      try {
+        await loadSessionRef.current?.();
+      } finally {
+        state.inFlight = false;
+        if (state.pending) refetchFromNudge();
+      }
+    }, NUDGE_COALESCE_MS);
+  }, []);
 
   // Subscribed only while the panel is open, for the same reason the poll is: a closed
   // panel deliberately fetches nothing, and a nudge it cannot act on is a wasted socket.
@@ -179,23 +213,29 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
 
     channel.on('broadcast', { event: 'questions:changed' }, ({ payload }) => {
       if (payload?.interviewId !== interviewId) return;
+      // Any nudge at all, even one this panel goes on to ignore, is proof that the server
+      // can publish and this browser receives - which is what the poll interval keys on.
+      setDelivered(true);
       // Anyone holding the anon key can post here, so a nudge is only ever a reason to
-      // re-read through the authenticated API - never data in its own right. The worst a
-      // forged one buys is a redundant GET.
+      // re-read through the authenticated API, never data in its own right. What bounds
+      // the cost of a forged one is the coalescing below, not this check.
       if (payload.at && watermark.current && new Date(payload.at) <= new Date(watermark.current)) {
         return;
       }
-      loadSessionRef.current?.();
+      refetchFromNudge();
     });
 
     channel.subscribe((status) => setConnected(status === 'SUBSCRIBED'));
 
     return () => {
       setConnected(false);
+      setDelivered(false);
+      if (nudge.current.timer) clearTimeout(nudge.current.timer);
+      nudge.current = { timer: null, inFlight: false, pending: false };
       try { channel.unsubscribe(); } catch { /* already gone */ }
       try { supabase.removeChannel(channel); } catch { /* already gone */ }
     };
-  }, [open, active, interviewId]);
+  }, [open, active, interviewId, refetchFromNudge]);
 
   useEffect(() => {
     if (!notice) return undefined;
