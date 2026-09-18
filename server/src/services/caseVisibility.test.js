@@ -157,6 +157,26 @@ describe('authorizeCaseRead', () => {
     expect(verdict.unlocksAt.toISOString()).toBe(hoursFromNow(1).toISOString());
   });
 
+  it('excludes cancelled interviews, which would otherwise hold the case open forever', async () => {
+    assignedTo(hoursFromNow(9));
+
+    await authorizeCaseRead('case-1', MEMBER, NOW);
+
+    const where = prisma.caseAssignment.findMany.mock.calls[0][0].where;
+    expect(where.interview.status).toEqual({ not: 'CANCELLED' });
+  });
+
+  it('still counts a DRAFT or UPCOMING interview, so a real one does not lock the member out', async () => {
+    assignedTo(hoursFromNow(1));
+
+    await authorizeCaseRead('case-1', MEMBER, NOW);
+
+    // Only CANCELLED is filtered out; nothing narrows it to one status.
+    const where = prisma.caseAssignment.findMany.mock.calls[0][0].where;
+    expect(where.interview.status).toEqual({ not: 'CANCELLED' });
+    expect(where.interview.status.in).toBeUndefined();
+  });
+
   it('scopes the assignment lookup to this case and this member', async () => {
     assignedTo(hoursFromNow(1));
 
@@ -166,7 +186,10 @@ describe('authorizeCaseRead', () => {
       expect.objectContaining({
         where: {
           caseId: 'case-42',
-          interview: { assignments: { some: { userId: 'member-1' } } },
+          interview: {
+            status: { not: 'CANCELLED' },
+            assignments: { some: { userId: 'member-1' } },
+          },
         },
       })
     );

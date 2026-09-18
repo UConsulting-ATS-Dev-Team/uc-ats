@@ -104,10 +104,19 @@ export async function authorizeCaseRead(caseId, user, now = new Date()) {
   if (user.role === 'ADMIN') return { allowed: true };
   if (user.role !== 'MEMBER') return { allowed: false, reason: 'FORBIDDEN' };
 
+  // Cancelling an interview leaves its case and interviewer assignments in place,
+  // so a cancelled interview whose start time has passed would hold the case open
+  // for people who are no longer running it — permanently, since the earliest
+  // unlock wins. Only CANCELLED is excluded: a DRAFT or UPCOMING interview is one
+  // the member may still run, and dropping those would lock them out of a real
+  // interview instead.
   const links = await prisma.caseAssignment.findMany({
     where: {
       caseId,
-      interview: { assignments: { some: { userId: user.id } } },
+      interview: {
+        status: { not: 'CANCELLED' },
+        assignments: { some: { userId: user.id } },
+      },
     },
     select: { interview: { select: { startDate: true } } },
   });

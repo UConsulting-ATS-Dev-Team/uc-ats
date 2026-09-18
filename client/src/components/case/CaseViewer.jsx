@@ -62,6 +62,9 @@ export default function CaseViewer({
   const [confirmSwitch, setConfirmSwitch] = useState(null);
   const [previewActive, setPreviewActive] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  // Bumped on every load so a slow response for a case the user has already
+  // switched away from cannot overwrite the current one.
+  const loadSeqRef = useRef(0);
   const containerRef = useRef(null);
   const overlayRef = useRef(null);
   const preEnterPageIdRef = useRef(null);
@@ -72,6 +75,9 @@ export default function CaseViewer({
   const caseId = assignment?.caseId || null;
 
   const loadCase = useCallback(async (id) => {
+    const seq = ++loadSeqRef.current;
+    const isStale = () => seq !== loadSeqRef.current;
+
     if (!id) {
       setCaseData(null);
       setPages([]);
@@ -84,10 +90,12 @@ export default function CaseViewer({
     setLocked(null);
     try {
       const data = await apiClient.get(`/cases/${id}`);
+      if (isStale()) return;
       setCaseData(data);
       setPages(data.pages || []);
       setCurrentPageId(data.pages?.[0]?.id || null);
     } catch (e) {
+      if (isStale()) return;
       // Too early is not an error the member can act on, so it gets its own
       // state and its own panel rather than a red message.
       if (isCaseLockedError(e)) {
@@ -99,7 +107,7 @@ export default function CaseViewer({
         setError(e.message || 'Failed to load case');
       }
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
   }, []);
 
