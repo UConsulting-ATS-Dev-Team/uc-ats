@@ -85,6 +85,14 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   const questionMap = useRef(new Map());
   const watermark = useRef(null);
 
+  // A read that started before this panel changed the list describes a list that no
+  // longer exists, and a full read rebuilds the map from scratch - so letting a stale one
+  // land erases the change. That is what made Add look broken: the button reported
+  // success, the question appeared, and the poll already in flight wiped it out again.
+  // Counting reads and local writes separately is enough to recognise both cases.
+  const loadSeq = useRef(0);
+  const localSeq = useRef(0);
+
   // Question prep only belongs to the structured rounds, and there is nothing to sync
   // without an interview. Every effect below is inert otherwise, because the hooks still
   // run on a coffee chat where the panel itself renders nothing.
@@ -98,10 +106,24 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     setSessionQuestions(sortQuestions([...questionMap.current.values()]));
   }, []);
 
+  // Everything this panel writes itself goes through here, so the counter can never be
+  // missed and the watermark advances the same way on every path.
+  const applyLocal = useCallback(
+    (rows) => {
+      const next = foldRows(questionMap.current, rows.filter(Boolean));
+      if (next) watermark.current = next;
+      localSeq.current += 1;
+      publish();
+    },
+    [publish]
+  );
+
   const loadSession = useCallback(
     async ({ full = false } = {}) => {
       if (!interviewId) return;
       if (full) setLoadingSession(true);
+      const seq = ++loadSeq.current;
+      const localAtStart = localSeq.current;
       try {
         // No watermark yet (first load, or an empty list) means a full read. Deriving the
         // watermark from the rows themselves rather than the local clock keeps this correct
@@ -111,6 +133,10 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
           useSince ? `?since=${encodeURIComponent(watermark.current)}` : ''
         }`;
         const rows = await apiClient.get(url);
+        // Superseded while in flight - by a newer read, or by this panel writing to the
+        // list. Dropping the answer is the honest move either way: it was computed
+        // against a list that has since moved on, and whatever superseded it is fresher.
+        if (seq !== loadSeq.current || localSeq.current !== localAtStart) return;
         const list = Array.isArray(rows) ? rows : [];
         if (full || !useSince) questionMap.current = new Map();
         const next = foldRows(questionMap.current, list);
@@ -133,7 +159,12 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
       if (roundFilter) params.set('round', roundFilter);
       if (categoryFilter) params.set('category', categoryFilter);
       const qs = params.toString();
-      const rows = await apiClient.get(`/member/interview-questions${qs ? `?${qs}` : ''}`);
+      // Asked for by interview, not by cycle: the bank that belongs to this interview is
+      // the one its own cycle owns, which stops being the active cycle the moment
+      // recruitment moves on.
+      const rows = await apiClient.get(
+        `/member/interviews/${interviewId}/question-bank${qs ? `?${qs}` : ''}`
+      );
       setBank(Array.isArray(rows) ? rows : []);
       setError(null);
     } catch (e) {
@@ -141,13 +172,13 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     } finally {
       setLoadingBank(false);
     }
-  }, [roundFilter, categoryFilter]);
+  }, [interviewId, roundFilter, categoryFilter]);
 
   useEffect(() => {
     if (!open) return undefined;
     loadSession({ full: true });
     apiClient
-      .get('/member/interview-questions/facets')
+      .get(`/member/interviews/${interviewId}/question-bank/facets`)
       .then((data) =>
         setFacets({
           categories: Array.isArray(data?.categories) ? data.categories : [],
@@ -156,7 +187,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
       )
       .catch(() => setFacets({ categories: [], rounds: [] }));
     return undefined;
-  }, [open, loadSession]);
+  }, [open, interviewId, loadSession]);
 
   useEffect(() => {
     if (!open || tab !== 'bank') return undefined;
@@ -268,9 +299,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
       const created = await apiClient.post(`/member/interviews/${interviewId}/session-questions`, {
         prompt,
       });
-      foldRows(questionMap.current, [created]);
-      watermark.current = created.updatedAt || watermark.current;
-      publish();
+      applyLocal([created]);
     } catch (err) {
       setDraft(prompt);
       setError(err.message || 'Could not add that question.');
@@ -284,9 +313,7 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
         `/member/interviews/${interviewId}/session-questions/bank`,
         { questionId: question.id }
       );
-      foldRows(questionMap.current, [created]);
-      watermark.current = created.updatedAt || watermark.current;
-      publish();
+      applyLocal([created]);
       setNotice('Added to this interview.');
     } catch (err) {
       setError(err.message || 'Could not add that question.');
@@ -301,9 +328,10 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
       const removed = await apiClient.delete(
         `/member/interviews/${interviewId}/session-questions/${question.id}`
       );
+      // The route answers with the soft-deleted row, so the tombstone carries both the
+      // removal and the stamp that advances the watermark past it.
       questionMap.current.delete(question.id);
-      watermark.current = removed?.updatedAt || watermark.current;
-      publish();
+      applyLocal([removed]);
     } catch (err) {
       setError(err.message || 'Could not remove that question.');
     } finally {
@@ -317,15 +345,17 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
     const reordered = [...sessionQuestions];
     const [moved] = reordered.splice(index, 1);
     reordered.splice(next, 0, moved);
-    setSessionQuestions(reordered); // optimistic
+    // Optimistic, and counted: a read already in flight must not undo it on arrival.
+    reordered.forEach((q, i) => questionMap.current.set(q.id, { ...q, position: i }));
+    localSeq.current += 1;
+    setSessionQuestions(reordered);
 
     try {
       const rows = await apiClient.patch(
         `/member/interviews/${interviewId}/session-questions/reorder`,
         { order: reordered.map((q) => q.id) }
       );
-      foldRows(questionMap.current, Array.isArray(rows) ? rows : []);
-      publish();
+      applyLocal(Array.isArray(rows) ? rows : []);
     } catch (err) {
       // A 409 means someone else added or removed a question while this list was on
       // screen. Resyncing is the honest recovery - the local order was computed against

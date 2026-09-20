@@ -13,6 +13,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
     interviewAssignment: { findFirst: vi.fn() },
+    interview: { findUnique: vi.fn() },
     interviewQuestion: { findFirst: vi.fn() },
     interviewSessionQuestion: {
       create: vi.fn(),
@@ -81,6 +82,8 @@ beforeEach(() => {
   );
   // Assigned to the interview unless a test says otherwise.
   prisma.interviewAssignment.findFirst.mockResolvedValue({ id: 'ia-1' });
+  // The bank routes resolve their cycle from the interview.
+  prisma.interview.findUnique.mockResolvedValue({ cycleId: 'cycle-1' });
 });
 
 describe('live interview question nudges', () => {
