@@ -3,6 +3,7 @@ import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
 import { describeRoster } from '../utils/candidateRoster.js';
 import { eventInviteFor } from './eventInvites.js';
+import { recordCommunication } from './communicationLog.js';
 
 // Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
 // are picked up automatically from the environment by the AWS SDK credential chain.
@@ -125,10 +126,55 @@ const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, 
 };
 
 // Send email function
-const sendEmail = async (to, subject, html, attachments = []) => {
+// `to` is usually one address, but nodemailer also accepts an array or a
+// comma-separated string. The log wants one row per person either way.
+const addressesOf = (to) => {
+  const raw = Array.isArray(to) ? to : String(to ?? '').split(',');
+  return raw.map((a) => a.trim()).filter(Boolean);
+};
+
+/**
+ * The one place mail leaves this server, and therefore the one place it is
+ * recorded. Every send - the automated ones and the ones an admin typed - lands
+ * in communication_logs, which is what Master Communications reads back.
+ *
+ * `meta` labels the row: `category` and `trigger` say what kind of message this
+ * was and whether a person or the system decided to send it, and
+ * `triggeredById` / `cycleId` / `messageLogId` tie it to whoever pressed the
+ * button and to the campaign it belonged to. Leaving `meta` off still logs the
+ * send, just as an automated OTHER - no caller has to be updated for the log to
+ * be complete.
+ */
+const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
+  const hasAttachments = Boolean(attachments && attachments.length > 0);
+  const { recipientName = null, ...context } = meta || {};
+
+  // Never rejects. recordCommunication already swallows its own write failures,
+  // but the mail is gone by the time this runs: if logging could throw here, a
+  // delivered message would be reported as failed and something upstream would
+  // send it a second time.
+  const record = (status, extra) =>
+    Promise.all(
+      addressesOf(to).map((recipient) =>
+        recordCommunication({
+          channel: 'email',
+          recipient,
+          recipientName,
+          subject,
+          body: html,
+          hasAttachments,
+          status,
+          ...context,
+          ...extra,
+        })
+      )
+    ).catch((e) => {
+      console.error('[emailNotifications] failed to log a send:', e);
+    });
+
   try {
     const transporter = createTransporter();
-    
+
     const mailOptions = {
       from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
       replyTo: process.env.EMAIL_REPLY_TO,
@@ -137,15 +183,18 @@ const sendEmail = async (to, subject, html, attachments = []) => {
       html: html
     };
 
-    if (attachments && attachments.length > 0) {
+    if (hasAttachments) {
       mailOptions.attachments = attachments;
     }
 
     const info = await transporter.sendMail(mailOptions);
     console.log('Email sent successfully:', info.messageId);
+    await record('SENT', { providerMessageId: info.messageId ?? null });
     return { success: true, messageId: info.messageId };
   } catch (error) {
     console.error('Error sending email:', error);
+    // A failed send is the row an admin most wants to find, so it is logged too.
+    await record('FAILED', { error: error.message });
     return { success: false, error: error.message };
   }
 };
@@ -168,7 +217,8 @@ export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventN
       candidateEmail,
       emailContent.subject,
       emailContent.html,
-      invite ? [invite] : []
+      invite ? [invite] : [],
+      { category: 'EVENT', recipientName: candidateName }
     );
 
     if (result.success) {
@@ -188,7 +238,7 @@ export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventN
 export const sendAttendanceConfirmation = async (candidateEmail, candidateName, eventName, eventDate, eventLocation) => {
   try {
     const emailContent = createAttendanceConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'EVENT', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Attendance confirmation email sent to ${candidateEmail} for event: ${eventName}`);
@@ -322,7 +372,7 @@ const createRejectionEmail = (candidateName, currentCycleName) => {
 export const sendAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -341,7 +391,7 @@ export const sendAcceptanceEmail = async (candidateEmail, candidateName, current
 export const sendRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -580,7 +630,7 @@ const createFirstRoundRejectionEmail = (candidateName, currentCycleName) => {
 export const sendCoffeeChatAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createCoffeeChatAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Coffee chat acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -599,7 +649,7 @@ export const sendCoffeeChatAcceptanceEmail = async (candidateEmail, candidateNam
 export const sendCoffeeChatRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createCoffeeChatRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Coffee chat rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -736,7 +786,7 @@ const createFinalRejectionEmail = (candidateName, currentCycleName) => {
 export const sendFirstRoundAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createFirstRoundAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`First round acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -755,7 +805,7 @@ export const sendFirstRoundAcceptanceEmail = async (candidateEmail, candidateNam
 export const sendFirstRoundRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createFirstRoundRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`First round rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -774,7 +824,7 @@ export const sendFirstRoundRejectionEmail = async (candidateEmail, candidateName
 export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createFinalAcceptanceEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Final acceptance email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -793,7 +843,7 @@ export const sendFinalAcceptanceEmail = async (candidateEmail, candidateName, cu
 export const sendFinalRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
     const emailContent = createFinalRejectionEmail(candidateName, currentCycleName);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Final rejection email sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -872,7 +922,7 @@ export const sendOfferLetter = async (candidateEmail, candidateName, currentCycl
     const attachments = attachmentBuffer
       ? [{ filename: attachmentFilename, content: attachmentBuffer }]
       : [];
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, attachments);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, attachments, { category: 'OFFER_LETTER', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Offer letter sent to ${candidateEmail} for cycle: ${currentCycleName}`);
@@ -961,7 +1011,7 @@ const createMeetingSignupConfirmationEmail = (candidateName, memberName, locatio
 export const sendMeetingSignupConfirmation = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
   try {
     const emailContent = createMeetingSignupConfirmationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting signup confirmation email sent to ${candidateEmail} for meeting with ${memberName}`);
@@ -1047,7 +1097,7 @@ const createMeetingSignupNotificationEmail = (memberName, candidateName, candida
 export const sendMeetingSignupNotification = async (memberEmail, memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
   try {
     const emailContent = createMeetingSignupNotificationEmail(memberName, candidateName, candidateEmail, studentId, location, startTime, endTime);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
     
     if (result.success) {
       console.log(`Meeting signup notification email sent to ${memberEmail} for signup by ${candidateName}`);
@@ -1253,7 +1303,7 @@ const createPasswordResetConfirmationEmail = (fullName) => {
 export const sendPasswordResetEmail = async (email, resetLink) => {
   try {
     const emailContent = createPasswordResetEmail(resetLink);
-    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT' });
 
     if (result.success) {
       console.log(`Password reset email sent to ${email}`);
@@ -1276,7 +1326,7 @@ export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
     }
 
     const emailContent = createPasswordResetConfirmationEmail(fullName);
-    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT', recipientName: fullName });
 
     if (result.success) {
       console.log(`Password reset confirmation email sent to ${email}`);
@@ -1295,7 +1345,7 @@ export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
 export const sendMeetingCancellationEmail = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
   try {
     const emailContent = createMeetingCancellationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting cancellation email sent to ${candidateEmail} for cancelled meeting with ${memberName}`);
@@ -1382,7 +1432,7 @@ const createMeetingCancellationMemberEmail = (memberName, location, startTime, e
 export const sendMeetingCancellationToMember = async (memberEmail, memberName, location, startTime, endTime, options = {}) => {
   try {
     const emailContent = createMeetingCancellationMemberEmail(memberName, location, startTime, endTime, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting cancellation email sent to host member ${memberEmail}`);
@@ -1486,7 +1536,7 @@ ${renderRescheduleDetails(next, previous)}
 export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous) => {
   try {
     const emailContent = createMeetingRescheduleEmail(candidateName, memberName, next, previous);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to ${candidateEmail} for moved meeting with ${memberName}`);
@@ -1556,7 +1606,7 @@ ${renderRescheduleDetails(next, previous)}
 export const sendMeetingRescheduleToMember = async (memberEmail, memberName, next, previous, options = {}) => {
   try {
     const emailContent = createMeetingRescheduleMemberEmail(memberName, next, previous, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to host member ${memberEmail}`);
@@ -1635,7 +1685,7 @@ export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName
     }
 
     const emailContent = createReviewerReminderEmail(reviewerName, teamName, cycleName, progress);
-    const result = await sendEmail(reviewerEmail, emailContent.subject, emailContent.html);
+    const result = await sendEmail(reviewerEmail, emailContent.subject, emailContent.html, [], { category: 'REVIEWER_REMINDER', recipientName: reviewerName });
 
     if (result.success) {
       console.log(`Reviewer reminder sent to ${reviewerEmail} for team ${teamName}`);
@@ -1903,7 +1953,7 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
     }
 
     const emailContent = createEmailVerificationEmail(fullName, verifyLink);
-    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT', recipientName: fullName });
 
     if (result.success) {
       console.log(`Email verification sent to ${email}`);

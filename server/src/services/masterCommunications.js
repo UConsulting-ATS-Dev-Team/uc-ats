@@ -2,6 +2,7 @@ import { marked } from 'marked';
 import prisma from '../prismaClient.js';
 import { sendEmail } from './emailNotifications.js';
 import { sendSlackMessage } from './slackService.js';
+import { recordCommunications } from './communicationLog.js';
 
 // Channels the server delivers itself. iMessage is absent on purpose: it leaves
 // from the admin's Messages app, so it can be neither sent nor scheduled here.
@@ -95,7 +96,7 @@ function markdownToHtml(text) {
   return marked.parse(text, { breaks: true });
 }
 
-async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2 }) {
+async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2, meta = {} }) {
   return withConcurrency(
     recipients,
     async (r) => {
@@ -105,7 +106,10 @@ async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency =
       let lastError = 'Unknown error';
 
       for (let attempt = 0; attempt <= retries; attempt++) {
-        const result = await sendEmail(r.email, subject, htmlBody);
+        const result = await sendEmail(r.email, subject, htmlBody, [], {
+          ...meta,
+          recipientName: r.fullName || null,
+        });
         if (result.success) {
           return { recipientId: r.id, ...result };
         }
@@ -130,7 +134,7 @@ async function notifyFailures({ channel, audience, failed, total, results }) {
       .join('\n');
     const text = `⚠️ Master Communications bulk send finished for ${channel} to ${audience}.\n` +
       `Delivered: ${total - failed} / ${total}\nFailed: ${failed}\nSample failures:\n${sample}`;
-    await sendSlackMessage({ text });
+    await sendSlackMessage({ text }, { category: 'MASTER_COMMUNICATION' });
   } catch (e) {
     console.error('[masterCommunications] Slack failure notification failed:', e);
   }
@@ -354,6 +358,29 @@ export async function logImessageSend({ recipientIds, body, templateId, cycleId,
     err.status = 500;
     throw err;
   }
+
+  // A row per person, so a search for someone's name or number turns up the
+  // iMessage alongside their email. Status is OPENED rather than SENT for the
+  // reason the campaign log already gives: Messages is not ours to observe.
+  const members = await prisma.user.findMany({
+    where: { id: { in: [...new Set(recipientIds)] } },
+    select: { id: true, fullName: true, email: true, phoneNumber: true },
+  });
+  await recordCommunications(
+    members.map((m) => ({
+      channel: 'imessage',
+      category: 'MASTER_COMMUNICATION',
+      trigger: 'MANUAL',
+      status: 'OPENED',
+      recipient: m.phoneNumber || m.email,
+      recipientName: m.fullName,
+      body,
+      triggeredById: sentBy,
+      cycleId: cycleId || null,
+      messageLogId: logId,
+    }))
+  );
+
   return { logId };
 }
 
@@ -378,10 +405,26 @@ export async function sendMasterCommunication({
       err.status = 400;
       throw err;
     }
-    await sendSlackMessage({ text: body });
     const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
+    await sendSlackMessage(
+      { text: body },
+      {
+        category: 'MASTER_COMMUNICATION',
+        trigger: 'MANUAL',
+        subject,
+        triggeredById: sentBy,
+        cycleId: cycleId || null,
+        messageLogId: logId,
+      }
+    );
     return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length, logId };
   }
+
+  // Written before the send, not after it, so each per-recipient row in
+  // communication_logs can name the campaign it belonged to. recipientCount is
+  // the size of the audience either way - sendBulkEmails returns one result per
+  // recipient whether or not the mail got through.
+  const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
 
   const results = await sendBulkEmails({
     recipients,
@@ -389,12 +432,17 @@ export async function sendMasterCommunication({
     baseBody: body,
     concurrency: 5,
     retries: 2,
+    meta: {
+      category: 'MASTER_COMMUNICATION',
+      trigger: 'MANUAL',
+      triggeredById: sentBy,
+      cycleId: cycleId || null,
+      messageLogId: logId,
+    },
   });
 
   const sent = results.filter((r) => r.success).length;
   const failed = results.length - sent;
-
-  const logId = await logMessage({ templateId, channel, recipientCount: results.length, subject, body, sentBy, cycleId });
 
   await notifyFailures({ channel, audience, failed, total: results.length, results });
 
@@ -563,7 +611,18 @@ export async function sendTestCommunication({ audience, filters, subject, body, 
     `${sample ? `a matching recipient (${mergeSource.fullName || mergeSource.email})` : 'your own account, because no recipient matched the current filters'}.` +
     `</div>`;
 
-  const result = await sendEmail(user.email, `[TEST] ${renderedSubject}`, banner + markdownToHtml(renderedBody));
+  const result = await sendEmail(
+    user.email,
+    `[TEST] ${renderedSubject}`,
+    banner + markdownToHtml(renderedBody),
+    [],
+    {
+      category: 'TEST',
+      trigger: 'MANUAL',
+      recipientName: user.fullName || null,
+      triggeredById: user.id,
+    }
+  );
 
   if (!result.success) {
     const err = new Error(result.error || 'Failed to send test email');

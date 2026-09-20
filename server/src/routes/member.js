@@ -1711,7 +1711,12 @@ router.post('/message-admin', requireAuth, async (req, res) => {
     };
 
     try {
-      await sendSlackMessage(slackMessage);
+      await sendSlackMessage(slackMessage, {
+        category: 'OTHER',
+        trigger: 'MANUAL',
+        subject: 'Message to the admins',
+        triggeredById: req.user.id,
+      });
     } catch (slackError) {
       console.error('[POST /api/member/message-admin] Slack error:', slackError);
       // Don't fail the request if Slack is down, but log the error
@@ -1828,7 +1833,12 @@ router.post('/flag-document', requireAuth, async (req, res) => {
         `**Message:** ${message || 'No additional details provided'}\n\n` +
         `Please review this flagged document in the admin panel.`;
 
-      await sendSlackMessage(slackMessage);
+      await sendSlackMessage(slackMessage, {
+        category: 'OTHER',
+        trigger: 'MANUAL',
+        subject: 'Flagged document',
+        triggeredById: req.user.id,
+      });
     } catch (slackError) {
       console.error('Failed to send Slack notification for flagged document:', slackError);
       // Don't fail the request if Slack notification fails
