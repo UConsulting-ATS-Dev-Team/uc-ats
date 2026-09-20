@@ -107,11 +107,13 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
   }, []);
 
   // Everything this panel writes itself goes through here, so the counter can never be
-  // missed and the watermark advances the same way on every path.
+  // missed. It deliberately leaves the watermark alone: the watermark means "every change
+  // up to here has been seen", and a local write only proves the panel has seen its own.
+  // Jumping it to the new row's stamp would skip a co-interviewer's change made a moment
+  // earlier, and no later `since` read would ever ask for that window again.
   const applyLocal = useCallback(
     (rows) => {
-      const next = foldRows(questionMap.current, rows.filter(Boolean));
-      if (next) watermark.current = next;
+      foldRows(questionMap.current, rows.filter(Boolean));
       localSeq.current += 1;
       publish();
     },
@@ -133,12 +135,18 @@ export default function InterviewQuestionPanel({ interviewId, round, interviewTi
           useSince ? `?since=${encodeURIComponent(watermark.current)}` : ''
         }`;
         const rows = await apiClient.get(url);
-        // Superseded while in flight - by a newer read, or by this panel writing to the
-        // list. Dropping the answer is the honest move either way: it was computed
-        // against a list that has since moved on, and whatever superseded it is fresher.
-        if (seq !== loadSeq.current || localSeq.current !== localAtStart) return;
+        // A newer read has already answered. This one is behind it and asked for no less,
+        // so it has nothing to add and could resurrect a row the newer one tombstoned.
+        if (seq !== loadSeq.current) return;
         const list = Array.isArray(rows) ? rows : [];
-        if (full || !useSince) questionMap.current = new Map();
+        // Only a read that rebuilds the map from scratch can erase a local write, and
+        // only one that started before that write carries a list old enough to do it.
+        // An incremental read is additive, so it is always safe to apply - dropping one
+        // would throw away the sole copy of whatever a co-interviewer changed in the
+        // window it covers.
+        const rebuilds = full || !useSince;
+        if (rebuilds && localSeq.current !== localAtStart) return;
+        if (rebuilds) questionMap.current = new Map();
         const next = foldRows(questionMap.current, list);
         if (next) watermark.current = next;
         publish();

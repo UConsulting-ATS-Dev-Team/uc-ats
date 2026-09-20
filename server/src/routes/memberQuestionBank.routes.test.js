@@ -13,7 +13,8 @@ import memberRoutes from './member.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
-    interviewAssignment: { findFirst: vi.fn() },
+    interviewAssignment: { findFirst: vi.fn(), findMany: vi.fn() },
+    interviewSlotAssignment: { findMany: vi.fn() },
     interview: { findUnique: vi.fn() },
     interviewQuestion: { findFirst: vi.fn(), findMany: vi.fn() },
     interviewSessionQuestion: { create: vi.fn(), findFirst: vi.fn() },
@@ -64,8 +65,14 @@ beforeEach(() => {
   prisma.user.findUnique.mockImplementation(async ({ where }) =>
     USERS.find((u) => u.id === where.id) || null
   );
-  prisma.interviewAssignment.findFirst.mockResolvedValue({ id: 'ia-1' });
-  prisma.interview.findUnique.mockResolvedValue({ cycleId: INTERVIEW_CYCLE });
+  // Staffed the current way: a slot assignment, no legacy InterviewAssignment row.
+  prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ interviewId: INTERVIEW }]);
+  prisma.interviewAssignment.findMany.mockResolvedValue([]);
+  prisma.interview.findUnique.mockResolvedValue({
+    id: INTERVIEW,
+    cycleId: INTERVIEW_CYCLE,
+    description: null
+  });
   prisma.interviewQuestion.findMany.mockResolvedValue([]);
   // Nothing here may consult the active cycle; a test that trips this is reading the
   // wrong pointer.
@@ -105,8 +112,36 @@ describe('the interview question bank', () => {
     );
   });
 
-  it('refuses someone who is not on the interview', async () => {
-    prisma.interviewAssignment.findFirst.mockResolvedValue(null);
+  // The list a member opens their interview from is roster-aware, so this has to be too:
+  // staffing moved to InterviewSlotAssignment, and checking only the legacy table meant a
+  // slot-assigned interviewer could open the interview and then be refused the bank.
+  it('lets in a member staffed through a slot assignment', async () => {
+    const res = await request(bankPath, { user: member });
+
+    expect(res.status).toBe(200);
+    expect(prisma.interviewSlotAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: member.id, removedAt: null })
+      })
+    );
+  });
+
+  it('lets in a member carried only by a legacy roster blob', async () => {
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+    prisma.interview.findUnique.mockResolvedValue({
+      id: INTERVIEW,
+      cycleId: INTERVIEW_CYCLE,
+      description: JSON.stringify({ memberGroups: [{ id: 'g1', memberIds: [member.id] }] })
+    });
+
+    const res = await request(bankPath, { user: member });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses someone who is on the interview by none of the three routes', async () => {
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+    prisma.interviewAssignment.findMany.mockResolvedValue([]);
 
     const res = await request(bankPath, { user: stranger });
 
@@ -114,10 +149,12 @@ describe('the interview question bank', () => {
     expect(prisma.interviewQuestion.findMany).not.toHaveBeenCalled();
   });
 
-  it('answers empty rather than guessing when the interview has no cycle', async () => {
+  it('answers empty rather than guessing when the interview is gone', async () => {
     prisma.interview.findUnique.mockResolvedValue(null);
 
-    const res = await request(bankPath);
+    // cycleId is not nullable, so a missing cycle means a missing interview. An admin
+    // gets past the access check and still must not be handed another cycle's bank.
+    const res = await request(bankPath, { user: admin });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);

@@ -2073,28 +2073,21 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
 // to add. Resolving the cycle from the interview also means an admin and a member
 // looking at the same interview see the same bank, which the active-cycle pointers
 // could not guarantee - they resolve to different cycles by role.
-async function bankCycleId(interviewId) {
-  const interview = await prisma.interview.findUnique({
-    where: { id: interviewId },
-    select: { cycleId: true }
-  });
-  return interview?.cycleId || null;
-}
-
 // List the published bank for the cycle this interview belongs to (ATS-23 / ATS-68)
 router.get('/interviews/:interviewId/question-bank', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { interviewId } = req.params;
     const { round, category } = req.query || {};
 
-    if (!(await canAccessInterview(req, interviewId))) {
+    // One read answers both questions this route asks of the interview: whether the
+    // caller is on it, and which cycle's bank belongs to it.
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
       return res.status(403).json({ error: 'Not assigned to this interview' });
     }
+    if (!interview?.cycleId) return res.json([]);
 
-    const cycleId = await bankCycleId(interviewId);
-    if (!cycleId) return res.json([]);
-
-    const where = { cycleId, status: 'PUBLISHED' };
+    const where = { cycleId: interview.cycleId, status: 'PUBLISHED' };
     if (round) where.round = String(round);
     if (category) where.category = String(category);
 
@@ -2115,14 +2108,13 @@ router.get('/interviews/:interviewId/question-bank/facets', requireAuth, require
   try {
     const { interviewId } = req.params;
 
-    if (!(await canAccessInterview(req, interviewId))) {
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
       return res.status(403).json({ error: 'Not assigned to this interview' });
     }
+    if (!interview?.cycleId) return res.json({ categories: [], rounds: [] });
 
-    const cycleId = await bankCycleId(interviewId);
-    if (!cycleId) return res.json({ categories: [], rounds: [] });
-
-    const where = { cycleId, status: 'PUBLISHED' };
+    const where = { cycleId: interview.cycleId, status: 'PUBLISHED' };
 
     const [categories, rounds] = await Promise.all([
       prisma.interviewQuestion.findMany({
@@ -2159,17 +2151,17 @@ router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requ
       return res.status(400).json({ error: 'questionId is required' });
     }
 
-    if (!(await canAccessInterview(req, interviewId))) {
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
       return res.status(403).json({ error: 'Not assigned to this interview' });
     }
 
     // Scoped to the interview's own cycle, exactly like the list above: what can be
     // added has to be what the interviewer was offered, or the id alone is enough to
     // pull another cycle's questions into this interview.
-    const cycleId = await bankCycleId(interviewId);
-    const bankQuestion = cycleId
+    const bankQuestion = interview?.cycleId
       ? await prisma.interviewQuestion.findFirst({
-          where: { id: questionId, status: 'PUBLISHED', cycleId }
+          where: { id: questionId, status: 'PUBLISHED', cycleId: interview.cycleId }
         })
       : null;
 
@@ -2208,12 +2200,30 @@ router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requ
 
 // Live interview session questions (ATS-13 / ATS-69)
 
+// `description` carries the legacy roster config, so it has to come back with the row:
+// interviewsAssignedTo reads it for interviews arranged before the slot tables existed.
+const interviewForAccess = (interviewId) =>
+  prisma.interview.findUnique({
+    where: { id: interviewId },
+    select: { id: true, cycleId: true, description: true }
+  });
+
+// A member is on an interview in any of three ways, and only one of them is the
+// InterviewAssignment table this used to check. Current interviews staff through
+// InterviewSlotAssignment, so a slot-assigned interviewer could open their own
+// interview from the list - which is roster-aware - and then be refused by every
+// session-question route behind this check. interviewsAssignedTo is the same rule the
+// list uses, so the two can no longer disagree.
+async function canAccessInterviewRecord(req, interview) {
+  if (req.user.role === 'ADMIN') return true;
+  if (!interview) return false;
+  const assigned = await interviewsAssignedTo(req.user.id, [interview]);
+  return assigned.length > 0;
+}
+
 async function canAccessInterview(req, interviewId) {
   if (req.user.role === 'ADMIN') return true;
-  const assignment = await prisma.interviewAssignment.findFirst({
-    where: { interviewId, userId: req.user.id }
-  });
-  return Boolean(assignment);
+  return canAccessInterviewRecord(req, await interviewForAccess(interviewId));
 }
 
 // A reorder rewrites every row, so the nudge carries the newest stamp of the batch -

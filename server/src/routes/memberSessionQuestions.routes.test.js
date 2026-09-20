@@ -12,7 +12,8 @@ import { nudgeSessionQuestions } from '../services/realtime.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
-    interviewAssignment: { findFirst: vi.fn() },
+    interviewAssignment: { findFirst: vi.fn(), findMany: vi.fn() },
+    interviewSlotAssignment: { findMany: vi.fn() },
     interview: { findUnique: vi.fn() },
     interviewQuestion: { findFirst: vi.fn() },
     interviewSessionQuestion: {
@@ -80,10 +81,16 @@ beforeEach(() => {
   prisma.user.findUnique.mockImplementation(async ({ where }) =>
     USERS.find((u) => u.id === where.id) || null
   );
-  // Assigned to the interview unless a test says otherwise.
-  prisma.interviewAssignment.findFirst.mockResolvedValue({ id: 'ia-1' });
-  // The bank routes resolve their cycle from the interview.
-  prisma.interview.findUnique.mockResolvedValue({ cycleId: 'cycle-1' });
+  // On the interview unless a test says otherwise, staffed the way interviews are
+  // staffed now: a slot assignment rather than a legacy InterviewAssignment row.
+  prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ interviewId: INTERVIEW }]);
+  prisma.interviewAssignment.findMany.mockResolvedValue([]);
+  // Access and the bank's cycle both come off the interview row.
+  prisma.interview.findUnique.mockResolvedValue({
+    id: INTERVIEW,
+    cycleId: 'cycle-1',
+    description: null
+  });
 });
 
 describe('live interview question nudges', () => {
@@ -154,7 +161,8 @@ describe('live interview question nudges', () => {
   });
 
   it('stays quiet when the caller is not on the interview', async () => {
-    prisma.interviewAssignment.findFirst.mockResolvedValue(null);
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+    prisma.interviewAssignment.findMany.mockResolvedValue([]);
 
     const res = await request(base, {
       user: stranger,
