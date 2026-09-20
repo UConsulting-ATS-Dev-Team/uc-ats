@@ -335,6 +335,45 @@ describe('InterviewQuestionPanel', () => {
       expect(apiClient.get.mock.calls.length).toBe(before + 1);
     });
 
+    it('starts no read after the panel closes mid-flight', async () => {
+      let release;
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+
+      renderPanel();
+      await openPanel();
+
+      // The next session read hangs until this test lets it go.
+      apiClient.get.mockImplementation((url) => {
+        if (url.includes('/interview-questions/facets')) return Promise.resolve(facets);
+        if (url.includes('/session-questions')) return gate.then(() => [mine, theirs]);
+        return Promise.resolve([]);
+      });
+
+      await act(async () => {
+        realtime.handler({ payload: { interviewId: 'int-1', at: '2026-08-27T10:30:00.000Z' } });
+      });
+      // Long enough that the coalesced read is genuinely in flight.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      // A second nudge lands while that read is still going - it queues a follow-up - and
+      // then the panel closes before the first read comes back.
+      await act(async () => {
+        realtime.handler({ payload: { interviewId: 'int-1', at: '2026-08-27T10:31:00.000Z' } });
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Close questions' }));
+
+      const before = apiClient.get.mock.calls.length;
+      await act(async () => {
+        release();
+        await gate;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 900));
+
+      expect(apiClient.get.mock.calls.length).toBe(before);
+    });
+
     it('keeps the ten-second poll while subscribed but undelivered', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       renderPanel();
