@@ -1686,6 +1686,11 @@ model CommunicationLog {
   /// Provider error text when status is FAILED.
   error             String?
   providerMessageId String?
+  /// Identifies one message to one recipient across retries. The senders retry
+  /// up to three times, and without this a transient failure left a FAILED row
+  /// next to the SENT one for the same message. Null for a send that is never
+  /// retried; Postgres allows many nulls under a unique index.
+  attemptKey        String?  @unique
   hasAttachments    Boolean  @default(false)
   triggeredById     String?
   messageLogId      String?

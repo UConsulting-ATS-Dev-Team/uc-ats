@@ -83,7 +83,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
   const [error, setError] = useState('');
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [scopeToCycle, setScopeToCycle] = useState(false);
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState(null);
   const [facets, setFacets] = useState({ known: {}, categories: [], channels: [], statuses: [] });
 
@@ -93,7 +93,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
   useEffect(() => {
     debounce.current = setTimeout(() => {
       setFilters((f) => (f.search === searchInput ? f : { ...f, search: searchInput }));
-      setLimit(PAGE_SIZE);
+      setOffset(0);
     }, 300);
     return () => clearTimeout(debounce.current);
   }, [searchInput]);
@@ -104,15 +104,18 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
     Object.entries(filters).forEach(([key, value]) => {
       if (value) params.set(key, value);
     });
-    params.set('limit', String(limit));
+    params.set('limit', String(PAGE_SIZE));
+    params.set('offset', String(offset));
     return params.toString();
-  }, [filters, scopeToCycle, cycleId, limit]);
+  }, [filters, scopeToCycle, cycleId, offset]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiClient.get(`/master-communications/communications?${query}`);
-      setRows(Array.isArray(data?.rows) ? data.rows : []);
+      const page = Array.isArray(data?.rows) ? data.rows : [];
+      const at = Number.isFinite(data?.offset) ? data.offset : 0;
+      setRows((current) => (at === 0 ? page : [...current, ...page]));
       setTotal(Number.isFinite(data?.total) ? data.total : 0);
       setError('');
     } catch (e) {
@@ -142,9 +145,10 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
     };
   }, []);
 
+  // Changing a filter starts the list again from the top.
   const set = (key) => (e) => {
     setFilters((f) => ({ ...f, [key]: e.target.value }));
-    setLimit(PAGE_SIZE);
+    setOffset(0);
   };
 
   const countFor = (list, value) => list?.find((f) => f.value === value)?.count;
@@ -172,7 +176,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
     setFilters(EMPTY_FILTERS);
     setSearchInput('');
     setScopeToCycle(false);
-    setLimit(PAGE_SIZE);
+    setOffset(0);
   };
 
   return (
@@ -263,7 +267,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
             variant={scopeToCycle ? 'contained' : 'outlined'}
             onClick={() => {
               setScopeToCycle((v) => !v);
-              setLimit(PAGE_SIZE);
+              setOffset(0);
             }}
           >
             {scopeToCycle ? `Only ${cycleName || 'this cycle'}` : 'All cycles'}
@@ -368,7 +372,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
               Showing {rows.length} of {total}
             </Typography>
             {rows.length < total && (
-              <Button size="small" disabled={loading} onClick={() => setLimit((l) => l + PAGE_SIZE)}>
+              <Button size="small" disabled={loading} onClick={() => setOffset(rows.length)}>
                 {loading ? 'Loading…' : 'Load more'}
               </Button>
             )}

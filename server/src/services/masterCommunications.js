@@ -109,6 +109,9 @@ async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency =
         const result = await sendEmail(r.email, subject, htmlBody, [], {
           ...meta,
           recipientName: r.fullName || null,
+          // Stable across this recipient's retries, so three attempts leave one
+          // row showing how the send ended, not three showing how it went.
+          attemptKey: meta.messageLogId ? `campaign:${meta.messageLogId}:${r.id}` : null,
         });
         if (result.success) {
           return { recipientId: r.id, ...result };
@@ -405,7 +408,10 @@ export async function sendMasterCommunication({
       err.status = 400;
       throw err;
     }
-    const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
+    // Sent before it is logged, unlike the email path below. sendSlackMessage
+    // throws when the webhook rejects, and a campaign row written first would
+    // survive that throw and claim a broadcast that never happened. One Slack
+    // post is one message, so nothing here needs a campaign id to point at.
     await sendSlackMessage(
       { text: body },
       {
@@ -414,9 +420,9 @@ export async function sendMasterCommunication({
         subject,
         triggeredById: sentBy,
         cycleId: cycleId || null,
-        messageLogId: logId,
       }
     );
+    const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
     return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length, logId };
   }
 

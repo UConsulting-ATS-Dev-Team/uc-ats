@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import {
+  redactSecrets,
   toBodyPreview,
   recordCommunication,
   recordCommunications,
@@ -13,6 +14,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     communicationLog: {
       create: vi.fn(),
+      upsert: vi.fn(),
       createMany: vi.fn(),
       findMany: vi.fn(),
       count: vi.fn(),
@@ -25,6 +27,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   prisma.communicationLog.create.mockResolvedValue({ id: 'log-1' });
+  prisma.communicationLog.upsert.mockResolvedValue({ id: 'log-1' });
   prisma.communicationLog.createMany.mockResolvedValue({ count: 0 });
   prisma.communicationLog.findMany.mockResolvedValue([]);
   prisma.communicationLog.count.mockResolvedValue(0);
@@ -137,7 +140,8 @@ describe('listCommunications', () => {
   it('turns a date range into one bounded sentAt filter', async () => {
     await listCommunications({ from: '2026-09-01', to: '2026-09-30' });
     expect(whereOf().sentAt.gte).toEqual(new Date('2026-09-01'));
-    expect(whereOf().sentAt.lte).toEqual(new Date('2026-09-30'));
+    // Exclusive, one day on: see "the end of a date range" below.
+    expect(whereOf().sentAt.lt).toEqual(new Date('2026-10-01'));
   });
 
   it('drops an unparseable date instead of filtering on Invalid Date', async () => {
@@ -156,5 +160,90 @@ describe('listCommunications', () => {
     const result = await listCommunications({ limit: 1 });
     expect(result).toMatchObject({ total: 412, limit: 1, offset: 0 });
     expect(result.rows).toHaveLength(1);
+  });
+});
+
+// A password-reset mail renders its link as visible text, so the preview would
+// otherwise hand any admin a working token for somebody else's account.
+describe('redacting credentials', () => {
+  it('strips a password-reset token but keeps the address recognisable', () => {
+    expect(redactSecrets('Reset here: https://app.uc.org/reset-password?token=abc123XYZ')).toBe(
+      'Reset here: https://app.uc.org/reset-password?token=[redacted]'
+    );
+  });
+
+  it('strips an email-verification token', () => {
+    expect(redactSecrets('https://app.uc.org/verify-email?token=deadbeef')).toBe(
+      'https://app.uc.org/verify-email?token=[redacted]'
+    );
+  });
+
+  it('leaves ordinary query parameters alone', () => {
+    expect(redactSecrets('https://app.uc.org/events?cycle=fall-2026&page=2')).toBe(
+      'https://app.uc.org/events?cycle=fall-2026&page=2'
+    );
+  });
+
+  it('strips a token that is not the first parameter', () => {
+    expect(redactSecrets('https://app.uc.org/x?a=1&token=secret&b=2')).toBe(
+      'https://app.uc.org/x?a=1&token=[redacted]&b=2'
+    );
+  });
+
+  it('runs as part of building a preview, not only on demand', () => {
+    const preview = toBodyPreview(
+      '<p>Click <a href="https://app.uc.org/reset-password?token=abc">here</a>: ' +
+        'https://app.uc.org/reset-password?token=abc</p>'
+    );
+    expect(preview).not.toContain('token=abc');
+    expect(preview).toContain('token=[redacted]');
+  });
+
+  it('redacts a preview a caller supplies ready-made', async () => {
+    await recordCommunication({
+      recipient: 'ryan@example.com',
+      bodyPreview: 'go to https://app.uc.org/reset-password?token=abc',
+    });
+    expect(dataOf().bodyPreview).toBe('go to https://app.uc.org/reset-password?token=[redacted]');
+  });
+});
+
+// The senders retry up to three times. Without a key, one message left a FAILED
+// row beside its SENT one and the log stopped being one row per recipient.
+describe('retries', () => {
+  it('upserts on the attempt key rather than inserting a second row', async () => {
+    await recordCommunication({
+      recipient: 'ryan@example.com',
+      attemptKey: 'decision-message:dm-1|ryan@example.com',
+      status: 'SENT',
+    });
+    expect(prisma.communicationLog.create).not.toHaveBeenCalled();
+    const call = prisma.communicationLog.upsert.mock.calls[0][0];
+    expect(call.where).toEqual({ attemptKey: 'decision-message:dm-1|ryan@example.com' });
+    expect(call.update).toMatchObject({ status: 'SENT' });
+  });
+
+  it('moves the timestamp forward when a retry overwrites the earlier attempt', async () => {
+    await recordCommunication({ recipient: 'a@b.com', attemptKey: 'k' });
+    expect(prisma.communicationLog.upsert.mock.calls[0][0].update.sentAt).toBeInstanceOf(Date);
+  });
+
+  it('still plainly inserts when nothing retries the send', async () => {
+    await recordCommunication({ recipient: 'a@b.com' });
+    expect(prisma.communicationLog.create).toHaveBeenCalled();
+    expect(prisma.communicationLog.upsert).not.toHaveBeenCalled();
+  });
+});
+
+// The picker sends YYYY-MM-DD, which parses to the start of that day.
+describe('the end of a date range', () => {
+  it('includes the whole day the admin picked', async () => {
+    await listCommunications({ to: '2026-09-20' });
+    expect(whereOf().sentAt).toEqual({ lt: new Date('2026-09-21T00:00:00.000Z') });
+  });
+
+  it('takes a full timestamp at its word', async () => {
+    await listCommunications({ to: '2026-09-20T12:00:00.000Z' });
+    expect(whereOf().sentAt).toEqual({ lt: new Date('2026-09-20T12:00:00.000Z') });
   });
 });

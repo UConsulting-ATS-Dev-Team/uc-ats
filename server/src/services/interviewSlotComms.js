@@ -370,7 +370,11 @@ async function sendOne(notificationId, renderBody) {
         notification.subject,
         html,
         invite ? [invite] : [],
-        { category: 'INTERVIEW_SLOT', recipientName: recipientNameOf(notification) }
+        {
+          category: 'INTERVIEW_SLOT',
+          recipientName: recipientNameOf(notification),
+          attemptKey: `slot-notification:${notificationId}`,
+        }
       );
       if (result.success) break;
       if (attempt < SEND_ATTEMPTS) {

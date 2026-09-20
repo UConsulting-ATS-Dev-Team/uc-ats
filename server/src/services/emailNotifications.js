@@ -147,7 +147,7 @@ const addressesOf = (to) => {
  */
 const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
   const hasAttachments = Boolean(attachments && attachments.length > 0);
-  const { recipientName = null, ...context } = meta || {};
+  const { recipientName = null, attemptKey = null, ...context } = meta || {};
 
   // Never rejects. recordCommunication already swallows its own write failures,
   // but the mail is gone by the time this runs: if logging could throw here, a
@@ -164,6 +164,9 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
           body: html,
           hasAttachments,
           status,
+          // Scoped to the address: one send to two people is two rows, and a
+          // retry of either updates only its own.
+          attemptKey: attemptKey ? `${attemptKey}|${recipient}` : null,
           ...context,
           ...extra,
         })

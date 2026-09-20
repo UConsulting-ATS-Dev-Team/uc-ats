@@ -147,3 +147,67 @@ describe('filtering', () => {
     expect(await screen.findByRole('option', { name: 'Failed' })).toBeInTheDocument();
   });
 });
+
+// Greptile caught this: "Load more" used to grow `limit`, which the server caps
+// at 200, so once the log passed 200 rows the button returned the same first
+// 200 forever and older messages could not be reached at all.
+describe('paging through a long log', () => {
+  const page = (n, size = 2) =>
+    Array.from({ length: size }, (_, i) =>
+      row({ id: `log-${n}-${i}`, subject: `page ${n} item ${i}` })
+    );
+
+  const mockPages = () =>
+    vi.spyOn(apiClient, 'get').mockImplementation((url) => {
+      if (url.includes('/facets')) {
+        return Promise.resolve({
+          known: { channels: ['email'], categories: [], statuses: ['SENT', 'FAILED'] },
+          channels: [],
+          categories: [],
+          statuses: [],
+        });
+      }
+      const offset = Number(new URL(url, 'http://x').searchParams.get('offset') || 0);
+      return Promise.resolve({ rows: page(offset), total: 6, offset });
+    });
+
+  it('asks for the next offset rather than a bigger page', async () => {
+    const get = mockPages();
+    render(<CommunicationsLog />);
+
+    await screen.findByText('page 0 item 0');
+    await userEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => expect(urlsFor(get).some((u) => u.includes('offset=2'))).toBe(true));
+    // The page size stays fixed; only the offset moves.
+    expect(urlsFor(get).every((u) => u.includes(`limit=50`))).toBe(true);
+  });
+
+  it('appends the next page instead of replacing what is shown', async () => {
+    mockPages();
+    render(<CommunicationsLog />);
+
+    await screen.findByText('page 0 item 0');
+    await userEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    expect(await screen.findByText('page 2 item 0')).toBeInTheDocument();
+    // The first page is still there.
+    expect(screen.getByText('page 0 item 0')).toBeInTheDocument();
+  });
+
+  it('starts again from the top when a filter changes', async () => {
+    const get = mockPages();
+    render(<CommunicationsLog />);
+
+    await screen.findByText('page 0 item 0');
+    await userEvent.click(screen.getByRole('button', { name: /load more/i }));
+    await screen.findByText('page 2 item 0');
+
+    await userEvent.click(screen.getByLabelText('Status'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Failed' }));
+
+    await waitFor(() => expect(urlsFor(get).some((u) => u.includes('status=FAILED'))).toBe(true));
+    const last = urlsFor(get).at(-1);
+    expect(last).toContain('offset=0');
+  });
+});

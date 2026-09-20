@@ -26,6 +26,26 @@ export const COMMUNICATION_STATUSES = ['SENT', 'FAILED', 'OPENED'];
 
 const BODY_PREVIEW_LIMIT = 2000;
 
+// Query parameters that carry a live credential. Password resets, email
+// verification and the set-your-password link in a decision email all render
+// their URL as visible text, so without this the log would hand any admin a
+// working reset token for somebody else's account for as long as it lasts.
+const SECRET_PARAMS = /^(token|resettoken|invite|inviteToken|code|key|secret|auth|access_token|refresh_token|signature|sig)$/i;
+
+/**
+ * Strip the value out of any token-bearing query parameter, keeping enough of
+ * the URL to recognise which email this was.
+ *
+ * Runs on the text after tags are removed, so it catches the address whether it
+ * appeared as a href or as visible anchor text.
+ */
+export function redactSecrets(text) {
+  if (!text) return text;
+  return text.replace(/([?&])([A-Za-z0-9_-]+)=([^\s&"'<>]+)/g, (match, sep, name, value) =>
+    SECRET_PARAMS.test(name) ? `${sep}${name}=[redacted]` : match
+  );
+}
+
 /**
  * Reduce an HTML body to the text a person would read, capped. The log is for
  * identifying a message, not for reproducing it, and full decision letters
@@ -55,7 +75,8 @@ export function toBodyPreview(body) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   if (!text) return null;
-  return text.length > BODY_PREVIEW_LIMIT ? `${text.slice(0, BODY_PREVIEW_LIMIT)}…` : text;
+  const safe = redactSecrets(text);
+  return safe.length > BODY_PREVIEW_LIMIT ? `${safe.slice(0, BODY_PREVIEW_LIMIT)}…` : safe;
 }
 
 /**
@@ -81,30 +102,41 @@ export async function recordCommunication({
   triggeredById = null,
   messageLogId = null,
   cycleId = null,
+  attemptKey = null,
   sentAt = undefined,
 } = {}) {
   if (!recipient) return null;
+  const data = {
+    channel,
+    category,
+    trigger,
+    status,
+    recipient: String(recipient).slice(0, 512),
+    recipientName,
+    subject: subject ? redactSecrets(String(subject)).slice(0, 998) : null,
+    bodyPreview: bodyPreview ? redactSecrets(String(bodyPreview)) : toBodyPreview(body),
+    error: error ? String(error).slice(0, 2000) : null,
+    providerMessageId,
+    hasAttachments,
+    triggeredById,
+    messageLogId,
+    cycleId,
+    attemptKey,
+    ...(sentAt ? { sentAt } : {}),
+  };
+
   try {
-    const row = await prisma.communicationLog.create({
-      data: {
-        channel,
-        category,
-        trigger,
-        status,
-        recipient: String(recipient).slice(0, 512),
-        recipientName,
-        subject: subject ? String(subject).slice(0, 998) : null,
-        bodyPreview: bodyPreview ?? toBodyPreview(body),
-        error: error ? String(error).slice(0, 2000) : null,
-        providerMessageId,
-        hasAttachments,
-        triggeredById,
-        messageLogId,
-        cycleId,
-        ...(sentAt ? { sentAt } : {}),
-      },
-      select: { id: true },
-    });
+    // With a key, the second and third attempts at the same message overwrite
+    // the first rather than piling up beside it: the log keeps one row per
+    // recipient per message, showing how it ended rather than how it went.
+    const row = attemptKey
+      ? await prisma.communicationLog.upsert({
+          where: { attemptKey },
+          create: data,
+          update: { ...data, sentAt: sentAt ?? new Date() },
+          select: { id: true },
+        })
+      : await prisma.communicationLog.create({ data, select: { id: true } });
     return row.id;
   } catch (e) {
     console.error('[communicationLog] failed to record communication:', e);
@@ -125,8 +157,8 @@ export async function recordCommunications(entries = []) {
         status: e.status || 'SENT',
         recipient: String(e.recipient).slice(0, 512),
         recipientName: e.recipientName ?? null,
-        subject: e.subject ? String(e.subject).slice(0, 998) : null,
-        bodyPreview: e.bodyPreview ?? toBodyPreview(e.body),
+        subject: e.subject ? redactSecrets(String(e.subject)).slice(0, 998) : null,
+        bodyPreview: e.bodyPreview ? redactSecrets(String(e.bodyPreview)) : toBodyPreview(e.body),
         error: e.error ? String(e.error).slice(0, 2000) : null,
         providerMessageId: e.providerMessageId ?? null,
         hasAttachments: e.hasAttachments ?? false,
@@ -163,10 +195,27 @@ const LIST_SELECT = {
 
 const MAX_PAGE = 200;
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 function parseDate(value) {
   if (!value) return null;
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * The upper bound of a date range, as an exclusive `lt`.
+ *
+ * The date picker sends `YYYY-MM-DD`, which parses to midnight at the *start* of
+ * that day. Used as `lte` it would drop everything sent during the day the admin
+ * picked, so a date-only value advances to the start of the next day instead. A
+ * full timestamp is taken at its word.
+ */
+function parseRangeEnd(value) {
+  const d = parseDate(value);
+  if (!d) return null;
+  if (!DATE_ONLY.test(String(value).trim())) return d;
+  return new Date(d.getTime() + 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -199,11 +248,11 @@ export async function listCommunications({
   if (trigger) where.trigger = trigger;
 
   const fromDate = parseDate(from);
-  const toDate = parseDate(to);
+  const toDate = parseRangeEnd(to);
   if (fromDate || toDate) {
     where.sentAt = {};
     if (fromDate) where.sentAt.gte = fromDate;
-    if (toDate) where.sentAt.lte = toDate;
+    if (toDate) where.sentAt.lt = toDate;
   }
 
   const term = typeof search === 'string' ? search.trim() : '';

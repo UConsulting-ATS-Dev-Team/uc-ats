@@ -278,6 +278,7 @@ async function sendOne(messageId, { template, context, sentBy, cycleId }, client
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
       result = await sendEmail(message.email, subject, html, [], {
+        attemptKey: `decision-message:${messageId}`,
         category: 'DECISION_BATCH',
         trigger: 'MANUAL',
         recipientName: [message.firstName, message.lastName].filter(Boolean).join(' ') || null,

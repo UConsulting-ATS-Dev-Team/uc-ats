@@ -111,12 +111,8 @@ describe('a bulk email send', () => {
 });
 
 describe('a Slack broadcast', () => {
-  it('is labelled and tied to its campaign row', async () => {
-    prisma.user.findMany.mockResolvedValue(
-      members.map((m) => ({ ...m, audience: 'user' }))
-    );
-
-    await sendMasterCommunication({
+  const broadcast = () =>
+    sendMasterCommunication({
       audience: 'users',
       channel: 'slack',
       filters: { roles: ['USER'] },
@@ -126,12 +122,30 @@ describe('a Slack broadcast', () => {
       cycleId: 'cycle-1',
     });
 
+  beforeEach(() => {
+    prisma.user.findMany.mockResolvedValue(members.map((m) => ({ ...m, audience: 'user' })));
+  });
+
+  it('says who sent it and what it was', async () => {
+    await broadcast();
+
     expect(sendSlackMessage.mock.calls[0][1]).toMatchObject({
       category: 'MASTER_COMMUNICATION',
       trigger: 'MANUAL',
       triggeredById: 'admin-1',
-      messageLogId: 'campaign-1',
+      cycleId: 'cycle-1',
     });
+  });
+
+  // The email path writes its campaign row first so per-recipient rows can name
+  // it. Slack cannot: sendSlackMessage throws when the webhook rejects, and a
+  // campaign row written first would outlive the throw and claim a broadcast
+  // that never went out.
+  it('records no campaign when the webhook rejects', async () => {
+    sendSlackMessage.mockRejectedValue(new Error('Slack API error: 403 Forbidden'));
+
+    await expect(broadcast()).rejects.toThrow('403 Forbidden');
+    expect(prisma.messageLog.create).not.toHaveBeenCalled();
   });
 });
 
@@ -166,5 +180,43 @@ describe('an iMessage hand-off', () => {
     });
 
     expect(recordCommunications.mock.calls[0][0][1].recipient).toBe('b@uc.org');
+  });
+});
+
+// Greptile caught this: sendBulkEmails retries up to three times, and without a
+// stable key a transient failure left a FAILED row sitting next to the SENT one
+// for the same message.
+describe('a retried recipient', () => {
+  const broadcastEmail = () =>
+    sendMasterCommunication({
+      audience: 'members',
+      channel: 'email',
+      filters: {},
+      subject: 'Retreat',
+      body: 'Hi',
+      sentBy: 'admin-1',
+      cycleId: 'cycle-1',
+    });
+
+  // Recipients are sent concurrently, so the retry is not the next call - it is
+  // the next call *for that address*.
+  const keysFor = (email) =>
+    sendEmail.mock.calls.filter(([to]) => to === email).map(([, , , , meta]) => meta.attemptKey);
+
+  it('keys every attempt to the same row', async () => {
+    sendEmail
+      .mockResolvedValueOnce({ success: false, error: 'timeout' })
+      .mockResolvedValue({ success: true, messageId: 'ses-2' });
+
+    await broadcastEmail();
+
+    const attempts = keysFor('a@uc.org');
+    expect(attempts.length).toBeGreaterThan(1);
+    expect(new Set(attempts)).toEqual(new Set(['campaign:campaign-1:u1']));
+  });
+
+  it('gives each recipient their own key', async () => {
+    await broadcastEmail();
+    expect(metaOf(0).attemptKey).not.toBe(metaOf(1).attemptKey);
   });
 });
