@@ -14,7 +14,7 @@ import { invalidateUserCache } from '../middleware/auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     candidate: { create: vi.fn() }
   }
 }));

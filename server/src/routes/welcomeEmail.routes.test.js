@@ -19,7 +19,14 @@ import { sendWelcomeEmail, sendEmailVerification } from '../services/emailNotifi
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    user: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn()
+    },
     candidate: { create: vi.fn() }
   }
 }));
@@ -90,14 +97,14 @@ const welcomeCall = () => {
 // is running in parallel. Nothing about them is slow on purpose.
 const SIGNUP_TIMEOUT_MS = 20_000;
 
-// The row prisma is pretending to hold. Kept as a variable rather than set
-// straight onto findUnique because an update has to return the *stored* row
-// with the patch applied - a fixed default here would quietly drop fields the
-// route reads back off the update, isExternalTalent among them.
+// The row prisma is pretending to hold, as one mutable variable rather than a
+// canned return per call. Verification now writes with updateMany and reads the
+// row back, so a mock that answered every read with the same frozen row would
+// hide whether the write happened at all - and, worse, would report count 1 to
+// a second request whose token had already been burned.
 let stored = null;
 const givenStoredUser = (overrides = {}) => {
   stored = userRow(overrides);
-  prisma.user.findUnique.mockResolvedValue(stored);
   return stored;
 };
 
@@ -119,12 +126,23 @@ beforeEach(() => {
   sendWelcomeEmail.mockResolvedValue({ success: true });
   sendEmailVerification.mockResolvedValue({ success: true });
   stored = null;
-  prisma.user.findUnique.mockResolvedValue(null);
+  prisma.user.findUnique.mockImplementation(() => Promise.resolve(stored));
   prisma.user.findFirst.mockResolvedValue(null);
   prisma.user.findMany.mockResolvedValue([]);
-  prisma.user.update.mockImplementation(({ where, data }) =>
-    Promise.resolve({ ...(stored ?? userRow({ id: where.id })), ...data })
-  );
+  prisma.user.update.mockImplementation(({ where, data }) => {
+    stored = { ...(stored ?? userRow({ id: where.id })), ...data };
+    return Promise.resolve(stored);
+  });
+  // The real thing matches on the token as well as the id, so a request whose
+  // token has already been burned by a concurrent one writes nothing and gets
+  // count 0. That is the whole guard against a duplicate welcome.
+  prisma.user.updateMany.mockImplementation(({ where, data }) => {
+    if (!stored || stored.emailVerificationToken !== where.emailVerificationToken) {
+      return Promise.resolve({ count: 0 });
+    }
+    stored = { ...stored, ...data };
+    return Promise.resolve({ count: 1 });
+  });
   prisma.user.create.mockImplementation(({ data }) => Promise.resolve({ id: 'new-user-1', ...data }));
   prisma.candidate.create.mockResolvedValue({ id: 'candidate-1' });
 });
@@ -172,6 +190,27 @@ describe('welcome email on verification', () => {
 
     expect(res.status).toBe(200);
     expect(sendWelcomeEmail).not.toHaveBeenCalled();
+  });
+
+  it('welcomes once when two requests verify the same token at the same time', async () => {
+    // The race is both requests reading before either writes, so the by-token
+    // lookup hands back the pre-race row to each of them and the pre-update
+    // emailVerifiedAt check passes twice. Only the one whose updateMany
+    // actually matched the token may send. Letting the lookup see the live row
+    // instead would just serialise the two and prove nothing.
+    const snapshot = { ...givenStoredUser() };
+    prisma.user.findUnique.mockImplementation(({ where }) =>
+      Promise.resolve(where?.emailVerificationToken ? { ...snapshot } : stored)
+    );
+
+    const [first, second] = await Promise.all([
+      post('/api/auth/verify-email', { token: 'a-live-token' }),
+      post('/api/auth/verify-email', { token: 'a-live-token' })
+    ]);
+
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(prisma.user.updateMany).toHaveBeenCalledTimes(2);
+    expect(sendWelcomeEmail).toHaveBeenCalledTimes(1);
   });
 
   it('does not welcome on an expired token, because the address is still unproved', async () => {

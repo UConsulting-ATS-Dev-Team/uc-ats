@@ -670,8 +670,13 @@ router.post('/verify-email', async (req, res) => {
       });
     }
 
-    const verified = await prisma.user.update({
-      where: { id: user.id },
+    // Scoped to the token still being present, not just to the id. Two requests
+    // carrying the same live token can both get past the reads above, and a
+    // write matching on id alone would let both of them believe they did the
+    // verifying. Matching on the token means exactly one clears it, and
+    // count tells that one apart from the one that lost.
+    const claim = await prisma.user.updateMany({
+      where: { id: user.id, emailVerificationToken: token },
       data: {
         emailVerifiedAt: user.emailVerifiedAt || new Date(),
         // Cleared so the link is single-use. A second click gets the "invalid or
@@ -681,18 +686,25 @@ router.post('/verify-email', async (req, res) => {
       }
     });
 
+    const verified = await prisma.user.findUnique({ where: { id: user.id } });
+
+    if (!verified) {
+      return res.status(400).json({ error: 'That verification link is invalid or has already been used.' });
+    }
+
     invalidateUserCache(verified.id);
 
     // Both password signup paths land here, and this is the first moment either
-    // one has a mailbox somebody has demonstrably read - so this is where the
+    // one has a mailbox somebody has demonstrably read. So this is where the
     // welcome goes, not at signup, where it would be a second mail to an
     // address that may never be confirmed.
     //
-    // Keyed off the pre-update emailVerifiedAt so it sends once. A second click
-    // on a live link cannot reach this line today, since verifying clears the
-    // token, but a future path that re-verifies an already-verified account
-    // should not re-welcome them.
-    if (!user.emailVerifiedAt) {
+    // Two conditions, each ruling out a different double-send. The claim rules
+    // out a concurrent request that verified the same token. The pre-update
+    // emailVerifiedAt rules out a future path that re-verifies an account which
+    // was already verified, which cannot happen today because verifying clears
+    // the token.
+    if (claim.count === 1 && !user.emailVerifiedAt) {
       await sendWelcome(verified);
     }
 

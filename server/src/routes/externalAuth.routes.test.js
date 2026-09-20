@@ -14,7 +14,7 @@ import { VERIFICATION_TTL_MS } from '../utils/externalTalent.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    user: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+    user: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     candidate: { create: vi.fn() }
   }
 }));
@@ -188,12 +188,15 @@ describe('POST /verify-email', () => {
 
   it('verifies and burns the token in one write', async () => {
     prisma.user.findUnique.mockResolvedValue(pending());
-    prisma.user.update.mockImplementation(({ data }) => ({ ...pending(), ...data }));
+    prisma.user.updateMany.mockResolvedValue({ count: 1 });
 
     const res = await post('/api/auth/verify-email', { token: 'a-token' });
     expect(res.status).toBe(200);
 
-    const { data } = prisma.user.update.mock.calls[0][0];
+    const { where, data } = prisma.user.updateMany.mock.calls[0][0];
+    // Matched on the token, not on the id alone, so two requests holding the
+    // same live token cannot both believe they did the verifying.
+    expect(where.emailVerificationToken).toBe('a-token');
     expect(data.emailVerifiedAt).toBeInstanceOf(Date);
     // Single-use: a second click gets "invalid or already used".
     expect(data.emailVerificationToken).toBeNull();
@@ -205,7 +208,7 @@ describe('POST /verify-email', () => {
     const res = await post('/api/auth/verify-email', { token: 'a-token' });
     expect(res.status).toBe(400);
     expect((await res.json()).expired).toBe(true);
-    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown token', async () => {
