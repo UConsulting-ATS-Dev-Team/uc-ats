@@ -23,6 +23,7 @@ import {
   CheckCircleIcon,
   ChevronRightIcon,
   EnvelopeIcon,
+  EnvelopeOpenIcon,
   BriefcaseIcon,
   UserPlusIcon,
   QuestionMarkCircleIcon,
@@ -87,6 +88,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
       { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
+      { name: 'Automatic Emails', href: '/admin/email-templates', icon: EnvelopeOpenIcon },
     ],
   },
 ];

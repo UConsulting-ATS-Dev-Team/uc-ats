@@ -1917,3 +1917,39 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
     return { success: false, error: error.message };
   }
 };
+
+// Template builders, keyed for preview ----------------------------------------
+//
+// Every `create*Email` above is a pure function of its arguments: it returns
+// { subject, html } and touches nothing else. That is what makes a preview
+// possible without a send — render the same content the send path renders and
+// stop short of the transporter.
+//
+// Exported as a keyed map rather than 21 individual exports so callers that
+// only want to enumerate templates (the preview screen) do not have to know
+// each builder's name, and so the builders themselves stay module-private.
+// Keys are part of the preview URL and are therefore stable; rename a builder
+// freely, but changing a key breaks saved links.
+export const TEMPLATE_BUILDERS = {
+  'rsvp-confirmation': createRSVPConfirmationEmail,
+  'attendance-confirmation': createAttendanceConfirmationEmail,
+  'application-acceptance': createAcceptanceEmail,
+  'application-rejection': createRejectionEmail,
+  'coffee-chat-acceptance': createCoffeeChatAcceptanceEmail,
+  'coffee-chat-rejection': createCoffeeChatRejectionEmail,
+  'first-round-acceptance': createFirstRoundAcceptanceEmail,
+  'first-round-rejection': createFirstRoundRejectionEmail,
+  'final-acceptance': createFinalAcceptanceEmail,
+  'final-rejection': createFinalRejectionEmail,
+  'offer-letter': createOfferLetterEmail,
+  'meeting-signup-confirmation': createMeetingSignupConfirmationEmail,
+  'meeting-signup-notification': createMeetingSignupNotificationEmail,
+  'meeting-cancellation-candidate': createMeetingCancellationEmail,
+  'meeting-cancellation-member': createMeetingCancellationMemberEmail,
+  'meeting-reschedule-candidate': createMeetingRescheduleEmail,
+  'meeting-reschedule-member': createMeetingRescheduleMemberEmail,
+  'password-reset': createPasswordResetEmail,
+  'password-reset-confirmation': createPasswordResetConfirmationEmail,
+  'reviewer-reminder': createReviewerReminderEmail,
+  'email-verification': createEmailVerificationEmail,
+};
