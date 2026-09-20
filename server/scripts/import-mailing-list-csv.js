@@ -11,6 +11,7 @@
 //   --name=<fileName>          name for the uploaded file
 //   --out=<path>               also write the deduped CSV locally
 //   --list-kept                print the surviving addresses, not just dropped ones
+//   --allow-empty              upload even when no rows survived dedup
 //
 // The mailing list is being retired, so this is expected to run once. It is
 // still safe to re-run: it only ever reads the ATS and writes a new Drive file.
@@ -63,8 +64,14 @@ console.log(`Email column: ${emailColumn || '(none found)'}`);
 console.log('');
 
 if (!emailColumn) {
-  console.error('Could not find an email column. Headers:', headers);
-  console.error('Pass it explicitly, e.g. --email-col="Email Address"');
+  const override = option('email-col');
+  if (override) {
+    console.error(`--email-col="${override}" matches no column in this file.`);
+  } else {
+    console.error('Could not find an email column.');
+  }
+  console.error('Headers:', headers);
+  console.error('Pass one explicitly, e.g. --email-col="Email Address"');
   process.exit(1);
 }
 
@@ -152,6 +159,13 @@ try {
     console.log(folderId
       ? `Target folder: ${folderId}. Re-run with --apply.`
       : 'No target folder set. Pass --folder=<driveFolderId> or set MARKETING_DRIVE_FOLDER_ID, then re-run with --apply.');
+  } else if (!kept.length && !flag('allow-empty')) {
+    // A file with nothing but a header row is what a wrong column or a wrong
+    // file looks like, and it is indistinguishable from a real list where
+    // everyone was already in the ATS. Make someone say which one they meant.
+    console.error('No rows survived, so there is no list to upload.');
+    console.error('Check the email column and the source file, or pass --allow-empty if a header-only file is really what you want.');
+    process.exitCode = 1;
   } else if (!folderId) {
     console.error('--apply needs a target folder: pass --folder=<driveFolderId> or set MARKETING_DRIVE_FOLDER_ID.');
     process.exitCode = 1;

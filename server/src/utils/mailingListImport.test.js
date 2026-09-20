@@ -54,6 +54,12 @@ describe('detectEmailColumn', () => {
     expect(detectEmailColumn(['Name', 'Address'], 'Address')).toBe('Address');
     expect(detectEmailColumn(['Name', 'School'])).toBeNull();
   });
+
+  it('rejects an override that matches no column instead of taking it on trust', () => {
+    // Accepting it would read undefined from every row, count the whole list as
+    // missing an address, and leave --apply uploading nothing but headers.
+    expect(detectEmailColumn(['Name', 'Email'], 'Emial')).toBeNull();
+  });
 });
 
 describe('indexExistingEmails', () => {

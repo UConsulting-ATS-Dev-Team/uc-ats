@@ -24,7 +24,10 @@ export function isPlausibleEmail(email) {
 }
 
 export function detectEmailColumn(headers, override) {
-  if (override) return override;
+  // A misspelled --email-col must not be taken at face value. Every row would
+  // return undefined for that field, every row would count as missing an
+  // address, and --apply would upload a file containing nothing but headers.
+  if (override) return headers.includes(override) ? override : null;
   const lower = headers.map((h) => h.toLowerCase());
   // Prefer a column that is exactly "email" over one that merely contains it,
   // so a sheet with both "Email" and "Email Verified" picks the address.
