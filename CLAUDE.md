@@ -128,7 +128,26 @@ npm run verify-candidates
 # Update schema relations
 npm run update-schema-relations
 npm run setup-candidate-relations
+
+# One-time mailing-list import (dry run; add --apply to upload to Drive)
+npm run import-mailing-list -- <csv>
 ```
+
+#### Mailing-list import
+
+The recruiting-interest mailing list is being retired, so
+`scripts/import-mailing-list-csv.js` runs once: it reads the export, drops every
+address the ATS already holds, and uploads what is left to the Marketing Drive
+folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`).
+
+"Already in the ATS" means `User`, `Candidate`, `Application` or `MeetingSignup`,
+compared case-insensitively. `DecisionMessage.email` is excluded on purpose - it is
+a copy of `Application.email` made when a decision is queued, so counting it would
+double-count the same person.
+
+The run is read-only against the database and writes only a new Drive file, so it
+is safe to re-run. Dry run is the default and prints every dropped row with its
+line number and reason; `--apply` is what uploads.
 
 ## Architecture
 
@@ -444,6 +463,10 @@ Required in `server/.env`:
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)
 - `EMAIL_USER`, `EMAIL_PASS` - Gmail credentials for nodemailer
 - `SLACK_WEBHOOK_URL` - (Optional) Slack webhook for admin notifications
+- `MARKETING_DRIVE_FOLDER_ID` - (Optional) Drive folder the one-time mailing-list
+  import uploads to. Share it with the service account as an **Editor**; read
+  access is enough for every other Drive call this server makes, so a folder
+  that works elsewhere can still fail here with `ACCESS_DENIED`.
 
 ## Common Patterns
 
