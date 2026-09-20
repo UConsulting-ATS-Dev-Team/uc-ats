@@ -1917,3 +1917,138 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
     return { success: false, error: error.message };
   }
 };
+
+// ---------------------------------------------------------------------------
+// Welcome
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-audience copy for the welcome email.
+ *
+ * Three audiences rather than one generic body, because "you signed up" means
+ * three different things here: a candidate is tracking an application, a
+ * talent-portal account has no application at all and only a profile, and a
+ * member is staff who will be grading and interviewing. One shared body would
+ * be wrong for at least two of them, and a welcome that describes the wrong app
+ * is worse than no welcome.
+ */
+const WELCOME_COPY = {
+  candidate: {
+    subject: 'Welcome to UConsulting Recruitment',
+    heading: 'Your account is ready',
+    intro: 'Your email is confirmed, so your UConsulting recruitment account is live. This is where you track everything from here on.',
+    bullets: [
+      'Follow your application status as it moves through each round',
+      'RSVP to recruitment events and coffee chats',
+      'Get interview prep materials before each round'
+    ],
+    ctaLabel: 'Go to your dashboard',
+    signoff: 'UConsulting Recruitment'
+  },
+  talent: {
+    subject: 'Welcome to the UConsulting Talent Network',
+    heading: 'Your profile is ready',
+    intro: 'Your email is confirmed, so your Talent Network profile is live. Finishing it is what puts you in front of our partner companies.',
+    bullets: [
+      'Upload your resume and keep the latest version on file',
+      'Fill in your profile so partners can find you',
+      'Choose whether to share your profile with the Talent Partner Network'
+    ],
+    ctaLabel: 'Finish your profile',
+    signoff: 'UConsulting Talent Network'
+  },
+  member: {
+    subject: 'Welcome to the UConsulting ATS',
+    heading: 'Your member account is ready',
+    intro: 'Your UConsulting ATS member account is set up. This is the tool we run recruitment out of.',
+    bullets: [
+      'See the interviews you have been assigned to',
+      'Grade resumes, cover letters and videos for your review team',
+      'Submit evaluations after each interview'
+    ],
+    ctaLabel: 'Open the ATS',
+    signoff: 'UConsulting'
+  }
+};
+
+/**
+ * `ctaUrl` is built by the caller from config.clientUrl, per the rule this
+ * module has followed throughout: it never imports config, and every link
+ * arrives as a finished string. fullName is whatever the person typed at
+ * signup, so it is escaped before it reaches the template.
+ */
+const createWelcomeEmail = (fullName, audience, ctaUrl) => {
+  const copy = WELCOME_COPY[audience] ?? WELCOME_COPY.candidate;
+  const greeting = fullName ? `Hi ${escapeHtml(fullName)},` : 'Hi,';
+  const bullets = copy.bullets
+    .map((line) => `<li style="margin: 0 0 8px 0;">${escapeHtml(line)}</li>`)
+    .join('');
+
+  return {
+    subject: copy.subject,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+          <h2 style="color: #042742; margin: 0;">${escapeHtml(copy.signoff)}</h2>
+        </div>
+
+        <div style="padding: 30px 20px;">
+          <h3 style="color: #333; margin: 0 0 20px 0;">${escapeHtml(copy.heading)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${greeting}</p>
+
+          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${escapeHtml(copy.intro)}</p>
+
+          <ul style="color: #666; line-height: 1.6; margin: 0 0 20px 0; padding-left: 20px;">${bullets}</ul>
+
+          ${
+            ctaUrl
+              ? `<p style="text-align: center; margin: 30px 0;">
+            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">${escapeHtml(copy.ctaLabel)}</a>
+          </p>`
+              : ''
+          }
+
+          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
+            Best regards,<br>
+            ${escapeHtml(copy.signoff)}
+          </p>
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+/**
+ * Send the one-time welcome email.
+ *
+ * Returns the { success, error } shape every other sender here returns, and
+ * never throws. No caller may fail its request on a send failure. The account
+ * exists either way, and a missing welcome costs nothing that a failed signup
+ * or a rejected verification would not cost far more.
+ */
+export const sendWelcomeEmail = async (email, fullName, { audience = 'candidate', ctaUrl = null } = {}) => {
+  try {
+    if (!email) {
+      return { success: false, error: 'No recipient email provided' };
+    }
+
+    const emailContent = createWelcomeEmail(fullName, audience, ctaUrl);
+    const result = await sendEmail(email, emailContent.subject, emailContent.html);
+
+    if (result.success) {
+      console.log(`Welcome email (${audience}) sent to ${email}`);
+    } else {
+      console.error(`Failed to send welcome email to ${email}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendWelcomeEmail:', error);
+    return { success: false, error: error.message };
+  }
+};

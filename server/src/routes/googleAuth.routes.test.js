@@ -22,7 +22,8 @@ vi.mock('../prismaClient.js', () => ({
 vi.mock('../services/emailNotifications.js', () => ({
   sendPasswordResetEmail: vi.fn().mockResolvedValue({ success: true }),
   sendPasswordResetConfirmationEmail: vi.fn().mockResolvedValue({ success: true }),
-  sendEmailVerification: vi.fn().mockResolvedValue({ success: true })
+  sendEmailVerification: vi.fn().mockResolvedValue({ success: true }),
+  sendWelcomeEmail: vi.fn().mockResolvedValue({ success: true })
 }));
 
 // auth.js imports only invalidateUserCache from this module, so replacing it
