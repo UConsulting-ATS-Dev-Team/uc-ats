@@ -278,7 +278,11 @@ async function sendOne(messageId, { template, context, sentBy, cycleId }, client
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
       result = await sendEmail(message.email, subject, html, [], {
-        attemptKey: `decision-message:${messageId}`,
+        // Includes the claim count, which the updateMany above incremented.
+        // Constant across the transport retries just below, so those collapse
+        // into one row; different for a later requeue, so an approved resend
+        // is a new row rather than an overwrite of the first send's record.
+        attemptKey: `decision-message:${messageId}:${message.attempts}`,
         category: 'DECISION_BATCH',
         trigger: 'MANUAL',
         recipientName: [message.firstName, message.lastName].filter(Boolean).join(' ') || null,

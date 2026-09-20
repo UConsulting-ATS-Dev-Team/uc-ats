@@ -211,3 +211,49 @@ describe('paging through a long log', () => {
     expect(last).toContain('offset=0');
   });
 });
+
+// Greptile, iteration 2: changing a filter while "Load more" was in flight
+// appended that older page to the new query's rows, so the list showed messages
+// the filters exclude.
+describe('a slow page that lands after the filters moved on', () => {
+  it('is discarded rather than mixed into the new results', async () => {
+    let releaseSlowPage;
+    const slowPage = new Promise((resolve) => {
+      releaseSlowPage = resolve;
+    });
+
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url.includes('/facets')) {
+        return {
+          known: { channels: [], categories: [], statuses: ['SENT', 'FAILED'] },
+          channels: [],
+          categories: [],
+          statuses: [],
+        };
+      }
+      if (url.includes('offset=1') && !url.includes('status=')) {
+        await slowPage;
+        return { rows: [row({ id: 'stale', subject: 'stale page' })], total: 2, offset: 1 };
+      }
+      if (url.includes('status=FAILED')) {
+        return { rows: [row({ id: 'fresh', subject: 'fresh page' })], total: 1, offset: 0 };
+      }
+      return { rows: [row({ id: 'first', subject: 'first page' })], total: 2, offset: 0 };
+    });
+
+    render(<CommunicationsLog />);
+    await screen.findByText('first page');
+
+    // Start the slow next page, then change a filter before it comes back.
+    await userEvent.click(screen.getByRole('button', { name: /load more/i }));
+    await userEvent.click(screen.getByLabelText('Status'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Failed' }));
+    await screen.findByText('fresh page');
+
+    releaseSlowPage();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByText('stale page')).not.toBeInTheDocument();
+    expect(screen.getByText('fresh page')).toBeInTheDocument();
+  });
+});

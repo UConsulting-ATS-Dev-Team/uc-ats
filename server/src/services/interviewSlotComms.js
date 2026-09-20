@@ -373,7 +373,10 @@ async function sendOne(notificationId, renderBody) {
         {
           category: 'INTERVIEW_SLOT',
           recipientName: recipientNameOf(notification),
-          attemptKey: `slot-notification:${notificationId}`,
+          // The claim count, for the reason decisionBatches.sendOne gives: a
+          // Resend of a FAILED or SUPPRESSED notification must record its own
+          // row, not overwrite the attempt before it.
+          attemptKey: `slot-notification:${notificationId}:${notification.attempts}`,
         }
       );
       if (result.success) break;

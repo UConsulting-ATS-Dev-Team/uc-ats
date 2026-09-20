@@ -109,19 +109,28 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
     return params.toString();
   }, [filters, scopeToCycle, cycleId, offset]);
 
+  // The query a response has to still belong to when it lands. Changing a
+  // filter while a "Load more" is in flight used to append that older page to
+  // the new query's rows, showing messages the filters exclude and a total that
+  // matched neither.
+  const inFlight = useRef('');
+
   const load = useCallback(async () => {
+    inFlight.current = query;
     setLoading(true);
     try {
       const data = await apiClient.get(`/master-communications/communications?${query}`);
+      if (inFlight.current !== query) return;
       const page = Array.isArray(data?.rows) ? data.rows : [];
       const at = Number.isFinite(data?.offset) ? data.offset : 0;
       setRows((current) => (at === 0 ? page : [...current, ...page]));
       setTotal(Number.isFinite(data?.total) ? data.total : 0);
       setError('');
     } catch (e) {
+      if (inFlight.current !== query) return;
       setError(e.message || 'Failed to load the communications log');
     } finally {
-      setLoading(false);
+      if (inFlight.current === query) setLoading(false);
     }
   }, [query]);
 
