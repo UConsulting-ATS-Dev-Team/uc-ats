@@ -21,6 +21,7 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
+import RoundOneHistoryPanel from '../components/interview/RoundOneHistoryPanel';
 import CaseViewer from '../components/case/CaseViewer';
 import { usePreviewActive } from '../utils/previewMode';
 import '../styles/FinalRoundInterviewInterface.css';
@@ -672,6 +673,13 @@ export default function FinalRoundInterviewInterface() {
                     )}
                   </div>
                 </div>
+
+                {/* What this candidate was already asked in round one, so nobody
+                    writes a question they have answered once already. */}
+                <RoundOneHistoryPanel
+                  applicationId={application.id}
+                  candidateName={application.name}
+                />
 
                 {/* Behavioral Section */}
                 {currentPage === 0 && (
