@@ -21,8 +21,12 @@ const CATALOG = [
     label: 'Application advanced',
     description: 'Tells a candidate their written application moved forward.',
     audience: 'Candidate',
-    category: 'Decisions',
-    trigger: 'Queued by Process Application Decisions.',
+    category: 'Applications',
+    trigger: 'Sent from the application page in admin.js.',
+    alsoAttaches: null,
+    source: 'emailNotifications',
+    sourceLabel: 'Hardcoded in emailNotifications.js',
+    editable: false,
   },
   {
     key: 'password-reset',
@@ -31,6 +35,34 @@ const CATALOG = [
     audience: 'Any account',
     category: 'Account',
     trigger: 'Sent from the forgot-password page.',
+    alsoAttaches: null,
+    source: 'emailNotifications',
+    sourceLabel: 'Hardcoded in emailNotifications.js',
+    editable: false,
+  },
+  {
+    key: 'slot-confirmation',
+    label: 'Interview slot confirmed',
+    description: 'Confirms the session a candidate picked.',
+    audience: 'Candidate',
+    category: 'Interview scheduling',
+    trigger: 'Sent when a candidate books an interview slot.',
+    alsoAttaches: 'A calendar invite (.ics).',
+    source: 'interviewSlot',
+    sourceLabel: 'Hardcoded in renderInterviewSlotEmail',
+    editable: false,
+  },
+  {
+    key: 'decision-round-1-advanced',
+    label: 'Application advanced (decision)',
+    description: 'Default wording for an application decision of ADVANCED.',
+    audience: 'Candidate',
+    category: 'Round decisions',
+    trigger: 'Queued by decision processing.',
+    alsoAttaches: null,
+    source: 'decisionBatch',
+    sourceLabel: 'Editable per batch in Master Communications',
+    editable: true,
   },
 ];
 
@@ -44,6 +76,16 @@ const PREVIEWS = {
     ...CATALOG[1],
     subject: 'Reset Your Password - UConsulting ATS',
     html: '<p>Use this link to reset your password.</p>',
+  },
+  'slot-confirmation': {
+    ...CATALOG[2],
+    subject: "You're confirmed - First Round Interviews",
+    html: '<p>Your time is confirmed.</p>',
+  },
+  'decision-round-1-advanced': {
+    ...CATALOG[3],
+    subject: "Congratulations! You've advanced to Coffee Chats - Fall 2026",
+    html: '<p>Hi Jordan,</p>',
   },
 };
 
@@ -72,8 +114,43 @@ describe('AdminEmailTemplates', () => {
 
     expect(await screen.findByText('Application advanced')).toBeInTheDocument();
     expect(screen.getByText('Password reset link')).toBeInTheDocument();
-    expect(screen.getByText('Decisions')).toBeInTheDocument();
+    expect(screen.getByText('Applications')).toBeInTheDocument();
     expect(screen.getByText('Account')).toBeInTheDocument();
+    expect(screen.getByText('Interview scheduling')).toBeInTheDocument();
+    expect(screen.getByText('Round decisions')).toBeInTheDocument();
+  });
+
+  it('says where each template can be edited', async () => {
+    mockApi();
+    render(<AdminEmailTemplates />);
+
+    await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
+    expect(screen.getByText('Hardcoded in emailNotifications.js')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('Application advanced (decision)'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Editable per batch in Master Communications')
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('names an attachment the frame cannot show', async () => {
+    mockApi();
+    render(<AdminEmailTemplates />);
+    await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
+
+    // The first template carries no attachment, so no note.
+    expect(screen.queryByText(/Not shown below/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('Interview slot confirmed'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Not shown below: A calendar invite (.ics).')
+      ).toBeInTheDocument();
+    });
   });
 
   it('previews the first template without being asked', async () => {

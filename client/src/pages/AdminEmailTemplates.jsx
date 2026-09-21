@@ -12,13 +12,17 @@ import {
   Alert,
   Divider,
 } from '@mui/material';
-import { MarkEmailRead as MarkEmailReadIcon } from '@mui/icons-material';
+import {
+  MarkEmailRead as MarkEmailReadIcon,
+  AttachFile as AttachFileIcon,
+} from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 
 const AUDIENCE_COLORS = {
   Candidate: 'primary',
   Member: 'info',
+  Admin: 'warning',
   'Any account': 'default',
   'Talent portal': 'secondary',
 };
@@ -116,7 +120,8 @@ function AdminEmailTemplatesContent() {
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 760 }}>
         Every email the ATS sends on its own, rendered exactly as a recipient receives it.
         Names, dates and links below are stand-ins for preview only — nothing here is sent,
-        and opening a template emails nobody.
+        and opening a template emails nobody. Each one says where its wording lives, which
+        is also where it can be changed.
       </Typography>
 
       <Box
@@ -196,7 +201,26 @@ function AdminEmailTemplatesContent() {
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                   {preview.trigger}
                 </Typography>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={preview.editable ? 'success' : 'default'}
+                  label={preview.sourceLabel}
+                  sx={{ mt: 1 }}
+                />
               </Box>
+
+              {/*
+                A builder returns subject and HTML only. Anything the send path
+                bolts on afterwards, such as a calendar invite, cannot appear in
+                the frame below, so the page says so rather than letting the
+                preview imply the email arrives bare.
+              */}
+              {preview.alsoAttaches && (
+                <Alert severity="info" icon={<AttachFileIcon fontSize="inherit" />}>
+                  Not shown below: {preview.alsoAttaches}
+                </Alert>
+              )}
 
               <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5 }}>
                 <Typography variant="caption" color="text.secondary" display="block">
