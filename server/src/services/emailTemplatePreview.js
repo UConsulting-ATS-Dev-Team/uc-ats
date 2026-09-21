@@ -262,7 +262,10 @@ const TRANSACTIONAL = [
     key: 'email-verification',
     label: 'Email verification link',
     description: 'Proves a new account owns the address it signed up with.',
-    audience: 'Any account',
+    // Not every account: a member is created already trusted, and Google has
+    // proved the address before the account exists. Only a password signup has
+    // anything left to prove.
+    audience: 'Password signups',
     category: 'Account',
     trigger:
       'Sent on password signup and on external registration, and again on resend. Talent uploads stay blocked until it is used. Google sign-in skips it.',

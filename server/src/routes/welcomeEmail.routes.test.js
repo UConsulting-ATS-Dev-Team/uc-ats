@@ -16,6 +16,10 @@ import prisma from '../prismaClient.js';
 import authRoutes from './auth.js';
 import config from '../config.js';
 import { sendWelcomeEmail, sendEmailVerification } from '../services/emailNotifications.js';
+// The preview page's "when does this fire" text is asserted here, beside the
+// behaviour it describes. On its own it is prose checked against itself, and
+// would stay green while these routes moved underneath it.
+import { renderEmailTemplatePreview } from '../services/emailTemplatePreview.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -31,7 +35,12 @@ vi.mock('../prismaClient.js', () => ({
   }
 }));
 
-vi.mock('../services/emailNotifications.js', () => ({
+// The real module is kept underneath the stubbed senders, so the preview
+// catalog can be imported here and checked against the behaviour these tests
+// exercise. Without that, its "when does this fire" text is prose asserted
+// against itself, and stays green while the routes below change underneath it.
+vi.mock('../services/emailNotifications.js', async (importActual) => ({
+  ...(await importActual()),
   sendPasswordResetEmail: vi.fn().mockResolvedValue({ success: true }),
   sendPasswordResetConfirmationEmail: vi.fn().mockResolvedValue({ success: true }),
   sendEmailVerification: vi.fn().mockResolvedValue({ success: true }),
@@ -171,6 +180,12 @@ describe('welcome email on verification', () => {
       audience: 'candidate',
       ctaUrl: config.clientUrl
     });
+
+    // Which is what the preview page says, and the reason it does not say
+    // "on signup": /register sent only the verification link above.
+    const applicant = renderEmailTemplatePreview('welcome-candidate');
+    expect(applicant.trigger).toMatch(/verifies their address/);
+    expect(applicant.trigger).toMatch(/only the verification link/);
   }, SIGNUP_TIMEOUT_MS);
 
   it('welcomes a talent-portal account with the talent copy, not the candidate copy', async () => {
@@ -250,6 +265,13 @@ describe('welcome email on the paths that skip verification', () => {
     // createFromGoogle sets isExternalTalent - a Google signup has no
     // application, so it gets the portal's copy.
     expect(welcomeCall()).toMatchObject({ audience: 'talent', ctaUrl: config.clientUrl });
+
+    // No verification was sent, and the preview page has to say so: this is the
+    // one signup path where the welcome does not wait for anything.
+    expect(sendEmailVerification).not.toHaveBeenCalled();
+    expect(renderEmailTemplatePreview('welcome-talent').trigger).toMatch(
+      /immediately when a Google account is created/
+    );
   });
 
   it('does not welcome a returning Google user', async () => {
@@ -283,6 +305,10 @@ describe('welcome email on the paths that skip verification', () => {
     // No verification link is issued on this path, so creation is the only
     // moment there is to send it.
     expect(sendEmailVerification).not.toHaveBeenCalled();
+    // So the preview page says the member welcome skips verification, and keeps
+    // members out of the verification email's audience entirely.
+    expect(renderEmailTemplatePreview('welcome-member').trigger).toMatch(/no verification step/);
+    expect(renderEmailTemplatePreview('email-verification').audience).toBe('Password signups');
     expect(welcomeCall()).toMatchObject({
       email: 'member@ucla.edu',
       fullName: 'Pam Beesly',
