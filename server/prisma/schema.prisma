@@ -86,6 +86,7 @@ model User {
   editedMessageDrafts        MessageDraft[]                  @relation("MessageDraftEditor")
   sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
   scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
+  triggeredCommunications    CommunicationLog[]              @relation("CommunicationLogTrigger")
   talentPartnerClient        TalentPartnerClient?            @relation("TalentPartnerClientUser")
   createdTalentPartners      TalentPartnerClient[]           @relation("TalentPartnerClientCreator")
   submittedReferrals         Referral[]                      @relation("ReferralSubmitter")
@@ -405,6 +406,7 @@ model RecruitingCycle {
   messageDrafts             MessageDraft[]                   @relation("CycleDrafts")
   messageLogs               MessageLog[]                     @relation("CycleLogs")
   scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
+  communicationLogs         CommunicationLog[]               @relation("CycleCommunicationLogs")
   helpAnnouncements         HelpAnnouncement[]
   liveVoteSessions          LiveVoteSession[]
 
@@ -1646,10 +1648,67 @@ model MessageLog {
   cycle          RecruitingCycle?  @relation("CycleLogs", fields: [cycleId], references: [id], onDelete: SetNull)
   sender         User              @relation("MessageLogSender", fields: [sentBy], references: [id])
   schedules      MessageSchedule[]
+  communications CommunicationLog[]
 
   @@index([cycleId])
   @@index([sentAt])
   @@map("message_logs")
+}
+
+/// Every outbound message this system produced, one row per recipient.
+///
+/// Written at the three points anything leaves: `sendEmail` in
+/// emailNotifications.js (all mail, automated or hand-written), `sendSlackMessage`,
+/// and the iMessage hand-off in masterCommunications.js. MessageLog above stays
+/// what it was - the campaign-level record of a bulk send - and a bulk send's
+/// per-person rows point back at it through `messageLogId`.
+///
+/// Recording is best-effort by design: a failure to write this row must never
+/// fail the send it describes.
+model CommunicationLog {
+  id                String   @id @default(uuid())
+  /// email | slack | imessage
+  channel           String   @default("email")
+  /// What kind of message this was - see COMMUNICATION_CATEGORIES in
+  /// services/communicationLog.js. Free text so a new email needs no migration.
+  category          String   @default("OTHER")
+  /// AUTOMATED (the system decided to send) | MANUAL (a person pressed send)
+  trigger           String   @default("AUTOMATED")
+  /// SENT | FAILED | OPENED (iMessage: handed to Messages, delivery unobservable)
+  status            String   @default("SENT")
+  /// Address, channel name or phone number, exactly as addressed.
+  recipient         String
+  recipientName     String?
+  subject           String?
+  /// First ~2000 characters of the plain-text body, enough to identify a message
+  /// without storing every decision letter twice.
+  bodyPreview       String?
+  /// Provider error text when status is FAILED.
+  error             String?
+  providerMessageId String?
+  /// Identifies one message to one recipient across retries. The senders retry
+  /// up to three times, and without this a transient failure left a FAILED row
+  /// next to the SENT one for the same message. Null for a send that is never
+  /// retried; Postgres allows many nulls under a unique index.
+  attemptKey        String?  @unique
+  hasAttachments    Boolean  @default(false)
+  triggeredById     String?
+  messageLogId      String?
+  cycleId           String?
+  sentAt            DateTime @default(now())
+
+  triggeredBy User?            @relation("CommunicationLogTrigger", fields: [triggeredById], references: [id], onDelete: SetNull)
+  messageLog  MessageLog?      @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  cycle       RecruitingCycle? @relation("CycleCommunicationLogs", fields: [cycleId], references: [id], onDelete: SetNull)
+
+  @@index([sentAt])
+  @@index([recipient])
+  @@index([category])
+  @@index([channel])
+  @@index([status])
+  @@index([cycleId])
+  @@index([messageLogId])
+  @@map("communication_logs")
 }
 
 model MessageSchedule {

@@ -229,6 +229,25 @@ The system follows a **recruiting cycle-based workflow**:
   `node scripts/import-member-phones-from-csv.js <csv>` (dry run; add `--apply` to write),
   or edit one in User Management.
 
+**Communications log:**
+- `CommunicationLog` (`communication_logs`) records every outbound message, one row per
+  recipient, read back in Master Communications → Logs → All messages.
+- Written at the three points anything leaves the server:
+  [`sendEmail`](server/src/services/emailNotifications.js) for all mail,
+  [`sendSlackMessage`](server/src/services/slackService.js), and `logImessageSend` in
+  [masterCommunications.js](server/src/services/masterCommunications.js). Nothing else may
+  send. A new email must go through `sendEmail`, or it will not be logged.
+- Both senders take an optional trailing `meta` ({ category, trigger, recipientName,
+  triggeredById, cycleId, messageLogId }). Omitting it still logs the send, as an
+  automated `OTHER`, so a new caller can never silently drop out of the log.
+- Recording is best-effort and never fails a send: the mail is already gone by the time
+  the row is written, so a logging error reported as a send error would get it sent twice.
+- `MessageLog` is unchanged and still the campaign-level record of a bulk send (Logs →
+  Bulk sends). A bulk send's per-recipient rows point back at it via `messageLogId`, which
+  is why `sendMasterCommunication` writes the campaign row *before* the first email.
+- An iMessage row is `OPENED`, not `SENT`: the server hands the conversation to the
+  admin's Messages app and cannot observe what happens after.
+
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
   interview: a note on what deliberation is for, plus one description per decision. Admins
