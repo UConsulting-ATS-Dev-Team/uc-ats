@@ -70,6 +70,9 @@ export default function MailingListImport() {
   // admin to choose it again.
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
+  // Held apart from `result`, which every run clears, so the column picker
+  // survives a re-run instead of blinking out and back.
+  const [headers, setHeaders] = useState([]);
   const [column, setColumn] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -78,17 +81,24 @@ export default function MailingListImport() {
   const run = async (chosenFile, emailColumn) => {
     setLoading(true);
     setError('');
+    // The previous run's numbers describe a different file, or the same file
+    // read down a different column. Leaving them up next to the new file name
+    // would offer a download of the old list under the new one's name.
+    setResult(null);
+    setShowDropped(false);
     try {
       const form = new FormData();
       form.append('file', chosenFile);
       if (emailColumn) form.append('emailColumn', emailColumn);
       const data = await apiClient.post('/master-communications/mailing-list/dedupe', form);
       setResult(data);
-      setShowDropped(false);
-      if (data.emailColumn) setColumn(data.emailColumn);
+      setHeaders((data.headers || []).filter((h) => h !== '__line'));
+      setColumn(data.emailColumn || '');
     } catch (err) {
       setError(err.serverMessage || err.message || 'Could not read that file');
       setResult(null);
+      setHeaders([]);
+      setColumn('');
     } finally {
       setLoading(false);
     }
@@ -101,8 +111,19 @@ export default function MailingListImport() {
     e.target.value = '';
     if (!chosen) return;
     setFile(chosen);
+    setHeaders([]);
     setColumn('');
     run(chosen, null);
+  };
+
+  // Detection is a guess, and a loose one: with no exact "Email" header it will
+  // take the first column merely containing the word, which can be something
+  // like "Email Verified". So the picker stays up after a successful run too -
+  // a wrong guess here silently dedupes against the wrong field.
+  const handleColumn = (e) => {
+    const chosen = e.target.value;
+    setColumn(chosen);
+    if (chosen && file) run(file, chosen);
   };
 
   const handleDownload = () => {
@@ -148,34 +169,28 @@ export default function MailingListImport() {
         {loading && <CircularProgress size={20} />}
       </Stack>
 
-      {needsColumn && (
+      {headers.length > 0 && (
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Typography variant="subtitle2" gutterBottom>
-            {result.overrideMissed
-              ? 'That column is not in this file. Pick another one.'
-              : 'Which column holds the email address?'}
+            {needsColumn
+              ? (result.overrideMissed
+                ? 'That column is not in this file. Pick another one.'
+                : 'Which column holds the email address?')
+              : 'Read down this column. Change it if the wrong one was picked.'}
           </Typography>
-          <Stack direction="row" spacing={2} alignItems="center">
-            <TextField
-              select
-              size="small"
-              label="Email column"
-              value={column}
-              onChange={(e) => setColumn(e.target.value)}
-              sx={{ minWidth: 260 }}
-            >
-              {result.headers.filter((h) => h !== '__line').map((h) => (
-                <MenuItem key={h} value={h}>{h}</MenuItem>
-              ))}
-            </TextField>
-            <Button
-              variant="contained"
-              disabled={!column || loading}
-              onClick={() => run(file, column)}
-            >
-              Use this column
-            </Button>
-          </Stack>
+          <TextField
+            select
+            size="small"
+            label="Email column"
+            value={column}
+            onChange={handleColumn}
+            disabled={loading}
+            sx={{ minWidth: 260 }}
+          >
+            {headers.map((h) => (
+              <MenuItem key={h} value={h}>{h}</MenuItem>
+            ))}
+          </TextField>
         </Paper>
       )}
 
@@ -185,7 +200,6 @@ export default function MailingListImport() {
             <Chip size="small" label={`${result.rows} rows read`} />
             <Chip size="small" label={`Email column: ${result.emailColumn}`} />
             <Chip size="small" label={`${result.knownAddresses} known addresses in the ATS`} />
-            <Button size="small" onClick={() => fileRef.current?.click()}>Change column or file</Button>
           </Stack>
 
           <Table size="small" sx={{ mb: 2 }}>

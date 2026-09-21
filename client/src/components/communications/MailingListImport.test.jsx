@@ -128,12 +128,57 @@ describe('a file whose email column could not be found', () => {
 
     await user.click(await screen.findByRole('combobox', { name: /Email column/i }));
     await user.click(await screen.findByRole('option', { name: 'Contact' }));
-    await user.click(screen.getByRole('button', { name: /Use this column/i }));
 
     await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
     // The same file, not a second prompt to choose one.
     expect(post.mock.calls[1][1].get('file')).toBeInstanceOf(File);
     expect(post.mock.calls[1][1].get('emailColumn')).toBe('Contact');
+  });
+});
+
+// Detection takes the first header merely containing "email" when there is no
+// exact match, so it can land on something like "Email Verified" and dedupe
+// against the wrong field without ever saying so.
+describe('a column detected wrongly', () => {
+  it('can still be changed after a successful run', async () => {
+    const post = vi.spyOn(apiClient, 'post')
+      .mockResolvedValueOnce({ ...deduped, headers: ['Email Verified', 'Email'], emailColumn: 'Email Verified' })
+      .mockResolvedValueOnce({ ...deduped, headers: ['Email Verified', 'Email'], emailColumn: 'Email' });
+
+    const user = userEvent.setup();
+    render(<MailingListImport />);
+    await pickFile(user);
+
+    // The picker stays up after detection succeeds - hiding it stranded the
+    // admin with a download deduped against the wrong column.
+    await user.click(await screen.findByRole('combobox', { name: /Email column/i }));
+    await user.click(await screen.findByRole('option', { name: 'Email' }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1][1].get('emailColumn')).toBe('Email');
+  });
+});
+
+describe('while a new run is in flight', () => {
+  it('takes down the previous run rather than offering its download', async () => {
+    let release;
+    vi.spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(deduped)
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+
+    const user = userEvent.setup();
+    render(<MailingListImport />);
+    await pickFile(user);
+    expect(await screen.findByRole('button', { name: /Download 2 rows/i })).toBeInTheDocument();
+
+    // A second file, still being read. The old numbers describe the old file.
+    await pickFile(user, csvFile('second.csv'));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /^Download/i })).not.toBeInTheDocument()
+    );
+
+    release({ ...deduped, fileName: 'second.csv', keptCount: 5 });
+    expect(await screen.findByRole('button', { name: /Download 5 rows/i })).toBeInTheDocument();
   });
 });
 
