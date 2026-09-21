@@ -14,7 +14,7 @@ import { invalidateUserCache } from '../middleware/auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     candidate: { create: vi.fn() }
   }
 }));
@@ -22,7 +22,8 @@ vi.mock('../prismaClient.js', () => ({
 vi.mock('../services/emailNotifications.js', () => ({
   sendPasswordResetEmail: vi.fn().mockResolvedValue({ success: true }),
   sendPasswordResetConfirmationEmail: vi.fn().mockResolvedValue({ success: true }),
-  sendEmailVerification: vi.fn().mockResolvedValue({ success: true })
+  sendEmailVerification: vi.fn().mockResolvedValue({ success: true }),
+  sendWelcomeEmail: vi.fn().mockResolvedValue({ success: true })
 }));
 
 // auth.js imports only invalidateUserCache from this module, so replacing it

@@ -83,11 +83,11 @@ const bankRows = [
 
 const facets = { categories: ['Behavioral', 'Casing'], rounds: ['ROUND_ONE'] };
 
-function mockGets({ session = [me] && [mine, theirs], bank = bankRows } = {}) {
+function mockGets({ session = [mine, theirs], bank = bankRows } = {}) {
   apiClient.get.mockImplementation((url) => {
-    if (url.includes('/interview-questions/facets')) return Promise.resolve(facets);
+    if (url.includes('/question-bank/facets')) return Promise.resolve(facets);
+    if (url.includes('/question-bank')) return Promise.resolve(bank);
     if (url.includes('/session-questions')) return Promise.resolve(session);
-    if (url.includes('/member/interview-questions')) return Promise.resolve(bank);
     return Promise.resolve([]);
   });
 }
@@ -224,6 +224,152 @@ describe('InterviewQuestionPanel', () => {
     });
   });
 
+  // The bank an interviewer browses belongs to the interview's own cycle. Asking for it
+  // by cycle meant asking for whichever cycle was active right now, which is a different
+  // cycle the moment recruitment moves on - and then the bank comes back empty and there
+  // is nothing to add. Asking by interview is what keeps the two from drifting apart.
+  it('asks for the bank of this interview, never a bare cycle-scoped list', async () => {
+    // Served under either shape on purpose: the assertion below is about which endpoint
+    // was asked, not about whether anything came back.
+    apiClient.get.mockImplementation((url) => {
+      if (url.includes('facets')) return Promise.resolve(facets);
+      if (url.includes('question-bank') || url.includes('/member/interview-questions')) {
+        return Promise.resolve(bankRows);
+      }
+      if (url.includes('/session-questions')) return Promise.resolve([mine, theirs]);
+      return Promise.resolve([]);
+    });
+    renderPanel();
+    await openPanel();
+    fireEvent.click(screen.getByRole('tab', { name: 'Question bank' }));
+    await waitFor(() => expect(screen.getByText('Size the LA scooter market.')).toBeInTheDocument());
+
+    const urls = apiClient.get.mock.calls.map(([url]) => url);
+    expect(urls.some((u) => u.startsWith('/member/interviews/int-1/question-bank'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('/member/interview-questions'))).toBe(false);
+    expect(urls.some((u) => u.startsWith('/member/interviews/int-1/question-bank/facets'))).toBe(true);
+  });
+
+  // A full read rebuilds the list from scratch, so one that started before the Add landed
+  // used to wipe the new question straight back out again. The button said it worked, the
+  // question showed for an instant, and then it was gone - which is what "Add does not
+  // add it" looked like from the interviewer's side.
+  it('keeps a question added while a read was already in flight', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    let releasePoll;
+    let sessionReads = 0;
+    apiClient.get.mockImplementation((url) => {
+      if (url.includes('facets')) return Promise.resolve(facets);
+      if (url.includes('question-bank') || url.includes('/member/interview-questions')) {
+        return Promise.resolve(bankRows);
+      }
+      if (url.includes('/session-questions')) {
+        sessionReads += 1;
+        // The first read is the panel opening. The second is the fallback poll, and it is
+        // held open across the Add so it lands afterwards carrying the older list.
+        if (sessionReads === 1) return Promise.resolve([]);
+        return new Promise((resolve) => { releasePoll = resolve; });
+      }
+      return Promise.resolve([]);
+    });
+    apiClient.post.mockResolvedValue({
+      id: 'sq-9',
+      interviewId: 'int-1',
+      prompt: 'Size the LA scooter market.',
+      guidance: null,
+      questionBankId: 'bank-2',
+      addedBy: 'me-1',
+      position: 1,
+      updatedAt: '2026-08-27T10:03:00.000Z',
+      deletedAt: null,
+    });
+
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Interview questions' }));
+    await waitFor(() => expect(screen.getByText(/No questions queued/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Question bank' }));
+    await waitFor(() => expect(screen.getByText('Size the LA scooter market.')).toBeInTheDocument());
+
+    // The fallback poll fires and is left in flight...
+    await act(async () => { vi.advanceTimersByTime(10000); });
+    await waitFor(() => expect(typeof releasePoll).toBe('function'));
+
+    // ...while the interviewer adds a question.
+    fireEvent.click(screen.getByRole('button', { name: 'Add: Size the LA scooter market.' }));
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
+
+    // Now the stale read lands, still describing an empty interview.
+    await act(async () => { releasePoll([]); });
+
+    expect(await screen.findByRole('button', { name: /Already added/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('tab', { name: /This interview/ }));
+    expect(await screen.findByText('Size the LA scooter market.')).toBeInTheDocument();
+  });
+
+  // The guard that protects a local write must not eat a co-interviewer's. An incremental
+  // read only ever adds rows, so dropping one throws away the only copy of everything that
+  // changed in the window it covers, and no later `since` read asks for that window again.
+  it('keeps a co-interviewer\u2019s change that arrived during a local add', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // theirs is at 10:01, so the panel opens with a watermark of 10:01.
+    const remote = {
+      id: 'sq-3',
+      interviewId: 'int-1',
+      prompt: 'What did you learn from it?',
+      guidance: null,
+      questionBankId: null,
+      addedBy: 'someone-else',
+      position: 2,
+      updatedAt: '2026-08-27T10:02:00.000Z',
+      deletedAt: null,
+    };
+
+    let releasePoll;
+    let sessionReads = 0;
+    apiClient.get.mockImplementation((url) => {
+      if (url.includes('facets')) return Promise.resolve(facets);
+      if (url.includes('question-bank')) return Promise.resolve(bankRows);
+      if (url.includes('/session-questions')) {
+        sessionReads += 1;
+        if (sessionReads === 1) return Promise.resolve([mine, theirs]);
+        // The poll carries the co-interviewer's question, written before the local add.
+        return new Promise((resolve) => { releasePoll = () => resolve([remote]); });
+      }
+      return Promise.resolve([]);
+    });
+    apiClient.post.mockResolvedValue({
+      ...mine,
+      id: 'sq-9',
+      questionBankId: 'bank-2',
+      prompt: 'Size the LA scooter market.',
+      position: 3,
+      // Stamped after the remote question, which is what used to strand it.
+      updatedAt: '2026-08-27T10:03:00.000Z',
+    });
+
+    renderPanel();
+    await openPanel();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Question bank' }));
+    await waitFor(() => expect(screen.getByText('Size the LA scooter market.')).toBeInTheDocument());
+
+    await act(async () => { vi.advanceTimersByTime(10000); });
+    await waitFor(() => expect(typeof releasePoll).toBe('function'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add: Size the LA scooter market.' }));
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
+
+    await act(async () => { releasePoll(); });
+
+    fireEvent.click(screen.getByRole('tab', { name: /This interview/ }));
+    // Both survive: the local add, and the remote question the poll was carrying.
+    expect(await screen.findByText('Size the LA scooter market.')).toBeInTheDocument();
+    expect(screen.getByText(remote.prompt)).toBeInTheDocument();
+  });
+
   it('defaults the bank filter to the round being interviewed', async () => {
     renderPanel();
     await openPanel();
@@ -231,7 +377,7 @@ describe('InterviewQuestionPanel', () => {
 
     await waitFor(() => {
       expect(apiClient.get).toHaveBeenCalledWith(
-        expect.stringContaining('/member/interview-questions?round=ROUND_ONE')
+        expect.stringContaining('/member/interviews/int-1/question-bank?round=ROUND_ONE')
       );
     });
   });

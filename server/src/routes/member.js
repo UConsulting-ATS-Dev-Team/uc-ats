@@ -1711,7 +1711,12 @@ router.post('/message-admin', requireAuth, async (req, res) => {
     };
 
     try {
-      await sendSlackMessage(slackMessage);
+      await sendSlackMessage(slackMessage, {
+        category: 'OTHER',
+        trigger: 'MANUAL',
+        subject: 'Message to the admins',
+        triggeredById: req.user.id,
+      });
     } catch (slackError) {
       console.error('[POST /api/member/message-admin] Slack error:', slackError);
       // Don't fail the request if Slack is down, but log the error
@@ -1828,7 +1833,12 @@ router.post('/flag-document', requireAuth, async (req, res) => {
         `**Message:** ${message || 'No additional details provided'}\n\n` +
         `Please review this flagged document in the admin panel.`;
 
-      await sendSlackMessage(slackMessage);
+      await sendSlackMessage(slackMessage, {
+        category: 'OTHER',
+        trigger: 'MANUAL',
+        subject: 'Flagged document',
+        triggeredById: req.user.id,
+      });
     } catch (slackError) {
       console.error('Failed to send Slack notification for flagged document:', slackError);
       // Don't fail the request if Slack notification fails
@@ -2066,21 +2076,28 @@ router.delete('/resume', requireAuth, requireMemberRole, async (req, res) => {
   }
 });
 
-// List published interview questions for the current cycle (ATS-23 / ATS-68)
-router.get('/interview-questions', requireAuth, requireAdminOrMember, async (req, res) => {
+// The question bank an interviewer browses is the bank of the cycle their interview
+// belongs to - not whichever cycle happens to be active right now. Those are the same
+// thing only until recruitment moves on, and then every interview still being run
+// against the old cycle loses its bank: the list comes back empty and there is nothing
+// to add. Resolving the cycle from the interview also means an admin and a member
+// looking at the same interview see the same bank, which the active-cycle pointers
+// could not guarantee - they resolve to different cycles by role.
+// List the published bank for the cycle this interview belongs to (ATS-23 / ATS-68)
+router.get('/interviews/:interviewId/question-bank', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
-    const { cycleId, round, category } = req.query || {};
-    const activeCycle = await resolveCycleForRequest(prisma, req);
-    const targetCycleId = cycleId || activeCycle?.id;
+    const { interviewId } = req.params;
+    const { round, category } = req.query || {};
 
-    if (!targetCycleId) {
-      return res.json([]);
+    // One read answers both questions this route asks of the interview: whether the
+    // caller is on it, and which cycle's bank belongs to it.
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
     }
+    if (!interview?.cycleId) return res.json([]);
 
-    const where = {
-      cycleId: targetCycleId,
-      status: 'PUBLISHED'
-    };
+    const where = { cycleId: interview.cycleId, status: 'PUBLISHED' };
     if (round) where.round = String(round);
     if (category) where.category = String(category);
 
@@ -2091,23 +2108,23 @@ router.get('/interview-questions', requireAuth, requireAdminOrMember, async (req
 
     res.json(questions);
   } catch (error) {
-    console.error('[GET /api/member/interview-questions]', error);
+    console.error('[GET /api/member/interviews/:interviewId/question-bank]', error);
     res.status(500).json({ error: 'Failed to fetch interview questions' });
   }
 });
 
-// Distinct category and round values across the published bank, for filter dropdowns.
-router.get('/interview-questions/facets', requireAuth, requireAdminOrMember, async (req, res) => {
+// Distinct category and round values across that same bank, for the filter dropdowns.
+router.get('/interviews/:interviewId/question-bank/facets', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
-    const { cycleId } = req.query || {};
-    const activeCycle = await resolveCycleForRequest(prisma, req);
-    const targetCycleId = cycleId || activeCycle?.id;
+    const { interviewId } = req.params;
 
-    if (!targetCycleId) {
-      return res.json({ categories: [], rounds: [] });
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
+      return res.status(403).json({ error: 'Not assigned to this interview' });
     }
+    if (!interview?.cycleId) return res.json({ categories: [], rounds: [] });
 
-    const where = { cycleId: targetCycleId, status: 'PUBLISHED' };
+    const where = { cycleId: interview.cycleId, status: 'PUBLISHED' };
 
     const [categories, rounds] = await Promise.all([
       prisma.interviewQuestion.findMany({
@@ -2129,7 +2146,7 @@ router.get('/interview-questions/facets', requireAuth, requireAdminOrMember, asy
       rounds: rounds.map((r) => r.round).filter(Boolean)
     });
   } catch (error) {
-    console.error('[GET /api/member/interview-questions/facets]', error);
+    console.error('[GET /api/member/interviews/:interviewId/question-bank/facets]', error);
     res.status(500).json({ error: 'Failed to fetch interview question facets' });
   }
 });
@@ -2144,13 +2161,19 @@ router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requ
       return res.status(400).json({ error: 'questionId is required' });
     }
 
-    if (!(await canAccessInterview(req, interviewId))) {
+    const interview = await interviewForAccess(interviewId);
+    if (!(await canAccessInterviewRecord(req, interview))) {
       return res.status(403).json({ error: 'Not assigned to this interview' });
     }
 
-    const bankQuestion = await prisma.interviewQuestion.findFirst({
-      where: { id: questionId, status: 'PUBLISHED' }
-    });
+    // Scoped to the interview's own cycle, exactly like the list above: what can be
+    // added has to be what the interviewer was offered, or the id alone is enough to
+    // pull another cycle's questions into this interview.
+    const bankQuestion = interview?.cycleId
+      ? await prisma.interviewQuestion.findFirst({
+          where: { id: questionId, status: 'PUBLISHED', cycleId: interview.cycleId }
+        })
+      : null;
 
     if (!bankQuestion) {
       return res.status(404).json({ error: 'Published question not found' });
@@ -2187,12 +2210,30 @@ router.post('/interviews/:interviewId/session-questions/bank', requireAuth, requ
 
 // Live interview session questions (ATS-13 / ATS-69)
 
+// `description` carries the legacy roster config, so it has to come back with the row:
+// interviewsAssignedTo reads it for interviews arranged before the slot tables existed.
+const interviewForAccess = (interviewId) =>
+  prisma.interview.findUnique({
+    where: { id: interviewId },
+    select: { id: true, cycleId: true, description: true }
+  });
+
+// A member is on an interview in any of three ways, and only one of them is the
+// InterviewAssignment table this used to check. Current interviews staff through
+// InterviewSlotAssignment, so a slot-assigned interviewer could open their own
+// interview from the list - which is roster-aware - and then be refused by every
+// session-question route behind this check. interviewsAssignedTo is the same rule the
+// list uses, so the two can no longer disagree.
+async function canAccessInterviewRecord(req, interview) {
+  if (req.user.role === 'ADMIN') return true;
+  if (!interview) return false;
+  const assigned = await interviewsAssignedTo(req.user.id, [interview]);
+  return assigned.length > 0;
+}
+
 async function canAccessInterview(req, interviewId) {
   if (req.user.role === 'ADMIN') return true;
-  const assignment = await prisma.interviewAssignment.findFirst({
-    where: { interviewId, userId: req.user.id }
-  });
-  return Boolean(assignment);
+  return canAccessInterviewRecord(req, await interviewForAccess(interviewId));
 }
 
 // A reorder rewrites every row, so the nudge carries the newest stamp of the batch -

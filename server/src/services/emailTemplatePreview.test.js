@@ -17,6 +17,13 @@ vi.mock('@aws-sdk/client-sesv2', () => ({
   SendEmailCommand: class {},
 }));
 
+// emailNotifications.js logs every send through communicationLog.js, which
+// constructs a PrismaClient at import. Rendering never reaches it, but the
+// module graph does, so it is stubbed rather than given a database.
+vi.mock('../prismaClient.js', () => ({
+  default: { communicationLog: { create: vi.fn() }, $disconnect: vi.fn() },
+}));
+
 import {
   TEMPLATE_BUILDERS,
   SLOT_EMAIL_TYPES,
@@ -28,6 +35,7 @@ import {
   UnknownEmailTemplateError,
   TEMPLATE_CATALOG,
 } from './emailTemplatePreview.js';
+import config from '../config.js';
 
 beforeEach(() => {
   sendMail.mockClear();
@@ -63,11 +71,20 @@ describe('slot notification copy and subjects stay in step', () => {
 
 describe('the catalog covers all three systems', () => {
   it('previews every registered transactional builder', () => {
-    const catalogued = new Set(
-      TEMPLATE_CATALOG.filter((e) => e.source.id === 'emailNotifications').map((e) => e.key)
+    // A catalog entry may point at a builder under another name, which is how
+    // the three welcome audiences share one. Compare against what is used.
+    const used = new Set(
+      TEMPLATE_CATALOG.filter((e) => e.source.id === 'emailNotifications').map(
+        (e) => e.builderKey ?? e.key
+      )
     );
-    const uncatalogued = Object.keys(TEMPLATE_BUILDERS).filter((key) => !catalogued.has(key));
+    const uncatalogued = Object.keys(TEMPLATE_BUILDERS).filter((key) => !used.has(key));
     expect(uncatalogued).toEqual([]);
+  });
+
+  it('lists all three welcome audiences, because all three are sent', () => {
+    const welcome = TEMPLATE_CATALOG.filter((e) => e.builderKey === 'welcome').map((e) => e.key);
+    expect(welcome.sort()).toEqual(['welcome-candidate', 'welcome-member', 'welcome-talent']);
   });
 
   it('carries the decision defaults for all four rounds', () => {
@@ -185,12 +202,28 @@ describe('what the preview actually shows', () => {
     // Builder output is what sendEmail is handed verbatim, so comparing the
     // preview against a direct builder call is the whole correctness claim.
     const direct = TEMPLATE_BUILDERS['password-reset'](
-      'https://uconsultingats.com/reset-password?token=sample-preview-token'
+      `${config.clientUrl}/reset-password?token=sample-preview-token`
     );
     const preview = renderEmailTemplatePreview('password-reset');
 
     expect(preview.subject).toBe(direct.subject);
     expect(preview.html).toBe(direct.html);
+  });
+
+  it('keeps the three welcome audiences distinct', () => {
+    const candidate = renderEmailTemplatePreview('welcome-candidate');
+    const talent = renderEmailTemplatePreview('welcome-talent');
+    const member = renderEmailTemplatePreview('welcome-member');
+
+    expect(candidate.subject).toBe('Welcome to UConsulting Recruitment');
+    expect(talent.subject).toBe('Welcome to the UConsulting Talent Network');
+    expect(member.subject).toBe('Welcome to the UConsulting ATS');
+    expect(new Set([candidate.html, talent.html, member.html]).size).toBe(3);
+  });
+
+  it('points sample links at this environment, not always production', () => {
+    const { html } = renderEmailTemplatePreview('password-reset');
+    expect(html).toContain(`${config.clientUrl}/reset-password`);
   });
 
   it('formats sample times in the club timezone', () => {

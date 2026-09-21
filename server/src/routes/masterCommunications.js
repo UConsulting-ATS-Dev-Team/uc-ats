@@ -18,6 +18,13 @@ import {
   cancelScheduledMessage,
 } from '../services/masterCommunications.js';
 import {
+  listCommunications,
+  listCommunicationFacets,
+  COMMUNICATION_CATEGORIES,
+  COMMUNICATION_CHANNELS,
+  COMMUNICATION_STATUSES,
+} from '../services/communicationLog.js';
+import {
   getDecisionBatch,
   listDecisionBatches,
   previewDecisionEmail,
@@ -192,6 +199,51 @@ router.get('/logs', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[GET /api/master-communications/logs]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to list logs' });
+  }
+});
+
+/**
+ * Everything this system has ever sent, one row per recipient - the automated
+ * mail as well as what an admin composed here. `/logs` above stays what it was:
+ * the campaign-level record of a bulk send.
+ */
+router.get('/communications', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const result = await listCommunications({
+      cycleId: req.query.cycleId,
+      channel: req.query.channel,
+      category: req.query.category,
+      status: req.query.status,
+      trigger: req.query.trigger,
+      search: req.query.search,
+      from: req.query.from,
+      to: req.query.to,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[GET /api/master-communications/communications]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to list communications' });
+  }
+});
+
+// What the filters can offer: the full vocabulary, plus the values actually
+// present so the dropdowns can show counts and hide what never happened.
+router.get('/communications/facets', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const present = await listCommunicationFacets({ cycleId: req.query.cycleId });
+    res.json({
+      ...present,
+      known: {
+        channels: COMMUNICATION_CHANNELS,
+        categories: COMMUNICATION_CATEGORIES,
+        statuses: COMMUNICATION_STATUSES,
+      },
+    });
+  } catch (err) {
+    console.error('[GET /api/master-communications/communications/facets]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to load filters' });
   }
 });
 

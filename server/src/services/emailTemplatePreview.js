@@ -226,7 +226,7 @@ const TRANSACTIONAL = [
     audience: 'Any account',
     category: 'Account',
     trigger: 'Sent when someone requests a reset from the forgot-password page.',
-    args: ['https://uconsultingats.com/reset-password?token=sample-preview-token'],
+    args: [`${config.clientUrl}/reset-password?token=sample-preview-token`],
   },
   {
     key: 'password-reset-confirmation',
@@ -254,7 +254,7 @@ const TRANSACTIONAL = [
         completedTotal: 18,
         expectedTotal: 36,
         completionPercent: 50,
-        gradingUrl: 'https://uconsultingats.com/document-grading',
+        gradingUrl: `${config.clientUrl}/document-grading`,
       },
     ],
   },
@@ -265,13 +265,48 @@ const TRANSACTIONAL = [
     audience: 'Talent portal',
     category: 'Account',
     trigger: 'Sent on external talent registration, before uploads are allowed.',
-    args: [SAMPLE_CANDIDATE, 'https://uconsultingats.com/verify-email?token=sample-preview-token'],
+    args: [SAMPLE_CANDIDATE, `${config.clientUrl}/verify-email?token=sample-preview-token`],
+  },
+  // One builder, three audiences, all three in use. `welcomeAudience` in
+  // auth.js picks between them, so an admin comparing the wording needs to see
+  // them side by side rather than guess which one a given signup gets.
+  {
+    key: 'welcome-candidate',
+    builderKey: 'welcome',
+    label: 'Welcome (applicant)',
+    description: 'Greets somebody who just created an account to apply.',
+    audience: 'Candidate',
+    category: 'Account',
+    trigger: 'Sent on signup, or once a verification completes.',
+    args: [SAMPLE_CANDIDATE, 'candidate', config.clientUrl],
+  },
+  {
+    key: 'welcome-talent',
+    builderKey: 'welcome',
+    label: 'Welcome (talent network)',
+    description: 'Greets a self-registered UCLA student joining the talent portal.',
+    audience: 'Talent portal',
+    category: 'Account',
+    trigger: 'Sent on external registration, once the address is verified.',
+    args: [SAMPLE_CANDIDATE, 'talent', config.clientUrl],
+  },
+  {
+    key: 'welcome-member',
+    builderKey: 'welcome',
+    label: 'Welcome (member)',
+    description: 'Greets a new member account on the ATS.',
+    audience: 'Member',
+    category: 'Account',
+    trigger: 'Sent when a member account is created.',
+    args: [SAMPLE_MEMBER, 'member', config.clientUrl],
   },
 ].map((entry) => ({
   ...entry,
   source: SOURCE.TRANSACTIONAL,
   render: () => {
-    const builder = TEMPLATE_BUILDERS[entry.key];
+    // `builderKey` lets several catalog entries share one builder, which is how
+    // the three welcome audiences are listed separately.
+    const builder = TEMPLATE_BUILDERS[entry.builderKey ?? entry.key];
     if (!builder) throw new Error(`No builder registered for ${entry.key}`);
     return builder(...entry.args);
   },
@@ -497,7 +532,7 @@ const DECISION = DECISION_ROUNDS.flatMap(({ round, name }) => {
         cycleName: SAMPLE_CYCLE,
         round,
         preview: true,
-        loginUrl: 'https://uconsultingats.com/login',
+        loginUrl: `${config.clientUrl}/login`,
       }),
   }));
 });
