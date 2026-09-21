@@ -43,6 +43,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DecisionBatchPanel from '../components/communications/DecisionBatchPanel';
 import ImessageComposer from '../components/communications/ImessageComposer';
+import CommunicationsLog from '../components/communications/CommunicationsLog';
 import MailingListImport from '../components/communications/MailingListImport';
 
 const CHANNELS = [
@@ -101,6 +102,9 @@ const MasterCommunications = () => {
   const [events, setEvents] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [logs, setLogs] = useState([]);
+  // The Logs tab shows every individual message by default; 'bulk' switches to
+  // the campaign-level record of each mass send, which is what it used to show.
+  const [logView, setLogView] = useState('all');
   const [scheduledMessages, setScheduledMessages] = useState([]);
   const [selectedCycles, setSelectedCycles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -995,6 +999,38 @@ const MasterCommunications = () => {
   );
 
   const renderLogsTab = () => (
+    <Box>
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+        <Button
+          size="small"
+          variant={logView === 'all' ? 'contained' : 'outlined'}
+          onClick={() => setLogView('all')}
+        >
+          All messages
+        </Button>
+        <Button
+          size="small"
+          variant={logView === 'bulk' ? 'contained' : 'outlined'}
+          onClick={() => setLogView('bulk')}
+        >
+          Bulk sends
+        </Button>
+      </Stack>
+
+      {logView === 'all' ? (
+        <CommunicationsLog
+          cycleId={primaryCycle}
+          cycleName={cycles.find((c) => c.id === primaryCycle)?.name || ''}
+        />
+      ) : (
+        renderBulkSendLog()
+      )}
+    </Box>
+  );
+
+  // One row per mass send rather than per recipient: who pressed send, how many
+  // people it went to, and which template it came from.
+  const renderBulkSendLog = () => (
     <Box>
       {logs.length === 0 ? (
         <Alert severity="info">No sends logged for this cycle yet.</Alert>

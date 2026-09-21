@@ -238,7 +238,13 @@ export async function sendDecisionTest({ batchId, outcome, user }, client = pris
     `<strong>Test email</strong> - nobody else received this. Merge fields were filled in for ${name || 'a sample recipient'}.` +
     '</div>';
 
-  const result = await sendEmail(user.email, `[TEST] ${subject}`, banner + html);
+  const result = await sendEmail(user.email, `[TEST] ${subject}`, banner + html, [], {
+    category: 'TEST',
+    trigger: 'MANUAL',
+    recipientName: user.fullName || null,
+    triggeredById: user.id,
+    cycleId: batch.cycleId,
+  });
   if (!result.success) throw httpError(502, result.error || 'Failed to send test email');
   return { sentTo: user.email, sample: { name, email: recipient.email } };
 }
@@ -254,7 +260,7 @@ async function mintInviteLink(userId, client) {
   return `${config.clientUrl}/reset-password?token=${resetToken}`;
 }
 
-async function sendOne(messageId, { template, context, sentBy }, client) {
+async function sendOne(messageId, { template, context, sentBy, cycleId }, client) {
   // Claim the message first. Only one sender can move it out of PENDING, so a
   // double click, or two admins sending at once, cannot email anyone twice.
   const { count } = await client.decisionMessage.updateMany({
@@ -271,7 +277,18 @@ async function sendOne(messageId, { template, context, sentBy }, client) {
 
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
-      result = await sendEmail(message.email, subject, html);
+      result = await sendEmail(message.email, subject, html, [], {
+        // Includes the claim count, which the updateMany above incremented.
+        // Constant across the transport retries just below, so those collapse
+        // into one row; different for a later requeue, so an approved resend
+        // is a new row rather than an overwrite of the first send's record.
+        attemptKey: `decision-message:${messageId}:${message.attempts}`,
+        category: 'DECISION_BATCH',
+        trigger: 'MANUAL',
+        recipientName: [message.firstName, message.lastName].filter(Boolean).join(' ') || null,
+        triggeredById: sentBy,
+        cycleId,
+      });
       if (result.success) break;
       if (attempt < SEND_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
     }
@@ -317,7 +334,7 @@ export async function sendDecisionEmails({ batchId, outcome, expectedCount, sent
   }
   if (pending.length === 0) return { sent: 0, failed: 0, skipped: 0, total: 0 };
 
-  const shared = { template, context: await renderContext(batch, client), sentBy };
+  const shared = { template, context: await renderContext(batch, client), sentBy, cycleId: batch.cycleId };
   const queue = pending.map((message) => message.id);
   const results = [];
   await Promise.all(

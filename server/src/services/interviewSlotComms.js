@@ -291,6 +291,14 @@ export async function loadCandidateRoster(notification, client = prisma) {
   }
 }
 
+// Only a candidate notification carries a name; the ones addressed to
+// interviewers are found by their address alone, which the log already stores.
+function recipientNameOf(notification) {
+  const application = notification?.signup?.application;
+  if (!application) return null;
+  return `${application.firstName ?? ''} ${application.lastName ?? ''}`.trim() || null;
+}
+
 /**
  * Send one queued notification and record the outcome.
  *
@@ -361,7 +369,15 @@ async function sendOne(notificationId, renderBody) {
         notification.recipient,
         notification.subject,
         html,
-        invite ? [invite] : []
+        invite ? [invite] : [],
+        {
+          category: 'INTERVIEW_SLOT',
+          recipientName: recipientNameOf(notification),
+          // The claim count, for the reason decisionBatches.sendOne gives: a
+          // Resend of a FAILED or SUPPRESSED notification must record its own
+          // row, not overwrite the attempt before it.
+          attemptKey: `slot-notification:${notificationId}:${notification.attempts}`,
+        }
       );
       if (result.success) break;
       if (attempt < SEND_ATTEMPTS) {

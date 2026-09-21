@@ -8,7 +8,8 @@ import { invalidateUserCache } from '../middleware/auth.js';
 import {
   sendPasswordResetEmail,
   sendPasswordResetConfirmationEmail,
-  sendEmailVerification
+  sendEmailVerification,
+  sendWelcomeEmail
 } from '../services/emailNotifications.js';
 import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
 import {
@@ -54,6 +55,34 @@ const signToken = (user) =>
     config.jwtSecret,
     { expiresIn: config.jwtExpiresIn },
   );
+
+/**
+ * Which welcome the account gets. Branches on isExternalTalent rather than on
+ * role for the same reason the rest of this file does: role USER covers both an
+ * applicant tracking an application and a talent-portal student who has applied
+ * to nothing, and sending either one the other's email describes an app they
+ * cannot see.
+ */
+const welcomeAudience = (user) => {
+  if (user.role === 'MEMBER' || user.role === 'ADMIN') return 'member';
+  if (user.isExternalTalent) return 'talent';
+  return 'candidate';
+};
+
+/**
+ * The CTA lands on the client root, not on a per-audience path. The root route
+ * already redirects by role and isExternalTalent, so one link stays correct for
+ * all three audiences and cannot rot when a page moves.
+ *
+ * Callers await this but must never fail on it. sendWelcomeEmail returns
+ * { success } and does not throw. A welcome that did not send is no reason to
+ * fail a signup, or to reject a verification the person already completed.
+ */
+const sendWelcome = (user) =>
+  sendWelcomeEmail(user.email, user.fullName, {
+    audience: welcomeAudience(user),
+    ctaUrl: config.clientUrl
+  });
 
 // Register new user
 router.post('/register', async (req, res) => {
@@ -263,6 +292,14 @@ router.post('/google', async (req, res) => {
   try {
     const { user, isNewAccount } = await signInWithGoogle(req.body?.credential);
 
+    // The only signup path that skips verification: Google has already proved
+    // the address (an unverified google email is refused outright), so the
+    // account is live the moment it is created and the welcome is the first
+    // and only mail it gets.
+    if (isNewAccount) {
+      await sendWelcome(user);
+    }
+
     res.status(isNewAccount ? 201 : 200).json({
       message: isNewAccount ? 'Account created' : 'Signed in with Google',
       user: publicUser(user),
@@ -469,7 +506,12 @@ router.post('/register-member', async (req, res) => {
         role: 'MEMBER', // Automatically set as MEMBER
       }
     });
-    
+
+    // Sent at creation rather than after verification, because this path issues
+    // no verification link: it is gated on the member registration token, and
+    // nothing downstream checks emailVerifiedAt for a MEMBER.
+    await sendWelcome(user);
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
@@ -628,8 +670,13 @@ router.post('/verify-email', async (req, res) => {
       });
     }
 
-    const verified = await prisma.user.update({
-      where: { id: user.id },
+    // Scoped to the token still being present, not just to the id. Two requests
+    // carrying the same live token can both get past the reads above, and a
+    // write matching on id alone would let both of them believe they did the
+    // verifying. Matching on the token means exactly one clears it, and
+    // count tells that one apart from the one that lost.
+    const claim = await prisma.user.updateMany({
+      where: { id: user.id, emailVerificationToken: token },
       data: {
         emailVerifiedAt: user.emailVerifiedAt || new Date(),
         // Cleared so the link is single-use. A second click gets the "invalid or
@@ -639,7 +686,27 @@ router.post('/verify-email', async (req, res) => {
       }
     });
 
+    const verified = await prisma.user.findUnique({ where: { id: user.id } });
+
+    if (!verified) {
+      return res.status(400).json({ error: 'That verification link is invalid or has already been used.' });
+    }
+
     invalidateUserCache(verified.id);
+
+    // Both password signup paths land here, and this is the first moment either
+    // one has a mailbox somebody has demonstrably read. So this is where the
+    // welcome goes, not at signup, where it would be a second mail to an
+    // address that may never be confirmed.
+    //
+    // Two conditions, each ruling out a different double-send. The claim rules
+    // out a concurrent request that verified the same token. The pre-update
+    // emailVerifiedAt rules out a future path that re-verifies an account which
+    // was already verified, which cannot happen today because verifying clears
+    // the token.
+    if (claim.count === 1 && !user.emailVerifiedAt) {
+      await sendWelcome(verified);
+    }
 
     res.json({
       message: 'Email verified',
