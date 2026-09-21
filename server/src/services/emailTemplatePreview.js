@@ -5,6 +5,7 @@ import {
   renderInterviewSlotEmail,
 } from './emailNotifications.js';
 import { defaultDecisionTemplates, renderDecisionEmail } from './decisionTemplates.js';
+import config from '../config.js';
 
 /**
  * Preview for every message the ATS sends without anyone composing it.
@@ -42,6 +43,19 @@ const SAMPLE_EVENT = 'Fall 2026 Information Session';
 const SAMPLE_EVENT_DATE = 'Thursday, October 8, 2026, 6:00 PM';
 const SAMPLE_LOCATION = 'Ackerman Union, Room 2408';
 const SAMPLE_INTERVIEW_TITLE = 'First Round Interviews';
+
+// Links are built from config.clientUrl for the same reason the send paths build
+// them that way: a preview on staging that points at the production app is a
+// preview of a different email.
+const CANDIDATE_CTA = { ctaUrl: `${config.clientUrl}/interview-signup` };
+const INTERVIEWER_CTA = {
+  ctaUrl: `${config.clientUrl}/assigned-interviews`,
+  ctaLabel: 'See my interviews',
+};
+const AVAILABILITY_CTA = {
+  ctaUrl: `${config.clientUrl}/assigned-interviews`,
+  ctaLabel: 'Add my availability',
+};
 
 const SAMPLE_MEETING = {
   startTime: SAMPLE_START,
@@ -339,6 +353,7 @@ const SLOT_META = {
     trigger: 'Sent to admins when a signup finds no free slot.',
   },
   AVAILABILITY_REQUEST: {
+    cta: AVAILABILITY_CTA,
     label: 'When can you interview?',
     description: 'Asks members for the times they can interview, before the day is cut into sessions.',
     audience: 'Member',
@@ -346,6 +361,7 @@ const SLOT_META = {
     withSession: false,
   },
   INTERVIEWER_ASSIGNED: {
+    cta: INTERVIEWER_CTA,
     label: 'You are interviewing',
     description: 'Tells a member which session they are running, and who they will see.',
     audience: 'Member',
@@ -354,6 +370,7 @@ const SLOT_META = {
     roster: SAMPLE_ROSTER,
   },
   INTERVIEWER_MOVED: {
+    cta: INTERVIEWER_CTA,
     label: 'Your session has changed',
     description: 'Tells a member recruitment moved which session they are running.',
     audience: 'Member',
@@ -362,6 +379,7 @@ const SLOT_META = {
     roster: SAMPLE_ROSTER,
   },
   INTERVIEWER_REMOVED: {
+    cta: INTERVIEWER_CTA,
     label: 'Taken off a session',
     description: 'Tells a member they are no longer interviewing at a session.',
     audience: 'Member',
@@ -375,20 +393,35 @@ const SLOT_META = {
   },
 };
 
-/** The 12 interview-slot notifications, all drawn by one renderer. */
-const SLOT = SLOT_EMAIL_TYPES.map((type) => {
-  const meta = SLOT_META[type];
-  if (!meta) throw new Error(`No preview metadata for slot notification ${type}`);
+const slotKey = (type, suffix = '') =>
+  `slot-${type.toLowerCase().replace(/_/g, '-')}${suffix}`;
 
+/**
+ * One previewable interview-slot notification.
+ *
+ * `options` has to match what the real caller passes, not just render something
+ * plausible. The three send paths use three different buttons: candidates get
+ * "View or change your time" on the signup page, interviewers get "See my
+ * interviews" on assigned-interviews, and an availability request gets "Add my
+ * availability" on the same page. Previewing all twelve with the candidate
+ * button would show four of them with a link their recipients never receive.
+ */
+function slotEntry(type, meta, { suffix = '', label, description, options } = {}) {
   const notification = slotNotification(type, {
     withSession: meta.withSession !== false,
     roster: meta.roster ?? null,
   });
 
+  const renderOptions = {
+    ...(meta.cta ?? CANDIDATE_CTA),
+    ...(meta.options ?? {}),
+    ...(options ?? {}),
+  };
+
   return {
-    key: `slot-${type.toLowerCase().replace(/_/g, '-')}`,
-    label: meta.label,
-    description: meta.description,
+    key: slotKey(type, suffix),
+    label: label ?? meta.label,
+    description: description ?? meta.description,
     audience: meta.audience,
     category: 'Interview scheduling',
     trigger: meta.trigger,
@@ -396,13 +429,30 @@ const SLOT = SLOT_EMAIL_TYPES.map((type) => {
     source: SOURCE.SLOT,
     render: () => ({
       subject: SLOT_NOTIFICATION_SUBJECTS[type](SAMPLE_INTERVIEW_TITLE),
-      html: renderInterviewSlotEmail(notification, {
-        ctaUrl: 'https://uconsultingats.com/interview-signup',
-        ...(meta.options ?? {}),
-      }),
+      html: renderInterviewSlotEmail(notification, renderOptions),
     }),
   };
+}
+
+/** The 12 interview-slot notifications, all drawn by one renderer. */
+const SLOT = SLOT_EMAIL_TYPES.map((type) => {
+  const meta = SLOT_META[type];
+  if (!meta) throw new Error(`No preview metadata for slot notification ${type}`);
+  return slotEntry(type, meta);
 });
+
+// INTERVIEWER_ASSIGNED is the one type whose body forks on how it happened:
+// somebody who claimed a session themselves should not read that they "have
+// been placed" in it. Both halves go out in production, so both are previewable.
+SLOT.push(
+  slotEntry('INTERVIEWER_ASSIGNED', SLOT_META.INTERVIEWER_ASSIGNED, {
+    suffix: '-self-signup',
+    label: 'You are interviewing (claimed it yourself)',
+    description:
+      'The same notification worded for a member who signed themselves up, rather than one an admin placed.',
+    options: { selfSignup: true },
+  })
+);
 
 const DECISION_ROUNDS = [
   { round: 1, name: 'Application' },

@@ -55,8 +55,9 @@ describe('slot notification copy and subjects stay in step', () => {
     const catalogued = new Set(
       TEMPLATE_CATALOG.filter((e) => e.source.id === 'interviewSlot').map((e) => e.key)
     );
-    const expected = SLOT_EMAIL_TYPES.map((t) => `slot-${t.toLowerCase().replace(/_/g, '-')}`);
-    expect([...catalogued].sort()).toEqual(expected.sort());
+    for (const type of SLOT_EMAIL_TYPES) {
+      expect(catalogued, type).toContain(`slot-${type.toLowerCase().replace(/_/g, '-')}`);
+    }
   });
 });
 
@@ -207,6 +208,45 @@ describe('what the preview actually shows', () => {
     expect(preview.html).toContain('Wednesday, October 14, 2026, 11:30 AM');
     // The location on the slot, which is the other half of that request.
     expect(preview.html).toContain('Ackerman Union, Room 2408');
+  });
+
+  // Three send paths pass three different buttons. A preview that showed the
+  // candidate button on an interviewer's email would be showing a link that
+  // recipient never gets.
+  it('gives a candidate the signup link', () => {
+    const { html } = renderEmailTemplatePreview('slot-confirmation');
+
+    expect(html).toContain('/interview-signup');
+    expect(html).toContain('View or change your time');
+  });
+
+  it('gives an interviewer the assigned-interviews link', () => {
+    for (const key of [
+      'slot-interviewer-assigned',
+      'slot-interviewer-moved',
+      'slot-interviewer-removed',
+    ]) {
+      const { html } = renderEmailTemplatePreview(key);
+      expect(html, key).toContain('/assigned-interviews');
+      expect(html, key).toContain('See my interviews');
+      expect(html, key).not.toContain('/interview-signup');
+    }
+  });
+
+  it('gives an availability request its own button', () => {
+    const { html } = renderEmailTemplatePreview('slot-availability-request');
+
+    expect(html).toContain('/assigned-interviews');
+    expect(html).toContain('Add my availability');
+  });
+
+  it('previews both wordings of the assignment email', () => {
+    const placed = renderEmailTemplatePreview('slot-interviewer-assigned');
+    const claimed = renderEmailTemplatePreview('slot-interviewer-assigned-self-signup');
+
+    expect(placed.html).toContain('You have been placed in');
+    expect(claimed.html).toContain('You signed up to run');
+    expect(claimed.html).not.toContain('You have been placed in');
   });
 
   it('leaves the details card off a message that has no session yet', () => {
