@@ -41,6 +41,7 @@ import featureRequestRoutes from './routes/featureRequests.js';
 import releaseNotesRoutes from './routes/releaseNotes.js';
 import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
+import emailTemplateRoutes from './routes/emailTemplates.js';
 
 const app = express();
 
@@ -93,6 +94,7 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 // Ahead of the catch-all /api/admin mount, same as release-notes above.
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
+app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);

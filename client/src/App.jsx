@@ -59,6 +59,7 @@ import AdminMeetingSlots from './pages/AdminMeetingSlots';
 import ReleaseNotes from './pages/ReleaseNotes';
 import MemberHelp from './pages/MemberHelp';
 import AdminHelpManagement from './pages/AdminHelpManagement';
+import AdminEmailTemplates from './pages/AdminEmailTemplates';
 import AdminQuestionBank from './pages/AdminQuestionBank';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
@@ -629,6 +630,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <AdminMeetingSlots />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin preview of the emails the ATS sends automatically */}
+      <Route
+        path="/admin/email-templates"
+        element={
+          <ProtectedRoute>
+            <AdminEmailTemplates />
           </ProtectedRoute>
         }
       />

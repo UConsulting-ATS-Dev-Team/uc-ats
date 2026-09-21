@@ -146,19 +146,11 @@ export function inviteFor(notification) {
   }
 }
 
-export const SLOT_NOTIFICATION_SUBJECTS = {
-  CONFIRMATION: (interviewTitle) => `You're confirmed - ${interviewTitle}`,
-  WAITLIST_ADDED: (interviewTitle) => `Your spot is booked, and you're on the waitlist - ${interviewTitle}`,
-  PROMOTED: (interviewTitle) => `Good news - you got your preferred time for ${interviewTitle}`,
-  FALLBACK_RELEASED: (interviewTitle) => `Your time has changed - ${interviewTitle}`,
-  CANCELLATION: (interviewTitle) => `Your booking is cancelled - ${interviewTitle}`,
-  MOVED_BY_ADMIN: (interviewTitle) => `Your time has been updated - ${interviewTitle}`,
-  ADMIN_OVERFLOW_ALERT: (interviewTitle) => `Action needed: a candidate could not be scheduled for ${interviewTitle}`,
-  AVAILABILITY_REQUEST: (interviewTitle) => `When can you interview? - ${interviewTitle}`,
-  INTERVIEWER_ASSIGNED: (interviewTitle) => `You're interviewing - ${interviewTitle}`,
-  INTERVIEWER_REMOVED: (interviewTitle) => `You've been taken off a session - ${interviewTitle}`,
-  REMINDER: (interviewTitle) => `Reminder - ${interviewTitle}`,
-};
+// The subject lines now live beside the bodies they belong to, in
+// emailNotifications.js. Splitting them across two files is what let
+// INTERVIEWER_MOVED ship a body with no subject. Re-exported here because every
+// caller already imports it from this module.
+export { SLOT_NOTIFICATION_SUBJECTS } from './emailNotifications.js';
 
 /**
  * Record notifications as QUEUED. Call inside the transaction that caused them,

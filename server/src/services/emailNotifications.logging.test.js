@@ -21,7 +21,7 @@ vi.mock('./communicationLog.js', () => ({
 const {
   sendEmail,
   sendPasswordResetEmail,
-  sendFinalAcceptanceEmail,
+  sendAcceptanceEmail,
   sendOfferLetter,
 } = await import('./emailNotifications.js');
 
@@ -117,8 +117,11 @@ describe('the wrappers say what kind of message they are', () => {
     expect(rowOf()).toMatchObject({ category: 'ACCOUNT', recipient: 'ryan@example.com' });
   });
 
-  it('labels a final-round acceptance, and carries the candidate name', async () => {
-    await sendFinalAcceptanceEmail('ryan@example.com', 'Ryan Kleczynski', 'Fall 2026');
+  // Was sendFinalAcceptanceEmail, which had no callers and is gone. The round
+  // decisions come from decisionTemplates.js; sendAcceptanceEmail is the live
+  // one, and carries the same category and name.
+  it('labels an application decision, and carries the candidate name', async () => {
+    await sendAcceptanceEmail('ryan@example.com', 'Ryan Kleczynski', 'Fall 2026');
     expect(rowOf()).toMatchObject({
       category: 'APPLICATION_DECISION',
       recipientName: 'Ryan Kleczynski',
