@@ -238,6 +238,28 @@ describe('validating an edit', () => {
     );
   });
 
+  it('refuses a reference-style link that is not a web address', () => {
+    // `](...)` is not the only way to write a destination in Markdown, and a
+    // check that knows about one of them is a check with a hole in it.
+    expect(() =>
+      normalizeCopy('rsvp-confirmation', { intro: '[click][x]\n\n[x]: javascript:alert(1)' })
+    ).toThrow(/not a web address/);
+  });
+
+  it('refuses an autolink that is not a web address', () => {
+    // Caught by the HTML check first, which reaches `<javascript:...>` before
+    // the link check does. Refused either way, which is what matters; the
+    // message just names the rule that stopped it.
+    expect(() => normalizeCopy('rsvp-confirmation', { intro: '<javascript:alert(1)>' })).toThrow(
+      /contains HTML|not a web address/
+    );
+  });
+
+  it('allows a reference-style link to a real address', () => {
+    const body = '[the ATS][ats]\n\n[ats]: https://uconsultingats.com';
+    expect(normalizeCopy('rsvp-confirmation', { intro: body })).toEqual({ intro: body });
+  });
+
   it('allows the links an email actually carries', () => {
     const links = '[ATS](https://uconsultingats.com) and [us](mailto:recruitment@example.com)';
     expect(normalizeCopy('rsvp-confirmation', { intro: links })).toEqual({ intro: links });

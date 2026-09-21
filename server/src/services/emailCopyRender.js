@@ -73,8 +73,15 @@ export const copyLine = (text, values) =>
 // list is absolute schemes plus the in-page anchors the previews use.
 const SAFE_LINK = /^(https?:\/\/|mailto:|tel:|#)/i;
 
-/** Point anything else at nothing, rather than shipping it to a candidate. */
-const defuseUnsafeLinks = (html) =>
+/**
+ * Point anything else at nothing, rather than shipping it to a candidate.
+ *
+ * Applied to rendered HTML rather than to the Markdown that produced it, which
+ * is the only place it can be complete. Markdown has several ways to write a
+ * link - inline, reference-style, a bare autolink - and a check that knows
+ * about one of them is a check with a hole in it. By here they are all `href`.
+ */
+export const defuseUnsafeLinks = (html) =>
   html.replace(/<a href="([^"]*)"/g, (match, href) =>
     SAFE_LINK.test(href.trim()) ? match : '<a href="#"'
   );

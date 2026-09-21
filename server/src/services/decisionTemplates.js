@@ -6,6 +6,7 @@ import {
   DECISION_ROUND_OUTCOMES,
   resolveEmailCopyMany,
 } from './emailTemplateCopy.js';
+import { defuseUnsafeLinks } from './emailCopyRender.js';
 
 // How a decision email is rendered for one recipient.
 //
@@ -123,6 +124,14 @@ export function renderDecisionEmail(template, recipient, context = {}) {
 
   // A subject is a plain-text header: nothing to escape, and no line breaks.
   const subject = fillMergeFields(template.subject, values, { escape: false }).replace(/[\r\n]+/g, ' ').trim();
-  const html = marked.parse(fillMergeFields(template.body, values, { escape: true }), { breaks: true });
+  // Links defused for the reason the other renderer defuses them: a body is
+  // written by an admin, here or per batch in Master Communications, and
+  // `javascript:` is not a thing a decision email should be able to carry.
+  // Checked on the rendered HTML rather than on the Markdown, because Markdown
+  // has more than one way to write a link and a check that knows about one of
+  // them is a check with a hole in it.
+  const html = defuseUnsafeLinks(
+    marked.parse(fillMergeFields(template.body, values, { escape: true }), { breaks: true })
+  );
   return { subject, html };
 }

@@ -93,6 +93,33 @@ describe('rendering', () => {
     expect(subject).not.toMatch(/[\r\n]/);
   });
 
+  it('points an unsafe link at nothing, however it was written', () => {
+    // A decision body is written by an admin, here or per batch in Master
+    // Communications. Checked on the rendered HTML, so reference-style links
+    // and autolinks are covered along with inline ones.
+    for (const body of [
+      '[click](javascript:alert(1))',
+      '[click][x]\n\n[x]: javascript:alert(1)',
+      '<javascript:alert(1)>'
+    ]) {
+      const { html } = renderDecisionEmail({ subject: 's', body }, recipient(), context);
+      // The scheme may survive as the link's visible text, which is harmless.
+      // What must not survive is a link that goes there.
+      expect(html, body).not.toMatch(/href="javascript:/);
+      expect(html, body).toContain('href="#"');
+    }
+  });
+
+  it('keeps the links a decision email actually carries', () => {
+    const { html } = renderDecisionEmail(
+      { subject: 's', body: '[the ATS](https://ats.example) and [us](mailto:r@example.com)' },
+      recipient(),
+      context
+    );
+    expect(html).toContain('href="https://ats.example"');
+    expect(html).toContain('href="mailto:r@example.com"');
+  });
+
   it('leaves unknown tokens alone rather than blanking them', () => {
     const { html } = renderDecisionEmail({ subject: 's', body: 'Hello {{nickname}}' }, recipient(), context);
     expect(html).toContain('{{nickname}}');

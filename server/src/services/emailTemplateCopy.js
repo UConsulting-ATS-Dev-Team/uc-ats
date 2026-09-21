@@ -804,11 +804,18 @@ const FIELD_MAX = 4000;
 // "Looks like an HTML tag", which "5 < 10" and "<3" deliberately do not.
 const HTML_TAG = /<\/?[a-zA-Z][^>]*>/;
 
-// A Markdown link, and the schemes one may use. Checked on the way in as well
-// as on the way out, because the round decision emails render through
-// decisionTemplates.js rather than through emailCopyRender.js, and a rule that
-// only one of the two renderers enforces is a rule with a hole in it.
-const MARKDOWN_LINK = /\]\(\s*([^)\s]+)/g;
+// Every way Markdown lets somebody write a destination: inline `](url)`,
+// a reference definition `[label]: url`, and an autolink `<url>`.
+//
+// Both renderers defuse an unsafe link on the way out, which is the check that
+// cannot be evaded. This one is on the way in, so an admin who pastes a
+// `javascript:` link is told, rather than saving something that silently
+// renders as a dead link.
+const MARKDOWN_LINKS = [
+  /\]\(\s*<?([^)\s>]+)/g,
+  /^[ \t]*\[[^\]]+\]:[ \t]*<?([^\s>]+)/gm,
+  /<((?:[a-zA-Z][a-zA-Z0-9+.-]*:)[^>\s]*)>/g,
+];
 const SAFE_LINK = /^(https?:\/\/|mailto:|tel:|#|\{\{)/i;
 
 /**
@@ -863,9 +870,11 @@ export function normalizeCopy(key, input) {
       );
     }
 
-    for (const [, href] of text.matchAll(MARKDOWN_LINK)) {
-      if (!SAFE_LINK.test(href)) {
-        throw fail(400, `${field.label} links to "${href}", which is not a web address`, 'UNSAFE_LINK');
+    for (const pattern of MARKDOWN_LINKS) {
+      for (const [, href] of text.matchAll(pattern)) {
+        if (!SAFE_LINK.test(href)) {
+          throw fail(400, `${field.label} links to "${href}", which is not a web address`, 'UNSAFE_LINK');
+        }
       }
     }
 
