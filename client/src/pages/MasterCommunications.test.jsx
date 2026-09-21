@@ -9,6 +9,7 @@
 // So the assertion that matters most here is simply that it renders at all.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import MasterCommunications from './MasterCommunications';
 import apiClient from '../utils/api';
 
@@ -48,10 +49,19 @@ describe('the page', () => {
   it('keeps every channel tab reachable, in order', () => {
     render(<MasterCommunications />);
     // Order matters: two effects used to key off a hard-coded tab index, so
-    // inserting a tab silently repointed them at the wrong one.
+    // inserting a tab silently repointed them at the wrong one. A new tab goes
+    // on the end for that reason - Mailing List did, and this list is what
+    // catches the next one that does not.
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
       'Email', 'Slack', 'iMessage', 'Drafts', 'Templates', 'Logs', 'Scheduled', 'Decisions',
+      'Mailing List',
     ]);
+  });
+
+  it('opens the mailing list import from its tab', async () => {
+    render(<MasterCommunications />);
+    await userEvent.click(screen.getByRole('tab', { name: /Mailing List/i }));
+    expect(screen.getByRole('button', { name: /Choose CSV/i })).toBeInTheDocument();
   });
 
   it('opens straight onto a decision batch when Staging links to one', async () => {

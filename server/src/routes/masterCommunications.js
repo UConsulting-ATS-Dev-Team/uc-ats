@@ -1,5 +1,8 @@
 import express from 'express';
+import multer from 'multer';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { dedupeMailingListCsv } from '../services/mailingListDedup.js';
+import { OUTCOMES } from '../utils/mailingListImport.js';
 import {
   listDrafts,
   createDraft,
@@ -392,6 +395,99 @@ router.post('/imessage/log', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     if (!err.status) console.error('[POST /api/master-communications/imessage/log]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to log iMessage' });
+  }
+});
+
+// Mailing list -------------------------------------------------------------
+//
+// The recruiting-interest mailing list is being retired. An admin uploads the
+// export here and gets back what survives dedup against the ATS, plus a full
+// account of what was dropped and why. Nothing is written: the server holds the
+// file only for the length of the request, and the survivors go back in the
+// response for the browser to save.
+//
+// scripts/import-mailing-list-csv.js is the same operation from the command
+// line, and uploads to Drive instead of downloading.
+
+const CSV_MAX_BYTES = 5 * 1024 * 1024;
+
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CSV_MAX_BYTES },
+  fileFilter(req, file, cb) {
+    // On the extension alone, deliberately. The browser-reported type is wrong
+    // in both directions - Windows sends .csv as application/vnd.ms-excel, and
+    // anything at all can claim to be text/csv - so accepting either one lets a
+    // PDF through to be parsed into garbage rows. What the admin picked in the
+    // file dialog is the honest signal.
+    if (/\.csv$/i.test(file.originalname || '')) cb(null, true);
+    else cb(new Error('Mailing list must be a .csv file'));
+  },
+});
+
+// There is no global Express error handler in this app, so an unwrapped multer
+// rejection returns an HTML 500 the client renders as "Server Error (500):
+// <!doctype html...". Same wrapper as talent.js and member.js.
+function csvUploadMiddleware(req, res, next) {
+  csvUpload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'Mailing list must be 5MB or smaller' });
+    }
+    return res.status(400).json({ error: err.message || 'Invalid file upload' });
+  });
+}
+
+router.post('/mailing-list/dedupe', requireAuth, requireAdmin, csvUploadMiddleware, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const emailColumnOverride = req.body?.emailColumn || undefined;
+    const run = await dedupeMailingListCsv({
+      content: req.file.buffer.toString('utf-8'),
+      emailColumnOverride,
+    });
+
+    if (!run.headers.length) {
+      return res.status(400).json({ error: 'That file has no rows in it' });
+    }
+
+    // A file whose email column cannot be found is not an error. The admin gets
+    // the headers back and picks the column by hand, which is the browser's
+    // version of the script's --email-col.
+    if (!run.emailColumn) {
+      return res.json({
+        fileName: req.file.originalname,
+        headers: run.headers,
+        emailColumn: null,
+        rows: run.records.length,
+        // Says which of the two happened: a bad guess the admin made, or no
+        // guess this code could make. The UI wording differs.
+        overrideMissed: Boolean(emailColumnOverride),
+      });
+    }
+
+    res.json({
+      fileName: req.file.originalname,
+      headers: run.headers,
+      emailColumn: run.emailColumn,
+      rows: run.records.length,
+      knownAddresses: run.knownAddresses,
+      summary: run.summary,
+      keptCount: run.kept.length,
+      // Every dropped row with its line number and reason, so the run can be
+      // reconciled against the source spreadsheet. A bare survivor count
+      // cannot be checked by anyone.
+      dropped: run.results
+        .filter((r) => r.outcome !== OUTCOMES.KEPT)
+        .map(({ line, email, raw, outcome, sources, firstSeenAt }) => ({
+          line, email, raw, outcome, sources, firstSeenAt,
+        })),
+      csv: run.csv,
+    });
+  } catch (err) {
+    console.error('[POST /api/master-communications/mailing-list/dedupe]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to read that mailing list' });
   }
 });
 

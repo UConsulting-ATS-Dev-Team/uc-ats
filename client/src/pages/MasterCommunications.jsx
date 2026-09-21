@@ -44,6 +44,7 @@ import AccessControl from '../components/AccessControl';
 import DecisionBatchPanel from '../components/communications/DecisionBatchPanel';
 import ImessageComposer from '../components/communications/ImessageComposer';
 import CommunicationsLog from '../components/communications/CommunicationsLog';
+import MailingListImport from '../components/communications/MailingListImport';
 
 const CHANNELS = [
   { key: 'email', label: 'Email' },
@@ -54,6 +55,10 @@ const CHANNELS = [
   { key: 'logs', label: 'Logs' },
   { key: 'scheduled', label: 'Scheduled' },
   { key: 'decisions', label: 'Decisions' },
+  // Not a send channel. It shares this tab bar because it is the admin's other
+  // job with a list of addresses, but it composes nothing - the composer state
+  // below is untouched while this tab is open.
+  { key: 'mailing-list', label: 'Mailing List' },
 ];
 
 // Staging links here after processing decisions: ?tab=decisions&batch=<id>.
@@ -1157,6 +1162,7 @@ const MasterCommunications = () => {
               userEmail={user?.email}
             />
           </TabPanel>
+          <TabPanel value={tab} index={8}><MailingListImport /></TabPanel>
         </Paper>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>

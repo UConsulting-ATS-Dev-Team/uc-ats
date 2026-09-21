@@ -135,19 +135,35 @@ npm run import-mailing-list -- <csv>
 
 #### Mailing-list import
 
-The recruiting-interest mailing list is being retired, so
-`scripts/import-mailing-list-csv.js` runs once: it reads the export, drops every
-address the ATS already holds, and uploads what is left to the Marketing Drive
-folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`).
+The recruiting-interest mailing list is being retired. Its export is deduped
+against the ATS in two places, which share one service and differ only in where
+the survivors go:
+
+- **Master Communications → Mailing List** (admin-only). Upload the CSV, read the
+  counts, download the survivors. Nothing is stored: the server holds the file
+  for the length of the request and returns the deduped CSV in the response, so a
+  closed tab leaves no half-finished import behind. `POST
+  /api/master-communications/mailing-list/dedupe`, 5 MB cap, `.csv` only.
+- **`scripts/import-mailing-list-csv.js`**, which uploads to the Marketing Drive
+  folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`) instead of downloading.
+  Dry run is the default; `--apply` is what uploads.
+
+[server/src/services/mailingListDedup.js](server/src/services/mailingListDedup.js)
+owns the operation and, with it, the answer to what counts as already known.
+The route and the script each keep only their own presentation. Put changes to
+the dedup there, not in either caller.
 
 "Already in the ATS" means `User`, `Candidate`, `Application` or `MeetingSignup`,
 compared case-insensitively. `DecisionMessage.email` is excluded on purpose - it is
 a copy of `Application.email` made when a decision is queued, so counting it would
 double-count the same person.
 
-The run is read-only against the database and writes only a new Drive file, so it
-is safe to re-run. Dry run is the default and prints every dropped row with its
-line number and reason; `--apply` is what uploads.
+Both are read-only against the database, so both are safe to re-run. Neither
+silently discards a row: every dropped row keeps its line number and its reason,
+in the console for the script and in the dropped-rows table for the UI, so a run
+can be reconciled against the source spreadsheet. A run where nothing survives is
+reported rather than treated as success - it is what a wrong email column looks
+like, and it is indistinguishable from a list where everyone was already known.
 
 ## Architecture
 
@@ -192,6 +208,8 @@ The system follows a **recruiting cycle-based workflow**:
   password rotation and the access log
 - `/api/master-communications/decision-batches` - Decision emails queued by Staging's
   Process All Decisions, reviewed and sent by an admin
+- `/api/master-communications/mailing-list/dedupe` - One-time import of the retiring
+  recruiting-interest list: upload the CSV, get back what the ATS has never seen
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
