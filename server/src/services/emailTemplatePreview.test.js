@@ -210,6 +210,29 @@ describe('what the preview actually shows', () => {
     expect(preview.html).toBe(direct.html);
   });
 
+  // The trigger text is the part an admin acts on, and it is prose, so it can
+  // drift from the code silently. These pin the three claims that were wrong
+  // the first time: only Google skips verification, and the other two do not.
+  it('says the applicant welcome waits for verification', () => {
+    const { trigger } = renderEmailTemplatePreview('welcome-candidate');
+
+    expect(trigger).toMatch(/verifies their address/);
+    expect(trigger).not.toMatch(/on signup\b/);
+  });
+
+  it('says a Google account is welcomed immediately', () => {
+    const { trigger } = renderEmailTemplatePreview('welcome-talent');
+
+    expect(trigger).toMatch(/immediately when a Google account is created/);
+    expect(trigger).toMatch(/register-external/);
+  });
+
+  it('says a member account needs no verification', () => {
+    expect(renderEmailTemplatePreview('welcome-member').trigger).toMatch(
+      /no verification step/
+    );
+  });
+
   it('keeps the three welcome audiences distinct', () => {
     const candidate = renderEmailTemplatePreview('welcome-candidate');
     const talent = renderEmailTemplatePreview('welcome-talent');
