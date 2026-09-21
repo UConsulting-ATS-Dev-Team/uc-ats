@@ -801,6 +801,16 @@ export async function resolveEmailCopyMany(keys, { client = prisma } = {}) {
 
 const FIELD_MAX = 4000;
 
+// "Looks like an HTML tag", which "5 < 10" and "<3" deliberately do not.
+const HTML_TAG = /<\/?[a-zA-Z][^>]*>/;
+
+// A Markdown link, and the schemes one may use. Checked on the way in as well
+// as on the way out, because the round decision emails render through
+// decisionTemplates.js rather than through emailCopyRender.js, and a rule that
+// only one of the two renderers enforces is a rule with a hole in it.
+const MARKDOWN_LINK = /\]\(\s*([^)\s]+)/g;
+const SAFE_LINK = /^(https?:\/\/|mailto:|tel:|#|\{\{)/i;
+
 /**
  * Validates and trims what an admin submitted.
  *
@@ -839,6 +849,24 @@ export function normalizeCopy(key, input) {
         `${field.label} uses ${unknown.map((name) => `{{${name}}}`).join(', ')}, which this email cannot fill in`,
         'UNKNOWN_MERGE_FIELD'
       );
+    }
+
+    // The editor promises that an edit changes the words and not the layout.
+    // HTML in a field would make that false, so it is refused here rather than
+    // quietly escaped - somebody who typed a <div> meant it, and should be told
+    // it is not going to work.
+    if (HTML_TAG.test(text)) {
+      throw fail(
+        400,
+        `${field.label} contains HTML. Write plain text, or Markdown for bold and links.`,
+        'HTML_NOT_ALLOWED'
+      );
+    }
+
+    for (const [, href] of text.matchAll(MARKDOWN_LINK)) {
+      if (!SAFE_LINK.test(href)) {
+        throw fail(400, `${field.label} links to "${href}", which is not a web address`, 'UNSAFE_LINK');
+      }
     }
 
     copy[field.name] = text;

@@ -52,9 +52,32 @@ export function fillMergeFields(text, values = {}, { escape = true } = {}) {
 export const copySubject = (text, values) =>
   fillMergeFields(text, values, { escape: false }).replace(/[\r\n]+/g, ' ').trim();
 
+/**
+ * Copy on its way into HTML: the sentence itself escaped, then its values
+ * filled in (and escaped in turn).
+ *
+ * Escaping the sentence is what keeps the promise the editor makes. It says the
+ * layout is not editable, and a `<div style="...">` typed into a body would
+ * make that false - Markdown passes raw HTML straight through. Escaped first,
+ * a typed tag arrives as the text somebody typed. Markdown still works, because
+ * `**bold**` and `[text](url)` contain nothing that needs escaping.
+ */
+const escapedWithValues = (text, values) => fillMergeFields(escapeCopyHtml(text), values);
+
 /** Merge fields filled and escaped, but not parsed as Markdown. For headings. */
 export const copyLine = (text, values) =>
-  fillMergeFields(text, values).replace(/[\r\n]+/g, ' ').trim();
+  escapedWithValues(text, values).replace(/[\r\n]+/g, ' ').trim();
+
+// Where a link in an email may point. `javascript:` and `data:` are the reason
+// this list exists; a relative link has no meaning in a mail client, so the
+// list is absolute schemes plus the in-page anchors the previews use.
+const SAFE_LINK = /^(https?:\/\/|mailto:|tel:|#)/i;
+
+/** Point anything else at nothing, rather than shipping it to a candidate. */
+const defuseUnsafeLinks = (html) =>
+  html.replace(/<a href="([^"]*)"/g, (match, href) =>
+    SAFE_LINK.test(href.trim()) ? match : '<a href="#"'
+  );
 
 // The paragraph styles these emails have always used. `tight` is the spacing
 // inside a coloured card, `loose` the spacing of body copy between cards.
@@ -73,11 +96,11 @@ const SPACING = {
  * keep matching the markup it replaced, card by card.
  */
 export function copyHtml(text, values, { color = '#666', spacing = 'loose', link = '#007bff' } = {}) {
-  const filled = fillMergeFields(text, values);
+  const filled = escapedWithValues(text, values);
   if (!filled.trim()) return '';
 
   const paragraph = `color: ${color}; ${SPACING[spacing] ?? SPACING.loose}`;
-  const html = marked.parse(filled, { breaks: true });
+  const html = defuseUnsafeLinks(marked.parse(filled, { breaks: true }));
 
   return html
     .replace(/<p>/g, `<p style="${paragraph}">`)
@@ -95,7 +118,7 @@ export function copyHtml(text, values, { color = '#666', spacing = 'loose', link
  * escapes and joins with <br> rather than letting Markdown open a second <p>.
  */
 export function copySignOff(text, values, { color = '#666' } = {}) {
-  const filled = fillMergeFields(text, values);
+  const filled = escapedWithValues(text, values);
   if (!filled.trim()) return '';
   const lines = filled.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return `<p style="color: ${color}; ${SPACING.loose}">${lines.join('<br>')}</p>`;

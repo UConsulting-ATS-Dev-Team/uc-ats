@@ -163,4 +163,36 @@ describe('EmailTemplateEditor', () => {
 
     await waitFor(() => expect(screen.getByText('Nope')).toBeInTheDocument());
   });
+
+  it('ignores a slow read for a template the admin has clicked away from', async () => {
+    // Otherwise the old template's fields land in the boxes for the new one,
+    // and Save posts them under the new template's key, rewording the wrong
+    // email.
+    const OTHER = {
+      ...COPY,
+      key: 'attendance-confirmation',
+      fields: COPY.fields.map((field) =>
+        field.name === 'heading' ? { ...field, default: 'Attendance Confirmation' } : field
+      ),
+    };
+
+    let releaseSlow;
+    apiClient.get.mockImplementation((path) =>
+      path.includes('rsvp-confirmation')
+        ? new Promise((resolve) => {
+            releaseSlow = () => resolve(COPY);
+          })
+        : Promise.resolve(OTHER)
+    );
+
+    const { rerender } = render(<EmailTemplateEditor templateKey="rsvp-confirmation" />);
+    rerender(<EmailTemplateEditor templateKey="attendance-confirmation" />);
+
+    await waitFor(() => expect(heading()).toHaveValue('Attendance Confirmation'));
+
+    releaseSlow();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(heading()).toHaveValue('Attendance Confirmation');
+  });
 });

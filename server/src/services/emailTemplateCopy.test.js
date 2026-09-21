@@ -215,6 +215,40 @@ describe('validating an edit', () => {
     );
   });
 
+  it('refuses HTML, because the editor promises the layout is not editable', () => {
+    expect(() => normalizeCopy('rsvp-confirmation', { heading: '<div>Hi</div>' })).toThrow(/contains HTML/);
+    expect(() => normalizeCopy('rsvp-confirmation', { intro: 'Hi <script>alert(1)</script>' })).toThrow(/contains HTML/);
+  });
+
+  it('allows a less-than that is not a tag', () => {
+    expect(normalizeCopy('rsvp-confirmation', { heading: 'Seats < 10' })).toEqual({
+      heading: 'Seats < 10',
+    });
+  });
+
+  it('refuses a link that is not a web address', () => {
+    // Refused on the way in as well as defused on the way out: the round
+    // decision emails render through decisionTemplates.js, which does not go
+    // near emailCopyRender.js.
+    expect(() => normalizeCopy('rsvp-confirmation', { intro: '[click](javascript:alert(1))' })).toThrow(
+      /not a web address/
+    );
+    expect(() => normalizeCopy('rsvp-confirmation', { intro: '[click](data:text/plain,hi)' })).toThrow(
+      /not a web address/
+    );
+  });
+
+  it('allows the links an email actually carries', () => {
+    const links = '[ATS](https://uconsultingats.com) and [us](mailto:recruitment@example.com)';
+    expect(normalizeCopy('rsvp-confirmation', { intro: links })).toEqual({ intro: links });
+  });
+
+  it('allows a link built from a merge field the email supplies', () => {
+    expect(
+      normalizeCopy('decision-round-4-accepted', { body: 'Hi {{firstName}}, {{accountSetup}}' })
+    ).toEqual({ body: 'Hi {{firstName}}, {{accountSetup}}' });
+  });
+
   it('refuses something that is not an object', () => {
     expect(() => normalizeCopy('rsvp-confirmation', 'nope')).toThrow(/must be an object/);
     expect(() => normalizeCopy('rsvp-confirmation', ['nope'])).toThrow(/must be an object/);

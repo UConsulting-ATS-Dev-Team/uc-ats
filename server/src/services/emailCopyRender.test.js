@@ -119,3 +119,55 @@ describe('sign-offs', () => {
     expect(copySignOff('', {})).toBe('');
   });
 });
+
+describe('copy cannot reach past the words', () => {
+  // The editor promises an edit changes what an email says and not how it is
+  // built. Markdown hands raw HTML straight through, so without this the
+  // promise would be false for anybody who typed a tag.
+  it('prints a tag somebody typed instead of building it', () => {
+    const html = copyHtml('<div style="display:none">gone</div>', {});
+    expect(html).not.toContain('<div');
+    expect(html).toContain('&lt;div');
+  });
+
+  it('prints a script tag rather than embedding one', () => {
+    const html = copyHtml('<script>alert(1)</script>', {});
+    expect(html).not.toContain('<script');
+    expect(html).toContain('&lt;script');
+  });
+
+  it('does the same in a heading and a sign-off', () => {
+    expect(copyLine('<b>Big</b>', {})).not.toContain('<b>');
+    expect(copySignOff('<b>Best</b>,\nUConsulting', {})).not.toContain('<b>');
+  });
+
+  it('still renders Markdown, which is the point of allowing any of it', () => {
+    const html = copyHtml('the **Final Round**, see [the ATS](https://ats.example)', {});
+    expect(html).toContain('<strong>Final Round</strong>');
+    expect(html).toContain('href="https://ats.example"');
+  });
+
+  it('leaves a less-than that is not a tag alone', () => {
+    expect(copyHtml('5 < 10 and <3', {})).toContain('5 &lt; 10 and &lt;3');
+  });
+
+  it('points a javascript: link at nothing', () => {
+    const html = copyHtml('[click](javascript:alert(1))', {});
+    expect(html).not.toContain('javascript:');
+    expect(html).toContain('href="#"');
+  });
+
+  it('points a data: link at nothing', () => {
+    expect(copyHtml('[click](data:text/html,<script>alert(1)</script>)', {})).not.toContain('data:text/html');
+  });
+
+  it('keeps the schemes an email actually uses', () => {
+    expect(copyHtml('[a](https://ats.example)', {})).toContain('href="https://ats.example"');
+    expect(copyHtml('[b](mailto:recruitment@example.com)', {})).toContain('href="mailto:recruitment@example.com"');
+  });
+
+  it('does not escape a trusted value, which carries composed Markdown', () => {
+    const cta = { value: '[Sign in](https://ats.example/login)', trusted: true };
+    expect(copyHtml('{{cta}}', { cta })).toContain('href="https://ats.example/login"');
+  });
+});

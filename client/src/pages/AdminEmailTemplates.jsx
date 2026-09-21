@@ -235,6 +235,11 @@ function AdminEmailTemplatesContent() {
 
               {tab === 'edit' && preview.editable && (
                 <EmailTemplateEditor
+                  // Keyed, so switching templates builds a new editor rather
+                  // than reusing this one. A save still in flight then lands on
+                  // a component nobody is looking at, instead of putting one
+                  // email's wording into another's boxes.
+                  key={preview.copyKey}
                   templateKey={preview.copyKey}
                   onSaved={() => {
                     setPreviewNonce((n) => n + 1);

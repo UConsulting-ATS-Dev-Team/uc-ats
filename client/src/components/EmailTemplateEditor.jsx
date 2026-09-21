@@ -39,12 +39,8 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
 
   const effective = (field) => field.value || field.default;
 
-  const load = (key) =>
-    apiClient.get(`/admin/email-templates/${encodeURIComponent(key)}/copy`).then((data) => {
-      setCopy(data);
-      setDraft(Object.fromEntries(data.fields.map((field) => [field.name, effective(field)])));
-      return data;
-    });
+  const fill = (data) =>
+    Object.fromEntries(data.fields.map((field) => [field.name, effective(field)]));
 
   useEffect(() => {
     let cancelled = false;
@@ -54,12 +50,21 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
     setSaveError('');
     setSaved(false);
 
-    load(templateKey)
+    apiClient
+      .get(`/admin/email-templates/${encodeURIComponent(templateKey)}/copy`)
+      .then((data) => {
+        // A slow read for the template an admin has already clicked away from
+        // must not land in the boxes. Without this, its fields would fill the
+        // editor for a different email, and Save would post them under the new
+        // template's key - rewording the wrong email.
+        if (cancelled) return;
+        setCopy(data);
+        setDraft(fill(data));
+      })
       .catch((err) => {
-        if (!cancelled) {
-          setCopy(null);
-          setLoadError(err.serverMessage || 'Failed to load this template for editing');
-        }
+        if (cancelled) return;
+        setCopy(null);
+        setLoadError(err.serverMessage || 'Failed to load this template for editing');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -68,7 +73,7 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
     return () => {
       cancelled = true;
     };
-    // `load` closes over nothing that changes between renders.
+    // `fill` closes over nothing that changes between renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateKey]);
 
@@ -85,7 +90,7 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
 
   const finish = (data) => {
     setCopy(data);
-    setDraft(Object.fromEntries(data.fields.map((field) => [field.name, effective(field)])));
+    setDraft(fill(data));
     setSaved(true);
     onSaved?.(data);
   };
