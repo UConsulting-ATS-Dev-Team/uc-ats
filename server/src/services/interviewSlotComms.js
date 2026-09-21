@@ -150,7 +150,16 @@ export function inviteFor(notification) {
 // emailNotifications.js. Splitting them across two files is what let
 // INTERVIEWER_MOVED ship a body with no subject. Re-exported here because every
 // caller already imports it from this module.
-export { SLOT_NOTIFICATION_SUBJECTS } from './emailNotifications.js';
+//
+// `SLOT_NOTIFICATION_SUBJECTS` is the wording this repo ships. The two
+// functions read what an admin has written over it, which is what a queueing
+// caller wants: `slotNotificationSubject` for one notification,
+// `slotSubjectFormatter` for a roster's worth of one type at once.
+export {
+  SLOT_NOTIFICATION_SUBJECTS,
+  slotNotificationSubject,
+  slotSubjectFormatter,
+} from './emailNotifications.js';
 
 /**
  * Record notifications as QUEUED. Call inside the transaction that caused them,

@@ -1,10 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   DECISION_MERGE_FIELDS,
-  defaultDecisionTemplates,
+  decisionTemplatesForRound,
   outcomeLabel,
   renderDecisionEmail
 } from './decisionTemplates.js';
+
+// The wording is admin-editable now, so reading it is a query. Nobody has
+// edited anything in these tests, which is what an empty result means.
+const shipped = { emailTemplateCopy: { findMany: async () => [] } };
+const templatesFor = (round) => decisionTemplatesForRound(round, { client: shipped });
 
 const recipient = (overrides = {}) => ({
   firstName: 'Sam',
@@ -17,24 +22,42 @@ const recipient = (overrides = {}) => ({
 const context = { cycleName: 'Fall 2026', round: '1', loginUrl: 'https://ats.example/login' };
 
 describe('default wording', () => {
-  it('covers exactly the outcomes each round can produce', () => {
-    expect(Object.keys(defaultDecisionTemplates('1')).sort()).toEqual(['ADVANCED', 'REJECTED']);
-    expect(Object.keys(defaultDecisionTemplates('3')).sort()).toEqual(['ADVANCED', 'REJECTED']);
-    expect(Object.keys(defaultDecisionTemplates('4')).sort()).toEqual(['ACCEPTED', 'REJECTED']);
+  it('covers exactly the outcomes each round can produce', async () => {
+    expect(Object.keys(await templatesFor('1')).sort()).toEqual(['ADVANCED', 'REJECTED']);
+    expect(Object.keys(await templatesFor('3')).sort()).toEqual(['ADVANCED', 'REJECTED']);
+    expect(Object.keys(await templatesFor('4')).sort()).toEqual(['ACCEPTED', 'REJECTED']);
   });
 
-  it('only uses merge fields the renderer knows', () => {
+  it('refuses a round it has no wording for', async () => {
+    await expect(templatesFor('9')).rejects.toThrow(/round 9/);
+  });
+
+  it('only uses merge fields the renderer knows', async () => {
     for (const round of ['1', '2', '3', '4']) {
-      for (const { subject, body } of Object.values(defaultDecisionTemplates(round))) {
+      for (const { subject, body } of Object.values(await templatesFor(round))) {
         const used = [...`${subject} ${body}`.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map(([, key]) => key);
         expect(DECISION_MERGE_FIELDS).toEqual(expect.arrayContaining(used));
       }
     }
   });
 
-  it('hands out a copy, so editing one batch cannot change the defaults', () => {
-    defaultDecisionTemplates('1').ADVANCED.subject = 'edited';
-    expect(defaultDecisionTemplates('1').ADVANCED.subject).not.toBe('edited');
+  it('hands out a copy, so editing one batch cannot change the defaults', async () => {
+    (await templatesFor('1')).ADVANCED.subject = 'edited';
+    expect((await templatesFor('1')).ADVANCED.subject).not.toBe('edited');
+  });
+
+  it('prefers an admin edit over the shipped wording, field by field', async () => {
+    const edited = {
+      emailTemplateCopy: {
+        findMany: async () => [
+          { templateKey: 'decision-round-1-advanced', copy: { subject: 'You are in - {{cycleName}}' } }
+        ]
+      }
+    };
+    const templates = await decisionTemplatesForRound('1', { client: edited });
+    expect(templates.ADVANCED.subject).toBe('You are in - {{cycleName}}');
+    // The body was not edited, so it is still the one this repo ships.
+    expect(templates.ADVANCED.body).toContain('Coffee Chats');
   });
 
   it('labels each outcome for the reviewer', () => {
@@ -104,7 +127,10 @@ describe('rendering', () => {
   });
 
   describe('scheduling link', () => {
-    const advanced = defaultDecisionTemplates('1').ADVANCED;
+    let advanced;
+    beforeAll(async () => {
+      advanced = (await templatesFor('1')).ADVANCED;
+    });
 
     it('links a candidate to the round they are moving to', () => {
       const { html } = renderDecisionEmail(advanced, recipient({ toRound: '2' }), {

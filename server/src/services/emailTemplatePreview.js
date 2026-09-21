@@ -1,10 +1,17 @@
 import {
   TEMPLATE_BUILDERS,
   SLOT_EMAIL_TYPES,
-  SLOT_NOTIFICATION_SUBJECTS,
   renderInterviewSlotEmail,
+  slotNotificationSubject,
 } from './emailNotifications.js';
-import { defaultDecisionTemplates, renderDecisionEmail } from './decisionTemplates.js';
+import { decisionTemplatesForRound, renderDecisionEmail } from './decisionTemplates.js';
+import {
+  DECISION_COPY_KEY,
+  DECISION_ROUND_OUTCOMES,
+  customizedTemplateKeys,
+  isEditableTemplate,
+  slotCopyKey,
+} from './emailTemplateCopy.js';
 import config from '../config.js';
 
 /**
@@ -13,16 +20,17 @@ import config from '../config.js';
  * Three separate systems write these emails, which is the first thing worth
  * knowing about them:
  *
- *   - `emailNotifications.js` builds 15 one-off emails from hardcoded HTML.
+ *   - `emailNotifications.js` builds 18 one-off emails, each with its own markup.
  *   - `renderInterviewSlotEmail` writes the 12 interview-slot notifications
  *     from a shared layout keyed by notification type.
- *   - `decisionTemplates.js` holds the round decision wording as Markdown with
- *     merge fields. Those already have an editor: an admin can rewrite them per
- *     batch in Master Communications before the batch goes out.
+ *   - `decisionTemplates.js` renders the round decision wording from Markdown
+ *     with merge fields. Those have a second editor as well: an admin can
+ *     rewrite one batch's wording in Master Communications before it goes out.
  *
- * All three end up at `sendEmail`, and none of them could be read anywhere in
- * the app before this. Rendering is pure in all three, so a preview is the
- * render call with the send left off.
+ * All three end up at `sendEmail`, and all three now take their words from
+ * emailTemplateCopy.js, so what this page previews is what an admin edits on
+ * it. Rendering reaches the database for that copy and nothing else, so a
+ * preview is still the render call with the send left off.
  *
  * Master Communications itself is not catalogued. Nothing there is automatic:
  * an admin writes each message, and it already previews what it will send.
@@ -69,24 +77,22 @@ const SAMPLE_PREVIOUS_MEETING = {
   location: 'Kerckhoff Hall, Room 133',
 };
 
-// Where a template's wording lives today, which is also where it would have to
-// be edited. The preview page shows this, because "can we change this email?"
-// was the question that produced the page.
+// Which system draws a template, and what an edit to it changes. The page
+// shows this, because "can we change this email?" was the question that
+// produced it - and the answer is now different for the decision emails than
+// for the rest.
 const SOURCE = {
   TRANSACTIONAL: {
     id: 'emailNotifications',
-    label: 'Hardcoded in emailNotifications.js',
-    editable: false,
+    label: 'Takes effect on the next send',
   },
   SLOT: {
     id: 'interviewSlot',
-    label: 'Hardcoded in renderInterviewSlotEmail',
-    editable: false,
+    label: 'Takes effect on notifications queued after the edit',
   },
   DECISION: {
     id: 'decisionBatch',
-    label: 'Editable per batch in Master Communications',
-    editable: true,
+    label: 'Sets what a new batch starts from; also editable per batch in Master Communications',
   },
 };
 
@@ -303,6 +309,9 @@ const TRANSACTIONAL = [
 ].map((entry) => ({
   ...entry,
   source: SOURCE.TRANSACTIONAL,
+  // The catalog key is the copy key here: each welcome audience has its own
+  // wording even though the three share one builder.
+  copyKey: entry.key,
   render: () => {
     // `builderKey` lets several catalog entries share one builder, which is how
     // the three welcome audiences are listed separately.
@@ -462,9 +471,12 @@ function slotEntry(type, meta, { suffix = '', label, description, options } = {}
     trigger: meta.trigger,
     alsoAttaches: meta.alsoAttaches,
     source: SOURCE.SLOT,
-    render: () => ({
-      subject: SLOT_NOTIFICATION_SUBJECTS[type](SAMPLE_INTERVIEW_TITLE),
-      html: renderInterviewSlotEmail(notification, renderOptions),
+    // Keyed by type, not by catalog entry: the self-signup variant is the same
+    // notification worded differently, and it is edited with the one it varies.
+    copyKey: slotCopyKey(type),
+    render: async () => ({
+      subject: await slotNotificationSubject(type, SAMPLE_INTERVIEW_TITLE),
+      html: await renderInterviewSlotEmail(notification, renderOptions),
     }),
   };
 }
@@ -510,32 +522,32 @@ const SAMPLE_DECISION_RECIPIENT = {
 };
 
 /**
- * The round decision emails, shown at their defaults.
+ * The round decision emails, shown at the wording a new batch would start from.
  *
- * An admin can already rewrite any of these for a specific batch before sending
- * it, so what a candidate receives may differ from what is here. The defaults
- * are still worth showing: they are what every new batch starts from.
+ * An admin can also rewrite any of these for a specific batch before sending
+ * it, so what a candidate receives may still differ from what is here.
  */
-const DECISION = DECISION_ROUNDS.flatMap(({ round, name }) => {
-  const templates = defaultDecisionTemplates(round);
-
-  return Object.entries(templates).map(([outcome, template]) => ({
-    key: `decision-round-${round}-${outcome.toLowerCase()}`,
+const DECISION = DECISION_ROUNDS.flatMap(({ round, name }) =>
+  DECISION_ROUND_OUTCOMES[String(round)].map((outcome) => ({
+    key: DECISION_COPY_KEY(round, outcome),
+    copyKey: DECISION_COPY_KEY(round, outcome),
     label: `${name} ${DECISION_OUTCOME_LABELS[outcome] ?? outcome.toLowerCase()}`,
-    description: `Default wording for a ${name.toLowerCase()} decision of ${outcome}.`,
+    description: `The wording a ${name.toLowerCase()} decision of ${outcome} starts from.`,
     audience: 'Candidate',
     category: 'Round decisions',
     trigger: 'Queued by decision processing, reviewed and sent in Master Communications.',
     source: SOURCE.DECISION,
-    render: () =>
-      renderDecisionEmail(template, SAMPLE_DECISION_RECIPIENT, {
+    render: async () => {
+      const templates = await decisionTemplatesForRound(round);
+      return renderDecisionEmail(templates[outcome], SAMPLE_DECISION_RECIPIENT, {
         cycleName: SAMPLE_CYCLE,
         round,
         preview: true,
         loginUrl: `${config.clientUrl}/login`,
-      }),
-  }));
-});
+      });
+    },
+  }))
+);
 
 const TEMPLATE_CATALOG = [...TRANSACTIONAL, ...SLOT, ...DECISION];
 
@@ -560,27 +572,43 @@ function describe(entry) {
     alsoAttaches: entry.alsoAttaches ?? null,
     source: entry.source.id,
     sourceLabel: entry.source.label,
-    editable: entry.source.editable,
+    // The record an edit writes to. Two catalog entries can share one - the
+    // self-signup wording of INTERVIEWER_ASSIGNED is a variant of that
+    // notification, not a template of its own.
+    copyKey: entry.copyKey,
+    editable: isEditableTemplate(entry.copyKey),
   };
 }
 
-/** Every previewable template, without rendering any of them. */
-export function listEmailTemplates() {
-  return TEMPLATE_CATALOG.map(describe);
+/**
+ * Every previewable template, without rendering any of them.
+ *
+ * The one query it does make is what tells the list which templates somebody
+ * has already reworded - the page badges those, so an admin can see at a glance
+ * which emails no longer read the way the repo ships them.
+ */
+export async function listEmailTemplates({ client } = {}) {
+  const edited = await customizedTemplateKeys(client ? { client } : {});
+  return TEMPLATE_CATALOG.map((entry) => ({
+    ...describe(entry),
+    customized: edited.has(entry.copyKey),
+  }));
 }
 
 /**
  * Render one template with its sample arguments.
  *
- * Returns the same { subject, html } the send path would hand the transporter.
- * Attachments are the one thing a preview cannot show, so a template that
- * carries one says so in `alsoAttaches`.
+ * Returns the same { subject, html } the send path would hand the transporter,
+ * including whatever an admin has edited - previewing the shipped wording while
+ * candidates receive something else would make the page a liar. Attachments are
+ * the one thing a preview cannot show, so a template that carries one says so
+ * in `alsoAttaches`.
  */
-export function renderEmailTemplatePreview(key) {
+export async function renderEmailTemplatePreview(key) {
   const entry = CATALOG_BY_KEY.get(key);
   if (!entry) throw new UnknownEmailTemplateError(key);
 
-  const { subject, html } = entry.render();
+  const { subject, html } = await entry.render();
 
   return { ...describe(entry), subject, html };
 }
