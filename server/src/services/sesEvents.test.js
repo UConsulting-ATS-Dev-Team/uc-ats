@@ -141,6 +141,12 @@ describe('applySesEvent', () => {
     expect(where.status.in.sort()).toEqual(['DELAYED', 'SENT']);
   });
 
+  it('clears a delay note once the message is delivered', async () => {
+    await applySesEvent({ eventType: 'Delivery', mail, delivery: { recipients: ['ryan@example.com'] } });
+    const [{ data }] = prisma.communicationLog.updateMany.mock.calls[0];
+    expect(data).toEqual({ status: 'DELIVERED', error: null });
+  });
+
   it('lets a complaint follow a delivery', async () => {
     await applySesEvent({ eventType: 'Complaint', mail, complaint: { complainedRecipients: [{ emailAddress: 'ryan@example.com' }] } });
     const [{ where }] = prisma.communicationLog.updateMany.mock.calls[0];

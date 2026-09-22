@@ -190,9 +190,10 @@ export async function applySesEvent(event) {
       },
       data: {
         status: outcome.status,
-        // DELIVERED clears nothing: a delay note on a message that later
-        // arrived is still true, and harmless.
-        ...(detail ? { error: String(detail).slice(0, 2000) } : {}),
+        // An event without detail - a delivery - clears the field. The only
+        // thing it can be replacing is a delay note, and the log dialog shows
+        // any error as a red alert, which is wrong next to "Delivered".
+        error: detail ? String(detail).slice(0, 2000) : null,
       },
     });
     updated += count;
