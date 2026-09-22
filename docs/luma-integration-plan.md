@@ -147,6 +147,7 @@ Staging score, application detail, filters (unchanged)
    - Effects:
      - `approval_status === 'approved'` → upsert `EventRsvp`.
      - Any other status (`declined`, …) → delete that guest's `LUMA` RSVP.
+       **Only the statuses we recognise do**, see below.
      - `checkedInAt` set → upsert `EventAttendance`.
      - Key every write on `lumaGuestId`, so ingesting the same data twice changes nothing.
    - Don't send the ATS confirmation emails for `LUMA` rows; Luma sends its own.
@@ -196,10 +197,18 @@ Staging score, application detail, filters (unchanged)
   **Residual risk:** a guest whose email the ATS does not know, who types someone else's UID
   *and* whose profile name resembles theirs, is still filed as that person. Removing that
   needs a second verified signal at registration, which the free Luma tier does not offer.
-- **A value we cannot read is rejected, never interpreted.** Because a guest can take rows
-  away as well as add them, an unknown `approval_status` or an unparseable `checked_in_at`
-  would otherwise read as "not approved" / "not checked in" and delete a live row. Both
-  reject the entry instead: nothing changes and it is reported in `summary.rejected`.
+- **A value we cannot read never deletes a row.** Because a guest can take rows away as
+  well as add them, an `approval_status` we do not recognise would otherwise read as "not
+  approved" and remove a live RSVP the first time Luma extends its vocabulary. Only the
+  statuses in `RSVP_FOR_STATUS` decide an RSVP (`approved` → yes; `declined`,
+  `pending_approval`, `invited`, `waitlist` → no). Any other status — including
+  **`session`**, which is in `list_guests`'s own enum but says nothing established about
+  whether the person is coming — is stored as Luma sent it, leaves the RSVP row untouched
+  in either direction, and is reported in `summary.unknownStatus`. Attendance is unaffected
+  by all of this: it is a door scan, so a guest of unreadable standing who was scanned
+  still counts as there. A *malformed* entry is different and still rejected outright
+  (`summary.rejected`) — no guest id, no usable email, no status at all, or a
+  `checked_in_at` that is not a readable time.
 - **Member attendance is settled per member, not per guest.** `member_event_attendance` has
   no `lumaGuestId` (it keys on event and member), so a row cannot say which guest put it
   there. It is decided by reading back every guest of the event: the member is present if

@@ -336,18 +336,42 @@ describe('ingestGuests', () => {
     expect(db.eventRsvp.rows).toHaveLength(1);
   });
 
-  it('rejects an unknown approval status instead of reading it as "not approved"', async () => {
+  it('holds an approval status it cannot read, rather than reading it as "not approved"', async () => {
     await ingestGuests(EVENT_ID, [rsvpOnly], { db });
     const odd = clone(rsvpOnly);
     odd.approval_status = 'approved_pending_review';
 
     const summary = await ingestGuests(EVENT_ID, [odd], { db });
 
-    expect(summary.rejected).toEqual([expect.objectContaining({
-      index: 0,
-      reason: expect.stringContaining('unknown approval_status')
+    // Kept, stored as Luma sent it, and reported - the one thing an unreadable
+    // status must not do is take a live RSVP out.
+    expect(summary.rejected).toEqual([]);
+    expect(summary.unknownStatus).toEqual([expect.objectContaining({
+      lumaGuestId: rsvpOnly.api_id,
+      approvalStatus: 'approved_pending_review'
     })]);
+    expect(summary.rsvps).toEqual({ created: 0, removed: 0 });
     expect(db.eventRsvp.rows).toHaveLength(1);
+    expect(db.lumaGuest.rows[0].approvalStatus).toBe('approved_pending_review');
+  });
+
+  it("does not invent an RSVP for Luma's session status, but still counts a door scan", async () => {
+    // `session` is in list_guests's approval_status enum, so it is a real
+    // status; what it says about whether someone is coming is not established,
+    // and attendance is a door scan either way.
+    const session = clone(checkedIn);
+    session.approval_status = 'session';
+
+    const summary = await ingestGuests(EVENT_ID, [session], { db });
+
+    expect(summary.unknownStatus).toEqual([expect.objectContaining({ approvalStatus: 'session' })]);
+    expect(db.eventRsvp.rows).toHaveLength(0);
+    expect(db.eventAttendance.rows).toHaveLength(1);
+  });
+
+  it('reports nothing for the statuses it does read', async () => {
+    const summary = await ingestGuests(EVENT_ID, fixture.entries, { db });
+    expect(summary.unknownStatus).toEqual([]);
   });
 
   it('reads a known approval status whatever its case', async () => {

@@ -25,16 +25,23 @@ const UID_LABEL = /\buid\b/i;
 const UID_DIGITS = /^\d{9}$/;
 const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
 
-// The approval_status values Luma sends. Anything else is rejected rather than
-// read as "not approved", so a status Luma adds later cannot silently delete
-// RSVPs; a rejected entry changes nothing and is reported in the summary.
-const APPROVAL_STATUSES = new Set([
-  'approved',
-  'declined',
-  'pending_approval',
-  'waitlist',
-  'invited',
-  'cancelled'
+// Which approval_status values say the person is coming, and which say they are
+// not. The keys are list_guests's own approval_status filter enum, minus
+// `session`: that one is real (a guest of an event's session) but not something
+// we have established means going or not going, and Luma can add more.
+//
+// A status that is not here is not a guess to be made in either direction - it
+// neither creates an RSVP nor removes one, so the row stays exactly as it is and
+// ingestGuests reports the guest in `summary.unknownStatus`. Reading an unknown
+// status as "not approved" would delete live RSVPs the first time Luma extended
+// the vocabulary; rejecting the whole entry would instead hide the guest, and
+// leave any stale row of theirs both wrong and invisible.
+const RSVP_FOR_STATUS = new Map([
+  ['approved', true],
+  ['declined', false],
+  ['pending_approval', false],
+  ['invited', false],
+  ['waitlist', false]
 ]);
 
 export const MATCH_STATUS = {
@@ -147,14 +154,12 @@ export function parseGuest(entry) {
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
     return { problem: `guest ${lumaGuestId} has no usable email` };
   }
-  const rawStatus = text(entry.approval_status);
-  if (!rawStatus) {
+  const approvalStatus = text(entry.approval_status).toLowerCase();
+  if (!approvalStatus) {
     return { problem: `guest ${lumaGuestId} has no approval_status` };
   }
-  const approvalStatus = rawStatus.toLowerCase();
-  if (!APPROVAL_STATUSES.has(approvalStatus)) {
-    return { problem: `guest ${lumaGuestId} has an unknown approval_status "${rawStatus}"` };
-  }
+  // A status we do not recognise is kept as Luma sent it and held at
+  // reconciliation (RSVP_FOR_STATUS); only a malformed entry is rejected here.
   const checkedIn = checkedInAtOf(entry);
   if (checkedIn.invalid !== undefined) {
     return { problem: `guest ${lumaGuestId} has an unreadable check-in time "${checkedIn.invalid}"` };
@@ -355,16 +360,25 @@ async function reconcileMemberAttendance(tx, eventId, memberId) {
 
 async function reconcileRows(tx, eventId, guest, person, previous) {
   const lumaGuestId = guest.lumaGuestId;
-  const rsvp = guest.approvalStatus === 'approved';
+  const rsvp = RSVP_FOR_STATUS.get(guest.approvalStatus);
   const attended = Boolean(guest.checkedInAt);
   const effects = { rsvp: 'unchanged', attendance: 'unchanged' };
   const record = (key, outcome) => {
     if (outcome !== 'unchanged') effects[key] = outcome;
   };
 
+  // A status that says neither "coming" nor "not coming" leaves the RSVP row as
+  // it is. Attendance is unaffected either way: it is a door scan, not a status,
+  // so a guest of an unreadable standing who was scanned still counts as there.
+  const reconcileRsvp = async (model, target) => {
+    if (rsvp === true) return ensureRow(model, target);
+    if (rsvp === false) return removeRow(model, lumaGuestId);
+    return 'unchanged';
+  };
+
   if (person.candidateId) {
     const target = { eventId, personField: 'candidateId', personId: person.candidateId, lumaGuestId };
-    record('rsvp', rsvp ? await ensureRow(tx.eventRsvp, target) : await removeRow(tx.eventRsvp, lumaGuestId));
+    record('rsvp', await reconcileRsvp(tx.eventRsvp, target));
     record('attendance', attended
       ? await ensureRow(tx.eventAttendance, target)
       : await removeRow(tx.eventAttendance, lumaGuestId));
@@ -375,9 +389,7 @@ async function reconcileRows(tx, eventId, guest, person, previous) {
 
   if (person.userId) {
     const target = { eventId, personField: 'memberId', personId: person.userId, lumaGuestId };
-    record('rsvp', rsvp
-      ? await ensureRow(tx.memberEventRsvp, target)
-      : await removeRow(tx.memberEventRsvp, lumaGuestId));
+    record('rsvp', await reconcileRsvp(tx.memberEventRsvp, target));
     record('attendance', await reconcileMemberAttendance(tx, eventId, person.userId));
   } else {
     record('rsvp', await removeRow(tx.memberEventRsvp, lumaGuestId));
@@ -427,7 +439,8 @@ async function ingestOne(tx, eventId, guest) {
  * @param {object[]} entries  list_guests `entries`, untouched
  * @returns a summary: counts per match status, rows created / removed, the
  *   unmatched guests (for the admin panel), the guests matched on something
- *   worth a second look, and any entries that were rejected.
+ *   worth a second look, the guests whose approval_status this code cannot read
+ *   as going or not going, and any entries that were rejected.
  */
 export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
   if (!Array.isArray(entries)) throw new TypeError('entries must be an array');
@@ -442,6 +455,7 @@ export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
     attendance: { created: 0, removed: 0 },
     unmatched: [],
     flagged: [],
+    unknownStatus: [],
     rejected: [],
     failed: []
   };
@@ -476,6 +490,10 @@ export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
       summary.unmatched.push(seen);
     } else if (result.matchNote) {
       summary.flagged.push(seen);
+    }
+    // Stored and left alone rather than acted on; see RSVP_FOR_STATUS.
+    if (!RSVP_FOR_STATUS.has(guest.approvalStatus)) {
+      summary.unknownStatus.push({ ...seen, approvalStatus: guest.approvalStatus });
     }
   }
 
