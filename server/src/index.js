@@ -42,6 +42,7 @@ import releaseNotesRoutes from './routes/releaseNotes.js';
 import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
 import emailTemplateRoutes from './routes/emailTemplates.js';
+import sesWebhookRoutes from './routes/sesWebhooks.js';
 
 const app = express();
 
@@ -114,6 +115,7 @@ app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/decision-guides', decisionGuideRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
+app.use('/api/webhooks/ses', sesWebhookRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
 app.use('/api/resume-uploads', resumeUploadsRoutes);

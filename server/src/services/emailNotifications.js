@@ -190,6 +190,12 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
       mailOptions.attachments = attachments;
     }
 
+    // The configuration set is what makes SES report deliveries, bounces and
+    // complaints back to /api/webhooks/ses. Without it the row stays SENT.
+    if (process.env.SES_CONFIGURATION_SET) {
+      mailOptions.ses = { ConfigurationSetName: process.env.SES_CONFIGURATION_SET };
+    }
+
     const info = await transporter.sendMail(mailOptions);
     console.log('Email sent successfully:', info.messageId);
     await record('SENT', { providerMessageId: info.messageId ?? null });

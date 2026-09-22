@@ -43,10 +43,18 @@ const CATEGORY_LABELS = {
 const CHANNEL_LABELS = { email: 'Email', slack: 'Slack', imessage: 'iMessage' };
 
 const STATUS_STYLES = {
-  SENT: { color: 'success', label: 'Sent' },
+  // Sent is SES accepting the message; Delivered is the recipient's server
+  // accepting it, reported back later.
+  SENT: { color: 'default', label: 'Sent' },
+  DELIVERED: { color: 'success', label: 'Delivered' },
+  DELAYED: { color: 'warning', label: 'Delayed' },
+  BOUNCED: { color: 'error', label: 'Bounced' },
+  COMPLAINED: { color: 'error', label: 'Marked as spam' },
   FAILED: { color: 'error', label: 'Failed' },
   OPENED: { color: 'warning', label: 'Opened' },
 };
+
+const STATUS_LABELS = Object.fromEntries(Object.entries(STATUS_STYLES).map(([k, v]) => [k, v.label]));
 
 const TRIGGERS = [
   { value: '', label: 'Automated and manual' },
@@ -234,11 +242,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
           sx={{ minWidth: 140 }}
         >
           <MenuItem value="">Any status</MenuItem>
-          {options('statuses', facets.statuses, {
-            SENT: 'Sent',
-            FAILED: 'Failed',
-            OPENED: 'Opened',
-          })}
+          {options('statuses', facets.statuses, STATUS_LABELS)}
         </TextField>
         <TextField
           select

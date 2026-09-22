@@ -265,6 +265,14 @@ The system follows a **recruiting cycle-based workflow**:
   is why `sendMasterCommunication` writes the campaign row *before* the first email.
 - An iMessage row is `OPENED`, not `SENT`: the server hands the conversation to the
   admin's Messages app and cannot observe what happens after.
+- An email row's `SENT` only means SES accepted it. What happened next arrives from SES
+  (configuration set `SES_CONFIGURATION_SET` → SNS topic `SES_SNS_TOPIC_ARN` →
+  `POST /api/webhooks/ses`) and moves the row to `DELIVERED`, `DELAYED`, `BOUNCED`,
+  `COMPLAINED` or `FAILED`, with the reason in `error`. Rows are matched by the SES id
+  inside `providerMessageId` plus recipient, and only ever move forward — SNS does not
+  guarantee order. The route has no auth; the SNS signature and topic ARN are its auth
+  ([server/src/services/sesEvents.js](server/src/services/sesEvents.js)). Unset topic ARN
+  means it refuses everything.
 
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
