@@ -105,6 +105,15 @@ export async function syncEventAttendance(eventId) {
           });
         }
 
+        // One attendance row per candidate per event. A second form response,
+        // or a Luma check-in that got there first, already counts.
+        const existingAttendance = await prisma.eventAttendance.findUnique({
+          where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
+        });
+        if (existingAttendance) {
+          continue;
+        }
+
         // Create attendance record
         await prisma.eventAttendance.create({
           data: {
@@ -237,6 +246,14 @@ export async function syncEventRSVP(eventId) {
           });
         }
 
+        // One RSVP per candidate per event; see the attendance sync above.
+        const existingRsvp = await prisma.eventRsvp.findUnique({
+          where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
+        });
+        if (existingRsvp) {
+          continue;
+        }
+
         // Create RSVP record
         await prisma.eventRsvp.create({
           data: {
@@ -353,6 +370,14 @@ export async function syncMemberEventRSVP(eventId) {
           console.warn(`Member not found for RSVP response: studentId=${transformedData.studentId}, email=${transformedData.email}`);
           errorCount++;
           continue; // Still count as processed, but as an error
+        }
+
+        // One RSVP per member per event; see the attendance sync above.
+        const existingMemberRsvp = await prisma.memberEventRsvp.findUnique({
+          where: { eventId_memberId: { eventId, memberId: member.id } }
+        });
+        if (existingMemberRsvp) {
+          continue;
         }
 
         // Create member RSVP record

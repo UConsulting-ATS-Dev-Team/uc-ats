@@ -1,0 +1,303 @@
+{
+  "_note": "Real list_guests response from the Luma MCP connector for the private test event evt-jdRdVNKwbFxwg0B (captured 2026-09-22). Guest 2 email/name anonymized; shape otherwise verbatim, including the duplicated nested guest/event_ticket objects.",
+  "entries": [
+    {
+      "api_id": "gst-sChFHqpVIsW2rhd",
+      "approval_status": "approved",
+      "attribution_params": null,
+      "created_at": "2026-09-21T23:35:56.754Z",
+      "utm_source": null,
+      "eth_address": null,
+      "invited_at": null,
+      "joined_at": null,
+      "phone_number": null,
+      "registered_at": "2026-09-21T23:35:56.754Z",
+      "registration_answers": [
+        {
+          "label": "UCLA UID (9 digits)",
+          "value": "123456789",
+          "question_id": "5lacnszu",
+          "question_type": "text",
+          "answer": "123456789"
+        },
+        {
+          "label": "Year",
+          "value": "4th year",
+          "question_id": "2v2ys7wu",
+          "question_type": "select",
+          "answer": "4th year"
+        },
+        {
+          "label": "Major",
+          "value": "Mechanical Engineering",
+          "question_id": "f3ptb8ix",
+          "question_type": "text",
+          "answer": "Mechanical Engineering"
+        }
+      ],
+      "solana_address": null,
+      "user_api_id": "usr-GwbgzXweJwrZTHq",
+      "checked_in_at": null,
+      "id": "gst-sChFHqpVIsW2rhd",
+      "user_id": "usr-GwbgzXweJwrZTHq",
+      "user_name": "UConsulting UCLA",
+      "user_email": "uconsultingla@gmail.com",
+      "user_first_name": "UConsulting",
+      "user_last_name": "UCLA",
+      "name": "UConsulting UCLA",
+      "email": "uconsultingla@gmail.com",
+      "custom_source": null,
+      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-bqFuAYbejxr59e3",
+      "event_tickets": [
+        {
+          "amount": 0,
+          "amount_discount": 0,
+          "amount_tax": 0,
+          "id": "tkt-6fnvSwz9C79HWf0",
+          "api_id": "tkt-6fnvSwz9C79HWf0",
+          "checked_in_at": null,
+          "currency": "usd",
+          "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+          "is_captured": false,
+          "name": "Standard"
+        }
+      ],
+      "event_ticket": {
+        "amount": 0,
+        "amount_discount": 0,
+        "amount_tax": 0,
+        "id": "tkt-6fnvSwz9C79HWf0",
+        "api_id": "tkt-6fnvSwz9C79HWf0",
+        "checked_in_at": null,
+        "currency": "usd",
+        "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+        "is_captured": false,
+        "name": "Standard"
+      },
+      "guest": {
+        "api_id": "gst-sChFHqpVIsW2rhd",
+        "approval_status": "approved",
+        "attribution_params": null,
+        "created_at": "2026-09-21T23:35:56.754Z",
+        "utm_source": null,
+        "eth_address": null,
+        "invited_at": null,
+        "joined_at": null,
+        "phone_number": null,
+        "registered_at": "2026-09-21T23:35:56.754Z",
+        "registration_answers": [
+          {
+            "label": "UCLA UID (9 digits)",
+            "value": "123456789",
+            "question_id": "5lacnszu",
+            "question_type": "text",
+            "answer": "123456789"
+          },
+          {
+            "label": "Year",
+            "value": "4th year",
+            "question_id": "2v2ys7wu",
+            "question_type": "select",
+            "answer": "4th year"
+          },
+          {
+            "label": "Major",
+            "value": "Mechanical Engineering",
+            "question_id": "f3ptb8ix",
+            "question_type": "text",
+            "answer": "Mechanical Engineering"
+          }
+        ],
+        "solana_address": null,
+        "user_api_id": "usr-GwbgzXweJwrZTHq",
+        "checked_in_at": null,
+        "id": "gst-sChFHqpVIsW2rhd",
+        "user_id": "usr-GwbgzXweJwrZTHq",
+        "user_name": "UConsulting UCLA",
+        "user_email": "uconsultingla@gmail.com",
+        "user_first_name": "UConsulting",
+        "user_last_name": "UCLA",
+        "name": "UConsulting UCLA",
+        "email": "uconsultingla@gmail.com",
+        "custom_source": null,
+        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-bqFuAYbejxr59e3",
+        "event_tickets": [
+          {
+            "amount": 0,
+            "amount_discount": 0,
+            "amount_tax": 0,
+            "id": "tkt-6fnvSwz9C79HWf0",
+            "api_id": "tkt-6fnvSwz9C79HWf0",
+            "checked_in_at": null,
+            "currency": "usd",
+            "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+            "is_captured": false,
+            "name": "Standard"
+          }
+        ],
+        "event_ticket": {
+          "amount": 0,
+          "amount_discount": 0,
+          "amount_tax": 0,
+          "id": "tkt-6fnvSwz9C79HWf0",
+          "api_id": "tkt-6fnvSwz9C79HWf0",
+          "checked_in_at": null,
+          "currency": "usd",
+          "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+          "is_captured": false,
+          "name": "Standard"
+        }
+      }
+    },
+    {
+      "api_id": "gst-hhyVTPnxWmIqATd",
+      "approval_status": "approved",
+      "attribution_params": null,
+      "created_at": "2026-09-22T00:34:37.130Z",
+      "utm_source": null,
+      "eth_address": null,
+      "invited_at": null,
+      "joined_at": null,
+      "phone_number": null,
+      "registered_at": "2026-09-22T00:34:37.130Z",
+      "registration_answers": [
+        {
+          "label": "UCLA UID (9 digits)",
+          "value": "123456788",
+          "question_id": "5lacnszu",
+          "question_type": "text",
+          "answer": "123456788"
+        },
+        {
+          "label": "Year",
+          "value": "4th year",
+          "question_id": "2v2ys7wu",
+          "question_type": "select",
+          "answer": "4th year"
+        },
+        {
+          "label": "Major",
+          "value": "Mechanical Engineering",
+          "question_id": "f3ptb8ix",
+          "question_type": "text",
+          "answer": "Mechanical Engineering"
+        }
+      ],
+      "solana_address": null,
+      "user_api_id": "usr-9H5HpYmmqGHZZNh",
+      "checked_in_at": "2026-09-22T00:37:34.889Z",
+      "id": "gst-hhyVTPnxWmIqATd",
+      "user_id": "usr-9H5HpYmmqGHZZNh",
+      "user_name": "Testguest",
+      "user_email": "test.guest@example.com",
+      "user_first_name": "Testguest",
+      "user_last_name": "",
+      "name": "Testguest",
+      "email": "test.guest@example.com",
+      "custom_source": null,
+      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-l9QBh9fyX5rWXpZ",
+      "event_tickets": [
+        {
+          "amount": 0,
+          "amount_discount": 0,
+          "amount_tax": 0,
+          "id": "tkt-FRj5w8sDnfiFHWQ",
+          "api_id": "tkt-FRj5w8sDnfiFHWQ",
+          "checked_in_at": "2026-09-22T00:37:34.889Z",
+          "currency": "usd",
+          "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+          "is_captured": false,
+          "name": "Standard"
+        }
+      ],
+      "event_ticket": {
+        "amount": 0,
+        "amount_discount": 0,
+        "amount_tax": 0,
+        "id": "tkt-FRj5w8sDnfiFHWQ",
+        "api_id": "tkt-FRj5w8sDnfiFHWQ",
+        "checked_in_at": "2026-09-22T00:37:34.889Z",
+        "currency": "usd",
+        "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+        "is_captured": false,
+        "name": "Standard"
+      },
+      "guest": {
+        "api_id": "gst-hhyVTPnxWmIqATd",
+        "approval_status": "approved",
+        "attribution_params": null,
+        "created_at": "2026-09-22T00:34:37.130Z",
+        "utm_source": null,
+        "eth_address": null,
+        "invited_at": null,
+        "joined_at": null,
+        "phone_number": null,
+        "registered_at": "2026-09-22T00:34:37.130Z",
+        "registration_answers": [
+          {
+            "label": "UCLA UID (9 digits)",
+            "value": "123456788",
+            "question_id": "5lacnszu",
+            "question_type": "text",
+            "answer": "123456788"
+          },
+          {
+            "label": "Year",
+            "value": "4th year",
+            "question_id": "2v2ys7wu",
+            "question_type": "select",
+            "answer": "4th year"
+          },
+          {
+            "label": "Major",
+            "value": "Mechanical Engineering",
+            "question_id": "f3ptb8ix",
+            "question_type": "text",
+            "answer": "Mechanical Engineering"
+          }
+        ],
+        "solana_address": null,
+        "user_api_id": "usr-9H5HpYmmqGHZZNh",
+        "checked_in_at": "2026-09-22T00:37:34.889Z",
+        "id": "gst-hhyVTPnxWmIqATd",
+        "user_id": "usr-9H5HpYmmqGHZZNh",
+        "user_name": "Testguest",
+        "user_email": "test.guest@example.com",
+        "user_first_name": "Testguest",
+        "user_last_name": "",
+        "name": "Testguest",
+        "email": "test.guest@example.com",
+        "custom_source": null,
+        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-l9QBh9fyX5rWXpZ",
+        "event_tickets": [
+          {
+            "amount": 0,
+            "amount_discount": 0,
+            "amount_tax": 0,
+            "id": "tkt-FRj5w8sDnfiFHWQ",
+            "api_id": "tkt-FRj5w8sDnfiFHWQ",
+            "checked_in_at": "2026-09-22T00:37:34.889Z",
+            "currency": "usd",
+            "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+            "is_captured": false,
+            "name": "Standard"
+          }
+        ],
+        "event_ticket": {
+          "amount": 0,
+          "amount_discount": 0,
+          "amount_tax": 0,
+          "id": "tkt-FRj5w8sDnfiFHWQ",
+          "api_id": "tkt-FRj5w8sDnfiFHWQ",
+          "checked_in_at": "2026-09-22T00:37:34.889Z",
+          "currency": "usd",
+          "event_ticket_type_id": "ttype-Zj3LCFXK5lIITRn",
+          "is_captured": false,
+          "name": "Standard"
+        }
+      }
+    }
+  ],
+  "has_more": false,
+  "next_cursor": "eyJzdiI6IjIwMjYtMDktMjIgMDA6MzQ6MzcuMTMwODA3KzAwIiwiZmIiOiJnc3QtaGh5VlRQbnhXbUlxQVRkIn0"
+}
