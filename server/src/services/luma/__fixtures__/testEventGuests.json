@@ -1,5 +1,5 @@
 {
-  "_note": "Real list_guests response from the Luma MCP connector for the private test event evt-jdRdVNKwbFxwg0B (captured 2026-09-22). Guest 2 email/name anonymized; shape otherwise verbatim, including the duplicated nested guest/event_ticket objects.",
+  "_note": "Real list_guests response from the Luma MCP connector for the private test event evt-jdRdVNKwbFxwg0B (captured 2026-09-22). Guest 2 email/name anonymized and every check_in_qr_code key replaced with a placeholder - that link carries the key that checks a guest in, which is why ingestGuests strips it from the stored copy. Shape otherwise verbatim, including the duplicated nested guest/event_ticket objects.",
   "entries": [
     {
       "api_id": "gst-sChFHqpVIsW2rhd",
@@ -47,7 +47,7 @@
       "name": "UConsulting UCLA",
       "email": "uconsultingla@gmail.com",
       "custom_source": null,
-      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-bqFuAYbejxr59e3",
+      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=REDACTED-NOT-A-REAL-KEY",
       "event_tickets": [
         {
           "amount": 0,
@@ -120,7 +120,7 @@
         "name": "UConsulting UCLA",
         "email": "uconsultingla@gmail.com",
         "custom_source": null,
-        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-bqFuAYbejxr59e3",
+        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=REDACTED-NOT-A-REAL-KEY",
         "event_tickets": [
           {
             "amount": 0,
@@ -195,7 +195,7 @@
       "name": "Testguest",
       "email": "test.guest@example.com",
       "custom_source": null,
-      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-l9QBh9fyX5rWXpZ",
+      "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=REDACTED-NOT-A-REAL-KEY",
       "event_tickets": [
         {
           "amount": 0,
@@ -268,7 +268,7 @@
         "name": "Testguest",
         "email": "test.guest@example.com",
         "custom_source": null,
-        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=g-l9QBh9fyX5rWXpZ",
+        "check_in_qr_code": "https://luma.com/check-in/evt-jdRdVNKwbFxwg0B?pk=REDACTED-NOT-A-REAL-KEY",
         "event_tickets": [
           {
             "amount": 0,

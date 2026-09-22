@@ -60,6 +60,7 @@ export async function syncEventAttendance(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -107,10 +108,16 @@ export async function syncEventAttendance(eventId) {
 
         // One attendance row per candidate per event. A second form response,
         // or a Luma check-in that got there first, already counts.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
         const existingAttendance = await prisma.eventAttendance.findUnique({
           where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
         });
         if (existingAttendance) {
+          skippedCount++;
           continue;
         }
 
@@ -147,8 +154,8 @@ export async function syncEventAttendance(eventId) {
       }
     }
 
-    console.log(`Attendance sync complete for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`Attendance sync complete for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
     
   } catch (error) {
     console.error(`Error syncing attendance for event ${eventId}:`, error);
@@ -199,6 +206,7 @@ export async function syncEventRSVP(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -247,10 +255,16 @@ export async function syncEventRSVP(eventId) {
         }
 
         // One RSVP per candidate per event; see the attendance sync above.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
         const existingRsvp = await prisma.eventRsvp.findUnique({
           where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
         });
         if (existingRsvp) {
+          skippedCount++;
           continue;
         }
 
@@ -291,8 +305,8 @@ export async function syncEventRSVP(eventId) {
       }
     }
 
-    console.log(`RSVP sync complete for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`RSVP sync complete for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
     
   } catch (error) {
     console.error(`Error syncing RSVP for event ${eventId}:`, error);
@@ -343,6 +357,7 @@ export async function syncMemberEventRSVP(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -373,10 +388,16 @@ export async function syncMemberEventRSVP(eventId) {
         }
 
         // One RSVP per member per event; see the attendance sync above.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
         const existingMemberRsvp = await prisma.memberEventRsvp.findUnique({
           where: { eventId_memberId: { eventId, memberId: member.id } }
         });
         if (existingMemberRsvp) {
+          skippedCount++;
           continue;
         }
 
@@ -412,8 +433,8 @@ export async function syncMemberEventRSVP(eventId) {
       }
     }
 
-    console.log(`Member RSVP sync completed for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`Member RSVP sync completed for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
 
   } catch (error) {
     console.error(`Error syncing member RSVP for event ${eventId}:`, error);

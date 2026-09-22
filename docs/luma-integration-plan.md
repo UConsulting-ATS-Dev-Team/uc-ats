@@ -142,6 +142,8 @@ Staging score, application detail, filters (unchanged)
      3. Otherwise, create a Candidate. This **needs a valid UID**, because `studentId` is
         required and unique. With no UID the guest is marked `UNMATCHED` and nothing is
         created.
+
+     **The built order is email first, then UID** — see "What Phase 1 actually did" below.
    - Effects:
      - `approval_status === 'approved'` → upsert `EventRsvp`.
      - Any other status (`declined`, …) → delete that guest's `LUMA` RSVP.
@@ -174,12 +176,35 @@ Staging score, application detail, filters (unchanged)
   nothing for them, and declining in Luma never removes the form row. The Google-form sync
   (`syncEventResponses.js`) now does the same in reverse: it skips a response when that
   person already has a row, because otherwise the new constraint would make it error on
-  every sync.
+  every sync. A skipped response stores no id of its own, and a response counts as done
+  only by the id on a row, so it comes back every sync; it is counted as `skipped` rather
+  than as work done, so a standing duplicate reads as one instead of inflating `processed`.
 - **The stored copy leaves out the check-in QR link** (`check_in_qr_code`, which carries
   the guest's check-in key) and the nested duplicate objects.
 - **Each guest is ingested in its own transaction.** A guest who fails lands in
   `summary.failed`, and one with a malformed shape in `summary.rejected`. Neither stops the
   rest of the page.
+- **The email decides, not the UID.** The plan had matching try `studentId` first. It is the
+  other way round: the email is the address Luma registered and mailed the guest at, while
+  the UID is free text they typed into a registration question, so anyone can type anyone's.
+  Matching goes member-by-email → candidate-by-email → member-by-UID → candidate-by-UID, so
+  the UID only answers for an address the ATS has never seen — which is the case it exists
+  for, since most people register with a personal address. A match made on the UID alone
+  whose Luma profile name shares no first or last name with the record it points at is still
+  made (a nickname or a handle is not fraud) but lands in `summary.flagged` with a note, so
+  the routine's output and the Phase 3 panel can show what a row was decided on.
+  **Residual risk:** a guest whose email the ATS does not know, who types someone else's UID
+  *and* whose profile name resembles theirs, is still filed as that person. Removing that
+  needs a second verified signal at registration, which the free Luma tier does not offer.
+- **A value we cannot read is rejected, never interpreted.** Because a guest can take rows
+  away as well as add them, an unknown `approval_status` or an unparseable `checked_in_at`
+  would otherwise read as "not approved" / "not checked in" and delete a live row. Both
+  reject the entry instead: nothing changes and it is reported in `summary.rejected`.
+- **Member attendance is settled per member, not per guest.** `member_event_attendance` has
+  no `lumaGuestId` (it keys on event and member), so a row cannot say which guest put it
+  there. It is decided by reading back every guest of the event: the member is present if
+  any guest resolving to them is checked in. Per guest, a member who registered twice would
+  keep or lose their check-in depending on which registration the page reached last.
 - **Known gap:** if an admin manually un-marks attendance that Luma recorded, the next sync
   puts it back. Fixing that needs a per-guest override; defer it to Phase 3 if it matters.
 

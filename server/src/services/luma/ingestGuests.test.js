@@ -26,6 +26,9 @@ function matches(row, where) {
     const value = row[field];
     if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
       if ('in' in condition) return condition.in.includes(value);
+      if ('not' in condition) {
+        return condition.not === null ? value != null : value !== condition.not;
+      }
       if ('equals' in condition) {
         return condition.mode === 'insensitive'
           ? String(value ?? '').toLowerCase() === String(condition.equals).toLowerCase()
@@ -169,8 +172,14 @@ describe('field extraction', () => {
       { checked_in_at: '2026-09-22T01:00:00.000Z' },
       { checked_in_at: '2026-09-22T00:30:00.000Z' }
     ];
-    expect(checkedInAtOf(entry)).toEqual(new Date('2026-09-22T00:30:00.000Z'));
-    expect(checkedInAtOf(rsvpOnly)).toBeNull();
+    expect(checkedInAtOf(entry)).toEqual({ at: new Date('2026-09-22T00:30:00.000Z') });
+    expect(checkedInAtOf(rsvpOnly)).toEqual({ at: null });
+  });
+
+  it('says a check-in time is unreadable rather than calling it absent', () => {
+    const entry = clone(rsvpOnly);
+    entry.checked_in_at = 'yesterday';
+    expect(checkedInAtOf(entry)).toEqual({ invalid: 'yesterday' });
   });
 
   it('drops the check-in QR link and the nested duplicates from the stored copy', () => {
@@ -222,7 +231,7 @@ describe('ingestGuests', () => {
     expect(snapshot(db)).toBe(before);
   });
 
-  it('matches an existing candidate by UID before email, and by email case-insensitively', async () => {
+  it('matches by email case-insensitively, and by UID when the email is unknown', async () => {
     const byUid = await db.candidate.create({
       data: { studentId: '123456789', email: 'someone.else@ucla.edu', firstName: 'A', lastName: 'B' }
     });
@@ -237,6 +246,41 @@ describe('ingestGuests', () => {
     expect(db.candidate.rows).toHaveLength(2);
     expect(db.eventRsvp.rows.find((r) => r.lumaGuestId === rsvpOnly.api_id).candidateId).toBe(byUid.id);
     expect(db.eventAttendance.rows[0].candidateId).toBe(byEmail.id);
+    // The UID is all that named the first guest, and their profile name says
+    // nothing either way, so the match is reported for a second look.
+    expect(summary.flagged).toEqual([expect.objectContaining({
+      lumaGuestId: rsvpOnly.api_id,
+      note: expect.stringContaining('matched on the UID 123456789 alone')
+    })]);
+  });
+
+  it("files a guest under the email's owner when the UID they typed is someone else's", async () => {
+    const impersonated = await db.candidate.create({
+      data: { studentId: '123456789', email: 'real.person@ucla.edu', firstName: 'Real', lastName: 'Person' }
+    });
+    const whoRegistered = await db.candidate.create({
+      data: { studentId: '405999999', email: 'uconsultingla@gmail.com', firstName: 'U', lastName: 'C' }
+    });
+
+    // The guest typed 123456789, which is the other candidate's UID. Luma is
+    // the authority on the address the guest registered and was mailed at, and
+    // a typed answer is not, so the address decides.
+    const summary = await ingestGuests(EVENT_ID, [rsvpOnly], { db });
+
+    expect(db.eventRsvp.rows).toEqual([expect.objectContaining({ candidateId: whoRegistered.id })]);
+    expect(db.eventRsvp.rows.some((r) => r.candidateId === impersonated.id)).toBe(false);
+    expect(summary.flagged).toEqual([]);
+  });
+
+  it('does not flag a UID match the profile name corroborates', async () => {
+    await db.candidate.create({
+      data: { studentId: '123456789', email: 'someone.else@ucla.edu', firstName: 'UConsulting', lastName: 'Bruin' }
+    });
+
+    const summary = await ingestGuests(EVENT_ID, [rsvpOnly], { db });
+
+    expect(summary.matchStatus.MATCHED_CANDIDATE).toBe(1);
+    expect(summary.flagged).toEqual([]);
   });
 
   it('leaves a guest with no match and no usable UID for an admin', async () => {
@@ -292,6 +336,43 @@ describe('ingestGuests', () => {
     expect(db.eventRsvp.rows).toHaveLength(1);
   });
 
+  it('rejects an unknown approval status instead of reading it as "not approved"', async () => {
+    await ingestGuests(EVENT_ID, [rsvpOnly], { db });
+    const odd = clone(rsvpOnly);
+    odd.approval_status = 'approved_pending_review';
+
+    const summary = await ingestGuests(EVENT_ID, [odd], { db });
+
+    expect(summary.rejected).toEqual([expect.objectContaining({
+      index: 0,
+      reason: expect.stringContaining('unknown approval_status')
+    })]);
+    expect(db.eventRsvp.rows).toHaveLength(1);
+  });
+
+  it('reads a known approval status whatever its case', async () => {
+    const shouty = clone(rsvpOnly);
+    shouty.approval_status = 'Approved';
+
+    const summary = await ingestGuests(EVENT_ID, [shouty], { db });
+
+    expect(summary.rejected).toEqual([]);
+    expect(db.eventRsvp.rows).toHaveLength(1);
+  });
+
+  it('rejects an unreadable check-in time instead of reading it as "not checked in"', async () => {
+    await ingestGuests(EVENT_ID, [checkedIn], { db });
+    const broken = clone(checkedIn);
+    broken.checked_in_at = 'not a date';
+
+    const summary = await ingestGuests(EVENT_ID, [broken], { db });
+
+    expect(summary.rejected).toEqual([expect.objectContaining({
+      reason: expect.stringContaining('unreadable check-in time')
+    })]);
+    expect(db.eventAttendance.rows).toHaveLength(1);
+  });
+
   it('does not count a Google Form responder twice, and never removes their form row', async () => {
     const candidate = await db.candidate.create({
       data: { studentId: '123456789', email: 'uconsultingla@gmail.com', firstName: 'U', lastName: 'C' }
@@ -336,6 +417,43 @@ describe('ingestGuests', () => {
 
     expect(summary.matchStatus.CREATED_CANDIDATE).toBe(1);
     expect(db.memberEventRsvp.rows).toHaveLength(0);
+  });
+
+  it('keeps a member checked in however their two registrations are ordered', async () => {
+    // member_event_attendance has no lumaGuestId, so a row cannot say which
+    // guest put it there. Settling it per guest would let the unscanned
+    // registration delete the scanned one's row whenever it came second.
+    const notScanned = clone(rsvpOnly);
+    notScanned.user_email = 'member@ucla.edu';
+
+    for (const page of [[checkedIn, notScanned], [notScanned, checkedIn]]) {
+      db = fakeDb();
+      const member = await db.user.create({
+        data: { email: 'member@ucla.edu', studentId: '123456788', role: 'MEMBER', fullName: 'M' }
+      });
+
+      await ingestGuests(EVENT_ID, clone(page), { db });
+
+      expect(db.memberEventAttendance.rows).toEqual([
+        expect.objectContaining({ memberId: member.id, source: 'LUMA' })
+      ]);
+    }
+  });
+
+  it("takes a member's attendance out once no registration of theirs is scanned", async () => {
+    await db.user.create({
+      data: { email: 'member@ucla.edu', studentId: '123456788', role: 'MEMBER', fullName: 'M' }
+    });
+    const notScanned = clone(rsvpOnly);
+    notScanned.user_email = 'member@ucla.edu';
+    await ingestGuests(EVENT_ID, [checkedIn, notScanned], { db });
+
+    const undone = clone(checkedIn);
+    undone.checked_in_at = null;
+    undone.event_tickets.forEach((t) => { t.checked_in_at = null; });
+    await ingestGuests(EVENT_ID, [undone, notScanned], { db });
+
+    expect(db.memberEventAttendance.rows).toHaveLength(0);
   });
 
   it("leaves a member's MANUAL attendance mark alone when Luma shows no check-in", async () => {

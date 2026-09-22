@@ -12,6 +12,10 @@
 // check-in take their row back out. Rows written by the Google Form sync are
 // never removed here; a person who answered both counts once.
 //
+// Because a guest can take rows away as well as add them, an entry this file
+// cannot read is rejected rather than interpreted: only a value we recognise is
+// allowed to mean "no longer approved" or "no longer checked in".
+//
 // No ATS confirmation emails go out for these rows: Luma already sent its own.
 import prisma from '../../prismaClient.js';
 
@@ -20,6 +24,18 @@ import prisma from '../../prismaClient.js';
 const UID_LABEL = /\buid\b/i;
 const UID_DIGITS = /^\d{9}$/;
 const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
+
+// The approval_status values Luma sends. Anything else is rejected rather than
+// read as "not approved", so a status Luma adds later cannot silently delete
+// RSVPs; a rejected entry changes nothing and is reported in the summary.
+const APPROVAL_STATUSES = new Set([
+  'approved',
+  'declined',
+  'pending_approval',
+  'waitlist',
+  'invited',
+  'cancelled'
+]);
 
 export const MATCH_STATUS = {
   MATCHED_CANDIDATE: 'MATCHED_CANDIDATE',
@@ -85,16 +101,26 @@ export function splitName(entry) {
   return { firstName: full.slice(0, cut).trim(), lastName: full.slice(cut + 1).trim() };
 }
 
-/** A door scan marks the ticket; the guest-level field is usually set too. */
+/**
+ * When the guest was scanned in: a door scan marks the ticket, and the
+ * guest-level field is usually set too, so the earliest of either counts.
+ *
+ * Returns `{ at }` - a Date, or null for a guest nobody scanned - or
+ * `{ invalid }`. A time that cannot be read is not the same as an absent one:
+ * an absent one removes this guest's attendance row, so a value we failed to
+ * parse would take a real check-in back out.
+ */
 export function checkedInAtOf(entry) {
-  const direct = parseDate(entry.checked_in_at);
-  if (direct) return direct;
   const tickets = Array.isArray(entry.event_tickets) ? entry.event_tickets : [];
-  const times = tickets
-    .map((t) => parseDate(t?.checked_in_at))
-    .filter(Boolean)
-    .sort((a, b) => a - b);
-  return times[0] ?? null;
+  const times = [];
+  for (const value of [entry.checked_in_at, ...tickets.map((t) => t?.checked_in_at)]) {
+    if (value == null || value === '') continue;
+    const date = parseDate(value);
+    if (!date) return { invalid: String(value) };
+    times.push(date);
+  }
+  times.sort((a, b) => a - b);
+  return { at: times[0] ?? null };
 }
 
 // The copy kept in luma_guests.raw: everything list_guests sent, minus the
@@ -121,9 +147,17 @@ export function parseGuest(entry) {
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
     return { problem: `guest ${lumaGuestId} has no usable email` };
   }
-  const approvalStatus = text(entry.approval_status);
-  if (!approvalStatus) {
+  const rawStatus = text(entry.approval_status);
+  if (!rawStatus) {
     return { problem: `guest ${lumaGuestId} has no approval_status` };
+  }
+  const approvalStatus = rawStatus.toLowerCase();
+  if (!APPROVAL_STATUSES.has(approvalStatus)) {
+    return { problem: `guest ${lumaGuestId} has an unknown approval_status "${rawStatus}"` };
+  }
+  const checkedIn = checkedInAtOf(entry);
+  if (checkedIn.invalid !== undefined) {
+    return { problem: `guest ${lumaGuestId} has an unreadable check-in time "${checkedIn.invalid}"` };
   }
 
   const answers = normalizeAnswers(entry.registration_answers);
@@ -139,7 +173,7 @@ export function parseGuest(entry) {
       lastName,
       approvalStatus,
       registeredAt: parseDate(entry.registered_at),
-      checkedInAt: checkedInAtOf(entry),
+      checkedInAt: checkedIn.at,
       joinedAt: parseDate(entry.joined_at),
       uid: uid.uid,
       uidProblem: uid.problem,
@@ -151,30 +185,43 @@ export function parseGuest(entry) {
 
 const insensitive = (value) => ({ equals: value, mode: 'insensitive' });
 
-async function findMember(tx, guest) {
-  if (guest.uid) {
-    const byUid = await tx.user.findFirst({
-      where: { studentId: guest.uid, role: { in: MEMBER_ROLES } }
-    });
-    if (byUid) return byUid;
-  }
-  return tx.user.findFirst({
-    where: { email: insensitive(guest.email), role: { in: MEMBER_ROLES } }
-  });
-}
+// Name pieces, compared with case, spacing and punctuation removed, so
+// "O'Brien", "OBrien" and "o brien" are the same piece.
+const nameKey = (value) => String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+const nameParts = (...values) => values
+  .flatMap((value) => String(value ?? '').split(/\s+/))
+  .map(nameKey)
+  .filter(Boolean);
 
-async function findCandidate(tx, guest) {
-  if (guest.uid) {
-    const byUid = await tx.candidate.findUnique({ where: { studentId: guest.uid } });
-    if (byUid) return byUid;
-  }
-  return tx.candidate.findFirst({ where: { email: insensitive(guest.email) } });
+/**
+ * Whether the Luma profile name corroborates a record found by UID alone, or a
+ * note saying it doesn't.
+ *
+ * The UID is free text the guest types, so it is the one input that can file
+ * somebody as someone else. An email the ATS already knows settles who
+ * registered (see resolvePerson); where it doesn't, the name is the only second
+ * opinion there is. One first or last name in common is enough - a nickname or
+ * a handle is not fraud - so a guest whose name says nothing is still matched,
+ * but carries a note that the summary and the Phase 3 panel can show.
+ */
+function uidOnlyNote(guest, person) {
+  const theirs = new Set(nameParts(person.firstName, person.lastName, person.fullName));
+  if (nameParts(guest.firstName, guest.lastName).some((part) => theirs.has(part))) return null;
+  return `matched on the UID ${guest.uid} alone: ${guest.email} is not in the ATS, `
+    + `and "${guest.name}" does not look like the record that UID points at`;
 }
 
 /**
  * Who this guest is. A match made on an earlier sync (or by an admin, by hand)
  * is kept, so it is only ever decided once; an UNMATCHED guest is retried every
  * time, since they may have applied since.
+ *
+ * The email is Luma's own - it is the address they registered and were mailed
+ * at. The UID is an answer they typed, and nothing stops anyone typing somebody
+ * else's. So the email decides wherever the ATS knows it, and the UID answers
+ * only for an address the ATS has never seen, which is the case it exists for:
+ * most people register with a personal address rather than the one on their
+ * application.
  */
 async function resolvePerson(tx, guest, previous) {
   if (previous?.userId) {
@@ -184,12 +231,37 @@ async function resolvePerson(tx, guest, previous) {
     return { candidateId: previous.candidateId, matchStatus: previous.matchStatus, matchNote: previous.matchNote };
   }
 
-  const member = await findMember(tx, guest);
-  if (member) return { userId: member.id, matchStatus: MATCH_STATUS.MATCHED_MEMBER, matchNote: null };
+  const memberByEmail = await tx.user.findFirst({
+    where: { email: insensitive(guest.email), role: { in: MEMBER_ROLES } }
+  });
+  if (memberByEmail) {
+    return { userId: memberByEmail.id, matchStatus: MATCH_STATUS.MATCHED_MEMBER, matchNote: null };
+  }
 
-  const candidate = await findCandidate(tx, guest);
-  if (candidate) {
-    return { candidateId: candidate.id, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+  const candidateByEmail = await tx.candidate.findFirst({ where: { email: insensitive(guest.email) } });
+  if (candidateByEmail) {
+    return { candidateId: candidateByEmail.id, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+  }
+
+  if (guest.uid) {
+    const memberByUid = await tx.user.findFirst({
+      where: { studentId: guest.uid, role: { in: MEMBER_ROLES } }
+    });
+    if (memberByUid) {
+      return {
+        userId: memberByUid.id,
+        matchStatus: MATCH_STATUS.MATCHED_MEMBER,
+        matchNote: uidOnlyNote(guest, memberByUid)
+      };
+    }
+    const candidateByUid = await tx.candidate.findUnique({ where: { studentId: guest.uid } });
+    if (candidateByUid) {
+      return {
+        candidateId: candidateByUid.id,
+        matchStatus: MATCH_STATUS.MATCHED_CANDIDATE,
+        matchNote: uidOnlyNote(guest, candidateByUid)
+      };
+    }
   }
 
   // A new Candidate needs a studentId, which is required and unique, so a guest
@@ -243,10 +315,31 @@ async function removeRow(model, lumaGuestId) {
   return count > 0 ? 'removed' : 'unchanged';
 }
 
-// member_event_attendance predates Luma and keys on (event, member) with a free
-// text source; the Luma sync owns only the rows it marked 'LUMA', so a MANUAL
-// mark from the accountability page is never touched.
-async function ensureMemberAttendance(tx, eventId, memberId) {
+/**
+ * Whether a member is marked present at the door.
+ *
+ * member_event_attendance predates Luma: it keys on (event, member) with a free
+ * text source and has no lumaGuestId, so a row cannot say which guest put it
+ * there. It is therefore settled from every guest of this event at once - the
+ * member is present if any guest resolving to them is checked in - rather than
+ * per guest, which would let a member who registered twice lose their check-in
+ * to whichever of the two registrations this page happened to reach last.
+ *
+ * Only rows marked 'LUMA' are ever removed, so a MANUAL mark from the
+ * accountability page is never touched.
+ */
+async function reconcileMemberAttendance(tx, eventId, memberId) {
+  const checkedIn = await tx.lumaGuest.findFirst({
+    where: { eventId, userId: memberId, checkedInAt: { not: null } }
+  });
+
+  if (!checkedIn) {
+    const { count } = await tx.memberEventAttendance.deleteMany({
+      where: { eventId, memberId, source: 'LUMA' }
+    });
+    return count > 0 ? 'removed' : 'unchanged';
+  }
+
   const existing = await tx.memberEventAttendance.findUnique({
     where: { eventId_memberId: { eventId, memberId } }
   });
@@ -258,13 +351,6 @@ async function ensureMemberAttendance(tx, eventId, memberId) {
     throw error;
   }
   return 'created';
-}
-
-async function removeMemberAttendance(tx, eventId, memberId) {
-  const { count } = await tx.memberEventAttendance.deleteMany({
-    where: { eventId, memberId, source: 'LUMA' }
-  });
-  return count > 0 ? 'removed' : 'unchanged';
 }
 
 async function reconcileRows(tx, eventId, guest, person, previous) {
@@ -292,15 +378,14 @@ async function reconcileRows(tx, eventId, guest, person, previous) {
     record('rsvp', rsvp
       ? await ensureRow(tx.memberEventRsvp, target)
       : await removeRow(tx.memberEventRsvp, lumaGuestId));
-    record('attendance', attended
-      ? await ensureMemberAttendance(tx, eventId, person.userId)
-      : await removeMemberAttendance(tx, eventId, person.userId));
+    record('attendance', await reconcileMemberAttendance(tx, eventId, person.userId));
   } else {
     record('rsvp', await removeRow(tx.memberEventRsvp, lumaGuestId));
     // A guest who was matched to a member before (and has since been relinked)
-    // leaves no member attendance behind.
+    // leaves no member attendance behind - unless another guest of that
+    // member's is checked in, which is what the reconcile re-checks.
     if (previous?.userId) {
-      record('attendance', await removeMemberAttendance(tx, eventId, previous.userId));
+      record('attendance', await reconcileMemberAttendance(tx, eventId, previous.userId));
     }
   }
 
@@ -323,6 +408,8 @@ async function ingestOne(tx, eventId, guest) {
     matchStatus: person.matchStatus,
     matchNote: person.matchNote ?? null
   };
+  // Stored before the rows are reconciled, because member attendance is settled
+  // by reading this event's guests back - including this one.
   await tx.lumaGuest.upsert({
     where: { lumaGuestId: guest.lumaGuestId },
     create: data,
@@ -339,7 +426,8 @@ async function ingestOne(tx, eventId, guest) {
  * @param {string} eventId  ATS Events.id (not the Luma evt-... id)
  * @param {object[]} entries  list_guests `entries`, untouched
  * @returns a summary: counts per match status, rows created / removed, the
- *   unmatched guests (for the admin panel) and any entries that were rejected.
+ *   unmatched guests (for the admin panel), the guests matched on something
+ *   worth a second look, and any entries that were rejected.
  */
 export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
   if (!Array.isArray(entries)) throw new TypeError('entries must be an array');
@@ -353,6 +441,7 @@ export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
     rsvps: { created: 0, removed: 0 },
     attendance: { created: 0, removed: 0 },
     unmatched: [],
+    flagged: [],
     rejected: [],
     failed: []
   };
@@ -377,13 +466,16 @@ export async function ingestGuests(eventId, entries, { db = prisma } = {}) {
     for (const [key, outcome] of [['rsvps', result.effects.rsvp], ['attendance', result.effects.attendance]]) {
       if (outcome !== 'unchanged') summary[key][outcome] += 1;
     }
+    const seen = {
+      lumaGuestId: guest.lumaGuestId,
+      name: guest.name,
+      email: guest.email,
+      note: result.matchNote
+    };
     if (result.matchStatus === MATCH_STATUS.UNMATCHED) {
-      summary.unmatched.push({
-        lumaGuestId: guest.lumaGuestId,
-        name: guest.name,
-        email: guest.email,
-        note: result.matchNote
-      });
+      summary.unmatched.push(seen);
+    } else if (result.matchNote) {
+      summary.flagged.push(seen);
     }
   }
 
