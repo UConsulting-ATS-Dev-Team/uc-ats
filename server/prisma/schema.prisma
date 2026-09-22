@@ -99,6 +99,7 @@ model User {
   announcementReads          MemberAnnouncementRead[]
   createdLiveVoteSessions    LiveVoteSession[]               @relation("LiveVoteSessionCreator")
   liveVoteParticipations     LiveVoteParticipant[]           @relation("LiveVoteParticipantUser")
+  lumaGuests                 LumaGuest[]
 
   @@map("users")
 }
@@ -124,6 +125,7 @@ model Candidate {
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
   onboarding        CandidateOnboarding?
+  lumaGuests        LumaGuest[]
   /// When set, this person's scores, evaluations, comments and application are
   /// sealed: staff routes answer 423 or redact them unless the request carries
   /// an executive unlock (server/src/utils/lockedRecords.js). Set automatically
@@ -638,6 +640,13 @@ model Events {
   memberEventAttendance   MemberEventAttendance[]
   cycle                   RecruitingCycle   @relation(fields: [cycleId], references: [id])
   memberEventRsvp         MemberEventRsvp[]
+  // The Luma event that replaces this event's Google Forms. lumaUrl is what an
+  // admin pastes (luma.com/<slug>); lumaEventId is the evt-... id the sync
+  // routine resolves it to, and what each page of guests is checked against.
+  lumaUrl                 String?
+  lumaEventId             String?           @unique
+  lumaLastSyncedAt        DateTime?
+  lumaGuests              LumaGuest[]
 
   @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@unique([cycleId, generatedFromStage])
@@ -649,40 +658,97 @@ enum EventFormStatus {
   CONNECTED
 }
 
+/// Where an RSVP or attendance row came from. Google Form rows carry the form
+/// responseId; Luma rows carry the Luma guest id instead, and the Luma sync
+/// only ever removes rows it wrote itself.
+enum EventResponseSource {
+  GOOGLE_FORM
+  LUMA
+}
+
 model EventRsvp {
-  id          String    @id @default(uuid())
-  responseId  String    @unique
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
   eventId     String
   candidateId String
-  createdAt   DateTime  @default(now())
-  candidate   Candidate @relation(fields: [candidateId], references: [id])
-  event       Events    @relation(fields: [eventId], references: [id])
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  candidate   Candidate           @relation(fields: [candidateId], references: [id])
+  event       Events              @relation(fields: [eventId], references: [id])
 
+  @@unique([eventId, candidateId])
   @@map("event_rsvp")
 }
 
 model EventAttendance {
-  id          String    @id @default(uuid())
-  responseId  String    @unique
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
   eventId     String
   candidateId String
-  createdAt   DateTime  @default(now())
-  candidate   Candidate @relation(fields: [candidateId], references: [id])
-  event       Events    @relation(fields: [eventId], references: [id])
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  candidate   Candidate           @relation(fields: [candidateId], references: [id])
+  event       Events              @relation(fields: [eventId], references: [id])
 
+  @@unique([eventId, candidateId])
   @@map("event_attendance")
 }
 
 model MemberEventRsvp {
-  id         String   @id @default(uuid())
-  responseId String   @unique
-  eventId    String
-  memberId   String
-  createdAt  DateTime @default(now())
-  event      Events   @relation(fields: [eventId], references: [id])
-  member     User     @relation(fields: [memberId], references: [id])
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
+  eventId     String
+  memberId    String
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  event       Events              @relation(fields: [eventId], references: [id])
+  member      User                @relation(fields: [memberId], references: [id])
 
+  @@unique([eventId, memberId])
   @@map("member_event_rsvp")
+}
+
+enum LumaMatchStatus {
+  MATCHED_CANDIDATE
+  CREATED_CANDIDATE
+  MATCHED_MEMBER
+  UNMATCHED
+}
+
+/// One Luma guest as the sync routine last saw it, plus who the ATS decided
+/// they are. The raw copy is what an admin links an UNMATCHED guest from, and a
+/// match sticks once made: later syncs reuse candidateId / userId rather than
+/// matching again, so a hand-made link survives. See services/luma/ingestGuests.js.
+model LumaGuest {
+  id             String          @id @default(uuid())
+  lumaGuestId    String          @unique
+  eventId        String
+  email          String
+  name           String
+  firstName      String
+  lastName       String
+  approvalStatus String
+  registeredAt   DateTime?
+  checkedInAt    DateTime?
+  joinedAt       DateTime?
+  uid            String?
+  rawAnswers     Json
+  raw            Json
+  candidateId    String?
+  userId         String?
+  matchStatus    LumaMatchStatus
+  matchNote      String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  event          Events          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  candidate      Candidate?      @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, matchStatus])
+  @@map("luma_guests")
 }
 
 model MemberEventAttendance {
