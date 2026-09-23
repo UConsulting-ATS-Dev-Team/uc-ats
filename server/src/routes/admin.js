@@ -8,6 +8,7 @@ import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
+import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
@@ -4686,6 +4687,8 @@ router.post('/meeting-slots', async (req, res) => {
         communications: { orderBy: { sentAt: 'desc' } }
       }
     });
+
+    await notifyHostSlotCreated(slot, host);
 
     res.json(slot);
   } catch (error) {

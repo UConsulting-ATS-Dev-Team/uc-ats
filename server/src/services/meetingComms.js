@@ -1,9 +1,12 @@
 import prisma from '../prismaClient.js';
+import { sendMeetingSlotCreated } from './emailNotifications.js';
+import { hostMeetingInvite } from './meetingInvites.js';
 
 // Subjects mirror the templates in emailNotifications.js so the log reflects
 // what the recipient actually received. Keep in sync if those templates change.
 export const MEETING_COMM_SUBJECTS = {
   CONFIRMATION: 'Time Slot Confirmation - Get to Know UC',
+  SLOT_CREATED: 'Your Get to Know UC slot is open',
   HOST_NOTIFICATION: (candidateName) => `New GTKUC Signup - ${candidateName} signed up for your slot`,
   CANCELLATION: 'Meeting Cancelled - Get to Know UC',
   CANCELLATION_TO_HOST: 'Get to Know UC - Meeting Cancelled',
@@ -68,4 +71,39 @@ export async function sendAndLogMeetingCommunication(sendFn, meta) {
     });
     return { ok: false, error };
   }
+}
+
+/**
+ * Tell a host their new GTKUC slot exists, with the calendar invite that puts it
+ * on their calendar. Later signup and cancellation emails update that entry.
+ *
+ * Sent whoever created the slot - the host, or an admin on their behalf - since
+ * either way it is the host whose time is now committed. Logged as a
+ * HOST_NOTIFICATION with no signup, which the admin slot log shows as "Host
+ * notified". Never throws: the slot exists whether or not this lands.
+ *
+ * `host` needs email and fullName.
+ */
+export async function notifyHostSlotCreated(slot, host) {
+  if (!slot?.id || !host?.email) return { ok: false };
+  const hostName = host.fullName || 'UC Consulting Member';
+
+  return sendAndLogMeetingCommunication(
+    async () => {
+      const result = await sendMeetingSlotCreated(host.email, hostName, slot.location, slot.startTime, slot.endTime, {
+        invite: hostMeetingInvite({ slot, hostEmail: host.email, hostName, attendeeNames: [] }),
+      });
+      // The sender resolves { success: false } rather than throwing; turn that
+      // back into a throw so the log says FAILED, not SENT.
+      if (result && result.success === false) throw new Error(result.error || 'email send failed');
+      return result;
+    },
+    {
+      slotId: slot.id,
+      signupId: null,
+      type: 'HOST_NOTIFICATION',
+      recipient: host.email,
+      subject: MEETING_COMM_SUBJECTS.SLOT_CREATED,
+    }
+  );
 }

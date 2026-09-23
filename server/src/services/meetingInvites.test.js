@@ -96,10 +96,19 @@ describe('hostMeetingInvite', () => {
     expect(prop(invite, 'STATUS')).toBe('STATUS:CONFIRMED');
   });
 
-  it('cancels the entry when the last candidate leaves', () => {
+  it('keeps an empty slot on the calendar as an open slot', () => {
+    // The host set this time aside when they opened the slot. The last candidate
+    // leaving frees it for someone else; it does not take it off their calendar.
     const invite = hostMeetingInvite({ slot, ...host, attendeeNames: [] });
-    expect(invite.contentType).toContain('method=CANCEL');
-    expect(prop(invite, 'STATUS')).toBe('STATUS:CANCELLED');
+    expect(invite.contentType).toContain('method=REQUEST');
+    expect(prop(invite, 'STATUS')).toBe('STATUS:CONFIRMED');
+    expect(prop(invite, 'SUMMARY')).toBe('SUMMARY:Get to Know UC (open slot)');
+  });
+
+  it('is the same entry from the moment the slot opens', () => {
+    const opened = hostMeetingInvite({ slot, ...host, attendeeNames: [] });
+    const booked = hostMeetingInvite({ slot, ...host, attendeeNames: ['Ada Lovelace'] });
+    expect(prop(booked, 'UID')).toBe(prop(opened, 'UID'));
   });
 
   it('cancels when the slot itself is deleted, even with people still booked', () => {

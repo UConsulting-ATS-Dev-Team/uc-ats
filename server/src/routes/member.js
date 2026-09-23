@@ -13,7 +13,7 @@ import {
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
-import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
@@ -1030,7 +1030,9 @@ router.post('/meeting-slots', requireAuth, requireAdminOrMember, async (req, res
     
     console.log('Created slot startTime:', slot.startTime);
     console.log('Created slot endTime:', slot.endTime);
-    
+
+    await notifyHostSlotCreated(slot, req.user);
+
     res.json(slot);
   } catch (error) {
     console.error('[POST /api/member/meeting-slots]', error);

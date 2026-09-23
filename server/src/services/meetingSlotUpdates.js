@@ -207,16 +207,13 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
     ? sendAndLogMeetingCommunication(
         () => sendOrThrow(() => sendMeetingRescheduleToMember(updated.member.email, hostName, next, previous, {
           signupCount: updated.signups.length,
-          // An empty slot never put anything on the host's calendar, so there is
-          // nothing to move.
-          invite: updated.signups.length
-            ? hostMeetingInvite({
-                slot: updated,
-                hostEmail: updated.member.email,
-                hostName,
-                attendeeNames: updated.signups.map((s) => s.fullName),
-              })
-            : null,
+          // Sent for an empty slot too: the host has had an entry since it opened.
+          invite: hostMeetingInvite({
+            slot: updated,
+            hostEmail: updated.member.email,
+            hostName,
+            attendeeNames: updated.signups.map((s) => s.fullName),
+          }),
         })),
         {
           slotId: updated.id,

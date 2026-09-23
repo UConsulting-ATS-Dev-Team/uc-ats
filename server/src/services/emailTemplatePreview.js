@@ -20,7 +20,7 @@ import config from '../config.js';
  * Three separate systems write these emails, which is the first thing worth
  * knowing about them:
  *
- *   - `emailNotifications.js` builds 18 one-off emails, each with its own markup.
+ *   - `emailNotifications.js` builds 19 one-off emails, each with its own markup.
  *   - `renderInterviewSlotEmail` writes the 12 interview-slot notifications
  *     from a shared layout keyed by notification type.
  *   - `decisionTemplates.js` renders the round decision wording from Markdown
@@ -164,7 +164,18 @@ const TRANSACTIONAL = [
     audience: 'Candidate',
     category: 'Get to Know UC',
     trigger: 'Sent when a candidate books a meeting slot.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [SAMPLE_CANDIDATE, SAMPLE_MEMBER, SAMPLE_LOCATION, SAMPLE_START, SAMPLE_END],
+  },
+  {
+    key: 'meeting-slot-created',
+    label: 'GTKUC slot opened',
+    description: 'Confirms to a member that their slot is open, with a calendar invite for it.',
+    audience: 'Member',
+    category: 'Get to Know UC',
+    trigger: 'Sent to the slot owner when a slot is created, by them or by an admin.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
+    args: [SAMPLE_MEMBER, SAMPLE_LOCATION, SAMPLE_START, SAMPLE_END],
   },
   {
     key: 'meeting-signup-notification',
@@ -173,6 +184,7 @@ const TRANSACTIONAL = [
     audience: 'Member',
     category: 'Get to Know UC',
     trigger: 'Sent to the slot owner when a candidate books.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [
       SAMPLE_MEMBER,
       SAMPLE_CANDIDATE,
@@ -190,6 +202,7 @@ const TRANSACTIONAL = [
     audience: 'Candidate',
     category: 'Get to Know UC',
     trigger: 'Sent when a member or admin cancels a booked slot.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [SAMPLE_CANDIDATE, SAMPLE_MEMBER, SAMPLE_LOCATION, SAMPLE_START, SAMPLE_END],
   },
   {
@@ -199,6 +212,7 @@ const TRANSACTIONAL = [
     audience: 'Member',
     category: 'Get to Know UC',
     trigger: 'Sent when a candidate cancels, or when an admin removes the slot.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [
       SAMPLE_MEMBER,
       SAMPLE_LOCATION,
@@ -214,6 +228,7 @@ const TRANSACTIONAL = [
     audience: 'Candidate',
     category: 'Get to Know UC',
     trigger: 'Sent when an admin or member moves a slot that already has signups.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [SAMPLE_CANDIDATE, SAMPLE_MEMBER, SAMPLE_MEETING, SAMPLE_PREVIOUS_MEETING],
   },
   {
@@ -223,6 +238,7 @@ const TRANSACTIONAL = [
     audience: 'Member',
     category: 'Get to Know UC',
     trigger: 'Sent to the slot owner when their slot is moved.',
+    alsoAttaches: 'A calendar invite (.ics) for the meeting.',
     args: [SAMPLE_MEMBER, SAMPLE_MEETING, SAMPLE_PREVIOUS_MEETING, { signupCount: 2 }],
   },
   {
