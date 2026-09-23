@@ -7,6 +7,7 @@ import {
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Candidate-facing: always the candidate pointer, never the caller's role.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -143,7 +144,15 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
         slot.member?.fullName || 'UC Consulting Member',
         slot.location,
         slot.startTime,
-        slot.endTime
+        slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot,
+            candidateEmail: email,
+            candidateName: fullName,
+            hostName: slot.member?.fullName,
+          }),
+        }
       );
     } catch (emailError) {
       console.error('Failed to send confirmation email:', emailError);
@@ -152,6 +161,7 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
     // Notification email to member.
     try {
       if (slot.member?.email) {
+        const hostAttendees = await bookedNames(slot.id);
         await sendMeetingSignupNotification(
           slot.member.email,
           slot.member.fullName || 'UC Consulting Member',
@@ -160,7 +170,15 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
           studentId,
           slot.location,
           slot.startTime,
-          slot.endTime
+          slot.endTime,
+          {
+            invite: hostMeetingInvite({
+              slot,
+              hostEmail: slot.member.email,
+              hostName: slot.member.fullName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         );
       }
     } catch (emailError) {
@@ -220,7 +238,16 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       );
     } catch (emailError) {
       console.error('Failed to send cancellation email to candidate:', emailError);
@@ -229,13 +256,23 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
     // Notify the member the slot opened back up.
     try {
       if (signup.slot.member?.email) {
+        // Already deleted above, so the roster no longer includes them.
+        const hostAttendees = await bookedNames(signup.slotId);
         await sendMeetingCancellationToMember(
           signup.slot.member.email,
           memberName,
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         );
       }
     } catch (emailError) {

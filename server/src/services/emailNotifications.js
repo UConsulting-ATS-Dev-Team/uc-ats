@@ -483,10 +483,10 @@ const createMeetingSignupConfirmationEmail = async (candidateName, memberName, l
 };
 
 // Send meeting signup confirmation email
-export const sendMeetingSignupConfirmation = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
+export const sendMeetingSignupConfirmation = async (candidateEmail, candidateName, memberName, location, startTime, endTime, { invite } = {}) => {
   try {
     const emailContent = await createMeetingSignupConfirmationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting signup confirmation email sent to ${candidateEmail} for meeting with ${memberName}`);
@@ -545,10 +545,10 @@ const createMeetingSignupNotificationEmail = async (memberName, candidateName, c
 };
 
 // Send meeting signup notification email to member
-export const sendMeetingSignupNotification = async (memberEmail, memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
+export const sendMeetingSignupNotification = async (memberEmail, memberName, candidateName, candidateEmail, studentId, location, startTime, endTime, { invite } = {}) => {
   try {
     const emailContent = await createMeetingSignupNotificationEmail(memberName, candidateName, candidateEmail, studentId, location, startTime, endTime);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: memberName });
     
     if (result.success) {
       console.log(`Meeting signup notification email sent to ${memberEmail} for signup by ${candidateName}`);
@@ -753,10 +753,10 @@ export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
 };
 
 // Send meeting cancellation email
-export const sendMeetingCancellationEmail = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
+export const sendMeetingCancellationEmail = async (candidateEmail, candidateName, memberName, location, startTime, endTime, { invite } = {}) => {
   try {
     const emailContent = await createMeetingCancellationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting cancellation email sent to ${candidateEmail} for cancelled meeting with ${memberName}`);
@@ -837,7 +837,7 @@ const createMeetingCancellationMemberEmail = async (memberName, location, startT
 export const sendMeetingCancellationToMember = async (memberEmail, memberName, location, startTime, endTime, options = {}) => {
   try {
     const emailContent = await createMeetingCancellationMemberEmail(memberName, location, startTime, endTime, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, options.invite ? [options.invite] : [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting cancellation email sent to host member ${memberEmail}`);
@@ -928,10 +928,10 @@ ${renderRescheduleDetails(next, previous)}
 };
 
 // Send the reschedule notice to a signed-up candidate.
-export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous) => {
+export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous, { invite } = {}) => {
   try {
     const emailContent = await createMeetingRescheduleEmail(candidateName, memberName, next, previous);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to ${candidateEmail} for moved meeting with ${memberName}`);
@@ -991,7 +991,7 @@ ${renderRescheduleDetails(next, previous)}
 export const sendMeetingRescheduleToMember = async (memberEmail, memberName, next, previous, options = {}) => {
   try {
     const emailContent = await createMeetingRescheduleMemberEmail(memberName, next, previous, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, options.invite ? [options.invite] : [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to host member ${memberEmail}`);

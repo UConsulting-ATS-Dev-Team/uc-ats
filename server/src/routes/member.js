@@ -14,6 +14,7 @@ import {
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
@@ -1129,7 +1130,16 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
             memberName,
             existingSlot.location,
             existingSlot.startTime,
-            existingSlot.endTime
+            existingSlot.endTime,
+            {
+              invite: candidateMeetingInvite({
+                slot: existingSlot,
+                candidateEmail: signup.email,
+                candidateName: signup.fullName,
+                hostName: memberName,
+                method: 'CANCEL',
+              }),
+            }
           ),
           {
             slotId: existingSlot.id,
@@ -1205,7 +1215,16 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       ),
       {
         slotId: signup.slotId,
