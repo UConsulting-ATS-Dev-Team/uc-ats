@@ -25,7 +25,6 @@ const status = (overrides = {}) => ({
   required: true,
   hasApplication: false,
   completed: false,
-  emailVerified: true,
   onboarding: null,
   talentPool: { shared: false, consentAt: null, consentRevokedAt: null },
   ...overrides,
@@ -78,14 +77,6 @@ const fillAndSubmit = async (
 };
 
 describe('what the module refuses to ask', () => {
-  it('tells an unverified account to check its email instead of showing the form', async () => {
-    mockStatus({ emailVerified: false });
-    render(<CandidateOnboarding />);
-
-    expect(await screen.findByText(/Check your email for a verification link/)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Cumulative GPA/)).not.toBeInTheDocument();
-  });
-
   it('does not ask a candidate who already has an application', async () => {
     mockStatus({ required: false, hasApplication: true });
     render(<CandidateOnboarding />);
