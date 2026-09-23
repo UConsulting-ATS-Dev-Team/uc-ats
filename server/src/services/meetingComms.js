@@ -82,16 +82,18 @@ export async function sendAndLogMeetingCommunication(sendFn, meta) {
  * HOST_NOTIFICATION with no signup, which the admin slot log shows as "Host
  * notified". Never throws: the slot exists whether or not this lands.
  *
- * `host` needs email and fullName.
+ * `host` needs email and fullName. `attendeeNames` is empty for a slot that
+ * was just created; the backfill script passes the current roster, since a
+ * slot that already has bookings already has a host entry naming them.
  */
-export async function notifyHostSlotCreated(slot, host) {
+export async function notifyHostSlotCreated(slot, host, { attendeeNames = [] } = {}) {
   if (!slot?.id || !host?.email) return { ok: false };
   const hostName = host.fullName || 'UC Consulting Member';
 
   return sendAndLogMeetingCommunication(
     async () => {
       const result = await sendMeetingSlotCreated(host.email, hostName, slot.location, slot.startTime, slot.endTime, {
-        invite: hostMeetingInvite({ slot, hostEmail: host.email, hostName, attendeeNames: [] }),
+        invite: hostMeetingInvite({ slot, hostEmail: host.email, hostName, attendeeNames }),
       });
       // The sender resolves { success: false } rather than throwing; turn that
       // back into a throw so the log says FAILED, not SENT.

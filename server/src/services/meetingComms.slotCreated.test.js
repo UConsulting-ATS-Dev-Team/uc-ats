@@ -74,6 +74,13 @@ describe('notifyHostSlotCreated', () => {
     });
   });
 
+  it('names who is booked, so a backfill does not blank an existing entry', async () => {
+    await notifyHostSlotCreated(slot, host, { attendeeNames: ['Jordan Rivera'] });
+
+    const { invite } = sendMeetingSlotCreated.mock.calls[0][5];
+    expect(invite.content).toContain('SUMMARY:Get to Know UC: Jordan Rivera');
+  });
+
   it('sends nothing for a host without an address', async () => {
     expect(await notifyHostSlotCreated(slot, { fullName: 'No Email' })).toEqual({ ok: false });
     expect(sendMeetingSlotCreated).not.toHaveBeenCalled();
