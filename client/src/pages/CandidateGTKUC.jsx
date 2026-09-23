@@ -222,9 +222,12 @@ export default function CandidateGTKUC() {
           Get to Know UC
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          Meet with a UConsulting member to learn more about the club and get your questions answered. You can
-          book one meeting per recruiting cycle.
+          Meet with a UConsulting member to learn more about the club and get your questions answered.
         </Typography>
+        <Alert severity="info" sx={{ mb: 3 }}>
+          <strong>Important:</strong> You can hold one meeting slot per cycle. Change or cancel it yourself here
+          (or on the /meet page) up to {MODIFY_CUTOFF_HOURS} hours before it starts.
+        </Alert>
 
         {error && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>

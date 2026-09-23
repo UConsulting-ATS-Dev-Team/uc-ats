@@ -418,7 +418,7 @@ export default function CoffeeChatsPublic() {
           <Box sx={{ textAlign: 'center' }}>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
               <Typography variant="body2">
-                <strong>Important:</strong> You can book one meeting per recruiting cycle. Once you have one, you can change its time or cancel it on this page, up to {MODIFY_CUTOFF_HOURS} hours before it starts.
+                <strong>Important:</strong> You can hold one meeting slot per cycle. Change or cancel it yourself from your ATS account (on this page, or Get to Know UC in the candidate portal) up to {MODIFY_CUTOFF_HOURS} hours before it starts.
               </Typography>
             </Alert>
           </Box>

@@ -164,6 +164,13 @@ const booking = (overrides = {}) => ({
 const signedIn = () => auth({ user: { fullName: 'Jordan Rivera', email: 'jordan@ucla.edu', studentId: '123456789' } });
 
 describe('one booking per cycle', () => {
+  it('tells people they can change or cancel from their account, not by email', async () => {
+    auth();
+    render(<CoffeeChatsPublic />);
+    expect(await screen.findByText(/Change or cancel it yourself from your ATS account/)).toBeInTheDocument();
+    expect(screen.queryByText(/uconsultingla@gmail.com/)).not.toBeInTheDocument();
+  });
+
   it('shows the booked meeting instead of the slot gallery', async () => {
     signedIn();
     mockGets({ mine: [booking()], slots: [slot, otherSlot] });
