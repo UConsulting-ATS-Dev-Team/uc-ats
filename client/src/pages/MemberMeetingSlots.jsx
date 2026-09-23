@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
+import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
 import AccessControl from '../components/AccessControl';
 import GtkucProfileModal from '../components/GtkucProfileModal';
 import {
@@ -80,35 +81,18 @@ export default function MemberMeetingSlots() {
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members and admins)
-      const active = await api.get('/active-cycle');
-      setActiveCycle(active || null);
-      return active || null;
+      const active = await fetchActiveCycle(api);
+      setActiveCycle(active);
+      return active;
     } catch (e) {
       console.error('Failed to load active cycle:', e);
       return null;
     }
   };
 
-  const filterSlotsByCycle = (slotsToFilter, cycle) => {
-    // If no active cycle, return empty array to only show slots from current cycle
-    if (!cycle) return [];
-
-    // Filter slots by creation date - include slots created up to 1 month before cycle starts
-    if (cycle.startDate) {
-      const cycleStartDate = new Date(cycle.startDate);
-      cycleStartDate.setHours(0, 0, 0, 0);
-      // Allow slots created up to 1 month before the cycle starts
-      cycleStartDate.setMonth(cycleStartDate.getMonth() - 1);
-
-      return slotsToFilter.filter(slot => {
-        const slotCreatedAt = new Date(slot.createdAt);
-        return slotCreatedAt >= cycleStartDate;
-      });
-    }
-
-    // If no start date on cycle, return all slots (fallback)
-    return slotsToFilter;
-  };
+  // No active cycle shows nothing, so a member never edits last cycle's slots.
+  const filterSlotsByCycle = (slotsToFilter, cycle) =>
+    cycle ? slotsCreatedForCycle(slotsToFilter, cycle) : [];
 
   const load = async () => {
     try {

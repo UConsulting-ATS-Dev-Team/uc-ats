@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
+import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
 import {
@@ -168,13 +169,13 @@ export default function AdminMeetingSlots() {
       setError('');
       const [data, cycle, users, profiles] = await Promise.all([
         api.get('/admin/meeting-slots'),
-        api.get('/active-cycle').catch(() => null),
+        fetchActiveCycle(api).catch(() => null),
         api.get('/admin/users').catch(() => []),
         api.get('/admin/gtkuc-profiles').catch(() => []),
         loadProfileState()
       ]);
       setSlots(data?.slots || []);
-      setActiveCycle(cycle || null);
+      setActiveCycle(cycle);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
       setGtkucProfiles(profiles || []);
     } catch (e) {
@@ -212,11 +213,7 @@ export default function AdminMeetingSlots() {
   // Cycle-scoped set — drives the summary cards and both tabs.
   const cycleSlots = useMemo(() => {
     if (cycleScope === 'all') return slots;
-    if (!activeCycle || !activeCycle.startDate) return slots;
-    const cutoff = new Date(activeCycle.startDate);
-    cutoff.setHours(0, 0, 0, 0);
-    cutoff.setMonth(cutoff.getMonth() - 1);
-    return slots.filter((s) => new Date(s.createdAt) >= cutoff);
+    return slotsCreatedForCycle(slots, activeCycle);
   }, [slots, cycleScope, activeCycle]);
 
   const stats = useMemo(() => {

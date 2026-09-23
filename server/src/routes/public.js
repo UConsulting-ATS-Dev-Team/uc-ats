@@ -411,15 +411,4 @@ router.get('/member/events', async (req, res) => {
   }
 });
 
-// Public: get active recruiting cycle (for filtering meeting slots by cycle)
-router.get('/active-cycle', async (req, res) => {
-  try {
-    const active = await resolveCandidateCycle(prisma);
-    res.json(active || null);
-  } catch (error) {
-    console.error('[GET /api/active-cycle]', error);
-    res.json(null);
-  }
-});
-
 export default router;
