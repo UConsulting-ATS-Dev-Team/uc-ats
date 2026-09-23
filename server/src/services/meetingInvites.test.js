@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { candidateMeetingInvite, hostMeetingInvite } from './meetingInvites.js';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import prisma from '../prismaClient.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from './meetingInvites.js';
+
+vi.mock('../prismaClient.js', () => ({
+  default: { meetingSignup: { findMany: vi.fn() } },
+}));
 
 beforeAll(() => {
   process.env.EMAIL_FROM = 'no-reply@uconsultingats.com';
@@ -106,5 +111,37 @@ describe('hostMeetingInvite', () => {
     const hostInvite = hostMeetingInvite({ slot, ...host, attendeeNames: ['Ada Lovelace'] });
     const candidateInvite = candidateMeetingInvite({ slot, ...candidate, candidateEmail: host.hostEmail });
     expect(prop(hostInvite, 'UID')).not.toBe(prop(candidateInvite, 'UID'));
+  });
+});
+
+describe('sequence', () => {
+  it('increases for every invite, even inside one second', () => {
+    // A second candidate booking the same slot a moment after the first updates the
+    // host's entry; an equal SEQUENCE would let a calendar ignore the update.
+    const seqs = Array.from({ length: 5 }, () =>
+      Number(prop(hostMeetingInvite({ slot, ...host, attendeeNames: ['Ada Lovelace'] }), 'SEQUENCE').split(':')[1])
+    );
+    for (let i = 1; i < seqs.length; i += 1) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    // Still a 32-bit INTEGER, as RFC 5545 requires.
+    expect(seqs.at(-1)).toBeLessThan(2 ** 31);
+  });
+});
+
+describe('bookedNames', () => {
+  it('reads the committed roster, leaving out a signup being cancelled', async () => {
+    prisma.meetingSignup.findMany.mockResolvedValueOnce([{ fullName: 'Alan Turing' }]);
+
+    expect(await bookedNames('slot-1', { excludingSignupId: 'signup-9' })).toEqual(['Alan Turing']);
+    expect(prisma.meetingSignup.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { slotId: 'slot-1', id: { not: 'signup-9' } } })
+    );
+  });
+
+  it('sends no host invite when the roster cannot be read, rather than a CANCEL', async () => {
+    prisma.meetingSignup.findMany.mockRejectedValueOnce(new Error('connection reset'));
+
+    const names = await bookedNames('slot-1');
+    expect(names).toBeNull();
+    expect(hostMeetingInvite({ slot, ...host, attendeeNames: names })).toBeNull();
   });
 });

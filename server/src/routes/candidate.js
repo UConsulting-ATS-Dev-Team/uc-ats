@@ -7,7 +7,7 @@ import {
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
-import { candidateMeetingInvite, hostMeetingInvite } from '../services/meetingInvites.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Candidate-facing: always the candidate pointer, never the caller's role.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -161,6 +161,7 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
     // Notification email to member.
     try {
       if (slot.member?.email) {
+        const hostAttendees = await bookedNames(slot.id);
         await sendMeetingSignupNotification(
           slot.member.email,
           slot.member.fullName || 'UC Consulting Member',
@@ -175,7 +176,7 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
               slot,
               hostEmail: slot.member.email,
               hostName: slot.member.fullName,
-              attendeeNames: [...slot.signups.map((s) => s.fullName), fullName],
+              attendeeNames: hostAttendees,
             }),
           }
         );
@@ -204,7 +205,7 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
       where: { id },
       include: {
         slot: {
-          include: { signups: true, member: { select: { fullName: true, email: true } } },
+          include: { member: { select: { fullName: true, email: true } } },
         },
       },
     });
@@ -255,6 +256,8 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
     // Notify the member the slot opened back up.
     try {
       if (signup.slot.member?.email) {
+        // Already deleted above, so the roster no longer includes them.
+        const hostAttendees = await bookedNames(signup.slotId);
         await sendMeetingCancellationToMember(
           signup.slot.member.email,
           memberName,
@@ -267,7 +270,7 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
               slot: signup.slot,
               hostEmail: signup.slot.member.email,
               hostName: memberName,
-              attendeeNames: signup.slot.signups.filter((s) => s.id !== signup.id).map((s) => s.fullName),
+              attendeeNames: hostAttendees,
             }),
           }
         );

@@ -7,7 +7,7 @@ import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEven
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
-import { candidateMeetingInvite, hostMeetingInvite } from '../services/meetingInvites.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
@@ -4924,7 +4924,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     const signup = await prisma.meetingSignup.findUnique({
       where: { id },
-      include: { slot: { include: { signups: true, member: { select: { fullName: true, email: true, profileImage: true } } } } }
+      include: { slot: { include: { member: { select: { fullName: true, email: true, profileImage: true } } } } }
     });
 
     if (!signup) {
@@ -4963,6 +4963,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     // ...and notify the host member the spot reopened.
     if (signup.slot.member?.email) {
+      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
       await sendAndLogMeetingCommunication(
         () => sendMeetingCancellationToMember(
           signup.slot.member.email,
@@ -4976,7 +4977,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
               slot: signup.slot,
               hostEmail: signup.slot.member.email,
               hostName: memberName,
-              attendeeNames: signup.slot.signups.filter((s) => s.id !== signup.id).map((s) => s.fullName),
+              attendeeNames: hostAttendees,
             }),
           }
         ),

@@ -14,15 +14,22 @@
 // otherwise the host would lose the meeting from their calendar while someone is
 // still coming. hostMeetingInvite decides that from `attendeeNames`.
 //
-// SEQUENCE is the send time, as eventInvites.js does it. MeetingSignup has no
-// updatedAt, and a signup or cancellation changes the host's entry without
-// touching the slot row, so slot.updatedAt would not always increase.
+// SEQUENCE is the send time in seconds, bumped past the last one issued so two
+// changes to the same entry inside one second still order correctly.
+// MeetingSignup has no updatedAt, and a signup or cancellation changes the
+// host's entry without touching the slot row, so slot.updatedAt would not always
+// increase. Seconds rather than milliseconds because RFC 5545 INTEGER is 32-bit.
+//
+// The host's attendee list is read from the database at send time, not from the
+// slot the route loaded before its write, so a booking that lands in between is
+// not dropped - and cannot turn the host's REQUEST into a CANCEL.
 //
 // Known gaps, all because no email goes out to the host to carry an update: a
 // host moving or deleting their own slot, or removing one of their own signups,
 // leaves their entry as it was, and an admin reassigning a slot to another host
 // moves nothing.
 
+import prisma from '../prismaClient.js';
 import { buildInvite, inviteUid, describeWhen } from './calendarInvite.js';
 
 const SUMMARY = 'Get to Know UC';
@@ -31,8 +38,11 @@ function organizerEmail() {
   return (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
 }
 
-function sequenceNow() {
-  return Math.floor(Date.now() / 1000);
+let lastSequence = 0;
+
+function nextSequence() {
+  lastSequence = Math.max(Math.floor(Date.now() / 1000), lastSequence + 1);
+  return lastSequence;
 }
 
 function joinLines(lines) {
@@ -53,7 +63,7 @@ export function candidateMeetingInvite({ slot, candidateEmail, candidateName, ho
     const when = describeWhen(slot.startTime, slot.endTime);
     return buildInvite({
       uid: inviteUid('gtkuc', `${slot.id}-${String(candidateEmail).toLowerCase()}`),
-      sequence: sequenceNow(),
+      sequence: nextSequence(),
       method,
       start: slot.startTime,
       end: slot.endTime,
@@ -81,7 +91,8 @@ export function candidateMeetingInvite({ slot, candidateEmail, candidateName, ho
 /**
  * The host's invite to one GTKUC slot, or null when it cannot be built.
  *
- * `attendeeNames` is everyone still booked after the change being announced. An
+ * `attendeeNames` is everyone still booked after the change being announced -
+ * read it with bookedNames. null (a failed read) means no invite. An
  * empty list turns a REQUEST into a CANCEL, which is what makes "the last
  * candidate cancelled" clear the entry and "one of two cancelled" keep it.
  * Pass method 'CANCEL' directly when the slot itself is gone.
@@ -89,7 +100,7 @@ export function candidateMeetingInvite({ slot, candidateEmail, candidateName, ho
 export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [], method = 'REQUEST' }) {
   try {
     const organizer = organizerEmail();
-    if (!slot?.id || !slot.startTime || !hostEmail || !organizer) return null;
+    if (!slot?.id || !slot.startTime || !hostEmail || !organizer || !attendeeNames) return null;
 
     const names = attendeeNames.filter(Boolean);
     const cancelling = method === 'CANCEL' || names.length === 0;
@@ -97,7 +108,7 @@ export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [
 
     return buildInvite({
       uid: inviteUid('gtkuc-host', slot.id),
-      sequence: sequenceNow(),
+      sequence: nextSequence(),
       method: cancelling ? 'CANCEL' : 'REQUEST',
       start: slot.startTime,
       end: slot.endTime,
@@ -116,6 +127,31 @@ export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [
   } catch (error) {
     console.warn('[hostMeetingInvite] could not build a calendar invite; sending without one', {
       slotId: slot?.id,
+      error: error?.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Names of everyone booked on a slot right now, for hostMeetingInvite.
+ *
+ * `excludingSignupId` drops a signup that is being cancelled but not yet deleted -
+ * the cancellation routes email before they delete. Returns null on a failed read,
+ * which callers pass straight through: better no invite than a CANCEL built from
+ * a roster we could not see.
+ */
+export async function bookedNames(slotId, { excludingSignupId = null } = {}) {
+  try {
+    const signups = await prisma.meetingSignup.findMany({
+      where: { slotId, ...(excludingSignupId ? { id: { not: excludingSignupId } } : {}) },
+      select: { fullName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return signups.map((s) => s.fullName);
+  } catch (error) {
+    console.warn('[bookedNames] could not read the slot roster; sending without a host invite', {
+      slotId,
       error: error?.message,
     });
     return null;
