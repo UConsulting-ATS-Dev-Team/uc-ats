@@ -28,6 +28,7 @@ import {
   sendMeetingSignupNotification,
   sendMeetingCancellationToMember,
   sendMeetingRescheduleEmail,
+  sendMeetingCancellationEmail,
 } from './emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from './meetingComms.js';
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from './meetingInvites.js';
@@ -154,9 +155,47 @@ export async function moveMeetingSignup({ signupId, slotId, account }) {
     }
 
     const cycle = await resolveCandidateCycle(tx);
+    // A booking left over from an earlier cycle could otherwise be moved in
+    // beside the one they already hold this cycle.
+    const other = await findBookingThisCycle(tx, account.email, cycle, { excludingSignupId: signupId });
+    if (other) {
+      throw new BookingError(
+        409,
+        `You already have a meeting booked on ${formatDay(other.slot.startTime)}. Change that one instead.`,
+        'ALREADY_BOOKED'
+      );
+    }
+
     const to = await claimSeat(tx, slotId, cycle);
     const moved = await tx.meetingSignup.update({ where: { id: signupId }, data: { slotId } });
     return { signup: moved, from: signup.slot, to };
+  });
+}
+
+/**
+ * Cancel the caller's own booking, under the same candidate lock as booking and
+ * moving. Without it a cancel could read the signup, lose the race to a move,
+ * and then delete the moved row while telling the old slot's host.
+ * Returns the deleted signup with the slot it was in.
+ */
+export async function cancelOwnMeetingSignup({ signupId, account }) {
+  return prisma.$transaction(async (tx) => {
+    await lockCandidate(tx, account.email);
+
+    const signup = await tx.meetingSignup.findUnique({
+      where: { id: signupId },
+      include: { slot: { include: { member: { select: { id: true, fullName: true, email: true } } } } },
+    });
+    if (!signup) throw new BookingError(404, 'Booking not found');
+    if (signup.email.toLowerCase() !== String(account.email).toLowerCase()) {
+      throw new BookingError(403, 'You can only cancel your own booking');
+    }
+    if (!canModify(signup.slot.startTime, MODIFY_CUTOFF_HOURS)) {
+      throw new BookingError(400, cutoffMessage('meeting'), 'CUTOFF');
+    }
+
+    await tx.meetingSignup.delete({ where: { id: signupId } });
+    return signup;
   });
 }
 
@@ -250,6 +289,43 @@ export async function notifyMeetingMoved({ signup, from, to }) {
         slotId: to.id, signupId: signup.id, type: 'HOST_NOTIFICATION', recipient: to.member.email,
         subject: MEETING_COMM_SUBJECTS.HOST_NOTIFICATION(signup.fullName),
       }
+    );
+  }
+}
+
+/**
+ * After a candidate cancels: they get the cancellation, whose invite removes
+ * their calendar entry, and the host hears the seat opened. Logged against the
+ * slot; the signup row is gone, so the logs carry no signupId.
+ */
+export async function notifyMeetingCancelled({ signup }) {
+  const { slot } = signup;
+  const hostName = slot.member?.fullName || HOST_FALLBACK;
+
+  await sendAndLogMeetingCommunication(
+    () => sendOrThrow(() => sendMeetingCancellationEmail(
+      signup.email, signup.fullName, hostName, slot.location, slot.startTime, slot.endTime,
+      {
+        invite: candidateMeetingInvite({
+          slot, signupId: signup.id, candidateEmail: signup.email, candidateName: signup.fullName, hostName,
+          method: 'CANCEL',
+        }),
+      }
+    )),
+    { slotId: slot.id, signupId: null, type: 'CANCELLATION', recipient: signup.email, subject: MEETING_COMM_SUBJECTS.CANCELLATION }
+  );
+
+  if (slot.member?.email) {
+    const remaining = await bookedNames(slot.id);
+    await sendAndLogMeetingCommunication(
+      () => sendOrThrow(() => sendMeetingCancellationToMember(
+        slot.member.email, hostName, slot.location, slot.startTime, slot.endTime,
+        {
+          candidateName: signup.fullName,
+          invite: hostMeetingInvite({ slot, hostEmail: slot.member.email, hostName, attendeeNames: remaining }),
+        }
+      )),
+      { slotId: slot.id, signupId: null, type: 'CANCELLATION', recipient: slot.member.email, subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST }
     );
   }
 }

@@ -1,18 +1,16 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
-import { sendMeetingCancellationToMember } from '../services/emailNotifications.js';
-import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
-import { hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import {
   BookingError,
   bookMeetingSlot,
   moveMeetingSignup,
+  cancelOwnMeetingSignup,
   notifyMeetingBooked,
   notifyMeetingMoved,
+  notifyMeetingCancelled,
 } from '../services/meetingSignups.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
-import { canModify, cutoffMessage } from '../utils/schedulingWindows.js';
 // Public routes are candidate-facing by definition: no token, so no role to key on.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
 
@@ -180,63 +178,15 @@ router.get('/meeting-signups/mine', requireAuth, async (req, res) => {
 // the spot reopened and logs the communication.
 router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const signup = await prisma.meetingSignup.findUnique({
-      where: { id },
-      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
-    });
-
-    if (!signup) {
-      return res.status(404).json({ error: 'Signup not found' });
-    }
-
-    // Ownership: a user may only cancel a signup made under their own email.
-    if (signup.email.toLowerCase() !== req.user.email.toLowerCase()) {
-      return res.status(403).json({ error: 'You can only cancel your own signup' });
-    }
-
-    // The same cutoff the candidate portal enforces, so /meet is not a way round it.
-    if (!canModify(signup.slot.startTime)) {
-      return res.status(400).json({ error: cutoffMessage('meeting'), code: 'CUTOFF' });
-    }
-
-    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
-
-    // Notify the host member their slot spot reopened (and log it).
-    if (signup.slot.member?.email) {
-      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
-      await sendAndLogMeetingCommunication(
-        () => sendMeetingCancellationToMember(
-          signup.slot.member.email,
-          memberName,
-          signup.slot.location,
-          signup.slot.startTime,
-          signup.slot.endTime,
-          {
-            candidateName: signup.fullName,
-            invite: hostMeetingInvite({
-              slot: signup.slot,
-              hostEmail: signup.slot.member.email,
-              hostName: memberName,
-              attendeeNames: hostAttendees,
-            }),
-          }
-        ),
-        {
-          slotId: signup.slotId,
-          signupId: signup.id,
-          type: 'CANCELLATION',
-          recipient: signup.slot.member.email,
-          subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
-        }
-      );
-    }
-
-    await prisma.meetingSignup.delete({ where: { id } });
-
-    res.json({ message: 'Your signup has been cancelled.' });
+    // Locked, owner- and cutoff-checked in the service, so it cannot interleave
+    // with a move of the same booking.
+    const signup = await cancelOwnMeetingSignup({ signupId: req.params.id, account: req.user });
+    await notifyMeetingCancelled({ signup });
+    res.json({ success: true, message: 'Your signup has been cancelled.' });
   } catch (error) {
+    if (error instanceof BookingError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     console.error('[DELETE /api/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to cancel signup' });
   }
