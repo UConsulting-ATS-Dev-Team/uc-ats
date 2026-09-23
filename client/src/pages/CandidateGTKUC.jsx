@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import apiClient from '../utils/api';
+import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import {
@@ -44,22 +45,6 @@ const formatDateTime = (dateTime) => {
     hour12: true,
     timeZone: 'America/Los_Angeles',
   });
-};
-
-// Keep only slots that fall within the active recruiting cycle's date range.
-const filterSlotsByCycle = (slotsToFilter, cycle) => {
-  if (!cycle) return [];
-  if (cycle.startDate || cycle.endDate) {
-    return slotsToFilter.filter((slot) => {
-      const slotDate = new Date(slot.startTime);
-      const startDate = cycle.startDate ? new Date(cycle.startDate) : null;
-      const endDate = cycle.endDate ? new Date(cycle.endDate) : null;
-      if (startDate && slotDate < startDate) return false;
-      if (endDate && slotDate > endDate) return false;
-      return true;
-    });
-  }
-  return [];
 };
 
 // Curated background for the hosting member. Industries are taxonomy tags, so
@@ -125,13 +110,13 @@ export default function CandidateGTKUC() {
     try {
       setLoading(true);
       setError('');
-      const [signups, cycleData, allSlots] = await Promise.all([
+      const [signups, cycle, allSlots] = await Promise.all([
         apiClient.get('/my-meeting-signups'),
-        apiClient.get('/active-cycle').catch(() => null),
+        fetchActiveCycle(apiClient).catch(() => null),
         apiClient.get('/meeting-slots'),
       ]);
       setMySignup(Array.isArray(signups) && signups.length > 0 ? signups[0] : null);
-      setActiveCycle(cycleData?.cycle || null);
+      setActiveCycle(cycle);
       setSlots(allSlots || []);
     } catch (e) {
       setError(e.message || 'Failed to load your Get to Know UC details');
@@ -148,7 +133,7 @@ export default function CandidateGTKUC() {
   // Available slots to book: within the active cycle, not in the past, with room left.
   const getAvailableSlots = () => {
     const now = new Date();
-    return filterSlotsByCycle(slots, activeCycle).filter(
+    return slotsInCycleDates(slots, activeCycle).filter(
       (slot) => new Date(slot.startTime) >= now && slot.remaining > 0
     );
   };

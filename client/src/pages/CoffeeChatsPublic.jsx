@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../utils/api';
+import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import UConsultingLogo from '../components/UConsultingLogo';
 import {
   Box,
@@ -45,38 +46,13 @@ export default function CoffeeChatsPublic() {
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members, admins, and unauthenticated)
-      const { cycle: active } = (await api.get('/active-cycle')) || {};
-      setActiveCycle(active || null);
-      return active || null;
+      const active = await fetchActiveCycle(api);
+      setActiveCycle(active);
+      return active;
     } catch (e) {
       console.error('Failed to load active cycle:', e);
       return null;
     }
-  };
-
-  const filterSlotsByCycle = (slotsToFilter, cycle) => {
-    // If no active cycle, return empty array to only show spots from current cycle
-    if (!cycle) return [];
-    
-    // If cycle has date range, filter slots by date
-    if (cycle.startDate || cycle.endDate) {
-      return slotsToFilter.filter(slot => {
-        const slotDate = new Date(slot.startTime);
-        const startDate = cycle.startDate ? new Date(cycle.startDate) : null;
-        const endDate = cycle.endDate ? new Date(cycle.endDate) : null;
-        
-        // If cycle has start date, slot must be on or after start date
-        if (startDate && slotDate < startDate) return false;
-        
-        // If cycle has end date, slot must be on or before end date
-        if (endDate && slotDate > endDate) return false;
-        
-        return true;
-      });
-    }
-    
-    // If no date range, return empty array to hide old cycle slots
-    return [];
   };
 
   const load = async () => {
@@ -88,7 +64,7 @@ export default function CoffeeChatsPublic() {
       
       // Load active cycle and filter slots
       const cycle = await loadActiveCycle();
-      const filtered = filterSlotsByCycle(data, cycle);
+      const filtered = slotsInCycleDates(data, cycle);
       setSlots(filtered);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
