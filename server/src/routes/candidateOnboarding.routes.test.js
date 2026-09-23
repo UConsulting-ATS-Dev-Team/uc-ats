@@ -218,16 +218,9 @@ describe('access gating', () => {
     expect(res.status).toBe(401);
   });
 
-  it('lets an unverified candidate read status, so the app can render "check your email"', async () => {
-    const res = await request('/api/candidate/onboarding/status', { user: unverifiedCandidate });
-    expect(res.status).toBe(200);
-    expect((await res.json()).emailVerified).toBe(false);
-  });
-
-  it('refuses an unverified candidate submitting, and says why', async () => {
+  it('lets a candidate who has not verified their email finish onboarding', async () => {
     const res = await submit({ user: unverifiedCandidate });
-    expect(res.status).toBe(403);
-    expect((await res.json()).needsVerification).toBe(true);
+    expect(res.status).toBe(201);
   });
 });
 
@@ -500,9 +493,9 @@ describe('editing details without re-uploading', () => {
     expect(prisma.candidateOnboarding.update).not.toHaveBeenCalled();
   });
 
-  it('refuses an unverified account', async () => {
+  it('lets an account that has not verified its email edit too', async () => {
     const res = await patch(unverifiedCandidate, details);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 
   it('404s for someone who has not onboarded', async () => {

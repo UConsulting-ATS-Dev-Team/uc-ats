@@ -19,8 +19,10 @@
 // as a self-registered student's, and every admin and client screen picks it up
 // with no change. Saying no revokes any consent already given, immediately.
 //
-// The gate is emailVerifiedAt, matching routes/talent.js. Reading the status is
-// open so the app can render the "check your email" state; submitting is not.
+// Unlike routes/talent.js, nothing here waits on a verified email: an applicant
+// can finish their profile the moment they sign up. Opting into the pool before
+// verifying is still safe, because the pool itself requires emailVerifiedAt
+// (see utils/talentPoolFilters.js) - the resume sits out of it until they verify.
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,16 +84,6 @@ function uploadMiddleware(req, res, next) {
     return res.status(400).json({ error: err.message || 'Invalid file upload' });
   });
 }
-
-const requireVerifiedEmail = (req, res, next) => {
-  if (!req.user?.emailVerifiedAt) {
-    return res.status(403).json({
-      error: 'Verify your email before completing onboarding.',
-      needsVerification: true
-    });
-  }
-  next();
-};
 
 router.use(requireAuth, requireCandidate);
 
@@ -167,7 +159,6 @@ router.get('/status', async (req, res) => {
       required: !hasApplication && !completed,
       hasApplication,
       completed,
-      emailVerified: Boolean(req.user.emailVerifiedAt),
       onboarding: serializeOnboarding(candidate.onboarding),
       // So the module can show what was chosen last time, and the dashboard can
       // offer a way to change it without re-uploading anything.
@@ -270,7 +261,7 @@ const applyTalentPoolConsent = async ({ user, optIn, resumeFile, metadata }) => 
  * resume upload: nothing here has been handed to a review team or a partner, so
  * there is no committed copy that has to keep pointing at the exact old file.
  */
-router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
+router.post('/', uploadMiddleware, async (req, res) => {
   try {
     const resumeFile = req.files?.resume?.[0];
     const headshotFile = req.files?.headshot?.[0];
@@ -367,7 +358,7 @@ router.post('/', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
  * and all. Their information should stay theirs to keep current whether or not
  * they ever applied.
  */
-router.patch('/', requireVerifiedEmail, async (req, res) => {
+router.patch('/', async (req, res) => {
   try {
     const { value, errors } = sanitizeOnboardingUpdate(req.body || {});
     if (errors.length > 0) {
@@ -420,7 +411,7 @@ router.patch('/', requireVerifiedEmail, async (req, res) => {
  * to an applicationId, which a candidate who never applied does not have - so
  * the Applicant Information page asked for one and got "Application not found".
  */
-router.put('/resume', requireVerifiedEmail, uploadMiddleware, async (req, res) => {
+router.put('/resume', uploadMiddleware, async (req, res) => {
   try {
     const resumeFile = req.files?.resume?.[0];
     if (!resumeFile) {
@@ -477,7 +468,7 @@ router.put('/resume', requireVerifiedEmail, uploadMiddleware, async (req, res) =
  * back on needs a resume to share, which is why it refuses when there is no
  * onboarding record: there would be nothing to copy into the pool.
  */
-router.patch('/talent-pool', requireVerifiedEmail, async (req, res) => {
+router.patch('/talent-pool', async (req, res) => {
   try {
     const optIn = req.body?.talentPoolOptIn === true || req.body?.talentPoolOptIn === 'true';
 
