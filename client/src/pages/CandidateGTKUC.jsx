@@ -3,6 +3,7 @@ import apiClient from '../utils/api';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
+import { GtkucSlotCard, GtkucSlotGrid } from '../components/GtkucSlotGallery';
 import {
   Box,
   Container,
@@ -269,49 +270,12 @@ export default function CandidateGTKUC() {
           </Typography>
         </Box>
       ) : (
-        <Stack spacing={{ xs: 1.5, md: 2 }}>
+        <GtkucSlotGrid>
           {availableSlots.map((slot) => (
-            <Card key={slot.id} variant="outlined">
-              <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    flexDirection: { xs: 'column', sm: 'row' },
-                    justifyContent: 'space-between',
-                    gap: { xs: 2, sm: 0 },
-                  }}
-                >
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                      {formatDateTime(slot.startTime)}
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      {slot.memberProfile?.photo ? (
-                        <Avatar src={slot.memberProfile.photo} sx={{ width: 28, height: 28 }} />
-                      ) : (
-                        <PersonIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                      )}
-                      <Typography variant="body2" color="text.secondary">
-                        {slot.memberName}
-                        {slot.memberProfile?.graduationClass
-                          ? ` · Class of ${slot.memberProfile.graduationClass}`
-                          : ''}
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <LocationIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                      <Typography variant="body2" color="text.secondary">
-                        {slot.location}
-                      </Typography>
-                    </Box>
-                    <MemberProfile profile={slot.memberProfile} compact />
-                  </Box>
-                  <Box sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
-                    <Chip label={`${slot.remaining} spots left`} color="primary" size="small" />
-                  </Box>
-                </Box>
-              </CardContent>
-              <CardActions sx={{ justifyContent: 'center', pb: 2 }}>
+            <GtkucSlotCard
+              key={slot.id}
+              slot={slot}
+              actions={
                 <Button
                   variant="contained"
                   startIcon={<CheckCircleIcon />}
@@ -320,17 +284,17 @@ export default function CandidateGTKUC() {
                 >
                   Sign Up
                 </Button>
-              </CardActions>
-            </Card>
+              }
+            />
           ))}
-        </Stack>
+        </GtkucSlotGrid>
       )}
     </Paper>
   );
 
   return (
     <AccessControl allowedRoles={['USER']}>
-      <Container maxWidth="md" sx={{ py: { xs: 3, md: 4 } }}>
+      <Container maxWidth="lg" sx={{ py: { xs: 3, md: 4 } }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 700, mb: 1 }}>
           Get to Know UC
         </Typography>
@@ -354,7 +318,7 @@ export default function CandidateGTKUC() {
             <CircularProgress />
           </Box>
         ) : mySignup && !rebooking ? (
-          renderBookedCard()
+          <Box sx={{ maxWidth: 852 }}>{renderBookedCard()}</Box>
         ) : (
           renderSlotPicker()
         )}
