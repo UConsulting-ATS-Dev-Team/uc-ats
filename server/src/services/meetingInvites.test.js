@@ -17,7 +17,7 @@ const slot = {
   endTime: new Date('2026-10-01T18:30:00.000Z'),
 };
 
-const candidate = { candidateEmail: 'ada@ucla.edu', candidateName: 'Ada Lovelace', hostName: 'Grace Hopper' };
+const candidate = { signupId: 'signup-1', candidateEmail: 'ada@ucla.edu', candidateName: 'Ada Lovelace', hostName: 'Grace Hopper' };
 const host = { hostEmail: 'grace@ucla.edu', hostName: 'Grace Hopper' };
 
 function prop(invite, name) {
@@ -41,14 +41,9 @@ describe('candidateMeetingInvite', () => {
     expect(prop(invite, 'ATTENDEE')).toContain('mailto:ada@ucla.edu');
   });
 
-  it('cancels the same entry it booked, whatever case the address arrives in', () => {
+  it('cancels the same entry it booked', () => {
     const booked = candidateMeetingInvite({ slot, ...candidate });
-    const cancelled = candidateMeetingInvite({
-      slot,
-      ...candidate,
-      candidateEmail: 'Ada@UCLA.edu',
-      method: 'CANCEL',
-    });
+    const cancelled = candidateMeetingInvite({ slot, ...candidate, method: 'CANCEL' });
 
     expect(prop(cancelled, 'UID')).toBe(prop(booked, 'UID'));
     expect(cancelled.contentType).toContain('method=CANCEL');
@@ -66,9 +61,19 @@ describe('candidateMeetingInvite', () => {
     expect(after.content).toContain('DTEND:20261002T183000Z');
   });
 
+  it('follows the booking when the candidate moves it to another slot', () => {
+    // A move keeps the signup row and changes its slot, so the entry must be keyed
+    // on the signup - keyed on the slot, the old time would stay on their calendar.
+    const other = { ...slot, id: 'slot-2', startTime: new Date('2026-10-03T18:00:00.000Z') };
+    const before = candidateMeetingInvite({ slot, ...candidate });
+    const after = candidateMeetingInvite({ slot: other, ...candidate });
+    expect(prop(after, 'UID')).toBe(prop(before, 'UID'));
+    expect(after.content).toContain('DTSTART:20261003T180000Z');
+  });
+
   it('keeps two candidates in one slot on separate entries', () => {
     const a = candidateMeetingInvite({ slot, ...candidate });
-    const b = candidateMeetingInvite({ slot, ...candidate, candidateEmail: 'alan@ucla.edu' });
+    const b = candidateMeetingInvite({ slot, ...candidate, signupId: 'signup-2', candidateEmail: 'alan@ucla.edu' });
     expect(prop(a, 'UID')).not.toBe(prop(b, 'UID'));
   });
 
@@ -76,6 +81,7 @@ describe('candidateMeetingInvite', () => {
     expect(candidateMeetingInvite({ slot: { ...slot, startTime: null }, ...candidate })).toBeNull();
     expect(candidateMeetingInvite({ slot, ...candidate, candidateEmail: '' })).toBeNull();
     expect(candidateMeetingInvite({ slot: null, ...candidate })).toBeNull();
+    expect(candidateMeetingInvite({ slot, ...candidate, signupId: undefined })).toBeNull();
   });
 });
 

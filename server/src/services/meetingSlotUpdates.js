@@ -185,6 +185,7 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
         // Same UID as the confirmation, so this moves the entry rather than adding one.
         invite: candidateMeetingInvite({
           slot: updated,
+          signupId: signup.id,
           candidateEmail: signup.email,
           candidateName: signup.fullName,
           hostName,

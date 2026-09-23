@@ -1,9 +1,15 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
-import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
-import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
-import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
+import {
+  BookingError,
+  bookMeetingSlot,
+  moveMeetingSignup,
+  cancelOwnMeetingSignup,
+  notifyMeetingBooked,
+  notifyMeetingMoved,
+  notifyMeetingCancelled,
+} from '../services/meetingSignups.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Public routes are candidate-facing by definition: no token, so no role to key on.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -103,153 +109,47 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Your account is missing a name, email, or student ID. Please complete your profile before signing up.' });
     }
 
-    // Get the active recruiting cycle to check for cycle-specific signups
-    const activeCycle = await resolveCandidateCycle(prisma);
+    // One booking per cycle, capacity, and the insert all happen under locks in
+    // the service; see meetingSignups.js for why.
+    const { signup, slot } = await bookMeetingSlot({ slotId: id, fullName, email, studentId });
+    await notifyMeetingBooked({ signup, slot });
 
-    // Check if user has already signed up for a meeting slot in the current cycle
-    if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
-      const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-      const cycleEndDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-
-      // Find existing signups for this email
-      const existingSignups = await prisma.meetingSignup.findMany({
-        where: { email },
-        include: { slot: true }
-      });
-
-      // Check if any existing signup falls within the current cycle's date range
-      const existingSignupInCycle = existingSignups.find(signup => {
-        const slotDate = new Date(signup.slot.startTime);
-        const isAfterStart = !cycleStartDate || slotDate >= cycleStartDate;
-        const isBeforeEnd = !cycleEndDate || slotDate <= cycleEndDate;
-        return isAfterStart && isBeforeEnd;
-      });
-
-      if (existingSignupInCycle) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.` 
-        });
-      }
-    } else {
-      // If no active cycle or no date range, fall back to checking all signups
-      // (for backwards compatibility)
-      const existingSignup = await prisma.meetingSignup.findFirst({
-        where: { email },
-        include: { slot: true }
-      });
-
-      if (existingSignup) {
-        return res.status(400).json({ 
-          error: `You have already signed up for a meeting on ${new Date(existingSignup.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot.` 
-        });
-      }
-    }
-
-    // Check if user exists in the system (has an account)
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
-    });
-
-    const slot = await prisma.meetingSlot.findUnique({
-      where: { id },
-      include: { 
-        signups: true,
-        member: {
-          select: { fullName: true, email: true }
-        }
-      }
-    });
-
-    if (!slot) {
-      return res.status(404).json({ error: 'Slot not found' });
-    }
-
-    if (slot.signups.length >= slot.capacity) {
-      return res.status(400).json({ error: 'This time slot is full' });
-    }
-
-    const signup = await prisma.meetingSignup.create({
-      data: {
-        slotId: id,
-        fullName,
-        email,
-        studentId
-      }
-    });
-
-    // Send confirmation email to candidate (and log the communication)
-    await sendAndLogMeetingCommunication(
-      () => sendMeetingSignupConfirmation(
-        email,
-        fullName,
-        slot.member?.fullName || 'UC Consulting Member',
-        slot.location,
-        slot.startTime,
-        slot.endTime,
-        {
-          invite: candidateMeetingInvite({
-            slot,
-            candidateEmail: email,
-            candidateName: fullName,
-            hostName: slot.member?.fullName,
-          }),
-        }
-      ),
-      {
-        slotId: slot.id,
-        signupId: signup.id,
-        type: 'CONFIRMATION',
-        recipient: email,
-        subject: MEETING_COMM_SUBJECTS.CONFIRMATION,
-      }
-    );
-
-    // Send notification email to member (and log the communication)
-    if (slot.member?.email) {
-      const hostAttendees = await bookedNames(slot.id);
-      await sendAndLogMeetingCommunication(
-        () => sendMeetingSignupNotification(
-          slot.member.email,
-          slot.member.fullName || 'UC Consulting Member',
-          fullName,
-          email,
-          studentId,
-          slot.location,
-          slot.startTime,
-          slot.endTime,
-          {
-            invite: hostMeetingInvite({
-              slot,
-              hostEmail: slot.member.email,
-              hostName: slot.member.fullName,
-              attendeeNames: hostAttendees,
-            }),
-          }
-        ),
-        {
-          slotId: slot.id,
-          signupId: signup.id,
-          type: 'HOST_NOTIFICATION',
-          recipient: slot.member.email,
-          subject: MEETING_COMM_SUBJECTS.HOST_NOTIFICATION(fullName),
-        }
-      );
-    }
-
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       signup,
-      needsAccount: !existingUser,
-      message: existingUser 
-        ? 'Successfully signed up! You will receive a confirmation email shortly.'
-        : 'Successfully signed up! You will receive a confirmation email shortly. We recommend creating an account to track your application status.'
+      message: 'Successfully signed up! You will receive a confirmation email shortly.'
     });
   } catch (error) {
+    if (error instanceof BookingError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     if (error?.code === 'P2002') {
       return res.status(400).json({ error: 'You are already signed up for this slot' });
     }
     console.error('[POST /api/meeting-slots/:id/signup]', error);
     res.status(500).json({ error: 'Failed to create signup' });
+  }
+});
+
+// Authenticated: move your own booking to another slot. The one-per-cycle rule
+// means this, not a second booking, is how a candidate changes their time. The
+// seat is kept until the new one is secured, so a full slot changes nothing.
+router.put('/meeting-signups/:id', requireAuth, async (req, res) => {
+  try {
+    const { signup, from, to } = await moveMeetingSignup({
+      signupId: req.params.id,
+      slotId: req.body?.slotId,
+      account: req.user,
+    });
+    await notifyMeetingMoved({ signup, from, to });
+
+    res.json({ success: true, signup, message: 'Your meeting has been moved. You will receive an updated invite shortly.' });
+  } catch (error) {
+    if (error instanceof BookingError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    console.error('[PUT /api/meeting-signups/:id]', error);
+    res.status(500).json({ error: 'Failed to change your meeting' });
   }
 });
 
@@ -278,58 +178,15 @@ router.get('/meeting-signups/mine', requireAuth, async (req, res) => {
 // the spot reopened and logs the communication.
 router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const signup = await prisma.meetingSignup.findUnique({
-      where: { id },
-      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
-    });
-
-    if (!signup) {
-      return res.status(404).json({ error: 'Signup not found' });
-    }
-
-    // Ownership: a user may only cancel a signup made under their own email.
-    if (signup.email.toLowerCase() !== req.user.email.toLowerCase()) {
-      return res.status(403).json({ error: 'You can only cancel your own signup' });
-    }
-
-    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
-
-    // Notify the host member their slot spot reopened (and log it).
-    if (signup.slot.member?.email) {
-      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
-      await sendAndLogMeetingCommunication(
-        () => sendMeetingCancellationToMember(
-          signup.slot.member.email,
-          memberName,
-          signup.slot.location,
-          signup.slot.startTime,
-          signup.slot.endTime,
-          {
-            candidateName: signup.fullName,
-            invite: hostMeetingInvite({
-              slot: signup.slot,
-              hostEmail: signup.slot.member.email,
-              hostName: memberName,
-              attendeeNames: hostAttendees,
-            }),
-          }
-        ),
-        {
-          slotId: signup.slotId,
-          signupId: signup.id,
-          type: 'CANCELLATION',
-          recipient: signup.slot.member.email,
-          subject: MEETING_COMM_SUBJECTS.CANCELLATION_TO_HOST,
-        }
-      );
-    }
-
-    await prisma.meetingSignup.delete({ where: { id } });
-
-    res.json({ message: 'Your signup has been cancelled.' });
+    // Locked, owner- and cutoff-checked in the service, so it cannot interleave
+    // with a move of the same booking.
+    const signup = await cancelOwnMeetingSignup({ signupId: req.params.id, account: req.user });
+    await notifyMeetingCancelled({ signup });
+    res.json({ success: true, message: 'Your signup has been cancelled.' });
   } catch (error) {
+    if (error instanceof BookingError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     console.error('[DELETE /api/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to cancel signup' });
   }
