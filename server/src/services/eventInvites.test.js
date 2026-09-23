@@ -117,4 +117,21 @@ describe('eventInviteFor', () => {
       process.env.EMAIL_FROM = saved;
     }
   });
+
+  it('names the reply-to inbox as organizer, so RSVP replies do not bounce', () => {
+    // Calendars send Yes/No replies to ORGANIZER. no-reply@uconsultingats.com has
+    // no mail server, so naming it bounced every RSVP back to the person.
+    const saved = process.env.EMAIL_REPLY_TO;
+    process.env.EMAIL_REPLY_TO = 'uconsultingla@gmail.com';
+    try {
+      const organizer = eventInviteFor({ event, ...recipient })
+        .content.replace(/\r\n /g, '')
+        .split('\r\n')
+        .find((l) => l.startsWith('ORGANIZER'));
+      expect(organizer).toBe('ORGANIZER;CN=UConsulting:mailto:uconsultingla@gmail.com');
+    } finally {
+      if (saved === undefined) delete process.env.EMAIL_REPLY_TO;
+      else process.env.EMAIL_REPLY_TO = saved;
+    }
+  });
 });
