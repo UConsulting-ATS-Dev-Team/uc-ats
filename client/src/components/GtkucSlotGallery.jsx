@@ -1,7 +1,9 @@
 import React from 'react';
 import {
+  Alert,
   Avatar,
   Box,
+  Button,
   Card,
   CardActions,
   CardContent,
@@ -11,6 +13,9 @@ import {
   Typography,
 } from '@mui/material';
 import {
+  EventBusy as EventBusyIcon,
+  EditCalendar as EditCalendarIcon,
+  LockClock as LockClockIcon,
   LinkedIn as LinkedInIcon,
   LocationOn as LocationIcon,
   Person as PersonIcon,
@@ -230,3 +235,110 @@ export const GtkucSlotCard = ({ slot, selected = false, onSelect, actions, child
     </Card>
   );
 };
+
+// The meeting a candidate already holds. A candidate gets one per cycle, so
+// this replaces the slot gallery; moving the meeting goes through "Change
+// time", never a second booking. `locked` is true inside the change cutoff.
+export const GtkucBookedMeetingCard = ({
+  memberName,
+  profile,
+  startTime,
+  location,
+  locked = false,
+  cutoffHours = 12,
+  busy = false,
+  onChangeTime,
+  onCancel,
+}) => (
+  <Card variant="outlined" sx={{ border: 2, borderColor: 'primary.main' }}>
+    <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+      <Chip label="Your meeting" color="primary" size="small" sx={{ mb: 2, fontWeight: 600 }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+        <Avatar
+          src={profile?.photo || undefined}
+          alt={memberName}
+          sx={{ width: { xs: 56, md: 72 }, height: { xs: 56, md: 72 }, border: '3px solid', borderColor: 'primary.light' }}
+        >
+          <PersonIcon sx={{ fontSize: { xs: 28, md: 36 } }} />
+        </Avatar>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Hosted by
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+              {memberName}
+            </Typography>
+            {profile?.linkedinUrl && (
+              <IconButton
+                component="a"
+                href={profile.linkedinUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`${memberName} on LinkedIn`}
+                sx={{ color: '#0A66C2', p: 0.5 }}
+              >
+                <LinkedInIcon />
+              </IconButton>
+            )}
+          </Box>
+          {profile?.graduationClass && (
+            <Typography variant="body2" color="text.secondary">
+              Class of {profile.graduationClass}
+            </Typography>
+          )}
+        </Box>
+      </Box>
+      <Stack spacing={0.75}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ScheduleIcon sx={{ fontSize: 20, color: 'primary.main' }} />
+          <Typography variant="body1" sx={{ fontWeight: 600 }}>
+            {formatSlotDateTime(startTime)}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <LocationIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+          <Typography variant="body2" color="text.secondary">
+            {location}
+          </Typography>
+        </Box>
+      </Stack>
+      {locked && (
+        <Alert severity="info" icon={<LockClockIcon fontSize="inherit" />} sx={{ mt: 2 }}>
+          Changes close {cutoffHours} hours before your meeting, so it can no longer be moved or
+          cancelled here. Email uconsultingla@gmail.com if something has come up.
+        </Alert>
+      )}
+    </CardContent>
+    <CardActions
+      sx={{
+        px: { xs: 2, md: 3 },
+        pb: 2,
+        gap: 1,
+        flexDirection: { xs: 'column', sm: 'row' },
+        alignItems: 'stretch',
+        '& > :not(style) ~ :not(style)': { ml: { xs: 0, sm: 1 } },
+      }}
+    >
+      <Button
+        variant="contained"
+        startIcon={<EditCalendarIcon />}
+        onClick={onChangeTime}
+        disabled={locked || busy}
+        sx={{ minHeight: { xs: 44, md: 36 } }}
+      >
+        Change time
+      </Button>
+      <Button
+        variant="outlined"
+        color="error"
+        startIcon={<EventBusyIcon />}
+        onClick={onCancel}
+        disabled={locked || busy}
+        sx={{ minHeight: { xs: 44, md: 36 } }}
+      >
+        Cancel meeting
+      </Button>
+    </CardActions>
+  </Card>
+);
