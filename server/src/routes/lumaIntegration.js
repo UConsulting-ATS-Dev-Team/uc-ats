@@ -167,17 +167,32 @@ router.post('/events/:id/resolve', async (req, res) => {
     const event = await syncableEvent(req.params.id);
     if (!event) return res.status(404).json({ error: 'No such event to sync' });
 
-    if (event.lumaEventId === lumaEventId) {
-      return res.json({ id: event.id, lumaEventId, changed: false });
-    }
-    if (event.lumaEventId) {
+    // "Only if it is still unlinked" is the WHERE clause, not a branch on the
+    // read above: two resolves naming different Luma events can both find it
+    // unlinked, and a plain update would let the second silently re-point it
+    // while both callers were told they had succeeded. The database decides,
+    // and the loser is told so.
+    const { count } = await prisma.events.updateMany({
+      where: { id: event.id, lumaEventId: null },
+      data: { lumaEventId }
+    });
+
+    if (count === 0) {
+      const linked = await prisma.events.findUnique({
+        where: { id: event.id },
+        select: { lumaEventId: true }
+      });
+      // Already ours: the routine reporting the same id again, which is what
+      // every run after the first one does.
+      if (linked?.lumaEventId === lumaEventId) {
+        return res.json({ id: event.id, lumaEventId, changed: false });
+      }
       return res.status(409).json({
         error: 'This event is already linked to a different Luma event. An admin has to change it.',
-        lumaEventId: event.lumaEventId
+        lumaEventId: linked?.lumaEventId ?? null
       });
     }
 
-    await prisma.events.update({ where: { id: event.id }, data: { lumaEventId } });
     console.log(`[luma] event ${event.id} ("${event.eventName}") resolved to ${lumaEventId}`);
     return res.json({ id: event.id, lumaEventId, changed: true });
   } catch (error) {
@@ -190,15 +205,23 @@ router.post('/events/:id/resolve', async (req, res) => {
   }
 });
 
-// POST /api/integrations/luma/events/:id/guests  { lumaEventId, entries: [...] }
+// POST /api/integrations/luma/events/:id/guests
+//   { lumaEventId, entries: [...], final?: boolean }
 //
 // One page of list_guests, relayed verbatim. `lumaEventId` is required and must
 // equal the one the ATS recorded: the routine holds several events at once, and
 // a page posted under the wrong id would file a whole event's guests against
 // another event.
+//
+// `final` says this was the last page - the cursor ran out - and is the only
+// thing that advances lumaLastSyncedAt. Only the routine knows where pagination
+// ended, and that timestamp has to mean "the ATS has this event's whole guest
+// list", not "something arrived": a routine that posts page one and then dies
+// every hour would otherwise look permanently healthy.
 router.post('/events/:id/guests', async (req, res) => {
   const lumaEventId = typeof req.body?.lumaEventId === 'string' ? req.body.lumaEventId.trim() : '';
   const entries = req.body?.entries;
+  const final = req.body?.final;
 
   if (!LUMA_EVENT_ID.test(lumaEventId)) {
     return res.status(400).json({ error: 'lumaEventId must look like evt-...' });
@@ -208,6 +231,14 @@ router.post('/events/:id/guests', async (req, res) => {
   }
   if (entries.length > MAX_ENTRIES) {
     return res.status(413).json({ error: `At most ${MAX_ENTRIES} entries per request` });
+  }
+  // Absent means "not the last page", so a routine that never sends it lets the
+  // event go stale and be warned about - the safe direction for a signal whose
+  // whole job is to warn. A `final` that is not a boolean is refused out loud
+  // rather than read as false, because "true" the string would otherwise mean a
+  // sync that silently never completes.
+  if (final !== undefined && typeof final !== 'boolean') {
+    return res.status(400).json({ error: 'final must be true or false' });
   }
 
   try {
@@ -224,20 +255,23 @@ router.post('/events/:id/guests', async (req, res) => {
     }
 
     const summary = await ingestGuests(event.id, entries);
-    // Written after the page lands, because "last synced" is the only signal
-    // anyone gets that this integration has stopped working.
-    await prisma.events.update({
-      where: { id: event.id },
-      data: { lumaLastSyncedAt: new Date() }
-    });
+    // Only a completed pass counts as a sync. A page in the middle has changed
+    // real rows, and is reported as such, but it does not clear the warning.
+    if (final === true) {
+      await prisma.events.update({
+        where: { id: event.id },
+        data: { lumaLastSyncedAt: new Date() }
+      });
+    }
 
     console.log(
       `[luma] event ${event.id} ("${event.eventName}"): ${summary.received} guests, `
       + `${summary.rsvps.created} RSVPs added, ${summary.attendance.created} check-ins added, `
       + `${summary.unmatched.length} unmatched, ${summary.flagged.length} flagged, `
       + `${summary.unknownStatus.length} of unknown status, ${summary.rejected.length} rejected`
+      + `${final === true ? ' (last page)' : ''}`
     );
-    return res.json({ summary });
+    return res.json({ summary, synced: final === true });
   } catch (error) {
     console.error('[luma] failed to ingest a page of guests:', error);
     return res.status(500).json({ error: 'Could not ingest these guests' });

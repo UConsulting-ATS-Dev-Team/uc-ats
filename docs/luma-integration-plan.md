@@ -254,6 +254,10 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   `409` instead of being followed: re-pointing would hand the guests already stored under
   the first id to a different event. Changing it is an admin action — which is why Phase 3's
   "Luma event link" field has to **clear `lumaEventId`** when an admin edits `lumaUrl`.
+  "Still unlinked" is the `WHERE` clause of the write, not a branch on a read before it:
+  two resolves naming different Luma events can both find it unlinked, and an unconditional
+  update would let the second silently re-point it while both callers were told they had
+  succeeded.
 - **The body cap is a count, not bytes.** `express.json({ limit: '1mb' })` is applied
   app-wide in `index.js` and has already parsed the body before this router sees it, so a
   router-level limit would never be consulted. Bytes are bounded by that global limit;
@@ -263,8 +267,19 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   replace. `LUMA_SYNC_TOKEN` is read from the environment per request, like the SES
   webhook's topic ARN: unset has to mean "refuse everything" at request time, not "the
   server would not have started".
-- **`lumaLastSyncedAt` is written only after a page actually lands.** It is the sole signal
-  that this integration has stopped working, so a failed page must not read as a sync.
+- **`lumaLastSyncedAt` means "the ATS has this event's whole guest list", not "something
+  arrived".** It is the sole signal that this integration has stopped working, and only the
+  routine knows where pagination ended, so the guests body carries `final` and only a page
+  marked `final` advances the timestamp. Advancing it per page would let a routine that
+  posts page one and then dies every hour look permanently healthy, and the stale-sync
+  warning would never fire for it. Absent `final` means "not the last page", so a routine
+  that never sends it lets the event go stale and be warned about — the safe direction for
+  a signal whose whole job is to warn. A `final` that is not a boolean is a `400`, because
+  `"true"` the string would otherwise be a sync that silently never completes.
+  - A refinement for Phase 3 if it is ever wanted: this cannot distinguish "the routine is
+    dead" from "the routine runs but never finishes an event". A second column recording
+    the last page of *any* kind would separate them. The routine's hourly report already
+    covers the second case, so it did not seem worth a migration.
 - **The routine reports the held cases.** `summary.unmatched`, `summary.flagged` and
   `summary.unknownStatus` are decisions Phase 1 deliberately declines to make, and nothing
   reads them until the Phase 3 panel exists. The routine prompt makes its hourly report say

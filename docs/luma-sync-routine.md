@@ -91,7 +91,19 @@ STEPS
 3. For each event that now has a lumaEventId, call list_guests for that Luma
    event id, 50 per page, following the cursor to the end. POST every page to
      POST /api/integrations/luma/events/<id>/guests
-     {"lumaEventId": "evt-...", "entries": [ ...the page, exactly as returned... ]}
+     {"lumaEventId": "evt-...",
+      "entries": [ ...the page, exactly as returned... ],
+      "final": false}
+
+   Set "final": true on the page where the cursor runs out, and on the only
+   page when the event has just one. That is what tells the ATS it now has the
+   whole guest list; it is the single thing that marks the event synced.
+
+   Set "final": true ONLY when you really did reach the end of the cursor. If
+   you stopped early for any reason - an error, a timeout, anything - leave it
+   false and say so in your report. An event that is never marked synced raises
+   a warning for a person to look at, which is the outcome you want; claiming a
+   sync you did not finish hides guests who never arrived.
 
    Pass each entry through unchanged. Add nothing, drop nothing, correct
    nothing, and never merge or split entries. If an entry looks wrong to you,
@@ -116,7 +128,8 @@ WHEN A REQUEST FAILS
   the endpoint, and the ATS's error message verbatim. 401 or 503 means the token
   is wrong or missing on one side; nothing else will work this run.
 - 5xx, a timeout, or an unreachable host: stop working on that event and report
-  it. The next hourly run picks it up; nothing is lost by stopping.
+  it, and do not mark it final. The next hourly run picks it up from the start;
+  nothing is lost by stopping, because posting a page twice changes nothing.
 
 REPORT
 
@@ -162,6 +175,12 @@ paused, **sync stops with no error anywhere**. Nothing polls for it. The only
 signal is `lumaLastSyncedAt` on the event, which Phase 3 surfaces as "last synced
 X ago" with a warning past three hours. Until then, an event whose RSVPs stop
 growing is the symptom to watch for.
+
+`lumaLastSyncedAt` moves only when a page arrives marked `final`, so it means
+"the ATS has this event's whole guest list", not "something arrived". A routine
+that posts the first page and then fails every hour therefore goes stale and
+gets warned about, rather than looking permanently healthy — which is why the
+prompt is emphatic that `final` is a claim about the cursor, not a formality.
 
 RSVPs and check-ins take up to about an hour to reach Staging. That is the
 interval, not a bug.
