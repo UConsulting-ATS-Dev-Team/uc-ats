@@ -121,9 +121,14 @@ export default function CoffeeChatsPublic() {
   // Book a slot as the signed-in account. `account` is passed right after a
   // login or register, before the context's user has updated.
   const bookSlot = async (slotId, account = user) => {
-    setSubmitting(true);
     setError('');
     setSuccess('');
+    // The server only checks the ID is present; hold it to the rule registration uses.
+    if (!account?.studentId && !/^\d{9}$/.test(form.studentId.trim())) {
+      setError('Student ID must be exactly 9 digits.');
+      return;
+    }
+    setSubmitting(true);
     try {
       const payload = account?.studentId ? {} : { studentId: form.studentId.trim() };
       const response = await api.post(`/meeting-slots/${slotId}/signup`, payload);
@@ -190,7 +195,15 @@ export default function CoffeeChatsPublic() {
       setPendingSlotId(null);
       // register() does not return the user; its student ID is the one just typed.
       const account = result.user || { studentId: authForm.studentId.trim() };
-      if (slotId) await bookSlot(slotId, account);
+      if (!slotId) return;
+      if (!account.studentId) {
+        // An older account with no student ID on file. Booking now would be
+        // refused; leave the slot open so its signed-in form asks for the ID.
+        setSelectedSlot(slotId);
+        setError('Add your UCLA student ID to finish booking.');
+        return;
+      }
+      await bookSlot(slotId, account);
     } catch (err) {
       setAuthError(err.message || 'Authentication failed. Please try again.');
     } finally {

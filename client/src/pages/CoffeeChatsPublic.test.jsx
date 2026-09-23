@@ -84,6 +84,35 @@ describe('booking a Get to Know UC slot', () => {
     expect(api.setToken).toHaveBeenCalledWith('fresh-token');
   });
 
+  it('asks an account with no student ID for one instead of booking blind', async () => {
+    const { login } = auth();
+    login.mockResolvedValue({ success: true, user: { fullName: 'Old Account', email: 'old@ucla.edu', studentId: null } });
+    const user = userEvent.setup();
+    const { rerender } = render(<CoffeeChatsPublic />);
+    await pickSlot(user);
+    await user.click(screen.getByRole('button', { name: 'Log in & Confirm Signup' }));
+    await user.type(await screen.findByLabelText(/Email Address/), 'old@ucla.edu');
+    await user.type(screen.getByLabelText(/Password/), 'hunter22');
+    await user.click(screen.getByRole('button', { name: 'Log in & book' }));
+
+    expect(await screen.findByText('Add your UCLA student ID to finish booking.')).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    // Signed in now: the form asks for the ID, and holds it to nine digits.
+    auth({ user: { fullName: 'Old Account', email: 'old@ucla.edu', studentId: null } });
+    rerender(<CoffeeChatsPublic />);
+    await user.type(await screen.findByLabelText(/UCLA Student ID/), '123');
+    await user.click(await screen.findByRole('button', { name: 'Confirm Signup' }));
+    expect(await screen.findByText('Student ID must be exactly 9 digits.')).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/UCLA Student ID/), '456789');
+    await user.click(screen.getByRole('button', { name: 'Confirm Signup' }));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/meeting-slots/slot-1/signup', { studentId: '123456789' })
+    );
+  });
+
   it('books straight away for a signed-in account, showing who is booking', async () => {
     auth({ user: { fullName: 'Jordan Rivera', email: 'jordan@ucla.edu', studentId: '123456789' } });
     const user = userEvent.setup();
