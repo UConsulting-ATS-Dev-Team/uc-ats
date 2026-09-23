@@ -125,13 +125,13 @@ export default function CandidateGTKUC() {
     try {
       setLoading(true);
       setError('');
-      const [signups, cycle, allSlots] = await Promise.all([
+      const [signups, cycleData, allSlots] = await Promise.all([
         apiClient.get('/my-meeting-signups'),
         apiClient.get('/active-cycle').catch(() => null),
         apiClient.get('/meeting-slots'),
       ]);
       setMySignup(Array.isArray(signups) && signups.length > 0 ? signups[0] : null);
-      setActiveCycle(cycle || null);
+      setActiveCycle(cycleData?.cycle || null);
       setSlots(allSlots || []);
     } catch (e) {
       setError(e.message || 'Failed to load your Get to Know UC details');

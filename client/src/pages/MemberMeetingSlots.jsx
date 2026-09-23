@@ -80,7 +80,7 @@ export default function MemberMeetingSlots() {
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members and admins)
-      const active = await api.get('/active-cycle');
+      const { cycle: active } = (await api.get('/active-cycle')) || {};
       setActiveCycle(active || null);
       return active || null;
     } catch (e) {

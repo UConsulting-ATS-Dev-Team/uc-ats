@@ -166,7 +166,7 @@ export default function AdminMeetingSlots() {
     try {
       setLoading(true);
       setError('');
-      const [data, cycle, users, profiles] = await Promise.all([
+      const [data, cycleData, users, profiles] = await Promise.all([
         api.get('/admin/meeting-slots'),
         api.get('/active-cycle').catch(() => null),
         api.get('/admin/users').catch(() => []),
@@ -174,7 +174,7 @@ export default function AdminMeetingSlots() {
         loadProfileState()
       ]);
       setSlots(data?.slots || []);
-      setActiveCycle(cycle || null);
+      setActiveCycle(cycleData?.cycle || null);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
       setGtkucProfiles(profiles || []);
     } catch (e) {

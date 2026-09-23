@@ -45,7 +45,7 @@ export default function CoffeeChatsPublic() {
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members, admins, and unauthenticated)
-      const active = await api.get('/active-cycle');
+      const { cycle: active } = (await api.get('/active-cycle')) || {};
       setActiveCycle(active || null);
       return active || null;
     } catch (e) {
