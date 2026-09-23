@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { candidateMeetingInvite, hostMeetingInvite } from '../services/meetingInvites.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Public routes are candidate-facing by definition: no token, so no role to key on.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -184,7 +185,15 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
         slot.member?.fullName || 'UC Consulting Member',
         slot.location,
         slot.startTime,
-        slot.endTime
+        slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot,
+            candidateEmail: email,
+            candidateName: fullName,
+            hostName: slot.member?.fullName,
+          }),
+        }
       ),
       {
         slotId: slot.id,
@@ -206,7 +215,15 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
           studentId,
           slot.location,
           slot.startTime,
-          slot.endTime
+          slot.endTime,
+          {
+            invite: hostMeetingInvite({
+              slot,
+              hostEmail: slot.member.email,
+              hostName: slot.member.fullName,
+              attendeeNames: [...slot.signups.map((s) => s.fullName), fullName],
+            }),
+          }
         ),
         {
           slotId: slot.id,
@@ -264,7 +281,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
 
     const signup = await prisma.meetingSignup.findUnique({
       where: { id },
-      include: { slot: { include: { member: { select: { fullName: true, email: true } } } } }
+      include: { slot: { include: { signups: true, member: { select: { fullName: true, email: true } } } } }
     });
 
     if (!signup) {
@@ -287,7 +304,15 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: signup.slot.signups.filter((s) => s.id !== signup.id).map((s) => s.fullName),
+            }),
+          }
         ),
         {
           slotId: signup.slotId,

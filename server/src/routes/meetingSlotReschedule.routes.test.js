@@ -101,7 +101,15 @@ const request = (path, { user, method = 'GET', body } = {}) => {
   });
 };
 
+// The calendar invite's organizer. Unset, every invite is skipped and the
+// assertions below on what gets attached would have nothing to check.
+const EMAIL_FROM = 'no-reply@uconsultingats.com';
+
+// The DTSTART line an .ics carries for a Date.
+const icsStart = (date) => `DTSTART:${date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`;
+
 beforeAll(async () => {
+  process.env.EMAIL_FROM = EMAIL_FROM;
   const app = express();
   app.use(express.json());
   app.use('/api/member', memberRoutes);
@@ -168,8 +176,14 @@ describe('member rescheduling their own GTKUC slot', () => {
       'Cand One',
       'Host Member',
       expect.objectContaining({ startTime: NEW_START }),
-      expect.objectContaining({ startTime: ORIGINAL_START })
+      expect.objectContaining({ startTime: ORIGINAL_START }),
+      { invite: expect.objectContaining({ contentType: expect.stringContaining('method=REQUEST') }) }
     );
+
+    // The invite carries the new time, so it moves the entry the confirmation made.
+    const { invite } = emails.sendMeetingRescheduleEmail.mock.calls[0][5];
+    expect(invite.content).toContain(icsStart(NEW_START));
+    expect(invite.content).toContain('mailto:one@ucla.edu');
 
     // Both candidate notices are logged against their signup.
     expect(prisma.meetingCommunication.create).toHaveBeenCalledWith(
@@ -288,8 +302,16 @@ describe('admin rescheduling any GTKUC slot', () => {
       'Host Member',
       expect.objectContaining({ location: 'Ackerman 2410', startTime: NEW_START }),
       expect.objectContaining({ location: 'Kerckhoff 152', startTime: ORIGINAL_START }),
-      { signupCount: 2 }
+      {
+        signupCount: 2,
+        invite: expect.objectContaining({ contentType: expect.stringContaining('method=REQUEST') }),
+      }
     );
+
+    const { invite } = emails.sendMeetingRescheduleToMember.mock.calls[0][4];
+    expect(invite.content).toContain(icsStart(NEW_START));
+    expect(invite.content).toContain('LOCATION:Ackerman 2410');
+    expect(invite.content).toContain('mailto:host@example.com');
   });
 
   it('treats a location-only change as a reschedule', async () => {

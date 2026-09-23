@@ -7,6 +7,7 @@ import {
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
+import { candidateMeetingInvite, hostMeetingInvite } from '../services/meetingInvites.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Candidate-facing: always the candidate pointer, never the caller's role.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -143,7 +144,15 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
         slot.member?.fullName || 'UC Consulting Member',
         slot.location,
         slot.startTime,
-        slot.endTime
+        slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot,
+            candidateEmail: email,
+            candidateName: fullName,
+            hostName: slot.member?.fullName,
+          }),
+        }
       );
     } catch (emailError) {
       console.error('Failed to send confirmation email:', emailError);
@@ -160,7 +169,15 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
           studentId,
           slot.location,
           slot.startTime,
-          slot.endTime
+          slot.endTime,
+          {
+            invite: hostMeetingInvite({
+              slot,
+              hostEmail: slot.member.email,
+              hostName: slot.member.fullName,
+              attendeeNames: [...slot.signups.map((s) => s.fullName), fullName],
+            }),
+          }
         );
       }
     } catch (emailError) {
@@ -187,7 +204,7 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
       where: { id },
       include: {
         slot: {
-          include: { member: { select: { fullName: true, email: true } } },
+          include: { signups: true, member: { select: { fullName: true, email: true } } },
         },
       },
     });
@@ -220,7 +237,16 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       );
     } catch (emailError) {
       console.error('Failed to send cancellation email to candidate:', emailError);
@@ -235,7 +261,15 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: signup.slot.signups.filter((s) => s.id !== signup.id).map((s) => s.fullName),
+            }),
+          }
         );
       }
     } catch (emailError) {
