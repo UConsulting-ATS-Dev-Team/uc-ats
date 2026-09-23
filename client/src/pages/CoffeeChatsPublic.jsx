@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import UConsultingLogo from '../components/UConsultingLogo';
 import {
@@ -19,7 +20,14 @@ import {
   Divider,
   Container,
   Avatar,
-  IconButton
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Tabs,
+  Tab,
+  Link
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
@@ -29,19 +37,33 @@ import {
   Email as EmailIcon,
   School as SchoolIcon,
   CheckCircle as CheckCircleIcon,
-  LinkedIn as LinkedInIcon
+  LinkedIn as LinkedInIcon,
+  Lock as LockIcon
 } from '@mui/icons-material';
 
 export default function CoffeeChatsPublic() {
+  const { user, login, register } = useAuth();
   const [slots, setSlots] = useState([]);
   const [allSlots, setAllSlots] = useState([]); // Store all slots for filtering
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedSlot, setSelectedSlot] = useState(null);
-  const [form, setForm] = useState({ fullName: '', email: '', studentId: '' });
+  // Name and email come from the signed-in account, server-side. The only thing
+  // the form can add is a student ID, for an account that lacks one.
+  const [form, setForm] = useState({ studentId: '' });
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
+
+  // Booking requires an account (POST /meeting-slots/:id/signup is requireAuth).
+  // A guest who picks a slot is asked to log in or register, and the booking
+  // completes on success.
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [authForm, setAuthForm] = useState({ email: '', password: '', fullName: '', graduationClass: '', studentId: '' });
+  const [authError, setAuthError] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [pendingSlotId, setPendingSlotId] = useState(null);
 
   const loadActiveCycle = async () => {
     try {
@@ -96,33 +118,83 @@ export default function CoffeeChatsPublic() {
     };
   }, []);
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedSlot) return;
+  // Book a slot as the signed-in account. `account` is passed right after a
+  // login or register, before the context's user has updated.
+  const bookSlot = async (slotId, account = user) => {
+    setSubmitting(true);
+    setError('');
+    setSuccess('');
     try {
-      setSubmitting(true);
-      setError('');
-      setSuccess('');
-      const response = await api.post(`/meeting-slots/${selectedSlot}/signup`, form);
+      const payload = account?.studentId ? {} : { studentId: form.studentId.trim() };
+      const response = await api.post(`/meeting-slots/${slotId}/signup`, payload);
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
-      
-      // If user needs an account, ask if they want to create one
-      if (response.needsAccount) {
-        const wantsAccount = window.confirm(
-          'You successfully signed up for the meeting! Would you like to create an account to track your application status and access more features?'
-        );
-        if (wantsAccount) {
-          window.open('/signup', '_blank');
-        }
-      }
-      
-      setForm({ fullName: '', email: '', studentId: '' });
+      setForm({ studentId: '' });
       setSelectedSlot(null);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to sign up for this meeting slot');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedSlot) return;
+
+    if (!user) {
+      setPendingSlotId(selectedSlot);
+      setAuthMode('login');
+      setAuthError('');
+      setAuthForm({ email: '', password: '', fullName: '', graduationClass: '', studentId: '' });
+      setAuthOpen(true);
+      return;
+    }
+
+    await bookSlot(selectedSlot);
+  };
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+
+    if (authMode === 'register' && !/^\d{9}$/.test(authForm.studentId.trim())) {
+      setAuthError('Student ID must be exactly 9 digits.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const result = authMode === 'login'
+        ? await login(authForm.email.trim(), authForm.password)
+        : await register({
+            email: authForm.email.trim(),
+            password: authForm.password,
+            fullName: authForm.fullName.trim(),
+            graduationClass: authForm.graduationClass.trim(),
+            studentId: authForm.studentId.trim()
+          });
+
+      if (!result?.success) {
+        setAuthError(result?.error || 'Authentication failed. Please try again.');
+        return;
+      }
+
+      // The context hands the new token to the API client in an effect, which
+      // has not run yet. Book with it now rather than waiting a render.
+      const token = localStorage.getItem('token');
+      if (token) api.setToken(token);
+
+      setAuthOpen(false);
+      const slotId = pendingSlotId;
+      setPendingSlotId(null);
+      // register() does not return the user; its student ID is the one just typed.
+      const account = result.user || { studentId: authForm.studentId.trim() };
+      if (slotId) await bookSlot(slotId, account);
+    } catch (err) {
+      setAuthError(err.message || 'Authentication failed. Please try again.');
+    } finally {
+      setAuthSubmitting(false);
     }
   };
 
@@ -533,72 +605,40 @@ export default function CoffeeChatsPublic() {
 
                         <Box component="form" onSubmit={onSubmit}>
                           <Stack spacing={{ xs: 2.5, md: 3 }}>
-                            <TextField
-                              fullWidth
-                              label="Full Name"
-                              placeholder="Enter your full name"
-                              value={form.fullName}
-                              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <PersonIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
+                            {user ? (
+                              <>
+                                <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>
+                                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Signing up as</Typography>
+                                  <Stack direction="row" spacing={1} alignItems="center">
+                                    <PersonIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                                    <Typography sx={{ fontWeight: 600 }}>{user.fullName}</Typography>
+                                  </Stack>
+                                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                                    <EmailIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                                    <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-all' }}>{user.email}</Typography>
+                                  </Stack>
+                                </Box>
 
-                            <TextField
-                              fullWidth
-                              label="Email Address"
-                              type="email"
-                              placeholder="your.email@ucla.edu"
-                              value={form.email}
-                              onChange={(e) => setForm({ ...form, email: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <EmailIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
-
-                            <TextField
-                              fullWidth
-                              label="UCLA Student ID"
-                              placeholder="e.g., 123456789"
-                              value={form.studentId}
-                              onChange={(e) => setForm({ ...form, studentId: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <SchoolIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
+                                {!user.studentId && (
+                                  <TextField
+                                    fullWidth
+                                    label="UCLA Student ID"
+                                    placeholder="e.g., 123456789"
+                                    value={form.studentId}
+                                    onChange={(e) => setForm({ ...form, studentId: e.target.value })}
+                                    required
+                                    helperText="Your account doesn't have a student ID on file."
+                                    InputProps={{
+                                      startAdornment: <SchoolIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
+                                    }}
+                                  />
+                                )}
+                              </>
+                            ) : (
+                              <Alert severity="info" icon={<LockIcon />}>
+                                You'll be asked to log in or create an account to confirm your signup.
+                              </Alert>
+                            )}
 
                             <Button
                               type="submit"
@@ -624,7 +664,7 @@ export default function CoffeeChatsPublic() {
                                 }
                               }}
                             >
-                              {submitting ? 'Signing Up...' : 'Confirm Signup'}
+                              {submitting ? 'Signing Up...' : user ? 'Confirm Signup' : 'Log in & Confirm Signup'}
                             </Button>
                           </Stack>
                         </Box>
@@ -662,6 +702,95 @@ export default function CoffeeChatsPublic() {
         )}
       </Grid>
       </Container>
+
+      {/* Log in or create an account, then finish the booking that was waiting */}
+      <Dialog open={authOpen} onClose={() => { if (!authSubmitting) setAuthOpen(false); }} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 0 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <LockIcon color="primary" />
+            <span>{authMode === 'login' ? 'Log in to confirm' : 'Create an account'}</span>
+          </Stack>
+        </DialogTitle>
+        <Tabs
+          value={authMode}
+          onChange={(_, v) => { setAuthMode(v); setAuthError(''); }}
+          variant="fullWidth"
+          sx={{ px: 2, mt: 1 }}
+        >
+          <Tab value="login" label="Log in" />
+          <Tab value="register" label="Create account" />
+        </Tabs>
+        <Box component="form" onSubmit={handleAuthSubmit}>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              An account is required to book a Get to Know UC meeting slot.
+            </Typography>
+            {authError && <Alert severity="error" sx={{ mb: 2 }}>{authError}</Alert>}
+            <Stack spacing={2}>
+              {authMode === 'register' && (
+                <>
+                  <TextField
+                    label="Full Name"
+                    fullWidth
+                    required
+                    value={authForm.fullName}
+                    onChange={(e) => setAuthForm({ ...authForm, fullName: e.target.value })}
+                  />
+                  <TextField
+                    label="Graduation Class"
+                    placeholder="e.g., 2027"
+                    fullWidth
+                    required
+                    value={authForm.graduationClass}
+                    onChange={(e) => setAuthForm({ ...authForm, graduationClass: e.target.value })}
+                  />
+                  <TextField
+                    label="UCLA Student ID"
+                    placeholder="9 digits"
+                    fullWidth
+                    required
+                    value={authForm.studentId}
+                    onChange={(e) => setAuthForm({ ...authForm, studentId: e.target.value })}
+                  />
+                </>
+              )}
+              <TextField
+                label="Email Address"
+                type="email"
+                fullWidth
+                required
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+              />
+              <TextField
+                label="Password"
+                type="password"
+                fullWidth
+                required
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+              {authMode === 'login' ? (
+                <>Don't have an account?{' '}
+                  <Link component="button" type="button" onClick={() => { setAuthMode('register'); setAuthError(''); }}>Create one</Link>
+                </>
+              ) : (
+                <>Already have an account?{' '}
+                  <Link component="button" type="button" onClick={() => { setAuthMode('login'); setAuthError(''); }}>Log in</Link>
+                </>
+              )}
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={() => setAuthOpen(false)} disabled={authSubmitting}>Cancel</Button>
+            <Button type="submit" variant="contained" disabled={authSubmitting}>
+              {authSubmitting ? 'Please wait…' : authMode === 'login' ? 'Log in & book' : 'Create account & book'}
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
     </Box>
   );
 }
