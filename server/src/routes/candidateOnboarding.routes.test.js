@@ -504,3 +504,34 @@ describe('editing details without re-uploading', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('an account that has not verified its email', () => {
+  beforeEach(() => {
+    prisma.candidate.findFirst.mockResolvedValue(candidateRow({ onboarding: onboardingRow() }));
+  });
+
+  it('can replace its resume', async () => {
+    const form = new FormData();
+    form.append('resume', new Blob([Buffer.from('%PDF-1.4 new')], { type: 'application/pdf' }), 'resume.pdf');
+    const res = await fetch(`http://localhost:${port}/api/candidate/onboarding/resume`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${tokenFor(unverifiedCandidate)}` },
+      body: form
+    });
+    expect(res.status).toBe(200);
+  });
+
+  // Consent is recorded, but the pool query still requires emailVerifiedAt
+  // (asserted in utils/talentPoolFilters.test.js), so partners cannot see this
+  // resume until the address is verified.
+  it('can opt into the talent pool', async () => {
+    stored.set(onboardingRow().resumeStoragePath, Buffer.from('%PDF-1.4 resume'));
+    const res = await fetch(`http://localhost:${port}/api/candidate/onboarding/talent-pool`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${tokenFor(unverifiedCandidate)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ talentPoolOptIn: true })
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).talentPool).toMatchObject({ shared: true });
+  });
+});
