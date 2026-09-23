@@ -24,6 +24,7 @@ const AUDIENCE_COLORS = {
   Member: 'info',
   Admin: 'warning',
   'Any account': 'default',
+  'Password signups': 'default',
   'Talent portal': 'secondary',
 };
 

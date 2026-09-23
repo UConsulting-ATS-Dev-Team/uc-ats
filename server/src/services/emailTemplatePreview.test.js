@@ -210,6 +210,9 @@ describe('what the preview actually shows', () => {
     expect(preview.html).toBe(direct.html);
   });
 
+  // The trigger text for these three is asserted in
+  // routes/welcomeEmail.routes.test.js, beside the routes that do the sending.
+  // Checking the strings here would only be prose agreeing with itself.
   it('keeps the three welcome audiences distinct', () => {
     const candidate = renderEmailTemplatePreview('welcome-candidate');
     const talent = renderEmailTemplatePreview('welcome-talent');

@@ -261,33 +261,43 @@ const TRANSACTIONAL = [
   {
     key: 'email-verification',
     label: 'Email verification link',
-    description: 'Verifies a self-registered talent portal address.',
-    audience: 'Talent portal',
+    description: 'Proves a new account owns the address it signed up with.',
+    // Not every account: a member is created already trusted, and Google has
+    // proved the address before the account exists. Only a password signup has
+    // anything left to prove.
+    audience: 'Password signups',
     category: 'Account',
-    trigger: 'Sent on external talent registration, before uploads are allowed.',
+    trigger:
+      'Sent on password signup and on external registration, and again on resend. Talent uploads stay blocked until it is used. Google sign-in skips it.',
     args: [SAMPLE_CANDIDATE, `${config.clientUrl}/verify-email?token=sample-preview-token`],
   },
   // One builder, three audiences, all three in use. `welcomeAudience` in
   // auth.js picks between them, so an admin comparing the wording needs to see
   // them side by side rather than guess which one a given signup gets.
+  //
+  // The three fire at different moments, which is the part worth stating: only
+  // Google sign-in skips verification, because an unverified Google address is
+  // refused outright and the account is live the moment it is created.
   {
     key: 'welcome-candidate',
     builderKey: 'welcome',
     label: 'Welcome (applicant)',
-    description: 'Greets somebody who just created an account to apply.',
+    description: 'Greets somebody who created an account to apply.',
     audience: 'Candidate',
     category: 'Account',
-    trigger: 'Sent on signup, or once a verification completes.',
+    trigger:
+      'Sent once a password signup verifies their address. /register itself sends only the verification link.',
     args: [SAMPLE_CANDIDATE, 'candidate', config.clientUrl],
   },
   {
     key: 'welcome-talent',
     builderKey: 'welcome',
     label: 'Welcome (talent network)',
-    description: 'Greets a self-registered UCLA student joining the talent portal.',
+    description: 'Greets a UCLA student joining the talent portal.',
     audience: 'Talent portal',
     category: 'Account',
-    trigger: 'Sent on external registration, once the address is verified.',
+    trigger:
+      'Sent immediately when a Google account is created, or once a /register-external signup verifies their address.',
     args: [SAMPLE_CANDIDATE, 'talent', config.clientUrl],
   },
   {
@@ -297,7 +307,7 @@ const TRANSACTIONAL = [
     description: 'Greets a new member account on the ATS.',
     audience: 'Member',
     category: 'Account',
-    trigger: 'Sent when a member account is created.',
+    trigger: 'Sent as soon as a member account is created, with no verification step.',
     args: [SAMPLE_MEMBER, 'member', config.clientUrl],
   },
 ].map((entry) => ({
