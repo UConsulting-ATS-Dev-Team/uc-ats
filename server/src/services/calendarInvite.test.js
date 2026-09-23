@@ -1,11 +1,34 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildInvite,
   sequenceFrom,
   inviteUid,
   describeWhen,
+  inviteOrganizerEmail,
   DEFAULT_DURATION_MINUTES,
 } from './calendarInvite.js';
+
+describe('inviteOrganizerEmail', () => {
+  const saved = { from: process.env.EMAIL_FROM, replyTo: process.env.EMAIL_REPLY_TO };
+  afterEach(() => {
+    process.env.EMAIL_FROM = saved.from;
+    process.env.EMAIL_REPLY_TO = saved.replyTo;
+    if (saved.from === undefined) delete process.env.EMAIL_FROM;
+    if (saved.replyTo === undefined) delete process.env.EMAIL_REPLY_TO;
+  });
+
+  it('names the reply-to inbox, so RSVP replies do not bounce off the no-reply domain', () => {
+    process.env.EMAIL_FROM = 'no-reply@uconsultingats.com';
+    process.env.EMAIL_REPLY_TO = "'uconsultingla@gmail.com'";
+    expect(inviteOrganizerEmail()).toBe('uconsultingla@gmail.com');
+  });
+
+  it('falls back to the sending address when no reply-to is set', () => {
+    process.env.EMAIL_FROM = 'no-reply@uconsultingats.com';
+    delete process.env.EMAIL_REPLY_TO;
+    expect(inviteOrganizerEmail()).toBe('no-reply@uconsultingats.com');
+  });
+});
 
 const base = {
   uid: 'slot-signup-abc@uconsultingats.com',

@@ -181,4 +181,19 @@ export function buildInvite({
   };
 }
 
+/**
+ * The address every invite names as its ORGANIZER.
+ *
+ * A calendar sends RSVP replies (Accepted / Declined) to the organizer. Invites
+ * used to name EMAIL_FROM, no-reply@uconsultingats.com, and that domain has no
+ * mail server, so every Yes or No a recipient clicked bounced back to them two
+ * days later as "Message not delivered". EMAIL_REPLY_TO is the inbox people are
+ * already meant to reach us at, so RSVPs land there. EMAIL_FROM is the fallback
+ * for a deployment that has no reply-to set.
+ */
+export function inviteOrganizerEmail() {
+  const clean = (value) => (value ?? '').replace(/['"]/g, '').trim();
+  return clean(process.env.EMAIL_REPLY_TO) || clean(process.env.EMAIL_FROM);
+}
+
 export { DEFAULT_DURATION_MINUTES, TIMEZONE };
