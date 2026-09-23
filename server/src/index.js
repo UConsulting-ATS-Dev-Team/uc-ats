@@ -43,6 +43,7 @@ import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
 import emailTemplateRoutes from './routes/emailTemplates.js';
 import sesWebhookRoutes from './routes/sesWebhooks.js';
+import lumaIntegrationRoutes from './routes/lumaIntegration.js';
 
 const app = express();
 
@@ -116,6 +117,9 @@ app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/decision-guides', decisionGuideRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
 app.use('/api/webhooks/ses', sesWebhookRoutes);
+// The hourly Luma sync routine. Carries its own bearer token rather than a JWT;
+// no user session ever reaches it.
+app.use('/api/integrations/luma', lumaIntegrationRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
 app.use('/api/resume-uploads', resumeUploadsRoutes);
