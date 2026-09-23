@@ -9,18 +9,11 @@ import {
   Paper,
   TextField,
   Button,
-  Card,
-  CardContent,
-  CardActions,
   Grid,
   Alert,
   CircularProgress,
   Stack,
-  Chip,
-  Divider,
   Container,
-  Avatar,
-  IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -31,15 +24,14 @@ import {
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
-  LocationOn as LocationIcon,
   People as PeopleIcon,
   Person as PersonIcon,
   Email as EmailIcon,
   School as SchoolIcon,
   CheckCircle as CheckCircleIcon,
-  LinkedIn as LinkedInIcon,
   Lock as LockIcon
 } from '@mui/icons-material';
+import { GtkucSlotCard, GtkucSlotGrid } from '../components/GtkucSlotGallery';
 
 export default function CoffeeChatsPublic() {
   const { user, login, register } = useAuth();
@@ -211,18 +203,6 @@ export default function CoffeeChatsPublic() {
     }
   };
 
-  const formatDateTime = (dateTime) => {
-    const date = new Date(dateTime);
-    return date.toLocaleString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'America/Los_Angeles'
-    });
-  };
 
   const getSelectedSlotData = () => {
     return slots.find(s => s.id === selectedSlot);
@@ -402,7 +382,8 @@ export default function CoffeeChatsPublic() {
         )}
       </Box>
 
-      <Container maxWidth="lg" sx={{ py: { xs: 3, md: 4 }, px: { xs: 1.5, md: 3 } }}>
+      {/* Widens to xl on very wide screens so the slot grid can fit a fourth column. */}
+      <Container maxWidth="lg" sx={{ py: { xs: 3, md: 4 }, px: { xs: 1.5, md: 3 }, maxWidth: { xl: 1536 } }}>
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
@@ -418,7 +399,7 @@ export default function CoffeeChatsPublic() {
 
       <Grid container spacing={{ xs: 2, md: 4 }}>
         {/* Available Slots */}
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
             <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
               Available Meeting Slots
@@ -442,144 +423,15 @@ export default function CoffeeChatsPublic() {
                 </Typography>
               </Box>
             ) : (
-              <Stack spacing={{ xs: 1.5, md: 2 }}>
+              <GtkucSlotGrid>
                 {availableSlots.map((slot) => (
-                    <Card 
-                    key={slot.id} 
-                    variant="outlined"
-                    sx={{ 
-                      cursor: slot.remaining > 0 ? 'pointer' : 'default',
-                      opacity: slot.remaining === 0 ? 0.6 : 1,
-                      border: selectedSlot === slot.id ? 2 : 1,
-                      borderColor: selectedSlot === slot.id ? 'primary.main' : 'divider',
-                      transition: 'all 0.2s ease-in-out',
-                      '&:hover': slot.remaining > 0 ? {
-                        borderColor: 'primary.main',
-                        boxShadow: 2,
-                        transform: 'translateY(-1px)'
-                      } : {},
-                      '&:active': slot.remaining > 0 ? {
-                        transform: 'translateY(0px)'
-                      } : {}
-                    }}
-                    onClick={() => slot.remaining > 0 && setSelectedSlot(slot.id)}
-                  >
-                    <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                      {/* Member-led layout: who you would be meeting comes first. */}
-                      <Box sx={{ display: 'flex', gap: { xs: 2, sm: 2.5 }, alignItems: 'flex-start' }}>
-                        <Avatar
-                          src={slot.memberProfile?.photo || undefined}
-                          alt={slot.memberName}
-                          sx={{
-                            width: { xs: 72, md: 92 },
-                            height: { xs: 72, md: 92 },
-                            border: '3px solid',
-                            borderColor: 'primary.light',
-                            flexShrink: 0
-                          }}
-                        >
-                          <PersonIcon sx={{ fontSize: { xs: 36, md: 46 } }} />
-                        </Avatar>
-
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Box sx={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'flex-start',
-                            gap: 1,
-                            mb: 0.5
-                          }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                              <Typography
-                                variant="h6"
-                                sx={{ fontWeight: 700, fontSize: { xs: '1.15rem', md: '1.35rem' }, lineHeight: 1.2 }}
-                              >
-                                {slot.memberName}
-                              </Typography>
-                              {slot.memberProfile?.linkedinUrl && (
-                                <IconButton
-                                  component="a"
-                                  href={slot.memberProfile.linkedinUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  aria-label={`${slot.memberName} on LinkedIn`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  sx={{ color: '#0A66C2', p: 0.5 }}
-                                >
-                                  <LinkedInIcon sx={{ fontSize: { xs: 26, md: 30 } }} />
-                                </IconButton>
-                              )}
-                            </Box>
-                            <Chip
-                              label={slot.remaining === 0 ? 'Full' : `${slot.remaining} ${slot.remaining === 1 ? 'spot' : 'spots'} left`}
-                              color={slot.remaining === 0 ? 'default' : 'primary'}
-                              variant={slot.remaining === 0 ? 'outlined' : 'filled'}
-                              size="small"
-                              sx={{ flexShrink: 0, fontWeight: 600 }}
-                            />
-                          </Box>
-
-                          {slot.memberProfile?.graduationClass && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                              Class of {slot.memberProfile.graduationClass}
-                            </Typography>
-                          )}
-
-                          <Stack spacing={0.75} sx={{ mb: slot.memberProfile ? 2 : 0 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <ScheduleIcon sx={{ fontSize: 20, color: 'primary.main' }} />
-                              <Typography variant="body1" sx={{ fontWeight: 600, fontSize: { xs: '0.95rem', md: '1rem' } }}>
-                                {formatDateTime(slot.startTime)}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <LocationIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                              <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.925rem' } }}>
-                                {slot.location}
-                              </Typography>
-                            </Box>
-                          </Stack>
-
-                          {slot.memberProfile?.industries?.length > 0 && (
-                            <Box sx={{ mb: 1.5 }}>
-                              <Typography
-                                variant="overline"
-                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
-                              >
-                                Industry experience
-                              </Typography>
-                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
-                                {slot.memberProfile.industries.map((industry) => (
-                                  <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
-                                ))}
-                              </Stack>
-                            </Box>
-                          )}
-
-                          {slot.memberProfile?.interests?.length > 0 && (
-                            <Box>
-                              <Typography
-                                variant="overline"
-                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
-                              >
-                                Interests
-                              </Typography>
-                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
-                                {slot.memberProfile.interests.map((interest) => (
-                                  <Chip key={interest} label={interest} size="small" variant="outlined" />
-                                ))}
-                              </Stack>
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </CardContent>
-                    {slot.remaining > 0 && (
-                      <CardActions sx={{ 
-                        justifyContent: 'center', 
-                        pb: 2,
-                        px: { xs: 2, md: 3 }
-                      }}>
+                  <GtkucSlotCard
+                    key={slot.id}
+                    slot={slot}
+                    selected={selectedSlot === slot.id}
+                    onSelect={setSelectedSlot}
+                    actions={
+                      slot.remaining > 0 && (
                         <Button
                           variant={selectedSlot === slot.id ? 'contained' : 'outlined'}
                           size="medium"
@@ -596,9 +448,9 @@ export default function CoffeeChatsPublic() {
                         >
                           {selectedSlot === slot.id ? 'Selected' : 'Select This Slot'}
                         </Button>
-                      </CardActions>
-                    )}
-
+                      )
+                    }
+                  >
                     {/* Inline Signup Form - appears below selected slot */}
                     {selectedSlot === slot.id && (
                       <Box sx={{ 
@@ -687,16 +539,16 @@ export default function CoffeeChatsPublic() {
                         </Typography>
                       </Box>
                     )}
-                  </Card>
+                  </GtkucSlotCard>
                 ))}
-              </Stack>
+              </GtkucSlotGrid>
             )}
           </Paper>
         </Grid>
 
         {/* Instructions when no slot is selected */}
         {!selectedSlot && (
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Paper sx={{ p: { xs: 2, md: 3 }, textAlign: 'center' }}>
               <PeopleIcon sx={{ fontSize: { xs: 48, md: 60 }, color: 'grey.400', mb: 2 }} />
               <Typography variant="h6" color="text.secondary" sx={{ 
