@@ -8,6 +8,7 @@ import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
+import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
@@ -4688,6 +4689,12 @@ router.post('/meeting-slots', async (req, res) => {
     });
 
     res.json(slot);
+
+    // After the response, as in the member route: a slow mail server must not
+    // hold open a request whose slot already exists.
+    notifyHostSlotCreated(slot, host).catch((err) =>
+      console.error('[POST /api/admin/meeting-slots] slot confirmation failed', err)
+    );
   } catch (error) {
     console.error('[POST /api/admin/meeting-slots]', error);
     res.status(500).json({ error: 'Failed to create meeting slot' });

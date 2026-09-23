@@ -507,6 +507,65 @@ export const sendMeetingSignupConfirmation = async (candidateEmail, candidateNam
   }
 };
 
+// Confirmation to the host that the GTKUC slot they (or an admin for them)
+// just opened exists. It carries the first calendar invite for the slot; each
+// later signup email updates that same entry.
+const createMeetingSlotCreatedEmail = async (memberName, location, startTime, endTime) => {
+  const copy = await resolveEmailCopy('meeting-slot-created');
+  const values = { memberName, location };
+
+  return {
+    subject: copySubject(copy.subject, values),
+    html: `
+        <div style="padding: 30px 20px;">
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
+          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
+            <h4 style="color: #155724; margin: 0 0 15px 0;">Slot Details</h4>
+            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            ${endTime ? `<p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>` : ''}
+            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
+          </div>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
+          </div>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+export const sendMeetingSlotCreated = async (memberEmail, memberName, location, startTime, endTime, { invite } = {}) => {
+  try {
+    const emailContent = await createMeetingSlotCreatedEmail(memberName, location, startTime, endTime);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: memberName });
+
+    if (result.success) {
+      console.log(`Meeting slot created email sent to ${memberEmail}`);
+    } else {
+      console.error(`Failed to send meeting slot created email to ${memberEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendMeetingSlotCreated:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Create meeting signup notification email template for members
 const createMeetingSignupNotificationEmail = async (memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
   const copy = await resolveEmailCopy('meeting-signup-notification');
@@ -1439,6 +1498,7 @@ export const TEMPLATE_BUILDERS = {
   'application-rejection': createRejectionEmail,
   'offer-letter': createOfferLetterEmail,
   'meeting-signup-confirmation': createMeetingSignupConfirmationEmail,
+  'meeting-slot-created': createMeetingSlotCreatedEmail,
   'meeting-signup-notification': createMeetingSignupNotificationEmail,
   'meeting-cancellation-candidate': createMeetingCancellationEmail,
   'meeting-cancellation-member': createMeetingCancellationMemberEmail,

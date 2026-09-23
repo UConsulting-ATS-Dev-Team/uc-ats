@@ -175,6 +175,27 @@ const MEETING_SIGNUP_CONFIRMATION = {
   ],
 };
 
+const MEETING_SLOT_CREATED = {
+  mergeFields: ['memberName', 'location'],
+  fields: [
+    line('subject', 'Subject', 'Your Get to Know UC slot is open'),
+    line('greeting', 'Greeting', 'Hi {{memberName}},'),
+    block(
+      'intro',
+      'Before the slot details',
+      "Your Get to Know UC slot is open for candidates to book. It's attached as a calendar invite so the time is held."
+    ),
+    line('highlightsTitle', 'Grey box title', 'What Happens Next'),
+    block(
+      'highlights',
+      'Grey box',
+      "• You'll get an email each time a candidate books this slot, and the calendar entry updates with their name\n\n• If nobody books, the time stays on your calendar as an open slot"
+    ),
+    block('outro', 'Closing', 'You can edit or cancel the slot any time in the [ATS](https://uconsultingats.com).'),
+    signOff(RECRUITMENT_TEAM),
+  ],
+};
+
 const MEETING_SIGNUP_NOTIFICATION = {
   mergeFields: ['memberName', 'candidateName', 'candidateEmail', 'location'],
   fields: [
@@ -691,6 +712,7 @@ const TRANSACTIONAL_TEMPLATES = {
   'application-rejection': APPLICATION_REJECTION,
   'offer-letter': OFFER_LETTER,
   'meeting-signup-confirmation': MEETING_SIGNUP_CONFIRMATION,
+  'meeting-slot-created': MEETING_SLOT_CREATED,
   'meeting-signup-notification': MEETING_SIGNUP_NOTIFICATION,
   'meeting-cancellation-candidate': MEETING_CANCELLATION_CANDIDATE,
   'meeting-cancellation-member': MEETING_CANCELLATION_MEMBER,

@@ -13,7 +13,7 @@ import {
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
 import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
-import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
@@ -1030,8 +1030,14 @@ router.post('/meeting-slots', requireAuth, requireAdminOrMember, async (req, res
     
     console.log('Created slot startTime:', slot.startTime);
     console.log('Created slot endTime:', slot.endTime);
-    
+
     res.json(slot);
+
+    // After the response: the slot exists either way, and a slow mail server
+    // must not hold the request open long enough to invite a duplicate retry.
+    notifyHostSlotCreated(slot, req.user).catch((err) =>
+      console.error('[POST /api/member/meeting-slots] slot confirmation failed', err)
+    );
   } catch (error) {
     console.error('[POST /api/member/meeting-slots]', error);
     res.status(500).json({ error: 'Failed to create meeting slot' });

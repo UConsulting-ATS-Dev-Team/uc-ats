@@ -1,5 +1,6 @@
 // Calendar invites for Get to Know UC meetings, attached to the emails in
-// emailNotifications.js that already announce a signup, a move or a cancellation.
+// emailNotifications.js that announce a new slot, a signup, a move or a
+// cancellation.
 //
 // Two calendar entries exist per slot, and they are keyed differently on purpose.
 //
@@ -7,12 +8,12 @@
 // MeetingSignup is unique on - so a reschedule moves the entry they already have
 // and a cancellation removes it.
 //
-// The host's entry is keyed on the slot alone. A slot seats more than one
-// candidate (capacity defaults to 2), and the host is at one meeting, not two.
-// So each signup re-sends the same entry with the attendee list updated, and a
-// single candidate cancelling only removes it when nobody else is still booked -
-// otherwise the host would lose the meeting from their calendar while someone is
-// still coming. hostMeetingInvite decides that from `attendeeNames`.
+// The host's entry is keyed on the slot alone. It is created when the slot is
+// (the "slot opened" email) and stands for the time the host has set aside, so
+// it lives exactly as long as the slot does: each signup or cancellation re-sends
+// it with the current attendee list, an empty list included, and only deleting
+// the slot cancels it. A slot seats more than one candidate (capacity defaults
+// to 2), and the host is at one meeting, not two.
 //
 // SEQUENCE is the send time in seconds, bumped past the last one issued so two
 // changes to the same entry inside one second still order correctly.
@@ -22,12 +23,13 @@
 //
 // The host's attendee list is read from the database at send time, not from the
 // slot the route loaded before its write, so a booking that lands in between is
-// not dropped - and cannot turn the host's REQUEST into a CANCEL.
+// not dropped from it.
 //
 // Known gaps, all because no email goes out to the host to carry an update: a
 // host moving or deleting their own slot, or removing one of their own signups,
 // leaves their entry as it was, and an admin reassigning a slot to another host
-// moves nothing.
+// moves nothing. Slots opened before the "slot opened" email existed have no
+// host entry until their first signup.
 
 import prisma from '../prismaClient.js';
 import { buildInvite, inviteUid, describeWhen } from './calendarInvite.js';
@@ -92,10 +94,9 @@ export function candidateMeetingInvite({ slot, candidateEmail, candidateName, ho
  * The host's invite to one GTKUC slot, or null when it cannot be built.
  *
  * `attendeeNames` is everyone still booked after the change being announced -
- * read it with bookedNames. null (a failed read) means no invite. An
- * empty list turns a REQUEST into a CANCEL, which is what makes "the last
- * candidate cancelled" clear the entry and "one of two cancelled" keep it.
- * Pass method 'CANCEL' directly when the slot itself is gone.
+ * read it with bookedNames. null (a failed read) means no invite. An empty list
+ * is an open slot and still a REQUEST: the host set that time aside whether or
+ * not anyone has booked it. Only method 'CANCEL', for a deleted slot, removes it.
  */
 export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [], method = 'REQUEST' }) {
   try {
@@ -103,7 +104,7 @@ export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [
     if (!slot?.id || !slot.startTime || !hostEmail || !organizer || !attendeeNames) return null;
 
     const names = attendeeNames.filter(Boolean);
-    const cancelling = method === 'CANCEL' || names.length === 0;
+    const cancelling = method === 'CANCEL';
     const when = describeWhen(slot.startTime, slot.endTime);
 
     return buildInvite({
@@ -112,9 +113,9 @@ export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [
       method: cancelling ? 'CANCEL' : 'REQUEST',
       start: slot.startTime,
       end: slot.endTime,
-      summary: names.length ? `${SUMMARY}: ${names.join(', ')}` : SUMMARY,
+      summary: names.length ? `${SUMMARY}: ${names.join(', ')}` : `${SUMMARY} (open slot)`,
       description: joinLines([
-        names.length ? `Candidates: ${names.join(', ')}` : null,
+        names.length ? `Candidates: ${names.join(', ')}` : 'No candidates booked yet.',
         when ? `When: ${when}` : null,
         slot.location ? `Where: ${slot.location}` : null,
         'Mark attendance afterwards at https://uconsultingats.com',
