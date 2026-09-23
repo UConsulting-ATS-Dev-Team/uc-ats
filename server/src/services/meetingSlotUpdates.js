@@ -15,6 +15,7 @@ import {
   sendMeetingRescheduleToMember,
 } from './emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from './meetingComms.js';
+import { candidateMeetingInvite, hostMeetingInvite } from './meetingInvites.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 
 /** Carries the HTTP status the route should answer with. */
@@ -180,7 +181,15 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
 
   const candidateSends = updated.signups.map((signup) =>
     sendAndLogMeetingCommunication(
-      () => sendOrThrow(() => sendMeetingRescheduleEmail(signup.email, signup.fullName, hostName, next, previous)),
+      () => sendOrThrow(() => sendMeetingRescheduleEmail(signup.email, signup.fullName, hostName, next, previous, {
+        // Same UID as the confirmation, so this moves the entry rather than adding one.
+        invite: candidateMeetingInvite({
+          slot: updated,
+          candidateEmail: signup.email,
+          candidateName: signup.fullName,
+          hostName,
+        }),
+      })),
       {
         slotId: updated.id,
         signupId: signup.id,
@@ -198,6 +207,16 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
     ? sendAndLogMeetingCommunication(
         () => sendOrThrow(() => sendMeetingRescheduleToMember(updated.member.email, hostName, next, previous, {
           signupCount: updated.signups.length,
+          // An empty slot never put anything on the host's calendar, so there is
+          // nothing to move.
+          invite: updated.signups.length
+            ? hostMeetingInvite({
+                slot: updated,
+                hostEmail: updated.member.email,
+                hostName,
+                attendeeNames: updated.signups.map((s) => s.fullName),
+              })
+            : null,
         })),
         {
           slotId: updated.id,

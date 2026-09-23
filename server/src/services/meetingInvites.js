@@ -1,0 +1,159 @@
+// Calendar invites for Get to Know UC meetings, attached to the emails in
+// emailNotifications.js that already announce a signup, a move or a cancellation.
+//
+// Two calendar entries exist per slot, and they are keyed differently on purpose.
+//
+// The candidate's entry is keyed on (slot, their address) - the same pair
+// MeetingSignup is unique on - so a reschedule moves the entry they already have
+// and a cancellation removes it.
+//
+// The host's entry is keyed on the slot alone. A slot seats more than one
+// candidate (capacity defaults to 2), and the host is at one meeting, not two.
+// So each signup re-sends the same entry with the attendee list updated, and a
+// single candidate cancelling only removes it when nobody else is still booked -
+// otherwise the host would lose the meeting from their calendar while someone is
+// still coming. hostMeetingInvite decides that from `attendeeNames`.
+//
+// SEQUENCE is the send time in seconds, bumped past the last one issued so two
+// changes to the same entry inside one second still order correctly.
+// MeetingSignup has no updatedAt, and a signup or cancellation changes the
+// host's entry without touching the slot row, so slot.updatedAt would not always
+// increase. Seconds rather than milliseconds because RFC 5545 INTEGER is 32-bit.
+//
+// The host's attendee list is read from the database at send time, not from the
+// slot the route loaded before its write, so a booking that lands in between is
+// not dropped - and cannot turn the host's REQUEST into a CANCEL.
+//
+// Known gaps, all because no email goes out to the host to carry an update: a
+// host moving or deleting their own slot, or removing one of their own signups,
+// leaves their entry as it was, and an admin reassigning a slot to another host
+// moves nothing.
+
+import prisma from '../prismaClient.js';
+import { buildInvite, inviteUid, describeWhen } from './calendarInvite.js';
+
+const SUMMARY = 'Get to Know UC';
+
+function organizerEmail() {
+  return (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
+}
+
+let lastSequence = 0;
+
+function nextSequence() {
+  lastSequence = Math.max(Math.floor(Date.now() / 1000), lastSequence + 1);
+  return lastSequence;
+}
+
+function joinLines(lines) {
+  return lines.filter(Boolean).join('\n');
+}
+
+/**
+ * The candidate's invite to one GTKUC slot, or null when it cannot be built.
+ *
+ * Never throws: a signup that was recorded must not be reported as failed because
+ * its invite could not be assembled. The email still goes without it.
+ */
+export function candidateMeetingInvite({ slot, candidateEmail, candidateName, hostName, method = 'REQUEST' }) {
+  try {
+    const organizer = organizerEmail();
+    if (!slot?.id || !slot.startTime || !candidateEmail || !organizer) return null;
+
+    const when = describeWhen(slot.startTime, slot.endTime);
+    return buildInvite({
+      uid: inviteUid('gtkuc', `${slot.id}-${String(candidateEmail).toLowerCase()}`),
+      sequence: nextSequence(),
+      method,
+      start: slot.startTime,
+      end: slot.endTime,
+      summary: hostName ? `${SUMMARY} with ${hostName}` : SUMMARY,
+      description: joinLines([
+        hostName ? `Meeting with: ${hostName}` : null,
+        when ? `When: ${when}` : null,
+        slot.location ? `Where: ${slot.location}` : null,
+        'Manage your booking at https://uconsultingats.com',
+      ]),
+      location: slot.location ?? null,
+      organizerEmail: organizer,
+      attendeeEmail: candidateEmail,
+      attendeeName: candidateName,
+    });
+  } catch (error) {
+    console.warn('[candidateMeetingInvite] could not build a calendar invite; sending without one', {
+      slotId: slot?.id,
+      error: error?.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * The host's invite to one GTKUC slot, or null when it cannot be built.
+ *
+ * `attendeeNames` is everyone still booked after the change being announced -
+ * read it with bookedNames. null (a failed read) means no invite. An
+ * empty list turns a REQUEST into a CANCEL, which is what makes "the last
+ * candidate cancelled" clear the entry and "one of two cancelled" keep it.
+ * Pass method 'CANCEL' directly when the slot itself is gone.
+ */
+export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [], method = 'REQUEST' }) {
+  try {
+    const organizer = organizerEmail();
+    if (!slot?.id || !slot.startTime || !hostEmail || !organizer || !attendeeNames) return null;
+
+    const names = attendeeNames.filter(Boolean);
+    const cancelling = method === 'CANCEL' || names.length === 0;
+    const when = describeWhen(slot.startTime, slot.endTime);
+
+    return buildInvite({
+      uid: inviteUid('gtkuc-host', slot.id),
+      sequence: nextSequence(),
+      method: cancelling ? 'CANCEL' : 'REQUEST',
+      start: slot.startTime,
+      end: slot.endTime,
+      summary: names.length ? `${SUMMARY}: ${names.join(', ')}` : SUMMARY,
+      description: joinLines([
+        names.length ? `Candidates: ${names.join(', ')}` : null,
+        when ? `When: ${when}` : null,
+        slot.location ? `Where: ${slot.location}` : null,
+        'Mark attendance afterwards at https://uconsultingats.com',
+      ]),
+      location: slot.location ?? null,
+      organizerEmail: organizer,
+      attendeeEmail: hostEmail,
+      attendeeName: hostName,
+    });
+  } catch (error) {
+    console.warn('[hostMeetingInvite] could not build a calendar invite; sending without one', {
+      slotId: slot?.id,
+      error: error?.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Names of everyone booked on a slot right now, for hostMeetingInvite.
+ *
+ * `excludingSignupId` drops a signup that is being cancelled but not yet deleted -
+ * the cancellation routes email before they delete. Returns null on a failed read,
+ * which callers pass straight through: better no invite than a CANCEL built from
+ * a roster we could not see.
+ */
+export async function bookedNames(slotId, { excludingSignupId = null } = {}) {
+  try {
+    const signups = await prisma.meetingSignup.findMany({
+      where: { slotId, ...(excludingSignupId ? { id: { not: excludingSignupId } } : {}) },
+      select: { fullName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return signups.map((s) => s.fullName);
+  } catch (error) {
+    console.warn('[bookedNames] could not read the slot roster; sending without a host invite', {
+      slotId,
+      error: error?.message,
+    });
+    return null;
+  }
+}

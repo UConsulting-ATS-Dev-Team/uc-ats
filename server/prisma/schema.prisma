@@ -2071,6 +2071,23 @@ model DecisionGuide {
   @@map("decision_guides")
 }
 
+/// Admin-editable wording for one automatic email, keyed by the template key in
+/// services/emailTemplateCopy.js. A row holds only the fields an admin changed;
+/// every field it leaves blank falls back to the wording shipped in the code,
+/// which is also what deleting the row restores.
+model EmailTemplateCopy {
+  id          String   @id @default(uuid())
+  /// A key from EMAIL_COPY_SCHEMA, e.g. 'rsvp-confirmation'.
+  templateKey String   @unique
+  /// { fieldName: string }. Fields the template does not declare are dropped on save.
+  copy        Json     @default("{}")
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("email_template_copy")
+}
+
 /// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the
 /// partial unique index `live_vote_sessions_single_open`, which Prisma cannot
 /// express and which lives in the migration SQL.

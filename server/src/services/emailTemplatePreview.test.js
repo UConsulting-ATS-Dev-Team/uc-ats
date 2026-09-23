@@ -20,8 +20,15 @@ vi.mock('@aws-sdk/client-sesv2', () => ({
 // emailNotifications.js logs every send through communicationLog.js, which
 // constructs a PrismaClient at import. Rendering never reaches it, but the
 // module graph does, so it is stubbed rather than given a database.
+// Rendering also reads the admin-editable wording. An empty result is "nobody
+// has edited anything", which is what these tests assert the shipped wording
+// against.
 vi.mock('../prismaClient.js', () => ({
-  default: { communicationLog: { create: vi.fn() }, $disconnect: vi.fn() },
+  default: {
+    communicationLog: { create: vi.fn() },
+    emailTemplateCopy: { findMany: vi.fn(async () => []) },
+    $disconnect: vi.fn(),
+  },
 }));
 
 import {
@@ -36,10 +43,12 @@ import {
   TEMPLATE_CATALOG,
 } from './emailTemplatePreview.js';
 import config from '../config.js';
+import prisma from '../prismaClient.js';
 
 beforeEach(() => {
   sendMail.mockClear();
   createTransport.mockClear();
+  prisma.emailTemplateCopy.findMany.mockResolvedValue([]);
 });
 
 // The bug this file exists to prevent: SLOT_EMAIL_COPY had a body for
@@ -117,8 +126,8 @@ describe('the catalog covers all three systems', () => {
 });
 
 describe('listEmailTemplates', () => {
-  it('describes every template without rendering it', () => {
-    const list = listEmailTemplates();
+  it('describes every template without rendering it', async () => {
+    const list = await listEmailTemplates();
 
     expect(list).toHaveLength(TEMPLATE_CATALOG.length);
     for (const entry of list) {
@@ -131,19 +140,26 @@ describe('listEmailTemplates', () => {
     }
   });
 
-  it('does not leak the sample arguments or the render closure', () => {
-    for (const entry of listEmailTemplates()) {
+  it('does not leak the sample arguments or the render closure', async () => {
+    for (const entry of await listEmailTemplates()) {
       expect(entry).not.toHaveProperty('args');
       expect(entry).not.toHaveProperty('render');
     }
   });
 
-  it('marks the decision emails as already editable and the rest as not', () => {
-    const byId = (id) => listEmailTemplates().filter((e) => e.source === id);
+  it('marks every template editable, and names the record each one edits', async () => {
+    for (const entry of await listEmailTemplates()) {
+      expect(entry.editable, entry.key).toBe(true);
+      expect(entry.copyKey, entry.key).toBeTruthy();
+    }
+  });
 
-    expect(byId('decisionBatch').every((e) => e.editable)).toBe(true);
-    expect(byId('emailNotifications').every((e) => !e.editable)).toBe(true);
-    expect(byId('interviewSlot').every((e) => !e.editable)).toBe(true);
+  it('edits the self-signup wording with the notification it is a variant of', async () => {
+    const byKey = Object.fromEntries((await listEmailTemplates()).map((e) => [e.key, e]));
+
+    expect(byKey['slot-interviewer-assigned-self-signup'].copyKey).toBe(
+      byKey['slot-interviewer-assigned'].copyKey
+    );
   });
 });
 
@@ -151,8 +167,8 @@ describe('renderEmailTemplatePreview', () => {
   // The guard against drift: if a builder's signature or a notification's shape
   // changes and the catalog is not updated, this fails here rather than in an
   // admin's face.
-  it.each(TEMPLATE_CATALOG.map((e) => e.key))('renders %s', (key) => {
-    const preview = renderEmailTemplatePreview(key);
+  it.each(TEMPLATE_CATALOG.map((e) => e.key))('renders %s', async (key) => {
+    const preview = await renderEmailTemplatePreview(key);
 
     expect(preview.subject).toBeTruthy();
     expect(typeof preview.subject).toBe('string');
@@ -161,9 +177,9 @@ describe('renderEmailTemplatePreview', () => {
     expect(preview.key).toBe(key);
   });
 
-  it('never leaves an unsubstituted placeholder in the output', () => {
+  it('never leaves an unsubstituted placeholder in the output', async () => {
     for (const { key } of TEMPLATE_CATALOG) {
-      const { subject, html } = renderEmailTemplatePreview(key);
+      const { subject, html } = await renderEmailTemplatePreview(key);
       expect(subject, key).not.toContain('undefined');
       expect(html, key).not.toContain('undefined');
       expect(html, key).not.toContain('[object Object]');
@@ -172,48 +188,48 @@ describe('renderEmailTemplatePreview', () => {
     }
   });
 
-  it('sends nothing', () => {
+  it('sends nothing', async () => {
     for (const { key } of TEMPLATE_CATALOG) {
-      renderEmailTemplatePreview(key);
+      await renderEmailTemplatePreview(key);
     }
 
     expect(sendMail).not.toHaveBeenCalled();
     expect(createTransport).not.toHaveBeenCalled();
   });
 
-  it('is deterministic, so the same template previews identically every time', () => {
+  it('is deterministic, so the same template previews identically every time', async () => {
     for (const { key } of TEMPLATE_CATALOG) {
-      expect(renderEmailTemplatePreview(key)).toEqual(renderEmailTemplatePreview(key));
+      expect(await renderEmailTemplatePreview(key)).toEqual(await renderEmailTemplatePreview(key));
     }
   });
 
-  it('rejects an unknown key', () => {
-    expect(() => renderEmailTemplatePreview('not-a-template')).toThrow(UnknownEmailTemplateError);
+  it('rejects an unknown key', async () => {
+    await expect(renderEmailTemplatePreview('not-a-template')).rejects.toThrow(UnknownEmailTemplateError);
   });
 
-  it('rejects a key that would otherwise reach Object.prototype', () => {
-    expect(() => renderEmailTemplatePreview('constructor')).toThrow(UnknownEmailTemplateError);
-    expect(() => renderEmailTemplatePreview('toString')).toThrow(UnknownEmailTemplateError);
+  it('rejects a key that would otherwise reach Object.prototype', async () => {
+    await expect(renderEmailTemplatePreview('constructor')).rejects.toThrow(UnknownEmailTemplateError);
+    await expect(renderEmailTemplatePreview('toString')).rejects.toThrow(UnknownEmailTemplateError);
   });
 });
 
 describe('what the preview actually shows', () => {
-  it('renders the same content the send path would produce', () => {
+  it('renders the same content the send path would produce', async () => {
     // Builder output is what sendEmail is handed verbatim, so comparing the
     // preview against a direct builder call is the whole correctness claim.
-    const direct = TEMPLATE_BUILDERS['password-reset'](
+    const direct = await TEMPLATE_BUILDERS['password-reset'](
       `${config.clientUrl}/reset-password?token=sample-preview-token`
     );
-    const preview = renderEmailTemplatePreview('password-reset');
+    const preview = await renderEmailTemplatePreview('password-reset');
 
     expect(preview.subject).toBe(direct.subject);
     expect(preview.html).toBe(direct.html);
   });
 
-  it('keeps the three welcome audiences distinct', () => {
-    const candidate = renderEmailTemplatePreview('welcome-candidate');
-    const talent = renderEmailTemplatePreview('welcome-talent');
-    const member = renderEmailTemplatePreview('welcome-member');
+  it('keeps the three welcome audiences distinct', async () => {
+    const candidate = await renderEmailTemplatePreview('welcome-candidate');
+    const talent = await renderEmailTemplatePreview('welcome-talent');
+    const member = await renderEmailTemplatePreview('welcome-member');
 
     expect(candidate.subject).toBe('Welcome to UConsulting Recruitment');
     expect(talent.subject).toBe('Welcome to the UConsulting Talent Network');
@@ -221,21 +237,21 @@ describe('what the preview actually shows', () => {
     expect(new Set([candidate.html, talent.html, member.html]).size).toBe(3);
   });
 
-  it('points sample links at this environment, not always production', () => {
-    const { html } = renderEmailTemplatePreview('password-reset');
+  it('points sample links at this environment, not always production', async () => {
+    const { html } = await renderEmailTemplatePreview('password-reset');
     expect(html).toContain(`${config.clientUrl}/reset-password`);
   });
 
-  it('formats sample times in the club timezone', () => {
-    const { html } = renderEmailTemplatePreview('meeting-signup-confirmation');
+  it('formats sample times in the club timezone', async () => {
+    const { html } = await renderEmailTemplatePreview('meeting-signup-confirmation');
 
     // 2026-10-14T18:30:00Z is 11:30 AM in America/Los_Angeles.
     expect(html).toContain('Wednesday, October 14, 2026, 11:30 AM');
     expect(html).toContain('Ackerman Union, Room 2408');
   });
 
-  it('shows the interview slot confirmation Senya asked about', () => {
-    const preview = renderEmailTemplatePreview('slot-confirmation');
+  it('shows the interview slot confirmation Senya asked about', async () => {
+    const preview = await renderEmailTemplatePreview('slot-confirmation');
 
     expect(preview.subject).toContain('First Round Interviews');
     expect(preview.html).toContain('Wednesday, October 14, 2026, 11:30 AM');
@@ -246,71 +262,94 @@ describe('what the preview actually shows', () => {
   // Three send paths pass three different buttons. A preview that showed the
   // candidate button on an interviewer's email would be showing a link that
   // recipient never gets.
-  it('gives a candidate the signup link', () => {
-    const { html } = renderEmailTemplatePreview('slot-confirmation');
+  it('gives a candidate the signup link', async () => {
+    const { html } = await renderEmailTemplatePreview('slot-confirmation');
 
     expect(html).toContain('/interview-signup');
     expect(html).toContain('View or change your time');
   });
 
-  it('gives an interviewer the assigned-interviews link', () => {
+  it('gives an interviewer the assigned-interviews link', async () => {
     for (const key of [
       'slot-interviewer-assigned',
       'slot-interviewer-moved',
       'slot-interviewer-removed',
     ]) {
-      const { html } = renderEmailTemplatePreview(key);
+      const { html } = await renderEmailTemplatePreview(key);
       expect(html, key).toContain('/assigned-interviews');
       expect(html, key).toContain('See my interviews');
       expect(html, key).not.toContain('/interview-signup');
     }
   });
 
-  it('gives an availability request its own button', () => {
-    const { html } = renderEmailTemplatePreview('slot-availability-request');
+  it('gives an availability request its own button', async () => {
+    const { html } = await renderEmailTemplatePreview('slot-availability-request');
 
     expect(html).toContain('/assigned-interviews');
     expect(html).toContain('Add my availability');
   });
 
-  it('previews both wordings of the assignment email', () => {
-    const placed = renderEmailTemplatePreview('slot-interviewer-assigned');
-    const claimed = renderEmailTemplatePreview('slot-interviewer-assigned-self-signup');
+  it('previews both wordings of the assignment email', async () => {
+    const placed = await renderEmailTemplatePreview('slot-interviewer-assigned');
+    const claimed = await renderEmailTemplatePreview('slot-interviewer-assigned-self-signup');
 
     expect(placed.html).toContain('You have been placed in');
     expect(claimed.html).toContain('You signed up to run');
     expect(claimed.html).not.toContain('You have been placed in');
   });
 
-  it('leaves the details card off a message that has no session yet', () => {
+  it('leaves the details card off a message that has no session yet', async () => {
     // AVAILABILITY_REQUEST goes out before the day is cut into slots, so there
     // is no time or location to print.
-    const { html } = renderEmailTemplatePreview('slot-availability-request');
+    const { html } = await renderEmailTemplatePreview('slot-availability-request');
 
     expect(html).toContain('When can you interview?');
     expect(html).not.toContain('<strong>When:</strong>');
   });
 
-  it('names the attachment a preview cannot draw', () => {
-    expect(renderEmailTemplatePreview('rsvp-confirmation').alsoAttaches).toMatch(/\.ics/);
-    expect(renderEmailTemplatePreview('slot-confirmation').alsoAttaches).toMatch(/\.ics/);
-    expect(renderEmailTemplatePreview('password-reset').alsoAttaches).toBeNull();
+  it('names the attachment a preview cannot draw', async () => {
+    expect((await renderEmailTemplatePreview('rsvp-confirmation')).alsoAttaches).toMatch(/\.ics/);
+    expect((await renderEmailTemplatePreview('slot-confirmation')).alsoAttaches).toMatch(/\.ics/);
+    expect((await renderEmailTemplatePreview('password-reset')).alsoAttaches).toBeNull();
   });
 
-  it('fills the merge fields in a decision email', () => {
-    const preview = renderEmailTemplatePreview('decision-round-1-advanced');
+  it('fills the merge fields in a decision email', async () => {
+    const preview = await renderEmailTemplatePreview('decision-round-1-advanced');
 
     expect(preview.subject).toContain('Fall 2026 Recruitment');
     expect(preview.html).toContain('Jordan');
   });
 
-  it('escapes candidate-controlled text rather than trusting it', () => {
-    const { html } = TEMPLATE_BUILDERS['application-acceptance'](
+  it('escapes candidate-controlled text rather than trusting it', async () => {
+    const { html } = await TEMPLATE_BUILDERS['application-acceptance'](
       '<script>alert(1)</script>',
       'Fall 2026'
     );
 
     expect(html).not.toContain('<script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('badges a template somebody has reworded, and both entries that share its wording', async () => {
+    prisma.emailTemplateCopy.findMany.mockResolvedValue([
+      { templateKey: 'slot-interviewer-assigned', copy: { heading: 'You are on' }, updatedAt: new Date() },
+    ]);
+
+    const byKey = Object.fromEntries((await listEmailTemplates()).map((e) => [e.key, e]));
+
+    expect(byKey['slot-interviewer-assigned'].customized).toBe(true);
+    // Same record, so the variant is edited too - saying otherwise would send an
+    // admin looking for a second place to change it.
+    expect(byKey['slot-interviewer-assigned-self-signup'].customized).toBe(true);
+    expect(byKey['slot-confirmation'].customized).toBe(false);
+  });
+
+  it('does not badge a row that holds nothing', async () => {
+    prisma.emailTemplateCopy.findMany.mockResolvedValue([
+      { templateKey: 'slot-confirmation', copy: {}, updatedAt: new Date() },
+    ]);
+
+    const byKey = Object.fromEntries((await listEmailTemplates()).map((e) => [e.key, e]));
+    expect(byKey['slot-confirmation'].customized).toBe(false);
   });
 });

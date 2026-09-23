@@ -4,6 +4,13 @@ import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js'
 import { describeRoster } from '../utils/candidateRoster.js';
 import { eventInviteFor } from './eventInvites.js';
 import { recordCommunication } from './communicationLog.js';
+import {
+  SLOT_EMAIL_TYPES,
+  defaultCopy,
+  resolveEmailCopy,
+  slotCopyKey,
+} from './emailTemplateCopy.js';
+import { copyHtml, copyLine, copySignOff, copySubject } from './emailCopyRender.js';
 
 // Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
 // are picked up automatically from the environment by the AWS SDK credential chain.
@@ -29,46 +36,36 @@ const createTransporter = () => {
 };
 
 // Email templates
-const createRSVPConfirmationEmail = (candidateName, eventName, eventDate, eventLocation) => {
-  const subjectName = eventName;
-  candidateName = escapeHtml(candidateName);
-  eventName = escapeHtml(eventName);
-  eventLocation = escapeHtml(eventLocation);
+const createRSVPConfirmationEmail = async (candidateName, eventName, eventDate, eventLocation) => {
+  const copy = await resolveEmailCopy('rsvp-confirmation');
+  const values = { candidateName, eventName, eventDate, eventLocation };
+
   return {
-    subject: `RSVP Confirmation - ${subjectName}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
           <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">RSVP Confirmation</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Thank you for your RSVP! We have successfully received your response for the following event:
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h4 style="color: #333; margin: 0 0 10px 0;">Event Details</h4>
-            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${eventName}</p>
-            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${eventLocation}</p>` : ''}
+            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${escapeHtml(eventName)}</p>
+            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${escapeHtml(eventLocation)}</p>` : ''}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We look forward to seeing you at the event! If you have any questions or need to make changes to your RSVP, please don't hesitate to contact us.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting ATS Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -77,46 +74,36 @@ const createRSVPConfirmationEmail = (candidateName, eventName, eventDate, eventL
   };
 };
 
-const createAttendanceConfirmationEmail = (candidateName, eventName, eventDate, eventLocation) => {
-  const subjectName = eventName;
-  candidateName = escapeHtml(candidateName);
-  eventName = escapeHtml(eventName);
-  eventLocation = escapeHtml(eventLocation);
+const createAttendanceConfirmationEmail = async (candidateName, eventName, eventDate, eventLocation) => {
+  const copy = await resolveEmailCopy('attendance-confirmation');
+  const values = { candidateName, eventName, eventDate, eventLocation };
+
   return {
-    subject: `Attendance Confirmation - ${subjectName}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
           <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Attendance Confirmation</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Thank you for attending our event! We have successfully recorded your attendance for the following event:
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h4 style="color: #333; margin: 0 0 10px 0;">Event Details</h4>
-            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${eventName}</p>
-            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${eventLocation}</p>` : ''}
+            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${escapeHtml(eventName)}</p>
+            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${escapeHtml(eventLocation)}</p>` : ''}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We appreciate your participation and hope you found the event valuable. If you have any feedback or questions, please feel free to reach out to us.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting ATS Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -218,7 +205,7 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
  */
 export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventName, eventDate, eventLocation, event = null) => {
   try {
-    const emailContent = createRSVPConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
+    const emailContent = await createRSVPConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
     const invite = event
       ? eventInviteFor({ event, recipientEmail: candidateEmail, recipientName: candidateName })
       : null;
@@ -246,7 +233,7 @@ export const sendRSVPConfirmation = async (candidateEmail, candidateName, eventN
 // Send attendance confirmation email
 export const sendAttendanceConfirmation = async (candidateEmail, candidateName, eventName, eventDate, eventLocation) => {
   try {
-    const emailContent = createAttendanceConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
+    const emailContent = await createAttendanceConfirmationEmail(candidateName, eventName, eventDate, eventLocation);
     const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'EVENT', recipientName: candidateName });
     
     if (result.success) {
@@ -268,50 +255,35 @@ export const formatEventDate = (date) => {
 };
 
 // Create acceptance email template
-const createAcceptanceEmail = (candidateName, currentCycleName) => {
-  const subjectCycle = currentCycleName;
-  candidateName = escapeHtml(candidateName);
-  currentCycleName = escapeHtml(currentCycleName);
+const createAcceptanceEmail = async (candidateName, currentCycleName) => {
+  const copy = await resolveEmailCopy('application-acceptance');
+  const values = { candidateName, cycleName: currentCycleName };
+
   return {
-    subject: `Congratulations! You've Advanced to Coffee Chats - ${subjectCycle}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #28a745; padding: 20px; text-align: center; color: white;">
           <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">🎉 Congratulations! You've Advanced!</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We're excited to inform you that you have successfully advanced to the <strong>Coffee Chats</strong> round of our recruitment process for the <strong>${currentCycleName}</strong> cycle!
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 10px 0;">What This Means</h4>
-            <p style="color: #155724; margin: 5px 0;">✅ You've successfully passed the Resume Review round</p>
-            <p style="color: #155724; margin: 5px 0;">☕ You'll be invited to participate in Coffee Chats</p>
-            <p style="color: #155724; margin: 5px 0;">📅 You'll receive scheduling information soon</p>
+            <h4 style="color: #155724; margin: 0 0 10px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { color: '#155724', spacing: 'snug' })}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            This is a significant achievement and demonstrates the quality of your application. We look forward to getting to know you better during the Coffee Chats round.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            You will receive additional information about scheduling and preparation for the Coffee Chats round in the coming days.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -321,54 +293,35 @@ const createAcceptanceEmail = (candidateName, currentCycleName) => {
 };
 
 // Create rejection email template
-const createRejectionEmail = (candidateName, currentCycleName) => {
-  const subjectCycle = currentCycleName;
-  candidateName = escapeHtml(candidateName);
-  currentCycleName = escapeHtml(currentCycleName);
+const createRejectionEmail = async (candidateName, currentCycleName) => {
+  const copy = await resolveEmailCopy('application-rejection');
+  const values = { candidateName, cycleName: currentCycleName };
+
   return {
-    subject: `Update on Your Application - ${subjectCycle}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
           <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Application Update</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Thank you for your interest in UConsulting and for taking the time to apply to our <strong>${currentCycleName}</strong> recruitment cycle.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            After careful review of your application, we regret to inform you that we are unable to move forward with your candidacy at this time.
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
-            <h4 style="color: #721c24; margin: 0 0 10px 0;">Important Information</h4>
-            <p style="color: #721c24; margin: 5px 0;">📝 Your application has been reviewed thoroughly</p>
-            <p style="color: #721c24; margin: 5px 0;">💼 We encourage you to apply to future cycles</p>
-            <p style="color: #721c24; margin: 5px 0;">🌟 Continue developing your skills and experience</p>
+            <h4 style="color: #721c24; margin: 0 0 10px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { color: '#721c24', spacing: 'snug' })}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We appreciate the time and effort you put into your application. We received many strong applications this cycle, and the decision was not easy.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We encourage you to continue developing your skills and to consider applying to future recruitment cycles. Your growth and development are important to us.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -380,7 +333,7 @@ const createRejectionEmail = (candidateName, currentCycleName) => {
 // Send acceptance email
 export const sendAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
-    const emailContent = createAcceptanceEmail(candidateName, currentCycleName);
+    const emailContent = await createAcceptanceEmail(candidateName, currentCycleName);
     const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
@@ -399,7 +352,7 @@ export const sendAcceptanceEmail = async (candidateEmail, candidateName, current
 // Send rejection email
 export const sendRejectionEmail = async (candidateEmail, candidateName, currentCycleName) => {
   try {
-    const emailContent = createRejectionEmail(candidateName, currentCycleName);
+    const emailContent = await createRejectionEmail(candidateName, currentCycleName);
     const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'APPLICATION_DECISION', recipientName: candidateName });
     
     if (result.success) {
@@ -423,53 +376,46 @@ export const sendRejectionEmail = async (candidateEmail, candidateName, currentC
 
 // Offer Letter specific email template
 
-const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) => {
+const createOfferLetterEmail = async (candidateName, currentCycleName, offerDetails) => {
   const { position, startDate, responseDeadline, additionalNotes } = offerDetails;
-  candidateName = escapeHtml(candidateName);
-  currentCycleName = escapeHtml(currentCycleName);
-  const positionE = escapeHtml(position);
-  const startDateE = escapeHtml(startDate || 'To be determined');
-  const responseDeadlineE = escapeHtml(responseDeadline);
+  const copy = await resolveEmailCopy('offer-letter');
+  const values = {
+    candidateName,
+    cycleName: currentCycleName,
+    position,
+    startDate: startDate || 'To be determined',
+    responseDeadline
+  };
   const additionalNotesE = additionalNotes
     ? escapeHtml(additionalNotes).replace(/\n/g, '<br>')
     : '';
+
   return {
-    subject: `Offer Letter - UConsulting ${currentCycleName}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #10b981; padding: 20px; text-align: center; color: white;">
           <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Congratulations, ${candidateName}!</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We are delighted to offer you a position with <strong>UConsulting</strong> for the <strong>${currentCycleName}</strong> cycle.
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #d1fae5; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10b981;">
             <h4 style="color: #065f46; margin: 0 0 10px 0;">Offer Details</h4>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Position:</strong> ${positionE}</p>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Start Date:</strong> ${startDateE}</p>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Response Deadline:</strong> ${responseDeadlineE}</p>
+            <p style="color: #065f46; margin: 5px 0;"><strong>Position:</strong> ${escapeHtml(position)}</p>
+            <p style="color: #065f46; margin: 5px 0;"><strong>Start Date:</strong> ${escapeHtml(startDate || 'To be determined')}</p>
+            <p style="color: #065f46; margin: 5px 0;"><strong>Response Deadline:</strong> ${escapeHtml(responseDeadline)}</p>
             ${additionalNotesE ? `<p style="color: #065f46; margin: 5px 0;"><strong>Additional Notes:</strong><br>${additionalNotesE}</p>` : ''}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Please review the attached PDF for the full official offer letter, sign it, and return it before the response deadline. If you have any questions, feel free to reach out.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We look forward to having you on the team!
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -481,7 +427,7 @@ const createOfferLetterEmail = (candidateName, currentCycleName, offerDetails) =
 // Send offer letter email
 export const sendOfferLetter = async (candidateEmail, candidateName, currentCycleName, offerDetails, attachmentBuffer = null, attachmentFilename = 'offer-letter.pdf') => {
   try {
-    const emailContent = createOfferLetterEmail(candidateName, currentCycleName, offerDetails);
+    const emailContent = await createOfferLetterEmail(candidateName, currentCycleName, offerDetails);
     const attachments = attachmentBuffer
       ? [{ filename: attachmentFilename, content: attachmentBuffer }]
       : [];
@@ -503,65 +449,37 @@ export const sendOfferLetter = async (candidateEmail, candidateName, currentCycl
 // Meeting Signup specific email templates
 
 // Create meeting signup confirmation email template
-const createMeetingSignupConfirmationEmail = (candidateName, memberName, location, startTime, endTime) => {
-  candidateName = escapeHtml(candidateName);
-  memberName = escapeHtml(memberName);
-  location = escapeHtml(location);
-  startTime = escapeHtml(startTime);
-  endTime = escapeHtml(endTime);
-  const formatDateTime = (date) => {
-    return formatEmailDateTime(date);
-  };
-
-  const formatTime = (date) => {
-    return formatEmailTime(date);
-  };
+const createMeetingSignupConfirmationEmail = async (candidateName, memberName, location, startTime, endTime) => {
+  const copy = await resolveEmailCopy('meeting-signup-confirmation');
+  const values = { candidateName, memberName, location };
 
   return {
-    subject: `Time Slot Confirmation - Get to Know UC`,
+    subject: copySubject(copy.subject, values),
     html: `
-     
-  
         <div style="padding: 30px 20px;">
-        
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Thank you for signing up to meet with a UConsulting member! We're excited to get to know you better.
-          </p>
-          
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
             <h4 style="color: #004085; margin: 0 0 15px 0;">Meeting Details</h4>
-            <p style="color: #004085; margin: 8px 0;"><strong>Member:</strong> ${memberName}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Date & Time:</strong> ${formatDateTime(startTime)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Duration:</strong> ${formatTime(startTime)} - ${formatTime(endTime)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Member:</strong> ${escapeHtml(memberName)}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
           </div>
-          
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">What to Expect</h4>
-            <p style="color: #666; margin: 8px 0;">• This is a casual chat to learn more about UC</p>
-            <p style="color: #666; margin: 8px 0;">• Feel free to ask questions about our organization, projects, and culture</p>
-            <p style="color: #666; margin: 8px 0;">• This is a great opportunity to connect with current members</p>
-            <p style="color: #666; margin: 8px 0;">• No preparation required - just come ready to chat!</p>
-          </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Need to cancel or change your time slot? You can manage everything by logging into your <a href="https://uconsultingats.com" style="color: #007bff;">ATS account</a>.
-          </p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We look forward to meeting you!
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best,<br>
-             UConsulting Recruitment Team
-          </p>
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
+          </div>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -571,10 +489,10 @@ const createMeetingSignupConfirmationEmail = (candidateName, memberName, locatio
 };
 
 // Send meeting signup confirmation email
-export const sendMeetingSignupConfirmation = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
+export const sendMeetingSignupConfirmation = async (candidateEmail, candidateName, memberName, location, startTime, endTime, { invite } = {}) => {
   try {
-    const emailContent = createMeetingSignupConfirmationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const emailContent = await createMeetingSignupConfirmationEmail(candidateName, memberName, location, startTime, endTime);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting signup confirmation email sent to ${candidateEmail} for meeting with ${memberName}`);
@@ -590,64 +508,40 @@ export const sendMeetingSignupConfirmation = async (candidateEmail, candidateNam
 };
 
 // Create meeting signup notification email template for members
-const createMeetingSignupNotificationEmail = (memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
-  const subjectCandidate = candidateName;
-  memberName = escapeHtml(memberName);
-  candidateName = escapeHtml(candidateName);
-  candidateEmail = escapeHtml(candidateEmail);
-  studentId = escapeHtml(studentId);
-  location = escapeHtml(location);
-  startTime = escapeHtml(startTime);
-  endTime = escapeHtml(endTime);
-  const formatDateTime = (date) => {
-    return formatEmailDateTime(date);
-  };
-
-  const formatTime = (date) => {
-    return formatEmailTime(date);
-  };
+const createMeetingSignupNotificationEmail = async (memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
+  const copy = await resolveEmailCopy('meeting-signup-notification');
+  const values = { memberName, candidateName, candidateEmail, location };
 
   return {
-    subject: `New GTKUC Signup - ${subjectCandidate} signed up for your slot`,
+    subject: copySubject(copy.subject, values),
     html: `
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Hi ${memberName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Great news! Someone has signed up for one of your GTKUC slots. Here are the details:
-          </p>
-          
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
             <h4 style="color: #155724; margin: 0 0 15px 0;">Meeting Details</h4>
-            <p style="color: #155724; margin: 8px 0;"><strong>Date & Time:</strong> ${formatDateTime(startTime)}</p>
-            <p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatTime(startTime)} - ${formatTime(endTime)}</p>
-            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            <p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
+            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
           </div>
-          
+
           <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
             <h4 style="color: #004085; margin: 0 0 15px 0;">Candidate Information</h4>
-            <p style="color: #004085; margin: 8px 0;"><strong>Name:</strong> ${candidateName}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Email:</strong> ${candidateEmail}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Name:</strong> ${escapeHtml(candidateName)}</p>
+            <p style="color: #004085; margin: 8px 0;"><strong>Email:</strong> ${escapeHtml(candidateEmail)}</p>
           </div>
-          
+
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">Next Steps</h4>
-            <p style="color: #666; margin: 8px 0;">• Mark attendance after the meeting in the ATS system</p>
-            <p style="color: #666; margin: 8px 0;">• Contact the candidate if you need to reschedule</p>
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            You can manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a>.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
@@ -657,10 +551,10 @@ const createMeetingSignupNotificationEmail = (memberName, candidateName, candida
 };
 
 // Send meeting signup notification email to member
-export const sendMeetingSignupNotification = async (memberEmail, memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
+export const sendMeetingSignupNotification = async (memberEmail, memberName, candidateName, candidateEmail, studentId, location, startTime, endTime, { invite } = {}) => {
   try {
-    const emailContent = createMeetingSignupNotificationEmail(memberName, candidateName, candidateEmail, studentId, location, startTime, endTime);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const emailContent = await createMeetingSignupNotificationEmail(memberName, candidateName, candidateEmail, studentId, location, startTime, endTime);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: memberName });
     
     if (result.success) {
       console.log(`Meeting signup notification email sent to ${memberEmail} for signup by ${candidateName}`);
@@ -676,80 +570,60 @@ export const sendMeetingSignupNotification = async (memberEmail, memberName, can
 };
 
 // Create meeting cancellation email template
-const createMeetingCancellationEmail = (candidateName, memberName, location, startTime, endTime) => {
-  candidateName = escapeHtml(candidateName);
-  memberName = escapeHtml(memberName);
-  location = escapeHtml(location);
-  startTime = escapeHtml(startTime);
-  endTime = escapeHtml(endTime);
-  const formatDateTime = (date) => {
-    return formatEmailDateTime(date);
-  };
-
-  const formatTime = (date) => {
-    return formatEmailTime(date);
-  };
+const createMeetingCancellationEmail = async (candidateName, memberName, location, startTime, endTime) => {
+  const copy = await resolveEmailCopy('meeting-cancellation-candidate');
+  const values = { candidateName, memberName, location };
 
   return {
-    subject: `Meeting Cancelled - Get to Know UC`,
+    subject: copySubject(copy.subject, values),
     html: `
-    
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
           <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
         </div>
-        
+
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Meeting Cancelled</h3>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Dear ${candidateName},
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We regret to inform you that your scheduled meeting with UConsulting has been cancelled.
-          </p>
-          
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
           <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
             <h4 style="color: #721c24; margin: 0 0 15px 0;">Cancelled Meeting Details</h4>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Member:</strong> ${memberName}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Date & Time:</strong> ${formatDateTime(startTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatTime(startTime)} - ${formatTime(endTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Member:</strong> ${escapeHtml(memberName)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
           </div>
-          
+
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
-            <p style="color: #666; margin: 8px 0;">• You can sign up for another available meeting slot</p>
-            <p style="color: #666; margin: 8px 0;">• Manage everything by logging into your <a href="https://uconsultingats.com" style="color: #007bff;">ATS account</a></p>
-            <p style="color: #666; margin: 8px 0;">• We apologize for any inconvenience this may cause</p>
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
           </div>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            We appreciate your interest in UConsulting and hope you'll consider signing up for another meeting slot.
-          </p>
-          
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Team
-          </p>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${copySignOff(copy.signOff, values)}
         </div>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
           <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
         </div>
-      </div>
       </div>
     `
   };
 };
 
 // Create password reset email template
-const createPasswordResetEmail = (resetLink) => {
+const createPasswordResetEmail = async (resetLink) => {
   // resetLink is server-generated (BASE/CLIENT URL + token), not user-controlled,
   // so it is safe to embed directly in the href and visible link text.
+  const copy = await resolveEmailCopy('password-reset');
+  const values = {};
+
   return {
-    subject: 'Reset Your Password - UConsulting ATS',
+    subject: copySubject(copy.subject, values),
     html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -769,29 +643,17 @@ const createPasswordResetEmail = (resetLink) => {
           </tr>
           <tr>
             <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">Password Reset Request</h3>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                You requested a password reset for your UConsulting ATS account.
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Click the button below to choose a new password. This link expires in 30 minutes.
-              </p>
+              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
+              ${copyHtml(copy.intro, values)}
               <p style="text-align: center; margin: 30px 0;">
                 <a href="${resetLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Reset Password</a>
               </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                If the button doesn&apos;t work, copy and paste this link into your browser:
-              </p>
+              ${copyHtml(copy.linkFallback, values)}
               <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
                 <a href="${resetLink}" style="color: #0C74C1; text-decoration: underline;">${resetLink}</a>
               </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                If you didn&apos;t request this, you can safely ignore this email &mdash; your password will not change.
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Best regards,<br>
-                UConsulting ATS Team
-              </p>
+              ${copyHtml(copy.ignoreNotice, values)}
+              ${copySignOff(copy.signOff, values)}
             </td>
           </tr>
           <tr>
@@ -809,10 +671,12 @@ const createPasswordResetEmail = (resetLink) => {
 };
 
 // Create password reset confirmation email template
-const createPasswordResetConfirmationEmail = (fullName) => {
-  const firstName = escapeHtml(fullName?.trim().split(' ')[0] || 'there');
+const createPasswordResetConfirmationEmail = async (fullName) => {
+  const copy = await resolveEmailCopy('password-reset-confirmation');
+  const values = { firstName: fullName?.trim().split(' ')[0] || 'there' };
+
   return {
-    subject: 'Your UConsulting ATS password has been reset',
+    subject: copySubject(copy.subject, values),
     html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -832,20 +696,10 @@ const createPasswordResetConfirmationEmail = (fullName) => {
           </tr>
           <tr>
             <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">Password Reset Successful</h3>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Hi ${firstName},
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                The password for your UConsulting ATS account was just changed.
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                If you made this change, you can safely ignore this email. If you did not reset your password, please contact the UConsulting ATS team immediately so we can help secure your account.
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Best regards,<br>
-                UConsulting ATS Team
-              </p>
+              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${copyLine(copy.greeting, values)}</p>
+              ${copyHtml(copy.intro, values)}
+              ${copySignOff(copy.signOff, values)}
             </td>
           </tr>
           <tr>
@@ -865,7 +719,7 @@ const createPasswordResetConfirmationEmail = (fullName) => {
 // Send password reset email
 export const sendPasswordResetEmail = async (email, resetLink) => {
   try {
-    const emailContent = createPasswordResetEmail(resetLink);
+    const emailContent = await createPasswordResetEmail(resetLink);
     const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT' });
 
     if (result.success) {
@@ -888,7 +742,7 @@ export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
       return { success: false, error: 'No recipient email provided' };
     }
 
-    const emailContent = createPasswordResetConfirmationEmail(fullName);
+    const emailContent = await createPasswordResetConfirmationEmail(fullName);
     const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT', recipientName: fullName });
 
     if (result.success) {
@@ -905,10 +759,10 @@ export const sendPasswordResetConfirmationEmail = async (email, fullName) => {
 };
 
 // Send meeting cancellation email
-export const sendMeetingCancellationEmail = async (candidateEmail, candidateName, memberName, location, startTime, endTime) => {
+export const sendMeetingCancellationEmail = async (candidateEmail, candidateName, memberName, location, startTime, endTime, { invite } = {}) => {
   try {
-    const emailContent = createMeetingCancellationEmail(candidateName, memberName, location, startTime, endTime);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const emailContent = await createMeetingCancellationEmail(candidateName, memberName, location, startTime, endTime);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
     
     if (result.success) {
       console.log(`Meeting cancellation email sent to ${candidateEmail} for cancelled meeting with ${memberName}`);
@@ -926,26 +780,27 @@ export const sendMeetingCancellationEmail = async (candidateEmail, candidateName
 // Create meeting cancellation email template directed at the HOST member.
 // Two variants: whole slot cancelled (candidateName omitted) vs. a single
 // candidate's signup cancelled (candidateName provided).
-const createMeetingCancellationMemberEmail = (memberName, location, startTime, endTime, options = {}) => {
-  const candidateName = options.candidateName ? escapeHtml(options.candidateName) : null;
+const createMeetingCancellationMemberEmail = async (memberName, location, startTime, endTime, options = {}) => {
+  const copy = await resolveEmailCopy('meeting-cancellation-member');
+  const candidateName = options.candidateName || null;
   const signupCount = Number.isInteger(options.signupCount) ? options.signupCount : null;
-  memberName = escapeHtml(memberName);
-  location = escapeHtml(location);
-  startTime = escapeHtml(startTime);
-  endTime = escapeHtml(endTime);
-  const formatDateTime = (date) => formatEmailDateTime(date);
-  const formatTime = (date) => formatEmailTime(date);
 
-  const intro = candidateName
-    ? `${candidateName} has cancelled their signup for one of your Get to Know UC meeting slots.`
-    : `One of your Get to Know UC meeting slots has been cancelled by an administrator.`;
+  const values = {
+    memberName,
+    location,
+    candidateName: candidateName ?? '',
+    // Reads correctly either way: "3 signed-up candidate(s) have been notified"
+    // and "Any signed-up candidates have been notified".
+    signupCountLabel: signupCount ? `${signupCount} signed-up candidate(s)` : 'Any signed-up candidates'
+  };
 
-  const impactLine = candidateName
-    ? `<p style="color: #666; margin: 8px 0;">• This spot is now open again for other candidates to sign up</p>`
-    : `<p style="color: #666; margin: 8px 0;">• ${signupCount ? `${signupCount} signed-up candidate(s) have` : 'Any signed-up candidates have'} been notified of the cancellation</p>`;
+  // Which opening and which first line - a candidate dropping their signup, or
+  // an admin pulling the whole slot. Decided by what happened, never by an edit.
+  const intro = candidateName ? copy.introCandidateCancelled : copy.introSlotCancelled;
+  const impact = candidateName ? copy.impactCandidateCancelled : copy.impactSlotCancelled;
 
   return {
-    subject: `Get to Know UC - Meeting Cancelled`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
@@ -953,34 +808,27 @@ const createMeetingCancellationMemberEmail = (memberName, location, startTime, e
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Meeting Cancelled</h3>
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Hi ${memberName},
-          </p>
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            ${intro}
-          </p>
+          ${copyHtml(intro, values)}
 
           <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
             <h4 style="color: #721c24; margin: 0 0 15px 0;">Cancelled Meeting Details</h4>
-            ${candidateName ? `<p style="color: #721c24; margin: 8px 0;"><strong>Candidate:</strong> ${candidateName}</p>` : ''}
-            <p style="color: #721c24; margin: 8px 0;"><strong>Date & Time:</strong> ${formatDateTime(startTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatTime(startTime)} - ${formatTime(endTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+            ${candidateName ? `<p style="color: #721c24; margin: 8px 0;"><strong>Candidate:</strong> ${escapeHtml(candidateName)}</p>` : ''}
+            <p style="color: #721c24; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
+            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
           </div>
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
-            ${impactLine}
-            <p style="color: #666; margin: 8px 0;">• Manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(impact, values, { spacing: 'tight' })}
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
           </div>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+          ${copySignOff(copy.signOff, values)}
         </div>
 
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
@@ -994,8 +842,8 @@ const createMeetingCancellationMemberEmail = (memberName, location, startTime, e
 // Send meeting cancellation email to the HOST member.
 export const sendMeetingCancellationToMember = async (memberEmail, memberName, location, startTime, endTime, options = {}) => {
   try {
-    const emailContent = createMeetingCancellationMemberEmail(memberName, location, startTime, endTime, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const emailContent = await createMeetingCancellationMemberEmail(memberName, location, startTime, endTime, options);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, options.invite ? [options.invite] : [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting cancellation email sent to host member ${memberEmail}`);
@@ -1049,12 +897,12 @@ const renderRescheduleDetails = (next, previous) => {
 };
 
 // Reschedule notice directed at a signed-up CANDIDATE.
-const createMeetingRescheduleEmail = (candidateName, memberName, next, previous) => {
-  candidateName = escapeHtml(candidateName);
-  memberName = escapeHtml(memberName);
+const createMeetingRescheduleEmail = async (candidateName, memberName, next, previous) => {
+  const copy = await resolveEmailCopy('meeting-reschedule-candidate');
+  const values = { candidateName, memberName };
 
   return {
-    subject: 'Meeting Rescheduled - Get to Know UC',
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
@@ -1062,29 +910,19 @@ const createMeetingRescheduleEmail = (candidateName, memberName, next, previous)
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Your Meeting Has Moved</h3>
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Hi ${candidateName},
-          </p>
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Your Get to Know UC meeting with ${memberName} has been rescheduled. Your spot is
-            still held - you do not need to sign up again. Please check the new details below
-            and update your calendar.
-          </p>
+          ${copyHtml(copy.intro, values)}
 ${renderRescheduleDetails(next, previous)}
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">If the new time doesn't work</h4>
-            <p style="color: #666; margin: 8px 0;">• Cancel or rebook your meeting in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
-            <p style="color: #666; margin: 8px 0;">• If it is too close to the start time to change it yourself, email recruitment</p>
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
           </div>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+          ${copySignOff(copy.signOff, values)}
         </div>
 
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
@@ -1096,10 +934,10 @@ ${renderRescheduleDetails(next, previous)}
 };
 
 // Send the reschedule notice to a signed-up candidate.
-export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous) => {
+export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, memberName, next, previous, { invite } = {}) => {
   try {
-    const emailContent = createMeetingRescheduleEmail(candidateName, memberName, next, previous);
-    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: candidateName });
+    const emailContent = await createMeetingRescheduleEmail(candidateName, memberName, next, previous);
+    const result = await sendEmail(candidateEmail, emailContent.subject, emailContent.html, invite ? [invite] : [], { category: 'MEETING', recipientName: candidateName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to ${candidateEmail} for moved meeting with ${memberName}`);
@@ -1116,16 +954,14 @@ export const sendMeetingRescheduleEmail = async (candidateEmail, candidateName, 
 
 // Reschedule notice directed at the HOST member. Sent only when somebody other
 // than the host moved the slot, so a member never gets mail about their own edit.
-const createMeetingRescheduleMemberEmail = (memberName, next, previous, options = {}) => {
-  memberName = escapeHtml(memberName);
+const createMeetingRescheduleMemberEmail = async (memberName, next, previous, options = {}) => {
+  const copy = await resolveEmailCopy('meeting-reschedule-member');
   const signupCount = Number.isInteger(options.signupCount) ? options.signupCount : null;
-
-  const impactLine = signupCount
-    ? `<p style="color: #666; margin: 8px 0;">• ${signupCount} signed-up candidate(s) have been emailed the new time</p>`
-    : `<p style="color: #666; margin: 8px 0;">• Nobody has signed up for this slot yet, so no candidates were emailed</p>`;
+  const values = { memberName, signupCount: signupCount ?? 0 };
+  const impact = signupCount ? copy.impactWithSignups : copy.impactWithoutSignups;
 
   return {
-    subject: 'Get to Know UC - Meeting Rescheduled',
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
@@ -1133,28 +969,20 @@ const createMeetingRescheduleMemberEmail = (memberName, next, previous, options 
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">One of Your Slots Has Moved</h3>
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Hi ${memberName},
-          </p>
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            An administrator has rescheduled one of your Get to Know UC meeting slots.
-            Please check the new details below and update your calendar.
-          </p>
+          ${copyHtml(copy.intro, values)}
 ${renderRescheduleDetails(next, previous)}
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">What's Next?</h4>
-            ${impactLine}
-            <p style="color: #666; margin: 8px 0;">• Manage everything — your slots, signups, and attendance — in the <a href="https://uconsultingats.com" style="color: #007bff;">ATS</a></p>
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(impact, values, { spacing: 'tight' })}
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
           </div>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+          ${copySignOff(copy.signOff, values)}
         </div>
 
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
@@ -1168,8 +996,8 @@ ${renderRescheduleDetails(next, previous)}
 // Send the reschedule notice to the HOST member.
 export const sendMeetingRescheduleToMember = async (memberEmail, memberName, next, previous, options = {}) => {
   try {
-    const emailContent = createMeetingRescheduleMemberEmail(memberName, next, previous, options);
-    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+    const emailContent = await createMeetingRescheduleMemberEmail(memberName, next, previous, options);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, options.invite ? [options.invite] : [], { category: 'MEETING', recipientName: memberName });
 
     if (result.success) {
       console.log(`Meeting reschedule email sent to host member ${memberEmail}`);
@@ -1186,13 +1014,13 @@ export const sendMeetingRescheduleToMember = async (memberEmail, memberName, nex
 
 // Reviewer grading reminder email templates
 
-const createReviewerReminderEmail = (reviewerName, teamName, cycleName, progress) => {
-  reviewerName = escapeHtml(reviewerName);
-  teamName = escapeHtml(teamName);
-  cycleName = escapeHtml(cycleName);
+const createReviewerReminderEmail = async (reviewerName, teamName, cycleName, progress) => {
+  const copy = await resolveEmailCopy('reviewer-reminder');
+  const values = { reviewerName, teamName, cycleName };
   const { completed, eligible, completedTotal, expectedTotal, completionPercent, gradingUrl } = progress;
+
   return {
-    subject: `Reminder: Submit your review grades - ${cycleName}`,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
@@ -1200,15 +1028,11 @@ const createReviewerReminderEmail = (reviewerName, teamName, cycleName, progress
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">Review Reminder</h3>
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Hi ${reviewerName},
-          </p>
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            This is a friendly reminder to submit your remaining grades for <strong>${teamName}</strong> in the <strong>${cycleName}</strong> recruiting cycle.
-          </p>
+          ${copyHtml(copy.intro, values)}
 
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h4 style="color: #333; margin: 0 0 10px 0;">Your current progress</h4>
@@ -1218,18 +1042,13 @@ const createReviewerReminderEmail = (reviewerName, teamName, cycleName, progress
             <p style="color: #666; margin: 5px 0;"><strong>Video:</strong> ${completed.video}/${eligible.video}</p>
           </div>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Please complete your evaluations in the ATS:
-          </p>
+          ${copyHtml(copy.outro, values)}
 
           <p style="text-align: center; margin: 30px 0;">
             <a href="${gradingUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Grade Applications</a>
           </p>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment Team
-          </p>
+          ${copySignOff(copy.signOff, values)}
         </div>
 
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
@@ -1247,7 +1066,7 @@ export const sendReviewerReminder = async (reviewerEmail, reviewerName, teamName
       return { success: false, error: 'Invalid reviewer email address' };
     }
 
-    const emailContent = createReviewerReminderEmail(reviewerName, teamName, cycleName, progress);
+    const emailContent = await createReviewerReminderEmail(reviewerName, teamName, cycleName, progress);
     const result = await sendEmail(reviewerEmail, emailContent.subject, emailContent.html, [], { category: 'REVIEWER_REMINDER', recipientName: reviewerName });
 
     if (result.success) {
@@ -1270,106 +1089,49 @@ export { sendEmail };
 // Interview slot scheduling
 // ---------------------------------------------------------------------------
 
-/// What each notification type actually says. Separated from the markup so the
-/// wording is reviewable in one place - these are the sentences a candidate
-/// reads at the most anxious point in the process, and they should be plain.
-const SLOT_EMAIL_COPY = {
-  CONFIRMATION: {
-    heading: 'Your time is confirmed',
-    body: (ctx) => `You're booked for ${ctx.interviewTitle}. The details are below - add them to your calendar now so they don't get lost.`,
-  },
-  WAITLIST_ADDED: {
-    heading: "You have a spot, and you're on the waitlist",
-    body: (ctx) =>
-      `Your first choice was full, so we've booked you into ${ctx.slotName} and added you to the waitlist for ${ctx.preferredName}. ` +
-      'You have a confirmed spot either way - if the one you wanted opens up, we move you automatically and email you.',
-  },
-  PROMOTED: {
-    heading: 'You got your preferred time',
-    body: (ctx) => `A spot opened up in ${ctx.slotName}, so we've moved you. Your previous time has been released - the details below are the ones that count.`,
-  },
-  FALLBACK_RELEASED: {
-    heading: 'Your time has changed',
-    body: () => 'You have been moved to the time you originally asked for. Your earlier booking has been released.',
-  },
-  CANCELLATION: {
-    heading: 'Your booking is cancelled',
-    body: (ctx) => `Your spot for ${ctx.interviewTitle} has been cancelled. If this was not you, contact recruitment as soon as you can.`,
-  },
-  MOVED_BY_ADMIN: {
-    heading: 'Your time has been updated',
-    body: (ctx) => `Recruitment has moved your ${ctx.interviewTitle} booking. Your new time is below - please check it carefully.`,
-  },
-  ADMIN_OVERFLOW_ALERT: {
-    heading: 'A candidate could not be scheduled',
-    body: (ctx) =>
-      `${ctx.candidateName} tried to sign up for ${ctx.interviewTitle} and every slot was full, so no spot could be given automatically. ` +
-      'They have been told recruitment will reach out. Place them from the interview roster - you can book over capacity if you need to.',
-  },
-  AVAILABILITY_REQUEST: {
-    heading: 'When can you interview?',
-    body: (ctx) =>
-      `Recruitment is putting together the schedule for ${ctx.interviewTitle} and needs to know when you are free. ` +
-      'Add your availability and they will build the day around it - including how many interviews run at once, ' +
-      'which is decided by how many of us can be there.',
-  },
-  INTERVIEWER_ASSIGNED: {
-    heading: "You're interviewing",
-    body: (ctx) =>
-      ctx.selfSignup
-        ? `You signed up to run a ${ctx.interviewTitle} session. The details are below, and the invite attached goes straight on your calendar.`
-        : `You have been placed in ${ctx.interviewTitle}. The details are below - add them to your calendar.`,
-  },
-  INTERVIEWER_MOVED: {
-    heading: 'Your interview session has changed',
-    body: (ctx) =>
-      `Recruitment has moved which ${ctx.interviewTitle} session you are running` +
-      (ctx.fromName ? ` - you were on ${ctx.fromName}.` : '.') +
-      ' Your new session is below. Please check it and update your calendar.',
-  },
-  INTERVIEWER_REMOVED: {
-    heading: 'You have been taken off a session',
-    body: (ctx) => `You are no longer down to interview at this session for ${ctx.interviewTitle}.`,
-  },
-  REMINDER: {
-    heading: 'A reminder about your upcoming interview',
-    body: (ctx) => `This is a reminder about your ${ctx.interviewTitle} booking.`,
-  },
-};
+/**
+ * Subject lines at the wording this repo ships, before any admin edit.
+ *
+ * Kept as the same { TYPE: (title) => string } map it has always been, because
+ * a caller that only wants the default - a test, a preview of the shipped
+ * wording - should not have to reach the database for it. Derived from the copy
+ * catalog rather than written out again, so the two cannot drift: the bug this
+ * shape exists to prevent was INTERVIEWER_MOVED having a body and no subject,
+ * which made queueing one call undefined(...) inside a catch.
+ */
+export { SLOT_EMAIL_TYPES };
 
-// Subject lines for the same notifications. These used to live in
-// interviewSlotComms.js, one import away from the bodies above, and the two
-// lists drifted: INTERVIEWER_MOVED had a body and no subject, so queueing one
-// called undefined(...) and the TypeError was swallowed by the caller. Keeping
-// both maps in the same file is what makes the mismatch visible, and
-// SLOT_EMAIL_TYPES below is asserted against both.
-export const SLOT_NOTIFICATION_SUBJECTS = {
-  CONFIRMATION: (interviewTitle) => `You're confirmed - ${interviewTitle}`,
-  WAITLIST_ADDED: (interviewTitle) => `Your spot is booked, and you're on the waitlist - ${interviewTitle}`,
-  PROMOTED: (interviewTitle) => `Good news - you got your preferred time for ${interviewTitle}`,
-  FALLBACK_RELEASED: (interviewTitle) => `Your time has changed - ${interviewTitle}`,
-  CANCELLATION: (interviewTitle) => `Your booking is cancelled - ${interviewTitle}`,
-  MOVED_BY_ADMIN: (interviewTitle) => `Your time has been updated - ${interviewTitle}`,
-  ADMIN_OVERFLOW_ALERT: (interviewTitle) => `Action needed: a candidate could not be scheduled for ${interviewTitle}`,
-  AVAILABILITY_REQUEST: (interviewTitle) => `When can you interview? - ${interviewTitle}`,
-  INTERVIEWER_ASSIGNED: (interviewTitle) => `You're interviewing - ${interviewTitle}`,
-  INTERVIEWER_MOVED: (interviewTitle) => `Your session has changed - ${interviewTitle}`,
-  INTERVIEWER_REMOVED: (interviewTitle) => `You've been taken off a session - ${interviewTitle}`,
-  REMINDER: (interviewTitle) => `Reminder - ${interviewTitle}`,
-};
-
-// Derived, never hand-written, so a type added to the copy above cannot be left
-// out of the preview catalog or the subject map without a test failing.
-export const SLOT_EMAIL_TYPES = Object.keys(SLOT_EMAIL_COPY);
+export const SLOT_NOTIFICATION_SUBJECTS = Object.fromEntries(
+  SLOT_EMAIL_TYPES.map((type) => [
+    type,
+    (interviewTitle) => copySubject(defaultCopy(slotCopyKey(type)).subject, { interviewTitle }),
+  ])
+);
 
 /**
- * One notification, rendered.
+ * The subject to stamp on a notification being queued, with any admin edit.
  *
- * Takes an InterviewSlotNotification with its slot, interview and signup loaded.
- * `ctaUrl` is built by the caller from config.clientUrl - this module has never
- * imported config, and every link in it arrives as a finished string.
+ * Resolved at queue time rather than at send time, which is where the stored
+ * `subject` column has always come from. So an edit reaches the notifications
+ * queued after it and leaves anything already waiting to go out alone.
  */
-export const renderInterviewSlotEmail = (
+export const slotNotificationSubject = async (type, interviewTitle) =>
+  (await slotSubjectFormatter(type))(interviewTitle);
+
+/**
+ * The same, read once and then applied to many interview titles.
+ *
+ * A roster filled in one action queues dozens of notifications of one type
+ * across sessions with different titles. Resolving the wording per row would
+ * turn one action into dozens of reads for an answer that cannot change between
+ * them.
+ */
+export const slotSubjectFormatter = async (type) => {
+  const copy = await resolveEmailCopy(slotCopyKey(type));
+  return (interviewTitle) => copySubject(copy.subject, { interviewTitle });
+};
+
+export const renderInterviewSlotEmail = async (
   notification,
   {
     ctaUrl = null,
@@ -1386,23 +1148,31 @@ export const renderInterviewSlotEmail = (
   const application = notification.signup?.application ?? {};
   const hasSession = Boolean(slot.startTime);
 
-  const ctx = {
+  const type = SLOT_EMAIL_TYPES.includes(notification.type) ? notification.type : 'CONFIRMATION';
+  const copy = await resolveEmailCopy(slotCopyKey(type));
+
+  const values = {
     interviewTitle: interview.title || 'your interview',
-    fromName: fromSlotName,
+    fromName: fromSlotName ?? '',
     slotName: slot.label || formatEmailDateTime(slot.startTime),
     preferredName: preferredSlotName || 'your first choice',
     candidateName: [application.firstName, application.lastName].filter(Boolean).join(' ') || 'A candidate',
-    selfSignup,
   };
 
-  const copy = SLOT_EMAIL_COPY[notification.type] ?? SLOT_EMAIL_COPY.CONFIRMATION;
+  // The two notifications whose wording forks on how the change happened.
+  // Which half is used is decided by the send path, never by an edit: somebody
+  // who claimed a session themselves must not read that they "have been placed"
+  // in it, and a move we cannot name the old session for must not print an
+  // empty one.
+  let body = copy.body;
+  if (type === 'INTERVIEWER_ASSIGNED' && selfSignup) body = copy.bodySelfSignup;
+  if (type === 'INTERVIEWER_MOVED' && !fromSlotName) body = copy.bodyNoPrevious;
+
   // Nothing to show in a details card when there is no session yet, or when the
   // point of the message is that a booking is gone.
-  const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(notification.type);
+  const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(type);
 
-  const heading = escapeHtml(copy.heading);
-  const body = escapeHtml(copy.body(ctx));
-  const title = escapeHtml(ctx.interviewTitle);
+  const title = escapeHtml(values.interviewTitle);
   const when = hasSession
     ? escapeHtml(`${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}`)
     : '';
@@ -1420,9 +1190,9 @@ export const renderInterviewSlotEmail = (
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${heading}</h3>
+          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
 
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${body}</p>
+          ${copyHtml(body, values)}
 
           ${
             !showDetails
@@ -1461,14 +1231,17 @@ export const renderInterviewSlotEmail = (
 // External talent portal
 // ---------------------------------------------------------------------------
 
-const createEmailVerificationEmail = (fullName, verifyLink) => {
+const createEmailVerificationEmail = async (fullName, verifyLink) => {
   // verifyLink is server-generated (CLIENT_URL + token), not user-controlled,
   // so it is safe to embed directly in the href and visible link text. fullName
-  // IS user-controlled - it is whatever the person typed at signup - so it is
-  // escaped before it reaches the template.
-  const greeting = fullName ? `Hi ${escapeHtml(fullName)},` : 'Hi,';
+  // IS user-controlled - it is whatever the person typed at signup - and is
+  // escaped by copyLine on its way into the greeting.
+  const copy = await resolveEmailCopy('email-verification');
+  const values = { fullName };
+  const greeting = fullName ? copyLine(copy.greeting, values) : copyLine(copy.greetingNoName, values);
+
   return {
-    subject: 'Verify Your Email - UConsulting Talent Network',
+    subject: copySubject(copy.subject, values),
     html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -1488,29 +1261,18 @@ const createEmailVerificationEmail = (fullName, verifyLink) => {
           </tr>
           <tr>
             <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">Confirm your UCLA email</h3>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                ${greeting}
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Thanks for joining the UConsulting Talent Network. Confirm this address to finish setting up your profile and upload your resume. This link expires in 24 hours.
-              </p>
+              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
+              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${greeting}</p>
+              ${copyHtml(copy.intro, values)}
               <p style="text-align: center; margin: 30px 0;">
                 <a href="${verifyLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Verify Email</a>
               </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                If the button doesn&apos;t work, copy and paste this link into your browser:
-              </p>
+              ${copyHtml(copy.linkFallback, values)}
               <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
                 <a href="${verifyLink}" style="color: #0C74C1; text-decoration: underline;">${verifyLink}</a>
               </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                If you didn&apos;t sign up, you can safely ignore this email &mdash; no profile will be created.
-              </p>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-                Best regards,<br>
-                UConsulting Talent Network
-              </p>
+              ${copyHtml(copy.ignoreNotice, values)}
+              ${copySignOff(copy.signOff, values)}
             </td>
           </tr>
           <tr>
@@ -1540,7 +1302,7 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
       return { success: false, error: 'No recipient email provided' };
     }
 
-    const emailContent = createEmailVerificationEmail(fullName, verifyLink);
+    const emailContent = await createEmailVerificationEmail(fullName, verifyLink);
     const result = await sendEmail(email, emailContent.subject, emailContent.html, [], { category: 'ACCOUNT', recipientName: fullName });
 
     if (result.success) {
@@ -1561,7 +1323,7 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Per-audience copy for the welcome email.
+ * Which welcome an audience gets, and the two things about it that are not copy.
  *
  * Three audiences rather than one generic body, because "you signed up" means
  * three different things here: a candidate is tracking an application, a
@@ -1569,44 +1331,15 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
  * member is staff who will be grading and interviewing. One shared body would
  * be wrong for at least two of them, and a welcome that describes the wrong app
  * is worse than no welcome.
+ *
+ * The wording itself is in emailTemplateCopy.js under these keys, where an
+ * admin can edit it. `ctaLabel` stays here because it names a destination the
+ * caller chose, and `brand` because it is the banner, not the body.
  */
-const WELCOME_COPY = {
-  candidate: {
-    subject: 'Welcome to UConsulting Recruitment',
-    heading: 'Your account is ready',
-    intro: 'Your email is confirmed, so your UConsulting recruitment account is live. This is where you track everything from here on.',
-    bullets: [
-      'Follow your application status as it moves through each round',
-      'RSVP to recruitment events and coffee chats',
-      'Get interview prep materials before each round'
-    ],
-    ctaLabel: 'Go to your dashboard',
-    signoff: 'UConsulting Recruitment'
-  },
-  talent: {
-    subject: 'Welcome to the UConsulting Talent Network',
-    heading: 'Your profile is ready',
-    intro: 'Your email is confirmed, so your Talent Network profile is live. Finishing it is what puts you in front of our partner companies.',
-    bullets: [
-      'Upload your resume and keep the latest version on file',
-      'Fill in your profile so partners can find you',
-      'Choose whether to share your profile with the Talent Partner Network'
-    ],
-    ctaLabel: 'Finish your profile',
-    signoff: 'UConsulting Talent Network'
-  },
-  member: {
-    subject: 'Welcome to the UConsulting ATS',
-    heading: 'Your member account is ready',
-    intro: 'Your UConsulting ATS member account is set up. This is the tool we run recruitment out of.',
-    bullets: [
-      'See the interviews you have been assigned to',
-      'Grade resumes, cover letters and videos for your review team',
-      'Submit evaluations after each interview'
-    ],
-    ctaLabel: 'Open the ATS',
-    signoff: 'UConsulting'
-  }
+const WELCOME_AUDIENCES = {
+  candidate: { key: 'welcome-candidate', ctaLabel: 'Go to your dashboard', brand: 'UConsulting Recruitment' },
+  talent: { key: 'welcome-talent', ctaLabel: 'Finish your profile', brand: 'UConsulting Talent Network' },
+  member: { key: 'welcome-member', ctaLabel: 'Open the ATS', brand: 'UConsulting' }
 };
 
 /**
@@ -1615,42 +1348,38 @@ const WELCOME_COPY = {
  * arrives as a finished string. fullName is whatever the person typed at
  * signup, so it is escaped before it reaches the template.
  */
-const createWelcomeEmail = (fullName, audience, ctaUrl) => {
-  const copy = WELCOME_COPY[audience] ?? WELCOME_COPY.candidate;
-  const greeting = fullName ? `Hi ${escapeHtml(fullName)},` : 'Hi,';
-  const bullets = copy.bullets
-    .map((line) => `<li style="margin: 0 0 8px 0;">${escapeHtml(line)}</li>`)
-    .join('');
+const createWelcomeEmail = async (fullName, audience, ctaUrl) => {
+  const which = WELCOME_AUDIENCES[audience] ?? WELCOME_AUDIENCES.candidate;
+  const copy = await resolveEmailCopy(which.key);
+  const values = { fullName };
+  const greeting = fullName ? copyLine(copy.greeting, values) : copyLine(copy.greetingNoName, values);
 
   return {
-    subject: copy.subject,
+    subject: copySubject(copy.subject, values),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #042742; margin: 0;">${escapeHtml(copy.signoff)}</h2>
+          <h2 style="color: #042742; margin: 0;">${escapeHtml(which.brand)}</h2>
         </div>
 
         <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin: 0 0 20px 0;">${escapeHtml(copy.heading)}</h3>
+          <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
 
           <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${greeting}</p>
 
-          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${escapeHtml(copy.intro)}</p>
+          ${copyHtml(copy.intro, values)}
 
-          <ul style="color: #666; line-height: 1.6; margin: 0 0 20px 0; padding-left: 20px;">${bullets}</ul>
+          ${copyHtml(copy.bullets, values)}
 
           ${
             ctaUrl
               ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">${escapeHtml(copy.ctaLabel)}</a>
+            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">${escapeHtml(which.ctaLabel)}</a>
           </p>`
               : ''
           }
 
-          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">
-            Best regards,<br>
-            ${escapeHtml(copy.signoff)}
-          </p>
+          ${copySignOff(copy.signOff, values)}
         </div>
 
         <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
@@ -1675,7 +1404,7 @@ export const sendWelcomeEmail = async (email, fullName, { audience = 'candidate'
       return { success: false, error: 'No recipient email provided' };
     }
 
-    const emailContent = createWelcomeEmail(fullName, audience, ctaUrl);
+    const emailContent = await createWelcomeEmail(fullName, audience, ctaUrl);
     const result = await sendEmail(email, emailContent.subject, emailContent.html);
 
     if (result.success) {

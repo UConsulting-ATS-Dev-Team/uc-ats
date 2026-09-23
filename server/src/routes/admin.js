@@ -7,6 +7,7 @@ import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEven
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import {
@@ -4750,7 +4751,16 @@ router.delete('/meeting-slots/:id', async (req, res) => {
               memberName,
               existingSlot.location,
               existingSlot.startTime,
-              existingSlot.endTime
+              existingSlot.endTime,
+              {
+                invite: candidateMeetingInvite({
+                  slot: existingSlot,
+                  candidateEmail: signup.email,
+                  candidateName: signup.fullName,
+                  hostName: memberName,
+                  method: 'CANCEL',
+                }),
+              }
             ),
             {
               slotId: existingSlot.id,
@@ -4774,7 +4784,15 @@ router.delete('/meeting-slots/:id', async (req, res) => {
             existingSlot.location,
             existingSlot.startTime,
             existingSlot.endTime,
-            { signupCount: existingSlot.signups.length }
+            {
+              signupCount: existingSlot.signups.length,
+              invite: hostMeetingInvite({
+                slot: existingSlot,
+                hostEmail: existingSlot.member.email,
+                hostName: memberName,
+                method: 'CANCEL',
+              }),
+            }
           ),
           {
             slotId: existingSlot.id,
@@ -4923,7 +4941,16 @@ router.delete('/meeting-signups/:id', async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       ),
       {
         slotId: signup.slotId,
@@ -4936,6 +4963,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     // ...and notify the host member the spot reopened.
     if (signup.slot.member?.email) {
+      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
       await sendAndLogMeetingCommunication(
         () => sendMeetingCancellationToMember(
           signup.slot.member.email,
@@ -4943,7 +4971,15 @@ router.delete('/meeting-signups/:id', async (req, res) => {
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         ),
         {
           slotId: signup.slotId,

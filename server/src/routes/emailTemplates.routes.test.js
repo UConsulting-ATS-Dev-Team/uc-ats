@@ -6,6 +6,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
+    emailTemplateCopy: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     $disconnect: vi.fn(),
   },
 }));
@@ -68,15 +69,27 @@ describe('/api/admin/email-templates', () => {
       if (id === memberUser.id) return memberUser;
       return null;
     });
+
+    // Nobody has edited anything unless a test says otherwise.
+    prisma.emailTemplateCopy.findMany.mockResolvedValue([]);
+    prisma.emailTemplateCopy.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.emailTemplateCopy.upsert.mockResolvedValue({});
   });
 
-  function get(path, token) {
-    const headers = {};
+  function request(path, token, init = {}) {
+    const headers = { ...(init.headers ?? {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
+    if (init.body !== undefined) headers['Content-Type'] = 'application/json';
     return fetch(`http://localhost:${server.address().port}/api/admin/email-templates${path}`, {
+      ...init,
       headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
   }
+
+  const get = (path, token) => request(path, token);
+  const put = (path, token, body) => request(path, token, { method: 'PUT', body });
+  const del = (path, token) => request(path, token, { method: 'DELETE' });
 
   describe('listing', () => {
     it('returns the catalog to an admin', async () => {
@@ -150,6 +163,143 @@ describe('/api/admin/email-templates', () => {
 
     it('refuses an anonymous caller', async () => {
       expect((await get('/password-reset/preview', undefined)).status).toBe(401);
+    });
+  });
+
+  describe('reading the editable wording', () => {
+    it('hands an admin the fields, what is stored and what they fall back to', async () => {
+      prisma.emailTemplateCopy.findMany.mockResolvedValue([
+        { templateKey: 'rsvp-confirmation', copy: { heading: 'You are on the list' }, updatedAt: new Date() },
+      ]);
+
+      const res = await get('/rsvp-confirmation/copy', tokenFor(adminUser));
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.key).toBe('rsvp-confirmation');
+      expect(body.customized).toBe(true);
+      const heading = body.fields.find((field) => field.name === 'heading');
+      expect(heading.value).toBe('You are on the list');
+      expect(heading.default).toBe('RSVP Confirmation');
+      expect(body.mergeFields).toContain('candidateName');
+    });
+
+    it('404s a template that does not exist', async () => {
+      expect((await get('/not-a-template/copy', tokenFor(adminUser))).status).toBe(404);
+    });
+
+    it('404s a prototype key', async () => {
+      expect((await get('/constructor/copy', tokenFor(adminUser))).status).toBe(404);
+    });
+
+    it('refuses a member', async () => {
+      expect((await get('/rsvp-confirmation/copy', tokenFor(memberUser))).status).toBe(403);
+    });
+
+    it('refuses an anonymous caller', async () => {
+      expect((await get('/rsvp-confirmation/copy', undefined)).status).toBe(401);
+    });
+  });
+
+  describe('saving wording', () => {
+    it('stores what an admin changed', async () => {
+      const res = await put('/rsvp-confirmation/copy', tokenFor(adminUser), {
+        copy: { heading: 'You are on the list' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(prisma.emailTemplateCopy.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { templateKey: 'rsvp-confirmation' },
+          create: expect.objectContaining({
+            templateKey: 'rsvp-confirmation',
+            copy: { heading: 'You are on the list' },
+            updatedById: adminUser.id,
+          }),
+        })
+      );
+    });
+
+    it('refuses a merge field the email cannot fill in, and says which', async () => {
+      const res = await put('/rsvp-confirmation/copy', tokenFor(adminUser), {
+        copy: { heading: 'Hi {{memberName}}' },
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe('UNKNOWN_MERGE_FIELD');
+      expect(body.error).toContain('{{memberName}}');
+      expect(prisma.emailTemplateCopy.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body that is not an object', async () => {
+      const res = await put('/rsvp-confirmation/copy', tokenFor(adminUser), { copy: 'nope' });
+
+      expect(res.status).toBe(400);
+      expect(prisma.emailTemplateCopy.upsert).not.toHaveBeenCalled();
+    });
+
+    it('404s a template that does not exist', async () => {
+      const res = await put('/not-a-template/copy', tokenFor(adminUser), { copy: {} });
+      expect(res.status).toBe(404);
+    });
+
+    it('refuses a member', async () => {
+      const res = await put('/rsvp-confirmation/copy', tokenFor(memberUser), { copy: {} });
+      expect(res.status).toBe(403);
+      expect(prisma.emailTemplateCopy.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses an anonymous caller', async () => {
+      const res = await put('/rsvp-confirmation/copy', undefined, { copy: {} });
+      expect(res.status).toBe(401);
+      expect(prisma.emailTemplateCopy.upsert).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing while saving', async () => {
+      await put('/rsvp-confirmation/copy', tokenFor(adminUser), { copy: { heading: 'New' } });
+
+      expect(sendMail).not.toHaveBeenCalled();
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restoring the shipped wording', () => {
+    it('drops the row', async () => {
+      const res = await del('/rsvp-confirmation/copy', tokenFor(adminUser));
+
+      expect(res.status).toBe(200);
+      expect(prisma.emailTemplateCopy.deleteMany).toHaveBeenCalledWith({
+        where: { templateKey: 'rsvp-confirmation' },
+      });
+    });
+
+    it('404s a template that does not exist', async () => {
+      expect((await del('/not-a-template/copy', tokenFor(adminUser))).status).toBe(404);
+      expect(prisma.emailTemplateCopy.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a member', async () => {
+      expect((await del('/rsvp-confirmation/copy', tokenFor(memberUser))).status).toBe(403);
+      expect(prisma.emailTemplateCopy.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses an anonymous caller', async () => {
+      expect((await del('/rsvp-confirmation/copy', undefined)).status).toBe(401);
+      expect(prisma.emailTemplateCopy.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the preview reflects an edit', () => {
+    it('renders what an admin saved, not what the repo ships', async () => {
+      prisma.emailTemplateCopy.findMany.mockResolvedValue([
+        { templateKey: 'rsvp-confirmation', copy: { heading: 'You are on the list' }, updatedAt: new Date() },
+      ]);
+
+      const body = await (await get('/rsvp-confirmation/preview', tokenFor(adminUser))).json();
+
+      expect(body.html).toContain('You are on the list');
+      expect(body.html).not.toContain('>RSVP Confirmation<');
     });
   });
 });

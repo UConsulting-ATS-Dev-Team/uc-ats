@@ -18,7 +18,8 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { renderInterviewSlotEmail } from './emailNotifications.js';
 import {
-  SLOT_NOTIFICATION_SUBJECTS,
+  slotNotificationSubject,
+  slotSubjectFormatter,
   flushNotifications,
   queueNotifications,
   queueNotificationsBulk,
@@ -65,15 +66,9 @@ export async function notifyInterviewer(
     ]);
     if (!user?.email || !slot) return;
 
+    const subject = await slotNotificationSubject(type, slot.interview.title);
     const ids = await prisma.$transaction((tx) =>
-      queueNotifications(tx, [
-        {
-          slotId,
-          type,
-          recipient: user.email,
-          subject: SLOT_NOTIFICATION_SUBJECTS[type](slot.interview.title),
-        },
-      ])
+      queueNotifications(tx, [{ slotId, type, recipient: user.email, subject }])
     );
     flushInBackground(ids, { fromSlotName, selfSignup }, 'notifyInterviewer');
   } catch (error) {
@@ -112,13 +107,15 @@ export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED
     const emailById = new Map(users.map((u) => [u.id, u.email]));
     const titleById = new Map(slots.map((s) => [s.id, s.interview?.title]));
 
+    // One read of this type's wording, applied to every session's title.
+    const subjectFor = await slotSubjectFormatter(type);
     const entries = wanted
       .filter((p) => emailById.get(p.userId) && titleById.get(p.slotId))
       .map((p) => ({
         slotId: p.slotId,
         type,
         recipient: emailById.get(p.userId),
-        subject: SLOT_NOTIFICATION_SUBJECTS[type](titleById.get(p.slotId)),
+        subject: subjectFor(titleById.get(p.slotId)),
       }));
     if (entries.length === 0) return [];
 

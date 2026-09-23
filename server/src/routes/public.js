@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendMeetingSignupConfirmation, sendMeetingSignupNotification, sendMeetingCancellationToMember } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Public routes are candidate-facing by definition: no token, so no role to key on.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
@@ -184,7 +185,15 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
         slot.member?.fullName || 'UC Consulting Member',
         slot.location,
         slot.startTime,
-        slot.endTime
+        slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot,
+            candidateEmail: email,
+            candidateName: fullName,
+            hostName: slot.member?.fullName,
+          }),
+        }
       ),
       {
         slotId: slot.id,
@@ -197,6 +206,7 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
 
     // Send notification email to member (and log the communication)
     if (slot.member?.email) {
+      const hostAttendees = await bookedNames(slot.id);
       await sendAndLogMeetingCommunication(
         () => sendMeetingSignupNotification(
           slot.member.email,
@@ -206,7 +216,15 @@ router.post('/meeting-slots/:id/signup', requireAuth, async (req, res) => {
           studentId,
           slot.location,
           slot.startTime,
-          slot.endTime
+          slot.endTime,
+          {
+            invite: hostMeetingInvite({
+              slot,
+              hostEmail: slot.member.email,
+              hostName: slot.member.fullName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         ),
         {
           slotId: slot.id,
@@ -280,6 +298,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
 
     // Notify the host member their slot spot reopened (and log it).
     if (signup.slot.member?.email) {
+      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
       await sendAndLogMeetingCommunication(
         () => sendMeetingCancellationToMember(
           signup.slot.member.email,
@@ -287,7 +306,15 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         ),
         {
           slotId: signup.slotId,
