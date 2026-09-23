@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
@@ -69,8 +69,13 @@ export default function CoffeeChatsPublic() {
   const [changingTime, setChangingTime] = useState(false);
   const [bookingBusy, setBookingBusy] = useState(false);
 
-  const loadMine = useCallback(async () => {
-    if (!user) {
+  // Takes the account explicitly: right after a login from the dialog, the
+  // handlers still close over the render where `user` was null. Only the newest
+  // request may write, so a slow earlier answer cannot overwrite a fresh one.
+  const mineRequest = useRef(0);
+  const loadMine = useCallback(async (account) => {
+    const requestId = ++mineRequest.current;
+    if (!account) {
       setMySignups([]);
       return;
     }
@@ -79,16 +84,20 @@ export default function CoffeeChatsPublic() {
     if (token) api.setToken(token);
     try {
       const data = await api.get('/meeting-signups/mine');
+      if (requestId !== mineRequest.current) return;
       setMySignups(Array.isArray(data) ? data : []);
     } catch (e) {
+      if (requestId !== mineRequest.current) return;
       console.error('Failed to load your meeting signups:', e);
       setMySignups([]);
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => {
-    loadMine();
-  }, [loadMine]);
+    loadMine(user);
+    // Keyed on the account, not the object: a profile update is not a new user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email, loadMine]);
 
   const myBooking = user ? currentCycleBooking(mySignups, activeCycle, (s) => s.slot?.startTime) : null;
 
@@ -162,13 +171,13 @@ export default function CoffeeChatsPublic() {
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
       setForm({ studentId: '' });
       setSelectedSlot(null);
-      await Promise.all([load(), loadMine()]);
+      await Promise.all([load(), loadMine(account)]);
     } catch (e) {
       if (e.status === 409 && e.code === 'ALREADY_BOOKED') {
         // They already hold this cycle's meeting. Show it instead of the gallery.
         setSelectedSlot(null);
         setChangingTime(false);
-        await loadMine();
+        await loadMine(account);
         setError(errorText(e, 'You already have a meeting booked this cycle.'));
       } else {
         setError(errorText(e, 'Failed to sign up for this meeting slot'));
@@ -190,7 +199,7 @@ export default function CoffeeChatsPublic() {
       setSelectedSlot(null);
       setChangingTime(false);
       setSuccess(response?.message || 'Your meeting time has been changed.');
-      await Promise.all([load(), loadMine()]);
+      await Promise.all([load(), loadMine(user)]);
     } catch (e) {
       // A full slot: refresh the counts first, since load() clears the error.
       if (e.status === 409) await load();
@@ -211,7 +220,7 @@ export default function CoffeeChatsPublic() {
       setChangingTime(false);
       setSelectedSlot(null);
       setSuccess('Your meeting has been cancelled. You can book a new time below.');
-      await Promise.all([load(), loadMine()]);
+      await Promise.all([load(), loadMine(user)]);
     } catch (e) {
       setError(errorText(e, 'Failed to cancel your meeting'));
     } finally {

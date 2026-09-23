@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import apiClient from '../utils/api';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import { useAuth } from '../context/AuthContext';
@@ -50,7 +50,11 @@ export default function CandidateGTKUC() {
   // One booking per cycle: with one, the gallery only comes back to pick a new time.
   const [changingTime, setChangingTime] = useState(false);
 
+  // The mount load and the reload after an action can overlap. Only the newest
+  // may write, so a slow earlier answer cannot bring back a booking just moved.
+  const loadRequest = useRef(0);
   const load = async () => {
+    const requestId = ++loadRequest.current;
     try {
       setLoading(true);
       const [mine, cycle, allSlots] = await Promise.all([
@@ -58,13 +62,15 @@ export default function CandidateGTKUC() {
         fetchActiveCycle(apiClient).catch(() => null),
         apiClient.get('/meeting-slots'),
       ]);
+      if (requestId !== loadRequest.current) return;
       setSignups(Array.isArray(mine) ? mine : []);
       setActiveCycle(cycle);
       setSlots(allSlots || []);
     } catch (e) {
+      if (requestId !== loadRequest.current) return;
       setError(errorText(e, 'Failed to load your Get to Know UC details'));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequest.current) setLoading(false);
     }
   };
 

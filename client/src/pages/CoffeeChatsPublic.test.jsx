@@ -291,6 +291,54 @@ describe('one booking per cycle', () => {
     expect(screen.getByRole('button', { name: 'Cancel meeting' })).toBeDisabled();
   });
 
+  it('shows the new booking after a guest logs in from the dialog and books', async () => {
+    const account = { fullName: 'Jordan Rivera', email: 'jordan@ucla.edu', studentId: '123456789' };
+    const { login } = auth();
+    login.mockImplementation(async () => {
+      localStorage.setItem('token', 'fresh-token');
+      // What AuthContext does on login: the next render sees the account.
+      auth({ user: account });
+      return { success: true, user: account };
+    });
+
+    // A /mine request sent before the booking lands is held back and answers
+    // late with the pre-booking state, so it races the refresh after booking.
+    let booked = false;
+    let releaseEarly;
+    const early = new Promise((resolve) => { releaseEarly = () => resolve([]); });
+    api.get.mockImplementation((url) => {
+      if (url === '/active-cycle') return Promise.resolve({ cycle });
+      if (url === '/meeting-signups/mine') {
+        return booked
+          ? Promise.resolve([booking({ slotId: 'slot-1', slot: { ...booking().slot, id: 'slot-1', startTime: slot.startTime, location: slot.location, member: { fullName: 'Avery Chen' } } })])
+          : early;
+      }
+      return Promise.resolve([slot, otherSlot]);
+    });
+    api.post.mockImplementation(async () => {
+      booked = true;
+      return { success: true, message: 'Successfully signed up!' };
+    });
+
+    const user = userEvent.setup();
+    render(<CoffeeChatsPublic />);
+    await pickSlot(user);
+    await user.click(screen.getByRole('button', { name: 'Log in & Confirm Signup' }));
+    await user.type(await screen.findByLabelText(/Email Address/), 'jordan@ucla.edu');
+    await user.type(screen.getByLabelText(/Password/), 'hunter22');
+    await user.click(screen.getByRole('button', { name: 'Log in & book' }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/meeting-slots/slot-1/signup', {}));
+    expect(await screen.findByText('Your meeting')).toBeInTheDocument();
+
+    // The stale answer arrives last and must not bring the gallery back.
+    releaseEarly();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText('Your meeting')).toBeInTheDocument();
+    expect(screen.getByText('Avery Chen')).toBeInTheDocument();
+    expect(screen.queryByText('Available Meeting Slots')).not.toBeInTheDocument();
+  });
+
   it('switches to the booked view when booking answers 409 ALREADY_BOOKED', async () => {
     signedIn();
     let mine = [];
