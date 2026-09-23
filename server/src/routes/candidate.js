@@ -2,15 +2,12 @@ import express from 'express';
 import prisma from '../prismaClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
-  sendMeetingSignupConfirmation,
-  sendMeetingSignupNotification,
   sendMeetingCancellationEmail,
   sendMeetingCancellationToMember,
 } from '../services/emailNotifications.js';
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
+import { BookingError, bookMeetingSlot, notifyMeetingBooked } from '../services/meetingSignups.js';
 import { toCandidateCard } from '../utils/gtkucProfile.js';
-// Candidate-facing: always the candidate pointer, never the caller's role.
-import { resolveCandidateCycle } from '../services/activeCycle.js';
 // A candidate may cancel or rebook only up to MODIFY_CUTOFF_HOURS before the
 // start time. Shared with interview slot signup so there is one rule, not two.
 import { MODIFY_CUTOFF_HOURS, canModify, hoursUntil } from '../utils/schedulingWindows.js';
@@ -24,7 +21,7 @@ const router = express.Router();
 router.get('/my-meeting-signups', requireAuth, async (req, res) => {
   try {
     const signups = await prisma.meetingSignup.findMany({
-      where: { email: req.user.email },
+      where: { email: { equals: req.user.email, mode: 'insensitive' } },
       include: {
         slot: {
           include: {
@@ -79,114 +76,14 @@ router.post('/my-meeting-signups', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Your account is missing a student ID. Please contact us to update your profile.' });
     }
 
-    // Enforce one signup per active recruiting cycle (mirrors public signup route).
-    const activeCycle = await resolveCandidateCycle(prisma);
-
-    if (activeCycle && (activeCycle.startDate || activeCycle.endDate)) {
-      const cycleStartDate = activeCycle.startDate ? new Date(activeCycle.startDate) : null;
-      const cycleEndDate = activeCycle.endDate ? new Date(activeCycle.endDate) : null;
-
-      const existingSignups = await prisma.meetingSignup.findMany({
-        where: { email },
-        include: { slot: true },
-      });
-
-      const existingSignupInCycle = existingSignups.find((signup) => {
-        const slotDate = new Date(signup.slot.startTime);
-        const isAfterStart = !cycleStartDate || slotDate >= cycleStartDate;
-        const isBeforeEnd = !cycleEndDate || slotDate <= cycleEndDate;
-        return isAfterStart && isBeforeEnd;
-      });
-
-      if (existingSignupInCycle) {
-        return res.status(400).json({
-          error: `You have already signed up for a meeting on ${new Date(existingSignupInCycle.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot per cycle.`,
-        });
-      }
-    } else {
-      const existingSignup = await prisma.meetingSignup.findFirst({
-        where: { email },
-        include: { slot: true },
-      });
-
-      if (existingSignup) {
-        return res.status(400).json({
-          error: `You have already signed up for a meeting on ${new Date(existingSignup.slot.startTime).toLocaleDateString()}. You can only sign up for one meeting slot.`,
-        });
-      }
-    }
-
-    const slot = await prisma.meetingSlot.findUnique({
-      where: { id: slotId },
-      include: {
-        signups: true,
-        member: { select: { fullName: true, email: true } },
-      },
-    });
-
-    if (!slot) {
-      return res.status(404).json({ error: 'Slot not found' });
-    }
-
-    if (slot.signups.length >= slot.capacity) {
-      return res.status(400).json({ error: 'This time slot is full' });
-    }
-
-    const signup = await prisma.meetingSignup.create({
-      data: { slotId, fullName, email, studentId },
-    });
-
-    // Confirmation email to candidate.
-    try {
-      await sendMeetingSignupConfirmation(
-        email,
-        fullName,
-        slot.member?.fullName || 'UC Consulting Member',
-        slot.location,
-        slot.startTime,
-        slot.endTime,
-        {
-          invite: candidateMeetingInvite({
-            slot,
-            candidateEmail: email,
-            candidateName: fullName,
-            hostName: slot.member?.fullName,
-          }),
-        }
-      );
-    } catch (emailError) {
-      console.error('Failed to send confirmation email:', emailError);
-    }
-
-    // Notification email to member.
-    try {
-      if (slot.member?.email) {
-        const hostAttendees = await bookedNames(slot.id);
-        await sendMeetingSignupNotification(
-          slot.member.email,
-          slot.member.fullName || 'UC Consulting Member',
-          fullName,
-          email,
-          studentId,
-          slot.location,
-          slot.startTime,
-          slot.endTime,
-          {
-            invite: hostMeetingInvite({
-              slot,
-              hostEmail: slot.member.email,
-              hostName: slot.member.fullName,
-              attendeeNames: hostAttendees,
-            }),
-          }
-        );
-      }
-    } catch (emailError) {
-      console.error('Failed to send notification email to member:', emailError);
-    }
+    const { signup, slot } = await bookMeetingSlot({ slotId, fullName, email, studentId });
+    await notifyMeetingBooked({ signup, slot });
 
     res.json({ success: true, signup, message: 'Successfully signed up! You will receive a confirmation email shortly.' });
   } catch (error) {
+    if (error instanceof BookingError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     if (error?.code === 'P2002') {
       return res.status(400).json({ error: 'You are already signed up for this slot' });
     }
@@ -215,7 +112,7 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
     }
 
     // Ownership: candidates may only cancel their own signup.
-    if (signup.email !== req.user.email) {
+    if (signup.email.toLowerCase() !== req.user.email.toLowerCase()) {
       return res.status(403).json({ error: 'You can only cancel your own signup' });
     }
 
@@ -242,6 +139,7 @@ router.delete('/my-meeting-signups/:id', requireAuth, async (req, res) => {
         {
           invite: candidateMeetingInvite({
             slot: signup.slot,
+            signupId: signup.id,
             candidateEmail: signup.email,
             candidateName: signup.fullName,
             hostName: memberName,

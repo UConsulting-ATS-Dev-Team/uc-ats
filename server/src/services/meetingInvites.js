@@ -4,9 +4,11 @@
 //
 // Two calendar entries exist per slot, and they are keyed differently on purpose.
 //
-// The candidate's entry is keyed on (slot, their address) - the same pair
-// MeetingSignup is unique on - so a reschedule moves the entry they already have
-// and a cancellation removes it.
+// The candidate's entry is keyed on their signup. A slot reschedule, and a
+// candidate moving their booking to another slot (which keeps the signup row and
+// changes its slotId), both move the entry they already have; a cancellation
+// removes it. Invites sent before this keyed on (slot, address) instead, and a
+// later change to one of those bookings adds a new entry beside the old one.
 //
 // The host's entry is keyed on the slot alone. It is created when the slot is
 // (the "slot opened" email) and stands for the time the host has set aside, so
@@ -57,14 +59,14 @@ function joinLines(lines) {
  * Never throws: a signup that was recorded must not be reported as failed because
  * its invite could not be assembled. The email still goes without it.
  */
-export function candidateMeetingInvite({ slot, candidateEmail, candidateName, hostName, method = 'REQUEST' }) {
+export function candidateMeetingInvite({ slot, signupId, candidateEmail, candidateName, hostName, method = 'REQUEST' }) {
   try {
     const organizer = organizerEmail();
-    if (!slot?.id || !slot.startTime || !candidateEmail || !organizer) return null;
+    if (!slot?.id || !slot.startTime || !signupId || !candidateEmail || !organizer) return null;
 
     const when = describeWhen(slot.startTime, slot.endTime);
     return buildInvite({
-      uid: inviteUid('gtkuc', `${slot.id}-${String(candidateEmail).toLowerCase()}`),
+      uid: inviteUid('gtkuc-signup', signupId),
       sequence: nextSequence(),
       method,
       start: slot.startTime,

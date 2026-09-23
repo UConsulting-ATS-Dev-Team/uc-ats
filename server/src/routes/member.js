@@ -1140,6 +1140,7 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
             {
               invite: candidateMeetingInvite({
                 slot: existingSlot,
+                signupId: signup.id,
                 candidateEmail: signup.email,
                 candidateName: signup.fullName,
                 hostName: memberName,
@@ -1225,6 +1226,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
         {
           invite: candidateMeetingInvite({
             slot: signup.slot,
+            signupId: signup.id,
             candidateEmail: signup.email,
             candidateName: signup.fullName,
             hostName: memberName,
