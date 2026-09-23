@@ -4688,9 +4688,13 @@ router.post('/meeting-slots', async (req, res) => {
       }
     });
 
-    await notifyHostSlotCreated(slot, host);
-
     res.json(slot);
+
+    // After the response, as in the member route: a slow mail server must not
+    // hold open a request whose slot already exists.
+    notifyHostSlotCreated(slot, host).catch((err) =>
+      console.error('[POST /api/admin/meeting-slots] slot confirmation failed', err)
+    );
   } catch (error) {
     console.error('[POST /api/admin/meeting-slots]', error);
     res.status(500).json({ error: 'Failed to create meeting slot' });
