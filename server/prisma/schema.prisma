@@ -660,10 +660,12 @@ enum EventFormStatus {
 
 /// Where an RSVP or attendance row came from. Google Form rows carry the form
 /// responseId; Luma rows carry the Luma guest id instead, and the Luma sync
-/// only ever removes rows it wrote itself.
+/// only ever removes rows it wrote itself. IN_APP is a member's own RSVP from
+/// the Events page, and cancelling there only ever removes an IN_APP row.
 enum EventResponseSource {
   GOOGLE_FORM
   LUMA
+  IN_APP
 }
 
 model EventRsvp {

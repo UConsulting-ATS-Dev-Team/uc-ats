@@ -1798,7 +1798,16 @@ router.get('/accountability', async (req, res) => {
           eventStartDate: true,
           eventEndDate: true,
           memberAttendanceForm: true,
-          _count: { select: { memberEventAttendance: true } }
+          _count: {
+            select: {
+              memberEventAttendance: true,
+              // Counted over the same people the check-in dialog lists, so the
+              // two totals agree even after someone is deactivated or demoted.
+              memberEventRsvp: {
+                where: { member: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true } }
+              }
+            }
+          }
         },
         orderBy: { eventStartDate: 'desc' }
       })
@@ -1830,7 +1839,8 @@ router.get('/accountability', async (req, res) => {
       leaderboard,
       events: events.map(e => ({
         ...e,
-        memberAttendanceCount: e._count.memberEventAttendance
+        memberAttendanceCount: e._count.memberEventAttendance,
+        memberRsvpCount: e._count.memberEventRsvp
       }))
     });
   } catch (error) {
@@ -1860,20 +1870,31 @@ router.get('/accountability/events/:id/members', async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
+    // RSVPs come alongside attendance so the check-in list can be worked from
+    // who said they were coming, which is how an admin takes it at the door.
     const memberIds = members.map(m => m.id);
-    const attendances = await prisma.memberEventAttendance.findMany({
-      where: { eventId: id, memberId: { in: memberIds } },
-      select: { memberId: true, source: true }
-    });
+    const [attendances, rsvps] = await Promise.all([
+      prisma.memberEventAttendance.findMany({
+        where: { eventId: id, memberId: { in: memberIds } },
+        select: { memberId: true, source: true }
+      }),
+      prisma.memberEventRsvp.findMany({
+        where: { eventId: id, memberId: { in: memberIds } },
+        select: { memberId: true, source: true }
+      })
+    ]);
 
     const attendanceByMember = Object.fromEntries(attendances.map(a => [a.memberId, a]));
+    const rsvpByMember = Object.fromEntries(rsvps.map(r => [r.memberId, r]));
 
     res.json({
       event,
       members: members.map(member => ({
         ...member,
         attended: Boolean(attendanceByMember[member.id]),
-        source: attendanceByMember[member.id]?.source || null
+        source: attendanceByMember[member.id]?.source || null,
+        rsvpd: Boolean(rsvpByMember[member.id]),
+        rsvpSource: rsvpByMember[member.id]?.source || null
       }))
     });
   } catch (error) {

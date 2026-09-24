@@ -358,6 +358,20 @@ The system follows a **recruiting cycle-based workflow**:
   (plural) for the whole list, while the manual add and remove still own exactly one
   `MANUAL` referral per candidate per cycle and never touch a member's submission.
 
+**Member event RSVPs:**
+- Members RSVP in the app from the Events page: `PUT` / `DELETE
+  /api/member/events/:eventId/rsvp` (ADMIN/MEMBER, only before the event starts). There is
+  no member form to fill in; going is a `member_event_rsvp` row with `source = IN_APP`.
+- Cancelling removes only an `IN_APP` row. An RSVP from Luma or the legacy Google Form is
+  shown as made but answers `409 RSVP_EXTERNAL` - it has to change where it was made.
+- Google Form, Luma and in-app rows coexist under the one-per-member-per-event index;
+  whichever wrote first stands, and neither sync ever removes another source's row.
+- A new in-app RSVP sends the RSVP confirmation (with calendar invite) best-effort.
+- Admins mark who actually came in Accountability Tracker → an event's Manage dialog,
+  which opens on the RSVP'd members (any source). An RSVP never counts as attendance by
+  itself; attendance is still only a `member_event_attendance` row, and a walk-in without
+  an RSVP is one switch away.
+
 **Case book time restriction:**
 - A member may open a case only once they are close to the interview they run it in.
   The window is one global number of hours, held in the `CaseVisibilitySetting`
