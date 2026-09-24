@@ -29,8 +29,9 @@ import apiClient from '../../utils/api';
 //
 // Choosing a file stores nothing. The file goes up, the survivors come back in
 // the same response, and the browser can save them. Import is a separate click
-// that sends the same file again and stores the survivors, so they can be
-// emailed from Send as the "Mailing list" audience.
+// that sends the same file again and stores every valid address on it -
+// survivors and people the ATS already knew alike - so the audience builder's
+// "On the mailing list" filter means exactly that.
 //
 // scripts/import-mailing-list-csv.js is the same operation from the command
 // line, and uploads to Drive instead of downloading.
@@ -165,9 +166,10 @@ export default function MailingListImport() {
   return (
     <Box>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Upload the mailing-list export. Everyone the ATS already knows about is dropped. What is
-        left can be downloaded as a CSV, or imported so you can email them from Send by choosing
-        the Mailing list audience. Nothing is saved until you click Import.
+        Upload the mailing-list export to see who on it the ATS has never heard of, and download
+        them as a CSV. Import saves every address on the list, including people already in the
+        ATS, so you can target them in a Filtered audience with “On the mailing list”. Nothing is
+        saved until you click Import.
       </Alert>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -249,13 +251,14 @@ export default function MailingListImport() {
             </Typography>
           )}
 
-          {result.keptCount === 0 ? (
-            <Alert severity="warning">
+          {result.keptCount === 0 && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
               No rows survived. Either everyone on this list is already in the ATS, or the wrong
               column was used {'—'} check the email column above before treating this as
               the answer.
             </Alert>
-          ) : (
+          )}
+          {(result.importableCount ?? result.keptCount) > 0 && (
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
               <Button
                 variant="contained"
@@ -263,11 +266,14 @@ export default function MailingListImport() {
                 onClick={handleImport}
                 disabled={importing || loading || imported !== null}
               >
-                Import {result.keptCount} contact{result.keptCount === 1 ? '' : 's'}
+                Import {result.importableCount ?? result.keptCount} contact
+                {(result.importableCount ?? result.keptCount) === 1 ? '' : 's'}
               </Button>
-              <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload}>
-                Download {result.keptCount} row{result.keptCount === 1 ? '' : 's'}
-              </Button>
+              {result.keptCount > 0 && (
+                <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload}>
+                  Download {result.keptCount} row{result.keptCount === 1 ? '' : 's'}
+                </Button>
+              )}
               {importing && <CircularProgress size={20} />}
             </Stack>
           )}
@@ -275,9 +281,9 @@ export default function MailingListImport() {
           {imported !== null && (
             <Alert severity="success" sx={{ mt: 2 }}>
               Imported {imported} contact{imported === 1 ? '' : 's'}.
-              {imported < result.keptCount &&
-                ` ${result.keptCount - imported} were skipped because they reached the ATS since this preview.`}
-              {' '}To email them, open Send and choose the Mailing list (imported) audience.
+              {imported < (result.importableCount ?? result.keptCount) &&
+                ` ${(result.importableCount ?? result.keptCount) - imported} were already on the list.`}
+              {' '}To email them, open Email, choose Filtered audience and add “On the mailing list”.
             </Alert>
           )}
 

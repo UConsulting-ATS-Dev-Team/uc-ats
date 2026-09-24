@@ -45,6 +45,16 @@ import DecisionBatchPanel from '../components/communications/DecisionBatchPanel'
 import ImessageComposer from '../components/communications/ImessageComposer';
 import CommunicationsLog from '../components/communications/CommunicationsLog';
 import MailingListImport from '../components/communications/MailingListImport';
+import AudienceBuilder from '../components/communications/AudienceBuilder';
+import SuppressionsPanel from '../components/communications/SuppressionsPanel';
+import {
+  SOURCE_LABELS,
+  countRules,
+  emptyTree,
+  legacyToTree,
+  toServerTree,
+  withIds,
+} from '../components/communications/audienceRules';
 
 const CHANNELS = [
   { key: 'email', label: 'Email' },
@@ -70,13 +80,11 @@ const readDeepLink = () => {
   return { tabIndex: tabIndex >= 0 ? tabIndex : 0, batchId: params.get('batch') };
 };
 
-const APPLICATION_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'ACCEPTED', 'REJECTED', 'WAITLISTED'];
-const INTERVIEW_ROUNDS = ['COFFEE_CHAT', 'ROUND_ONE', 'FINAL_ROUND'];
-const DECISIONS = ['yes', 'no', 'maybe'];
 const USER_ROLES = ['USER', 'MEMBER', 'ADMIN'];
 const TEMPLATE_CHANNELS = ['email', 'slack', 'imessage'];
 
 const MERGE_FIELDS = {
+  custom: ['firstName', 'lastName', 'fullName', 'email'],
   applicants: ['firstName', 'lastName', 'fullName', 'email', 'phoneNumber'],
   members: ['firstName', 'lastName', 'fullName', 'email', 'role'],
   admins: ['firstName', 'lastName', 'fullName', 'email', 'role'],
@@ -115,12 +123,13 @@ const MasterCommunications = () => {
   const channel = CHANNELS[tab].key;
   const primaryCycle = selectedCycles[0] || '';
 
-  const [audience, setAudience] = useState('applicants');
-  const [applicationStatus, setApplicationStatus] = useState('');
-  const [interviewRound, setInterviewRound] = useState('');
-  const [decision, setDecision] = useState('');
-  const [eventRsvpId, setEventRsvpId] = useState('');
-  const [eventAttendedId, setEventAttendedId] = useState('');
+  // 'custom' is the filter builder; members and admins stay one click because
+  // Slack and staff announcements need nothing more.
+  const [audience, setAudience] = useState('custom');
+  const [audienceTree, setAudienceTree] = useState(emptyTree);
+  // Set only while the tree is exactly a saved audience; sends then resolve
+  // the saved copy on the server, so a draft follows later edits to it.
+  const [savedAudienceId, setSavedAudienceId] = useState(null);
   const [roles, setRoles] = useState(['MEMBER']);
   // iMessage recipients, picked by name rather than filtered.
   const [imessageMemberIds, setImessageMemberIds] = useState([]);
@@ -142,11 +151,6 @@ const MasterCommunications = () => {
   const [sending, setSending] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [testing, setTesting] = useState(false);
-
-  const filteredEvents = useMemo(
-    () => events.filter((e) => selectedCycles.length === 0 || selectedCycles.includes(e.cycleId)),
-    [events, selectedCycles]
-  );
 
   useEffect(() => {
     fetchCycles();
@@ -248,6 +252,7 @@ const MasterCommunications = () => {
       channel,
       audience: isImessage ? 'members' : audience,
       filters: isImessage ? { memberIds: imessageMemberIds } : buildFilters(),
+      savedAudienceId: !isImessage && audience === 'custom' ? savedAudienceId : null,
       subject: channel === 'email' ? subject : '',
       body,
       cycleId: primaryCycle || null,
@@ -273,17 +278,22 @@ const MasterCommunications = () => {
     clearMessages();
     setOpenDraftId(draft.id);
     setDraftName(draft.name);
-    setAudience(draft.audience);
     setSubject(draft.subject || '');
     setBody(draft.body || '');
 
     const filters = draft.filters || {};
+    // Drafts from before the builder carry the flat applicant or mailing-list
+    // filters; they open as the equivalent tree.
+    const legacy = legacyToTree(draft.audience, filters);
+    if (draft.audience === 'custom' || legacy) {
+      setAudience('custom');
+      setAudienceTree(legacy || (filters.root ? withIds(filters) : emptyTree()));
+      setSavedAudienceId(draft.savedAudienceId || null);
+    } else {
+      setAudience(draft.audience);
+      setSavedAudienceId(null);
+    }
     setRoles(filters.roles || ['MEMBER']);
-    setApplicationStatus(filters.applicationStatus || '');
-    setInterviewRound(filters.interviewRound || '');
-    setDecision(filters.decision || '');
-    setEventRsvpId(filters.eventRsvpId || '');
-    setEventAttendedId(filters.eventAttendedId || '');
     setImessageMemberIds(filters.memberIds || []);
     if (filters.cycleIds?.length) setSelectedCycles(filters.cycleIds);
 
@@ -308,35 +318,34 @@ const MasterCommunications = () => {
   };
 
   const buildFilters = () => {
+    if (audience === 'custom') return toServerTree(audienceTree);
+
     const filters = {};
     if (selectedCycles.length > 0) filters.cycleIds = selectedCycles;
-
-    if (audience === 'applicants') {
-      if (applicationStatus) filters.applicationStatus = applicationStatus;
-      if (interviewRound && decision) {
-        filters.interviewRound = interviewRound;
-        filters.decision = decision;
-      }
-      if (eventRsvpId) filters.eventRsvpId = eventRsvpId;
-      if (eventAttendedId) filters.eventAttendedId = eventAttendedId;
-    }
-
     if (audience === 'members' || audience === 'users') {
       if (roles.length > 0) filters.roles = roles;
     }
-
     return filters;
   };
+
+  // What every preview, test, send and schedule is addressed to.
+  const audiencePayload = () => ({
+    audience,
+    filters: buildFilters(),
+    savedAudienceId: audience === 'custom' ? savedAudienceId || undefined : undefined,
+  });
+
+  const ruleCount = countRules(audienceTree.root);
+  // A filtered audience needs a filter; the staff audiences still hang off the
+  // cycle picker as they always have.
+  const audienceReady = audience === 'custom' ? ruleCount > 0 : selectedCycles.length > 0;
 
   const handlePreview = async () => {
     clearMessages();
     setLoading(true);
     setPreview(null);
     try {
-      const result = await apiClient.post('/master-communications/preview', {
-        audience,
-        filters: buildFilters(),
-      });
+      const result = await apiClient.post('/master-communications/preview', audiencePayload());
       setPreview(result);
     } catch (e) {
       setError(e.message || 'Failed to load preview');
@@ -356,15 +365,17 @@ const MasterCommunications = () => {
     setSending(true);
     try {
       const result = await apiClient.post('/master-communications/send', {
-        audience,
+        ...audiencePayload(),
         channel,
-        filters: buildFilters(),
         subject,
         body,
         cycleId: primaryCycle,
         templateId: selectedTemplate || undefined,
       });
-      setSuccess(`Sent ${result.sent} of ${result.total} ${channel} messages`);
+      setSuccess(
+        `Sent ${result.sent} of ${result.total} ${channel} messages` +
+          (result.skipped ? `. ${result.skipped} skipped because they unsubscribed.` : '')
+      );
       setConfirmOpen(false);
       setPreview(null);
       setScheduledAt('');
@@ -381,8 +392,7 @@ const MasterCommunications = () => {
     setTesting(true);
     try {
       const result = await apiClient.post('/master-communications/test', {
-        audience,
-        filters: buildFilters(),
+        ...audiencePayload(),
         subject,
         body,
       });
@@ -407,9 +417,8 @@ const MasterCommunications = () => {
     setScheduling(true);
     try {
       const payload = {
+        ...audiencePayload(),
         channel,
-        audience,
-        filters: buildFilters(),
         subject,
         body,
         cycleId: primaryCycle,
@@ -508,10 +517,9 @@ const MasterCommunications = () => {
       { value: 'admins', label: 'Admins' },
     ];
     return [
-      { value: 'applicants', label: 'Applicants' },
+      { value: 'custom', label: 'Filtered audience' },
       { value: 'members', label: 'Members' },
       { value: 'admins', label: 'Admins' },
-      { value: 'mailing-list', label: 'Mailing list (imported)' },
     ];
   }, [channel]);
 
@@ -543,8 +551,8 @@ const MasterCommunications = () => {
         </TextField>
       </Grid>
 
-      {/* Imported mailing-list contacts belong to no cycle. */}
-      {audience !== 'mailing-list' && (
+      {/* A filtered audience picks cycles rule by rule, in the builder. */}
+      {audience !== 'custom' && (
         <Grid item xs={12} sm={6} md={4}>
           <TextField
             select
@@ -560,87 +568,22 @@ const MasterCommunications = () => {
         </Grid>
       )}
 
-      {audience === 'applicants' && (
-        <>
-          <Grid item xs={12} sm={6} md={4}>
-            <TextField
-              select
-              fullWidth
-              label="Application Status"
-              value={applicationStatus}
-              onChange={(e) => setApplicationStatus(e.target.value)}
-            >
-              <MenuItem value=""><em>Any</em></MenuItem>
-              {APPLICATION_STATUSES.map((s) => (
-                <MenuItem key={s} value={s}>{s.replace(/_/g, ' ')}</MenuItem>
-              ))}
-            </TextField>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={4}>
-            <TextField
-              select
-              fullWidth
-              label="RSVP to Event"
-              value={eventRsvpId}
-              onChange={(e) => setEventRsvpId(e.target.value)}
-            >
-              <MenuItem value=""><em>Any</em></MenuItem>
-              {filteredEvents.map((e) => (
-                <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
-              ))}
-            </TextField>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={4}>
-            <TextField
-              select
-              fullWidth
-              label="Attended Event"
-              value={eventAttendedId}
-              onChange={(e) => setEventAttendedId(e.target.value)}
-            >
-              <MenuItem value=""><em>Any</em></MenuItem>
-              {filteredEvents.map((e) => (
-                <MenuItem key={e.id} value={e.id}>{e.eventName}</MenuItem>
-              ))}
-            </TextField>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={4}>
-            <TextField
-              select
-              fullWidth
-              label="Interview Round"
-              value={interviewRound}
-              onChange={(e) => {
-                setInterviewRound(e.target.value);
-                setDecision('');
-              }}
-            >
-              <MenuItem value=""><em>Any</em></MenuItem>
-              {INTERVIEW_ROUNDS.map((r) => (
-                <MenuItem key={r} value={r}>{r.replace(/_/g, ' ')}</MenuItem>
-              ))}
-            </TextField>
-          </Grid>
-
-          <Grid item xs={12} sm={6} md={4}>
-            <TextField
-              select
-              fullWidth
-              label="Decision"
-              value={decision}
-              onChange={(e) => setDecision(e.target.value)}
-              disabled={!interviewRound}
-            >
-              <MenuItem value=""><em>Any</em></MenuItem>
-              {DECISIONS.map((d) => (
-                <MenuItem key={d} value={d}>{d}</MenuItem>
-              ))}
-            </TextField>
-          </Grid>
-        </>
+      {audience === 'custom' && (
+        <Grid item xs={12}>
+          <AudienceBuilder
+            tree={audienceTree}
+            savedAudienceId={savedAudienceId}
+            onChange={({ tree, savedAudienceId: id }) => {
+              setAudienceTree(tree);
+              setSavedAudienceId(id);
+              setPreview(null);
+            }}
+            cycles={cycles}
+            events={events}
+            onError={(message) => { setSuccess(''); setError(message); }}
+            onSuccess={(message) => { setError(''); setSuccess(message); }}
+          />
+        </Grid>
       )}
 
       {(audience === 'members' || audience === 'users') && (
@@ -812,7 +755,7 @@ const MasterCommunications = () => {
           variant="outlined"
           startIcon={<PreviewIcon />}
           onClick={handlePreview}
-          disabled={loading || selectedCycles.length === 0}
+          disabled={loading || !audienceReady}
         >
           {loading ? <CircularProgress size={20} /> : 'Preview Recipients'}
         </Button>
@@ -823,7 +766,7 @@ const MasterCommunications = () => {
           variant="contained"
           startIcon={<SendIcon />}
           onClick={handleOpenSend}
-          disabled={!body || (channel === 'email' && !subject) || selectedCycles.length === 0}
+          disabled={!body || (channel === 'email' && !subject) || !audienceReady}
         >
           Send {channel === 'email' ? 'Email' : 'Slack'}
         </Button>
@@ -832,7 +775,7 @@ const MasterCommunications = () => {
             variant="outlined"
             startIcon={testing ? <CircularProgress size={20} /> : <SendIcon />}
             onClick={handleSendTest}
-            disabled={testing || !body || !subject || selectedCycles.length === 0}
+            disabled={testing || !body || !subject || !audienceReady}
           >
             {user?.email ? `Send Test to ${user.email}` : 'Send Test to Me'}
           </Button>
@@ -842,7 +785,7 @@ const MasterCommunications = () => {
           color="secondary"
           startIcon={scheduling ? <CircularProgress size={20} /> : <SaveIcon />}
           onClick={handleSchedule}
-          disabled={!body || (channel === 'email' && !subject) || !scheduledAt || selectedCycles.length === 0}
+          disabled={!body || (channel === 'email' && !subject) || !scheduledAt || !audienceReady}
         >
           Schedule
         </Button>
@@ -853,6 +796,26 @@ const MasterCommunications = () => {
           <Typography variant="h6" gutterBottom>
             Recipients: {preview.count}
           </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+            {preview.skipped > 0 && (
+              <Chip size="small" color="warning" label={`${preview.skipped} skipped: unsubscribed`} />
+            )}
+            {preview.marketing > 0 && (
+              <Chip size="small" variant="outlined" label={`${preview.marketing} get an unsubscribe link`} />
+            )}
+            {Object.entries(preview.sources || {})
+              .sort((a, b) => b[1] - a[1])
+              .map(([source, n]) => (
+                <Chip key={source} size="small" variant="outlined" label={`${SOURCE_LABELS[source] || source}: ${n}`} />
+              ))}
+          </Stack>
+          {preview.savedAudience?.lastUsedAt && (
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Last sent {new Date(preview.savedAudience.lastUsedAt).toLocaleDateString()} to{' '}
+              {preview.savedAudience.lastUsedCount} ({preview.count - preview.savedAudience.lastUsedCount >= 0 ? '+' : ''}
+              {preview.count - preview.savedAudience.lastUsedCount} since).
+            </Typography>
+          )}
 
           {preview.count === 0 ? (
             <Alert severity="warning">No recipients match the selected filters.</Alert>
@@ -909,7 +872,11 @@ const MasterCommunications = () => {
                     <Stack direction="row" spacing={1} alignItems="center">
                       <span>{draft.name}</span>
                       <Chip size="small" variant="outlined" label={draft.channel} />
-                      <Chip size="small" variant="outlined" label={draft.audience} />
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={draft.savedAudience?.name || (draft.audience === 'custom' ? 'filtered' : draft.audience)}
+                      />
                       {openDraftId === draft.id && <Chip size="small" color="primary" label="Open" />}
                     </Stack>
                   }
@@ -1020,16 +987,23 @@ const MasterCommunications = () => {
         >
           Bulk sends
         </Button>
+        <Button
+          size="small"
+          variant={logView === 'unsubscribes' ? 'contained' : 'outlined'}
+          onClick={() => setLogView('unsubscribes')}
+        >
+          Unsubscribes
+        </Button>
       </Stack>
 
-      {logView === 'all' ? (
+      {logView === 'all' && (
         <CommunicationsLog
           cycleId={primaryCycle}
           cycleName={cycles.find((c) => c.id === primaryCycle)?.name || ''}
         />
-      ) : (
-        renderBulkSendLog()
       )}
+      {logView === 'bulk' && renderBulkSendLog()}
+      {logView === 'unsubscribes' && <SuppressionsPanel />}
     </Box>
   );
 
@@ -1100,7 +1074,7 @@ const MasterCommunications = () => {
               <TableRow key={m.id}>
                 <TableCell>{new Date(m.scheduledAt).toLocaleString()}</TableCell>
                 <TableCell>{m.channel}</TableCell>
-                <TableCell>{m.audience}</TableCell>
+                <TableCell>{m.savedAudience?.name || (m.audience === 'custom' ? 'Filtered' : m.audience)}</TableCell>
                 <TableCell>{m.status}</TableCell>
                 <TableCell>{m.subject ? `${m.subject} — ` : ''}{m.body.slice(0, 60)}{m.body.length > 60 ? '…' : ''}</TableCell>
                 <TableCell>
@@ -1176,6 +1150,11 @@ const MasterCommunications = () => {
             <Alert severity="warning" sx={{ mb: 2 }}>
               You are about to send {channel} to {preview?.count || 0} recipients. This cannot be undone.
             </Alert>
+            {preview?.skipped > 0 && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                {preview.skipped} more match the filters but unsubscribed, so they will not be emailed.
+              </Alert>
+            )}
             {preview?.sample?.length > 0 && (
               <>
                 <Typography variant="subtitle2" gutterBottom>Sample recipients:</Typography>

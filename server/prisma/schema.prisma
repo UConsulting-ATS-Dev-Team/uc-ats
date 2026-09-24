@@ -84,6 +84,8 @@ model User {
   createdMessageTemplates    MessageTemplate[]               @relation("MessageTemplateCreator")
   createdMessageDrafts       MessageDraft[]                  @relation("MessageDraftCreator")
   editedMessageDrafts        MessageDraft[]                  @relation("MessageDraftEditor")
+  createdSavedAudiences      SavedAudience[]                 @relation("SavedAudienceCreator")
+  editedSavedAudiences       SavedAudience[]                 @relation("SavedAudienceEditor")
   sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
   scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
   triggeredCommunications    CommunicationLog[]              @relation("CommunicationLogTrigger")
@@ -1673,6 +1675,9 @@ model MessageDraft {
   subject     String           @default("")
   body        String
   cycleId     String?
+  /// When set, the audience is this saved one, read fresh at send time;
+  /// `filters` is only the copy the composer last showed.
+  savedAudienceId String?
   createdById String
   updatedById String?
   createdAt   DateTime         @default(now())
@@ -1680,6 +1685,7 @@ model MessageDraft {
   cycle       RecruitingCycle? @relation("CycleDrafts", fields: [cycleId], references: [id], onDelete: SetNull)
   creator     User             @relation("MessageDraftCreator", fields: [createdById], references: [id])
   editor      User?            @relation("MessageDraftEditor", fields: [updatedById], references: [id])
+  savedAudience SavedAudience? @relation(fields: [savedAudienceId], references: [id], onDelete: SetNull)
 
   @@index([cycleId])
   @@index([updatedAt])
@@ -1791,6 +1797,10 @@ model MessageSchedule {
   body         String
   cycleId      String?
   templateId   String?
+  /// A saved audience is resolved when the schedule fires, not when it was
+  /// queued. If it has been deleted by then, `filters` - the copy taken at
+  /// scheduling time - is used instead.
+  savedAudienceId String?
   sentBy       String
   scheduledAt  DateTime
   status       String           @default("PENDING")
@@ -1801,6 +1811,7 @@ model MessageSchedule {
   cycle        RecruitingCycle? @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
   sender       User             @relation("ScheduleSender", fields: [sentBy], references: [id])
   messageLog   MessageLog?      @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  savedAudience SavedAudience? @relation(fields: [savedAudienceId], references: [id], onDelete: SetNull)
 
   @@index([scheduledAt])
   @@index([status])
@@ -2108,6 +2119,62 @@ model MailingListContact {
   createdAt    DateTime @default(now())
 
   @@map("mailing_list_contacts")
+}
+/// An address that must not receive Master Communications marketing mail.
+///
+/// One row per address, ever. Resubscribing sets `resubscribedAt` rather than
+/// deleting the row, so the history of who opted out and why survives; a later
+/// opt-out clears it again. The row is active while `resubscribedAt` is null.
+///
+/// Only bulk sends to non-staff are held back by this (see
+/// services/emailSuppression.js). Decision letters, password resets, interview
+/// scheduling and every other automated email are not marketing and ignore it.
+model EmailSuppression {
+  id             String    @id @default(uuid())
+  /// Stored lowercased, like every other address in this schema.
+  email          String    @unique
+  /// UNSUBSCRIBED | BOUNCED | COMPLAINED | ADMIN
+  reason         String
+  /// LINK (footer page) | ONE_CLICK (List-Unsubscribe-Post) | SES | ADMIN
+  source         String
+  /// Free text: the SES diagnostic, or an admin's note.
+  detail         String?
+  /// The campaign whose footer or header was used, when there was one.
+  messageLogId   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  resubscribedAt DateTime?
+
+  @@index([resubscribedAt])
+  @@map("email_suppressions")
+}
+
+/// A named Master Communications audience: a filter tree (see
+/// services/audiences/audienceFilters.js) re-run every time it is used, so it
+/// always reaches whoever matches today rather than whoever matched when it
+/// was saved.
+model SavedAudience {
+  id            String            @id @default(uuid())
+  name          String
+  description   String?
+  /// { version: 2, root: <group> } - validated by normalizeAudienceTree.
+  filters       Json
+  createdById   String
+  updatedById   String?
+  lastUsedAt    DateTime?
+  /// How many people it reached at lastUsedAt, so the picker can say how much
+  /// the audience has grown or shrunk since.
+  lastUsedCount Int?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  creator       User              @relation("SavedAudienceCreator", fields: [createdById], references: [id])
+  editor        User?             @relation("SavedAudienceEditor", fields: [updatedById], references: [id])
+  drafts        MessageDraft[]
+  schedules     MessageSchedule[]
+
+  @@index([updatedAt])
+  @@map("saved_audiences")
 }
 
 /// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the

@@ -140,10 +140,13 @@ against the ATS in two places, which share one service and differ only in where
 the survivors go:
 
 - **Master Communications → Mailing List** (admin-only). Upload the CSV, read the
-  counts, download the survivors. Nothing is stored: the server holds the file
-  for the length of the request and returns the deduped CSV in the response, so a
-  closed tab leaves no half-finished import behind. `POST
-  /api/master-communications/mailing-list/dedupe`, 5 MB cap, `.csv` only.
+  counts, download the survivors. The preview stores nothing: the server holds the
+  file for the length of the request and returns the deduped CSV in the response.
+  `POST /api/master-communications/mailing-list/dedupe`, 5 MB cap, `.csv` only.
+  **Import** (`/mailing-list/import`) is a separate click that stores *every* valid
+  address as a `MailingListContact` - survivors and already-known people alike -
+  so the audience builder's "On the mailing list" means exactly that. Only rows
+  from an earlier import are skipped, which makes re-importing a no-op.
 - **`scripts/import-mailing-list-csv.js`**, which uploads to the Marketing Drive
   folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`) instead of downloading.
   Dry run is the default; `--apply` is what uploads.
@@ -158,7 +161,7 @@ compared case-insensitively. `DecisionMessage.email` is excluded on purpose - it
 a copy of `Application.email` made when a decision is queued, so counting it would
 double-count the same person.
 
-Both are read-only against the database, so both are safe to re-run. Neither
+The script and the preview are read-only against the database, so both are safe to re-run. Neither
 silently discards a row: every dropped row keeps its line number and its reason,
 in the console for the script and in the dropped-rows table for the UI, so a run
 can be reconciled against the source spreadsheet. A run where nothing survives is
@@ -210,6 +213,10 @@ The system follows a **recruiting cycle-based workflow**:
   Process All Decisions, reviewed and sent by an admin
 - `/api/master-communications/mailing-list/dedupe` - One-time import of the retiring
   recruiting-interest list: upload the CSV, get back what the ATS has never seen
+- `/api/master-communications/audiences` - Saved audiences (named filter trees);
+  `/audience-options` feeds the builder; `/suppressions` is the unsubscribe list
+- `/api/unsubscribe` - Public, token-gated: the footer link's page actions and the
+  RFC 8058 one-click `POST /one-click`
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
@@ -249,6 +256,46 @@ The system follows a **recruiting cycle-based workflow**:
 - Numbers live on `User.phoneNumber` (E.164). Bulk-load them from a roster CSV with
   `node scripts/import-member-phones-from-csv.js <csv>` (dry run; add `--apply` to write),
   or edit one in User Management.
+
+**Master Communications audiences:**
+- Email's "Filtered audience" (`audience: 'custom'`) is an AND/OR tree of rules, any
+  node negatable, stored as `{ version: 2, root }`. Members and Admins stay as the flat
+  audiences they were (Slack uses only those). Old drafts with `applicants` /
+  `mailing-list` filters still resolve server-side and open in the builder as the
+  equivalent tree (`legacyToTree` in the client).
+- [audienceFilters.js](server/src/services/audiences/audienceFilters.js) validates a
+  tree and folds rule results; [audiencePeople.js](server/src/services/audiences/audiencePeople.js)
+  builds the people and answers each rule. **A new rule goes in `RULE_TYPES`, in
+  `MATCHERS`, and in the client's `RULES`** ([audienceRules.js](client/src/components/communications/audienceRules.js)).
+- A person is one lowercased address, merged across accounts, applications,
+  candidates, mailing-list contacts, meeting signups and Luma guests. A candidate's
+  addresses merge into one person, represented by their active account's address if
+  any (so staff are recognised), else their latest application's.
+- Sealed records are identity only to an audience, even with an exec unlock: a sealed
+  application still counts as "applied" (cycle, status, date) but its decisions,
+  rounds, answers, onboarding and referrals are never read, or a decision filter would
+  list exactly who the seal hides. A new rule reading application content must respect
+  the `locked` marker `redactApplication` leaves.
+- NOT is taken against everyone known, so a tree with no positive rule is refused -
+  it would reach everybody. Deactivated accounts and `CLIENT` accounts are never in
+  the universe at all.
+- Saved audiences (`SavedAudience`) keep the tree, never the people, and are re-run
+  at send time. A draft or schedule with `savedAudienceId` follows later edits to it;
+  a schedule also keeps a copy of the filters in case the audience is deleted.
+  "Exactly who got send X" is the `receivedCampaign` rule, not a snapshot.
+
+**Unsubscribes:**
+- `EmailSuppression` holds addresses opted out of Master Communications *marketing*
+  mail: any bulk email send to someone who is not active staff. Staff mail carries no
+  link and ignores the list. Nothing outside Master Communications reads it - decision
+  letters, account and interview emails still go out.
+- Marketing mail gets a footer link to the public `/unsubscribe` page (a button; a GET
+  never acts, since scanners open every link) and `List-Unsubscribe` +
+  `List-Unsubscribe-Post` headers for Gmail/Yahoo one-click. Links carry an HMAC of the
+  address under `UNSUBSCRIBE_SECRET` (falls back to `JWT_SECRET`).
+- SES complaints and **permanent** bounces add a row automatically; soft bounces do not.
+- A row is never deleted: resubscribing sets `resubscribedAt`. Previews and sends
+  report held-back people as `skipped` rather than dropping them silently.
 
 **Communications log:**
 - `CommunicationLog` (`communication_logs`) records every outbound message, one row per
@@ -550,6 +597,8 @@ Required in `server/.env`:
   treated as a placeholder somebody meant to replace, and `/api/integrations/luma` answers
   503 exactly as if it were unset. The same value goes on the Render service and in the
   routine's environment; read per request, so rotating it needs no redeploy of the routine.
+- `UNSUBSCRIBE_SECRET` - (Optional) Signs Master Communications unsubscribe links;
+  falls back to `JWT_SECRET`. Rotating it breaks every link already in an inbox.
 - `MARKETING_DRIVE_FOLDER_ID` - (Optional) Drive folder the one-time mailing-list
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
