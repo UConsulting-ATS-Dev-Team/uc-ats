@@ -341,6 +341,16 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   had read the guest a moment earlier, taking the reconciled rows with it. Both now take
   `pg_advisory_xact_lock` on the guest id first (`lockGuest` in `services/luma/ingestGuests.js`),
   keyed per guest so guests never wait on each other.
+- **Member attendance needs a second lock, per member.** The guest lock does not cover it:
+  member attendance is not derived from one guest but from "is any guest of this member's
+  checked in?" across the event, so two *different* guests of one member settle the same row
+  while holding two different locks — and relinking both away at once leaves each
+  transaction seeing the other's old assignment, so the member stays marked present with
+  nobody checked in. `reconcileRows` therefore locks every member a guest is arriving at or
+  leaving (`lockMemberAttendance`), **in sorted order** so that opposite relinks queue
+  instead of deadlocking, and always after the guest lock, so the two lock classes cannot
+  cycle. The candidate tables need none of this: they carry `lumaGuestId` and are settled
+  per guest.
 - **Relinking re-settles the member the guest is leaving.** `member_event_attendance` keys
   on (event, member) and carries no `lumaGuestId`, so it is worked out from all of an
   event's guests rather than per guest — which means settling the *new* member cannot clear
