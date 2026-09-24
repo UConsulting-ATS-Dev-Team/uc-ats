@@ -25,10 +25,10 @@ function prop(invite, name) {
 }
 
 describe('eventInviteFor', () => {
-  it('builds a REQUEST for the event time and place', () => {
+  it('publishes the event time and place', () => {
     const invite = eventInviteFor({ event, ...recipient });
 
-    expect(invite.contentType).toContain('method=REQUEST');
+    expect(invite.contentType).toContain('method=PUBLISH');
     expect(invite.content).toContain('DTSTART:20261001T010000Z');
     expect(invite.content).toContain('DTEND:20261001T020000Z');
     expect(prop(invite, 'SUMMARY')).toBe('SUMMARY:Fall Info Session');
@@ -54,15 +54,8 @@ describe('eventInviteFor', () => {
     expect(prop(lower, 'UID')).toBe(prop(upper, 'UID'));
   });
 
-  it('invites only the one recipient', () => {
-    const attendees = eventInviteFor({ event, ...recipient })
-      .content.replace(/\r\n /g, '')
-      .split('\r\n')
-      .filter((l) => l.startsWith('ATTENDEE'));
-
-    expect(attendees).toHaveLength(1);
-    expect(attendees[0]).toContain('mailto:candidate@ucla.edu');
-    expect(attendees[0]).toContain('CN=Ada Lovelace');
+  it('names no attendee, so there is nothing to RSVP to', () => {
+    expect(prop(eventInviteFor({ event, ...recipient }), 'ATTENDEE')).toBeNull();
   });
 
   it('works for a member recipient, ready for the integrated member RSVP form', () => {
@@ -70,9 +63,8 @@ describe('eventInviteFor', () => {
     // member's address and needs no change here, so pin that now.
     const invite = eventInviteFor({ event, recipientEmail: 'member@ucla.edu', recipientName: 'Grace Hopper' });
 
-    expect(invite.contentType).toContain('method=REQUEST');
+    expect(invite.contentType).toContain('method=PUBLISH');
     expect(invite.content).toContain('DTSTART:20261001T010000Z');
-    expect(invite.content).toContain('CN=Grace Hopper');
   });
 
   it('keeps a member and a candidate on one event on separate entries', () => {
@@ -118,20 +110,12 @@ describe('eventInviteFor', () => {
     }
   });
 
-  it('names the reply-to inbox as organizer, so RSVP replies do not bounce', () => {
-    // Calendars send Yes/No replies to ORGANIZER. no-reply@uconsultingats.com has
-    // no mail server, so naming it bounced every RSVP back to the person.
-    const saved = process.env.EMAIL_REPLY_TO;
-    process.env.EMAIL_REPLY_TO = 'uconsultingla@gmail.com';
-    try {
-      const organizer = eventInviteFor({ event, ...recipient })
-        .content.replace(/\r\n /g, '')
-        .split('\r\n')
-        .find((l) => l.startsWith('ORGANIZER'));
-      expect(organizer).toBe('ORGANIZER;CN=UConsulting:mailto:uconsultingla@gmail.com');
-    } finally {
-      if (saved === undefined) delete process.env.EMAIL_REPLY_TO;
-      else process.env.EMAIL_REPLY_TO = saved;
-    }
+  it('asks for no RSVP, so no reply goes to the no-reply organizer', () => {
+    // Calendars send Yes/No replies to ORGANIZER, and no-reply@uconsultingats.com
+    // has no mail server, so every RSVP used to bounce back to the person.
+    const invite = eventInviteFor({ event, ...recipient });
+    expect(invite.contentType).toContain('method=PUBLISH');
+    expect(prop(invite, 'ORGANIZER')).toBe('ORGANIZER;CN=UConsulting:mailto:no-reply@uconsultingats.com');
+    expect(prop(invite, 'ATTENDEE')).toBeNull();
   });
 });

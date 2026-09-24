@@ -9,23 +9,14 @@ import {
 } from './calendarInvite.js';
 
 describe('inviteOrganizerEmail', () => {
-  const saved = { from: process.env.EMAIL_FROM, replyTo: process.env.EMAIL_REPLY_TO };
+  const saved = process.env.EMAIL_FROM;
   afterEach(() => {
-    process.env.EMAIL_FROM = saved.from;
-    process.env.EMAIL_REPLY_TO = saved.replyTo;
-    if (saved.from === undefined) delete process.env.EMAIL_FROM;
-    if (saved.replyTo === undefined) delete process.env.EMAIL_REPLY_TO;
+    if (saved === undefined) delete process.env.EMAIL_FROM;
+    else process.env.EMAIL_FROM = saved;
   });
 
-  it('names the reply-to inbox, so RSVP replies do not bounce off the no-reply domain', () => {
-    process.env.EMAIL_FROM = 'no-reply@uconsultingats.com';
-    process.env.EMAIL_REPLY_TO = "'uconsultingla@gmail.com'";
-    expect(inviteOrganizerEmail()).toBe('uconsultingla@gmail.com');
-  });
-
-  it('falls back to the sending address when no reply-to is set', () => {
-    process.env.EMAIL_FROM = 'no-reply@uconsultingats.com';
-    delete process.env.EMAIL_REPLY_TO;
+  it('is the sending address, quotes stripped as .env writes them', () => {
+    process.env.EMAIL_FROM = "'no-reply@uconsultingats.com'";
     expect(inviteOrganizerEmail()).toBe('no-reply@uconsultingats.com');
   });
 });
@@ -52,12 +43,12 @@ function propertyOf(ics, name) {
 }
 
 describe('buildInvite', () => {
-  it('renders a REQUEST with UTC timestamps and CRLF line endings', () => {
+  it('renders a booking as PUBLISH with UTC timestamps and CRLF line endings', () => {
     const { content, contentType, filename } = buildInvite(base);
 
     expect(filename).toBe('invite.ics');
-    expect(contentType).toBe('text/calendar; charset=utf-8; method=REQUEST');
-    expect(content).toContain('METHOD:REQUEST');
+    expect(contentType).toBe('text/calendar; charset=utf-8; method=PUBLISH');
+    expect(content).toContain('METHOD:PUBLISH');
     expect(content).toContain('DTSTART:20261006T160000Z');
     expect(content).toContain('DTEND:20261006T163000Z');
     expect(content).toContain('STATUS:CONFIRMED');
@@ -81,7 +72,17 @@ describe('buildInvite', () => {
     expect(moved.content).toContain('DTSTART:20261006T180000Z');
   });
 
-  it('marks a CANCEL as cancelled and stops asking for an RSVP', () => {
+  it('publishes a booking with nobody to reply as, so no RSVP is ever sent', () => {
+    // A REQUEST names the recipient as an attendee and Gmail offers Yes / No, each of
+    // which mails the organizer. The no-reply domain bounced those back to the
+    // person; a real inbox would fill with "Accepted:". PUBLISH has no attendee.
+    const { content } = buildInvite(base);
+    expect(propertyOf(content, 'ATTENDEE')).toBeNull();
+    expect(content).not.toContain('RSVP=TRUE');
+    expect(content).not.toContain('METHOD:REQUEST');
+  });
+
+  it('marks a CANCEL as cancelled and asks for no reply', () => {
     const { content, contentType } = buildInvite({ ...base, method: 'CANCEL', sequence: 300 });
 
     expect(contentType).toBe('text/calendar; charset=utf-8; method=CANCEL');
