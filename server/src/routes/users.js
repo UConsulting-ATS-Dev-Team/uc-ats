@@ -1,52 +1,40 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import bcrypt from 'bcryptjs';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 import { normalizePhoneNumber } from '../utils/phone.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { storeProfileImage, removeProfileImage } from '../services/profileImageStorage.js';
 
 const router = express.Router();
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, '../../uploads/profile-images');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'profile-' + uniqueSuffix + path.extname(file.originalname));
+// Held in memory, not written to disk: storeProfileImage decodes and re-encodes
+// it before anything is stored. The file filter is only a first pass; decoding
+// is the real format check.
+const PROFILE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: PROFILE_IMAGE_MAX_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype?.startsWith('image/')) return cb(null, true);
+    cb(Object.assign(new Error('Only image files are allowed.'), { code: 'NOT_AN_IMAGE' }));
   }
 });
 
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  },
-  fileFilter: function (req, file, cb) {
-    const allowedTypes = /jpeg|jpg|png|gif/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed!'));
+// multer reports a rejected file by calling next(err), which skips the route's
+// own try/catch and ends in Express's default HTML 500. Answer 400 with a
+// message the profile page can show instead.
+const profileImageUpload = (req, res, next) => {
+  upload.single('profileImage')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File size must be less than 10MB.' });
     }
-  }
-});
+    return res.status(400).json({ error: err.message || 'Upload failed.' });
+  });
+};
 
 // Get all users (admin only)
 router.get('/', requireAuth, async (req, res) => {
@@ -259,10 +247,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
 });
 
 // Upload profile image
-router.post('/:id/profile-image', requireAuth, upload.single('profileImage'), async (req, res) => {
+router.post('/:id/profile-image', requireAuth, profileImageUpload, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Check if user is admin or uploading their own image
     if (req.user.role !== 'ADMIN' && req.user.id !== id) {
       return res.status(403).json({ error: 'Access denied.' });
@@ -272,14 +260,13 @@ router.post('/:id/profile-image', requireAuth, upload.single('profileImage'), as
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    console.log('File uploaded:', req.file);
-    console.log('File path:', req.file.path);
+    const existing = await prisma.user.findUnique({ where: { id }, select: { profileImage: true } });
+    if (!existing) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    // Generate file URL
-    const fileUrl = `/api/uploads/profile-images/${req.file.filename}`;
-    console.log('Generated file URL:', fileUrl);
+    const fileUrl = await storeProfileImage(id, req.file.buffer);
 
-    // Update user's profile image
     const updatedUser = await prisma.user.update({
       where: { id },
       data: { profileImage: fileUrl },
@@ -291,14 +278,23 @@ router.post('/:id/profile-image', requireAuth, upload.single('profileImage'), as
         role: true
       }
     });
+    invalidateUserCache(id);
 
-    console.log('Updated user:', updatedUser);
+    if (existing.profileImage && existing.profileImage !== fileUrl) {
+      await removeProfileImage(existing.profileImage);
+    }
 
     res.json({
       message: 'Profile image uploaded successfully',
       user: updatedUser
     });
   } catch (error) {
+    if (error.code === 'IMAGE_UNREADABLE') {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    if (error.code === 'STORAGE_NOT_CONFIGURED') {
+      return res.status(503).json({ error: error.message, code: error.code });
+    }
     console.error('Error uploading profile image:', error);
     res.status(500).json({ error: 'Failed to upload profile image' });
   }
