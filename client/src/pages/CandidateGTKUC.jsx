@@ -1,128 +1,76 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import apiClient from '../utils/api';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
-import { GtkucSlotCard, GtkucSlotGrid } from '../components/GtkucSlotGallery';
+import {
+  GtkucBookedMeetingCard,
+  GtkucSlotCard,
+  GtkucSlotGrid,
+  formatSlotDateTime,
+} from '../components/GtkucSlotGallery';
+import {
+  MODIFY_CUTOFF_HOURS,
+  canModify,
+  currentCycleBooking,
+  errorText,
+} from '../utils/schedulingWindows';
 import {
   Box,
   Container,
   Typography,
   Paper,
   Button,
-  Card,
-  CardContent,
-  CardActions,
-  Stack,
-  Chip,
   Alert,
   CircularProgress,
-  Avatar,
-  Divider,
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
-  LocationOn as LocationIcon,
-  Person as PersonIcon,
   CheckCircle as CheckCircleIcon,
-  LockClock as LockClockIcon,
-  LinkedIn as LinkedInIcon,
 } from '@mui/icons-material';
 
-// The cutoff is the server's rule (server/src/utils/schedulingWindows.js), and it
-// arrives on each signup as canModify plus modifyCutoffHours. This page used to
-// keep its own copy of the number, which is fine right up until one of them
-// changes. Fall back only so the sentence still reads if an older payload lands.
-const DEFAULT_MODIFY_CUTOFF_HOURS = 12;
-
-const formatDateTime = (dateTime) => {
-  const date = new Date(dateTime);
-  return date.toLocaleString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'America/Los_Angeles',
-  });
-};
-
-// Curated background for the hosting member. Industries are taxonomy tags, so
-// the only thing here that can name an employer is the member's own LinkedIn
-// link, which they published themselves.
-const MemberProfile = ({ profile, compact = false }) => {
-  if (!profile) return null;
-  return (
-    <Box sx={{ mt: compact ? 1.5 : 2 }}>
-      {!compact && <Divider sx={{ mb: 2 }} />}
-      {profile.industries?.length > 0 && (
-        <Box sx={{ mb: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-            Industry experience
-          </Typography>
-          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
-            {profile.industries.map((industry) => (
-              <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
-            ))}
-          </Stack>
-        </Box>
-      )}
-      {profile.interests?.length > 0 && (
-        <Box sx={{ mb: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-            Interests
-          </Typography>
-          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
-            {profile.interests.map((interest) => (
-              <Chip key={interest} label={interest} size="small" variant="outlined" />
-            ))}
-          </Stack>
-        </Box>
-      )}
-      {profile.linkedinUrl && (
-        <Button
-          size="small"
-          startIcon={<LinkedInIcon />}
-          href={profile.linkedinUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          sx={{ mt: 0.5, pl: 0 }}
-        >
-          View LinkedIn
-        </Button>
-      )}
-    </Box>
-  );
-};
+// /my-meeting-signups does not always carry the slot id, so match the slot the
+// booking sits in by id when it is there, and by host, time and place otherwise.
+const isBookedSlot = (slot, signup) =>
+  signup.slotId
+    ? slot.id === signup.slotId
+    : new Date(slot.startTime).getTime() === new Date(signup.startTime).getTime() &&
+      slot.location === signup.location &&
+      slot.memberName === signup.memberName;
 
 export default function CandidateGTKUC() {
   const { user } = useAuth();
-  const [mySignup, setMySignup] = useState(null);
+  const [signups, setSignups] = useState([]);
   const [slots, setSlots] = useState([]);
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [rebooking, setRebooking] = useState(false);
+  // One booking per cycle: with one, the gallery only comes back to pick a new time.
+  const [changingTime, setChangingTime] = useState(false);
 
+  // The mount load and the reload after an action can overlap. Only the newest
+  // may write, so a slow earlier answer cannot bring back a booking just moved.
+  const loadRequest = useRef(0);
   const load = async () => {
+    const requestId = ++loadRequest.current;
     try {
       setLoading(true);
-      setError('');
-      const [signups, cycle, allSlots] = await Promise.all([
+      const [mine, cycle, allSlots] = await Promise.all([
         apiClient.get('/my-meeting-signups'),
         fetchActiveCycle(apiClient).catch(() => null),
         apiClient.get('/meeting-slots'),
       ]);
-      setMySignup(Array.isArray(signups) && signups.length > 0 ? signups[0] : null);
+      if (requestId !== loadRequest.current) return;
+      setSignups(Array.isArray(mine) ? mine : []);
       setActiveCycle(cycle);
       setSlots(allSlots || []);
     } catch (e) {
-      setError(e.message || 'Failed to load your Get to Know UC details');
+      if (requestId !== loadRequest.current) return;
+      setError(errorText(e, 'Failed to load your Get to Know UC details'));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequest.current) setLoading(false);
     }
   };
 
@@ -131,25 +79,59 @@ export default function CandidateGTKUC() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.email]);
 
-  // Available slots to book: within the active cycle, not in the past, with room left.
-  const getAvailableSlots = () => {
-    const now = new Date();
-    return slotsInCycleDates(slots, activeCycle).filter(
-      (slot) => new Date(slot.startTime) >= now && slot.remaining > 0
-    );
+  const mySignup = currentCycleBooking(signups, activeCycle, (s) => s.startTime);
+  const locked = mySignup ? (mySignup.canModify ?? canModify(mySignup.startTime)) === false : false;
+  const cutoffHours = mySignup?.modifyCutoffHours ?? MODIFY_CUTOFF_HOURS;
+  const picking = Boolean(mySignup) && changingTime;
+
+  // Bookable slots: within the active cycle, not in the past, with room left,
+  // and not the one the candidate already holds.
+  const now = new Date();
+  const availableSlots = slotsInCycleDates(slots, activeCycle).filter(
+    (slot) =>
+      new Date(slot.startTime) >= now &&
+      slot.remaining > 0 &&
+      !(mySignup && isBookedSlot(slot, mySignup))
+  );
+
+  const clearMessages = () => {
+    setError('');
+    setSuccess('');
   };
 
   const handleBook = async (slotId) => {
     try {
       setActionLoading(true);
-      setError('');
-      setSuccess('');
+      clearMessages();
       const response = await apiClient.post('/my-meeting-signups', { slotId });
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
-      setRebooking(false);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to sign up for this meeting slot');
+      if (e.status === 409 && e.code === 'ALREADY_BOOKED') {
+        // They already hold this cycle's meeting; show it.
+        setChangingTime(false);
+        await load();
+      }
+      setError(errorText(e, 'Failed to sign up for this meeting slot'));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Moves the booking in one step. If the new slot is gone the server keeps the
+  // current one, so nothing is lost on failure.
+  const handleMove = async (slotId) => {
+    if (!mySignup) return;
+    try {
+      setActionLoading(true);
+      clearMessages();
+      const response = await apiClient.put(`/meeting-signups/${mySignup.id}`, { slotId });
+      setChangingTime(false);
+      setSuccess(response?.message || 'Your meeting time has been changed.');
+      await load();
+    } catch (e) {
+      setError(errorText(e, 'Failed to change your meeting time'));
+      if (e.status === 409) await load();
     } finally {
       setActionLoading(false);
     }
@@ -157,108 +139,54 @@ export default function CandidateGTKUC() {
 
   const handleCancel = async () => {
     if (!mySignup) return;
-    const confirmed = window.confirm('Are you sure you want to cancel your Get to Know UC meeting?');
+    const confirmed = window.confirm('Cancel your Get to Know UC meeting? Your spot will go to someone else.');
     if (!confirmed) return;
     try {
       setActionLoading(true);
-      setError('');
-      setSuccess('');
+      clearMessages();
       await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
-      setSuccess('Your meeting has been cancelled.');
+      setChangingTime(false);
+      setSuccess('Your meeting has been cancelled. You can book a new time below.');
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to cancel your meeting');
+      setError(errorText(e, 'Failed to cancel your meeting'));
     } finally {
       setActionLoading(false);
     }
   };
-
-  const handleRebook = async () => {
-    if (!mySignup) return;
-    const confirmed = window.confirm(
-      'Rebooking will release your current meeting slot so you can choose a new one. Continue?'
-    );
-    if (!confirmed) return;
-    try {
-      setActionLoading(true);
-      setError('');
-      setSuccess('');
-      await apiClient.delete(`/my-meeting-signups/${mySignup.id}`);
-      setRebooking(true);
-      await load();
-    } catch (e) {
-      setError(e.message || 'Failed to start rebooking');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const availableSlots = getAvailableSlots();
-
-  const renderBookedCard = () => (
-    <Card variant="outlined" sx={{ borderColor: 'primary.main', borderWidth: 2 }}>
-      <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-        <Chip label="Upcoming Meeting" color="primary" size="small" sx={{ mb: 2 }} />
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
-          {mySignup.memberProfile?.photo ? (
-            <Avatar src={mySignup.memberProfile.photo} sx={{ width: 48, height: 48 }} />
-          ) : (
-            <PersonIcon sx={{ color: 'primary.main' }} />
-          )}
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
-            {mySignup.memberName}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-          <ScheduleIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-          <Typography variant="body1" color="text.secondary">
-            {formatDateTime(mySignup.startTime)}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <LocationIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-          <Typography variant="body1" color="text.secondary">
-            {mySignup.location}
-          </Typography>
-        </Box>
-
-        <MemberProfile profile={mySignup.memberProfile} />
-
-        {!mySignup.canModify && (
-          <Alert
-            severity="info"
-            icon={<LockClockIcon fontSize="inherit" />}
-            sx={{ mt: 2 }}
-          >
-            Changes are locked within {mySignup.modifyCutoffHours ?? DEFAULT_MODIFY_CUTOFF_HOURS} hours of your meeting.
-          </Alert>
-        )}
-      </CardContent>
-      <CardActions sx={{ px: { xs: 2, md: 3 }, pb: 2, gap: 1, flexWrap: 'wrap' }}>
-        <Button
-          variant="outlined"
-          onClick={handleRebook}
-          disabled={!mySignup.canModify || actionLoading}
-        >
-          Rebook
-        </Button>
-        <Button
-          variant="outlined"
-          color="error"
-          onClick={handleCancel}
-          disabled={!mySignup.canModify || actionLoading}
-        >
-          Cancel
-        </Button>
-      </CardActions>
-    </Card>
-  );
 
   const renderSlotPicker = () => (
     <Paper sx={{ p: { xs: 2, md: 3 } }}>
-      <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, color: 'primary.dark' }}>
-        Available Meeting Slots
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          alignItems: { xs: 'stretch', sm: 'center' },
+          justifyContent: 'space-between',
+          gap: 1.5,
+          mb: 2,
+        }}
+      >
+        <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.dark' }}>
+          {picking ? 'Pick a new time' : 'Available Meeting Slots'}
+        </Typography>
+        {picking && (
+          <Button
+            variant="outlined"
+            onClick={() => setChangingTime(false)}
+            disabled={actionLoading}
+            sx={{ minHeight: { xs: 44, md: 36 } }}
+          >
+            Keep my current time
+          </Button>
+        )}
+      </Box>
+      {picking && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Your current meeting is {formatSlotDateTime(mySignup.startTime)} with {mySignup.memberName}. It stays
+          booked until you pick a new time.
+        </Alert>
+      )}
       {availableSlots.length === 0 ? (
         <Box sx={{ textAlign: 'center', p: 4 }}>
           <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
@@ -279,10 +207,11 @@ export default function CandidateGTKUC() {
                 <Button
                   variant="contained"
                   startIcon={<CheckCircleIcon />}
-                  onClick={() => handleBook(slot.id)}
+                  onClick={() => (picking ? handleMove(slot.id) : handleBook(slot.id))}
                   disabled={actionLoading}
+                  sx={{ minHeight: { xs: 44, md: 36 } }}
                 >
-                  Sign Up
+                  {picking ? 'Move to this time' : 'Sign Up'}
                 </Button>
               }
             />
@@ -301,6 +230,10 @@ export default function CandidateGTKUC() {
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
           Meet with a UConsulting member to learn more about the club and get your questions answered.
         </Typography>
+        <Alert severity="info" sx={{ mb: 3 }}>
+          <strong>Important:</strong> You can hold one meeting slot per cycle. Change or cancel it yourself here
+          (or on the /meet page) up to {MODIFY_CUTOFF_HOURS} hours before it starts.
+        </Alert>
 
         {error && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
@@ -313,12 +246,28 @@ export default function CandidateGTKUC() {
           </Alert>
         )}
 
-        {loading ? (
+        {/* Spinner only on the first load; reloads after an action keep the view in place. */}
+        {loading && !mySignup && slots.length === 0 ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}>
             <CircularProgress />
           </Box>
-        ) : mySignup && !rebooking ? (
-          <Box sx={{ maxWidth: 852 }}>{renderBookedCard()}</Box>
+        ) : mySignup && !changingTime ? (
+          <Box sx={{ maxWidth: 852 }}>
+            <GtkucBookedMeetingCard
+              memberName={mySignup.memberName}
+              profile={mySignup.memberProfile}
+              startTime={mySignup.startTime}
+              location={mySignup.location}
+              locked={locked}
+              cutoffHours={cutoffHours}
+              busy={actionLoading}
+              onChangeTime={() => {
+                clearMessages();
+                setChangingTime(true);
+              }}
+              onCancel={handleCancel}
+            />
+          </Box>
         ) : (
           renderSlotPicker()
         )}
