@@ -459,26 +459,18 @@ router.delete('/audiences/:id', requireAuth, requireAdmin, audienceRoute(
   (req) => deleteSavedAudience(req.params.id)
 ));
 
-// The choices the filter builder offers that the page does not already load:
-// past email sends to pick from, and the mailing-list imports.
+// The choice the filter builder offers that the page does not already load:
+// past email sends to pick from.
 router.get('/audience-options', requireAuth, requireAdmin, audienceRoute(
   'GET /api/master-communications/audience-options',
   async () => {
-    const [campaigns, imports] = await Promise.all([
-      prisma.messageLog.findMany({
-        where: { channel: 'email' },
-        orderBy: { sentAt: 'desc' },
-        take: 100,
-        select: { id: true, subject: true, sentAt: true, recipientCount: true },
-      }),
-      prisma.mailingListContact.groupBy({ by: ['sourceFile'], _count: { _all: true } }),
-    ]);
-    return {
-      campaigns,
-      mailingListImports: imports
-        .filter((i) => i.sourceFile)
-        .map((i) => ({ sourceFile: i.sourceFile, count: i._count._all })),
-    };
+    const campaigns = await prisma.messageLog.findMany({
+      where: { channel: 'email' },
+      orderBy: { sentAt: 'desc' },
+      take: 100,
+      select: { id: true, subject: true, sentAt: true, recipientCount: true },
+    });
+    return { campaigns };
   }
 ));
 

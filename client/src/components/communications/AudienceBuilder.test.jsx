@@ -20,7 +20,7 @@ const SAVED = {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(apiClient, 'get').mockImplementation(async (url) =>
-    url.includes('audience-options') ? { campaigns: [], mailingListImports: [] } : { audiences: [SAVED] }
+    url.includes('audience-options') ? { campaigns: [] } : { audiences: [SAVED] }
   );
 });
 

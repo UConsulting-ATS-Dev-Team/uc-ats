@@ -94,8 +94,6 @@ function FieldEditor({ field, params, onParam, options }) {
       return multi(options.events, labelOf(options.events));
     case 'campaigns':
       return multi(options.campaigns, labelOf(options.campaigns));
-    case 'imports':
-      return multi(options.imports, labelOf(options.imports));
     case 'multi':
       return multi(field.options, labelOf(field.options));
     case 'select':
@@ -366,7 +364,7 @@ function SaveDialog({ open, onClose, onSave }) {
  */
 export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycles = [], events = [], onError, onSuccess }) {
   const [saved, setSaved] = useState([]);
-  const [remote, setRemote] = useState({ campaigns: [], mailingListImports: [] });
+  const [campaigns, setCampaigns] = useState([]);
   const [saveOpen, setSaveOpen] = useState(false);
 
   const loadSaved = async () => {
@@ -382,7 +380,7 @@ export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycle
     loadSaved();
     apiClient
       .get('/master-communications/audience-options')
-      .then((data) => setRemote({ campaigns: data.campaigns || [], mailingListImports: data.mailingListImports || [] }))
+      .then((data) => setCampaigns(data.campaigns || []))
       .catch(() => {});
   }, []);
 
@@ -396,13 +394,12 @@ export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycle
           value: e.id,
           label: `${e.eventName}${cycleName[e.cycleId] ? ` · ${cycleName[e.cycleId]}` : ''}`,
         })),
-      campaigns: remote.campaigns.map((c) => ({
+      campaigns: campaigns.map((c) => ({
         value: c.id,
         label: `${c.subject || '(no subject)'} · ${new Date(c.sentAt).toLocaleDateString()} · ${c.recipientCount}`,
       })),
-      imports: remote.mailingListImports.map((i) => ({ value: i.sourceFile, label: `${i.sourceFile} (${i.count})` })),
     };
-  }, [cycles, events, remote]);
+  }, [cycles, events, campaigns]);
 
   const activeCycleIds = useMemo(() => cycles.filter((c) => c.isActive).map((c) => c.id), [cycles]);
   const presetList = useMemo(() => presets({ activeCycleIds }), [activeCycleIds]);

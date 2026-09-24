@@ -16,11 +16,20 @@
 // the universe - deactivation is how this app records that someone has left,
 // and clients are companies, not students.
 //
+// Sealed records (Candidate.recordsLockedAt, see utils/lockedRecords.js) are
+// read as identity only, always - an executive unlock does not change it. A
+// sealed application still says who applied, when and in which cycle, with
+// what status; its decisions, rounds, answers and onboarding are never read.
+// Otherwise "final-round decision is yes" would list exactly the people the
+// seal exists to hide. Sends and schedules have no unlock of their own, and an
+// audience that changed with who happened to preview it would be worse.
+//
 // Rules answer with sets of person keys; audienceFilters.js combines them.
 
 import prisma from '../../prismaClient.js';
 import { normalizeEmail } from '../../utils/mailingListImport.js';
 import { getRound } from '../../utils/roundProgression.js';
+import { redactApplication } from '../../utils/lockedRecords.js';
 import { evaluateAudienceTree, normalizeAudienceTree } from './audienceFilters.js';
 
 const STAFF_ROLES = ['MEMBER', 'ADMIN'];
@@ -72,7 +81,7 @@ function makeAliases() {
  * answers a whole tree.
  */
 export async function loadAudienceContext(client = prisma) {
-  const [users, applications, candidates, contacts, signups, lumaGuests, externalResumes, memberResumes, cycles] =
+  const [users, loadedApplications, candidates, contacts, signups, lumaGuests, externalResumes, memberResumes, cycles] =
     await Promise.all([
       client.user.findMany({
         select: {
@@ -83,7 +92,7 @@ export async function loadAudienceContext(client = prisma) {
       client.application.findMany({
         select: {
           id: true, email: true, firstName: true, lastName: true, phoneNumber: true, submittedAt: true,
-          cycleId: true, candidateId: true, status: true, graduationYear: true, major1: true, major2: true,
+          cycleId: true, candidateId: true, studentId: true, status: true, graduationYear: true, major1: true, major2: true,
           isTransferStudent: true, isFirstGeneration: true, talentPoolOptIn: true, currentRound: true,
           approved: true, resumeDecision: true, coffeeChatDecision: true, firstRoundDecision: true,
           finalRoundDecision: true,
@@ -91,7 +100,7 @@ export async function loadAudienceContext(client = prisma) {
       }),
       client.candidate.findMany({
         select: {
-          id: true, email: true, firstName: true, lastName: true,
+          id: true, email: true, studentId: true, firstName: true, lastName: true, recordsLockedAt: true,
           onboarding: {
             select: {
               graduationYear: true, major1: true, major2: true, isTransferStudent: true,
@@ -101,7 +110,7 @@ export async function loadAudienceContext(client = prisma) {
         },
       }),
       client.mailingListContact.findMany({
-        select: { id: true, email: true, firstName: true, lastName: true, sourceFile: true },
+        select: { id: true, email: true, firstName: true, lastName: true },
       }),
       client.meetingSignup.findMany({ select: { email: true, fullName: true, attended: true } }),
       client.lumaGuest.findMany({
@@ -117,6 +126,20 @@ export async function loadAudienceContext(client = prisma) {
       }),
       client.recruitingCycle.findMany({ select: { id: true, isActive: true } }),
     ]);
+
+  // 0. Cut sealed records down to identity before anything reads them.
+  const sealed = candidates.filter((c) => c.recordsLockedAt);
+  const sealedIds = new Set(sealed.map((c) => c.id));
+  const sealedStudentIds = new Set(sealed.map((c) => c.studentId).filter(Boolean));
+  const sealedEmails = new Set(sealed.map((c) => normalizeEmail(c.email)));
+  // Same rule as sealedRowPredicate: the candidate id when there is one, else
+  // the two fields Candidate is unique on.
+  const isSealed = (a) =>
+    a.candidateId
+      ? sealedIds.has(a.candidateId)
+      : sealedStudentIds.has(a.studentId) || sealedEmails.has(normalizeEmail(a.email));
+  const applications = loadedApplications.map((a) => (isSealed(a) ? redactApplication(a) : a));
+  for (const c of candidates) if (c.recordsLockedAt) c.onboarding = null;
 
   // 1. Merge a candidate's addresses into one group.
   const aliases = makeAliases();
@@ -234,6 +257,7 @@ export async function loadAudienceContext(client = prisma) {
     keyOf,
     userKeys,
     candidateKeys,
+    sealedCandidateIds: sealedIds,
     cycles,
     activeCycleIds: new Set(cycles.filter((c) => c.isActive).map((c) => c.id)),
   };
@@ -296,7 +320,10 @@ const within = (date, from, to) => {
 
 const inCycles = (cycleIds) => (a) => cycleIds.length === 0 || cycleIds.includes(a.cycleId);
 
+// A sealed application (redacted to identity, marked `locked`) has reached no
+// round and has no decision, as far as an audience is concerned.
 const roundNumber = (a) => {
+  if (a.locked) return 0;
   if (a.status === 'ACCEPTED') return 5;
   const n = Number(a.currentRound);
   return Number.isInteger(n) && n > 0 ? n : 1;
@@ -305,6 +332,7 @@ const roundNumber = (a) => {
 // Mirrors decisionFor in decisionProcessing.js: the round's own column, and for
 // resume review only, the older `approved` flag.
 const decisionOf = (a, round) => {
+  if (a.locked) return null;
   const recorded = a[getRound(round).decisionField];
   if (recorded) return String(recorded).toLowerCase();
   if (String(round) === '1') {
@@ -325,8 +353,7 @@ const addKey = (set, key) => {
 };
 
 const MATCHERS = {
-  mailingList: (ctx, { sourceFiles }) =>
-    wherePeople(ctx, (p) => p.contact && (sourceFiles.length === 0 || sourceFiles.includes(p.contact.sourceFile))),
+  mailingList: (ctx) => wherePeople(ctx, (p) => Boolean(p.contact)),
 
   account: (ctx, { roles, createdFrom, createdTo }) =>
     wherePeople(ctx, (p) =>
@@ -374,7 +401,9 @@ const MATCHERS = {
       select: { candidateId: true },
     });
     const out = new Set();
-    for (const r of referrals) addKey(out, ctx.candidateKeys.get(r.candidateId));
+    for (const r of referrals) {
+      if (!ctx.sealedCandidateIds.has(r.candidateId)) addKey(out, ctx.candidateKeys.get(r.candidateId));
+    }
     return out;
   },
 

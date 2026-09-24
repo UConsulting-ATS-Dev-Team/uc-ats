@@ -97,6 +97,39 @@ describe('who is never reached', () => {
   });
 });
 
+// A sealed record (utils/lockedRecords.js) is identity only to an audience:
+// otherwise a decision filter would list exactly the people the seal hides.
+describe('sealed records', () => {
+  const sealedClient = () => fakeClient({
+    candidates: [
+      { id: 'sealed', email: 'exec@uc.org', studentId: '1', firstName: 'S', lastName: 'S', recordsLockedAt: new Date(), onboarding: { graduationYear: '2027' } },
+      { id: 'open', email: 'open@ucla.edu', studentId: '2', firstName: 'O', lastName: 'O', recordsLockedAt: null, onboarding: null },
+    ],
+    applications: [
+      app({ email: 'exec@uc.org', candidateId: 'sealed', finalRoundDecision: 'yes', currentRound: '4', graduationYear: '2027' }),
+      app({ email: 'open@ucla.edu', candidateId: 'open', finalRoundDecision: 'yes', currentRound: '4', graduationYear: '2027' }),
+      // No candidate link: sealed by email, like sealedRowPredicate does.
+      app({ email: 'EXEC@uc.org', cycleId: 'spring', finalRoundDecision: 'yes' }),
+    ],
+    referrals: [{ candidateId: 'sealed' }, { candidateId: 'open' }],
+  });
+
+  it('never matches on decisions, rounds, answers or referrals', async () => {
+    const client = sealedClient();
+    const run = (r) => resolveAudience(all(r), { client }).then(emails);
+    expect(await run(rule('decision', { round: '4', decisions: ['yes'] }))).toEqual(['open@ucla.edu']);
+    expect(await run(rule('decision', { round: '4', decisions: ['undecided'] }))).toEqual([]);
+    expect(await run(rule('reachedRound', { round: '1' }))).toEqual(['open@ucla.edu']);
+    expect(await run(rule('gradYear', { years: [2027] }))).toEqual(['open@ucla.edu']);
+    expect(await run(rule('referred'))).toEqual(['open@ucla.edu']);
+  });
+
+  it('still knows they applied', async () => {
+    const client = sealedClient();
+    expect(emails(await resolveAudience(all(rule('applied')), { client }))).toEqual(['exec@uc.org', 'open@ucla.edu']);
+  });
+});
+
 describe('rules', () => {
   it('finds accounts that never applied', async () => {
     const client = fakeClient({

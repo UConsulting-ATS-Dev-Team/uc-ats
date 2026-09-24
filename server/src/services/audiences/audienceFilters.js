@@ -89,10 +89,10 @@ const oneOf = (raw, label, name, allowed, fallback) => {
  */
 export const RULE_TYPES = {
   // Where they came from --------------------------------------------------
-  mailingList: {
-    label: 'On the mailing list',
-    params: (p, l) => ({ sourceFiles: stringList(p.sourceFiles, l, 'import') }),
-  },
+  // One list, imported once, so there is nothing to choose between. A contact
+  // row records only the file it first arrived in, which is why this does not
+  // offer "from import X": a later file's copy of the same address is skipped.
+  mailingList: { label: 'On the mailing list', params: () => ({}) },
   account: {
     label: 'Has an ATS account',
     params: (p, l) => ({

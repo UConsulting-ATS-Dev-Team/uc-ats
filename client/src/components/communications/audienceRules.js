@@ -28,7 +28,7 @@ const DECISION_OPTIONS = [
 
 /**
  * `fields` drive the generic editor in AudienceBuilder. Kinds:
- *   cycles | events | campaigns | imports   - multi-selects over loaded options
+ *   cycles | events | campaigns             - multi-selects over loaded options
  *   multi (options) | select (options)      - fixed choices
  *   triBool                                 - any / yes / no
  *   date | int | csv                        - typed inputs; csv is a comma list
@@ -37,7 +37,7 @@ export const RULES = {
   mailingList: {
     group: 'Where they came from',
     label: 'On the mailing list',
-    fields: [{ key: 'sourceFiles', kind: 'imports', label: 'From import (any if empty)' }],
+    fields: [],
   },
   account: {
     group: 'Where they came from',

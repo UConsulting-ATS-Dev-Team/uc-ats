@@ -271,6 +271,11 @@ The system follows a **recruiting cycle-based workflow**:
   candidates, mailing-list contacts, meeting signups and Luma guests. A candidate's
   addresses merge into one person, represented by their active account's address if
   any (so staff are recognised), else their latest application's.
+- Sealed records are identity only to an audience, even with an exec unlock: a sealed
+  application still counts as "applied" (cycle, status, date) but its decisions,
+  rounds, answers, onboarding and referrals are never read, or a decision filter would
+  list exactly who the seal hides. A new rule reading application content must respect
+  the `locked` marker `redactApplication` leaves.
 - NOT is taken against everyone known, so a tree with no positive rule is refused -
   it would reach everybody. Deactivated accounts and `CLIENT` accounts are never in
   the universe at all.
