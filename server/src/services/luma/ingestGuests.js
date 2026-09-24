@@ -400,6 +400,17 @@ export async function reconcileRows(tx, eventId, guest, person, previous) {
     record('attendance', await removeRow(tx.eventAttendance, lumaGuestId));
   }
 
+  // Every member this guest is arriving at or leaving, locked up front and in a
+  // fixed order. Up front because the reads below decide from them; in sorted
+  // order because a transaction moving a guest from A to B and one moving a
+  // guest from B to A would otherwise take the two locks in opposite orders and
+  // deadlock. The guest lock is already held, and no transaction ever waits on
+  // a guest lock while holding one of these, so the two classes cannot cycle.
+  const settling = [...new Set([person.userId, previous?.userId].filter(Boolean))].sort();
+  for (const memberId of settling) {
+    await lockMemberAttendance(tx, eventId, memberId);
+  }
+
   if (person.userId) {
     const target = { eventId, personField: 'memberId', personId: person.userId, lumaGuestId };
     record('rsvp', await reconcileRsvp(tx.memberEventRsvp, target));
@@ -445,6 +456,25 @@ export async function reconcileRows(tx, eventId, guest, person, previous) {
  */
 export async function lockGuest(tx, lumaGuestId) {
   const key = `luma_guest_${lumaGuestId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
+}
+
+/**
+ * Serialises one member's attendance for one event.
+ *
+ * lockGuest is not enough here. Member attendance is not derived from a single
+ * guest - it is the answer to "is any guest of this member's checked in?" - so
+ * two *different* guests of the same member settle the same row. Relinking both
+ * away at once, each holding only its own guest lock, lets each transaction
+ * still see the other's old assignment, conclude the member is present, and
+ * leave the row behind: nobody is checked in, but the member stays marked
+ * present, and no later sync revisits it.
+ *
+ * Callers take these in a fixed order (sorted by member id) and always after
+ * the guest lock, so two transactions touching the same pair cannot deadlock.
+ */
+export async function lockMemberAttendance(tx, eventId, memberId) {
+  const key = `luma_member_attendance_${eventId}_${memberId}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
 }
 

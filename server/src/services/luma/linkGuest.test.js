@@ -262,6 +262,26 @@ describe('relinking a checked-in guest from one member to another', () => {
       .toEqual([alice.id, bob.id].sort());
   });
 
+  // The guest lock does not cover this: member attendance is settled across all
+  // of an event's guests, so two *different* guests of the same member settle
+  // the same row and would each see the other's old assignment.
+  it('locks every member it is settling, in a fixed order', async () => {
+    db.raw.length = 0;
+
+    await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, userId: bob.id }, { db });
+
+    const memberLocks = db.raw
+      .map((statement) => statement.values[0])
+      .filter((key) => String(key).startsWith('luma_member_attendance_'));
+    // Both of them - the one being credited and the one being cleared - and in
+    // sorted order, so a transaction moving a guest the other way takes the same
+    // two locks in the same order and waits rather than deadlocking.
+    expect(memberLocks).toEqual([
+      `luma_member_attendance_${EVENT_ID}_${alice.id}`,
+      `luma_member_attendance_${EVENT_ID}_${bob.id}`
+    ].sort());
+  });
+
   it('takes the credit away entirely when the guest turns out to be a candidate', async () => {
     const candidate = await db.candidate.create({
       data: { studentId: '405000103', email: 'notamember@example.com', firstName: 'Not', lastName: 'Member' }
