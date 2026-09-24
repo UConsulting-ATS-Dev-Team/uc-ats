@@ -123,13 +123,20 @@ export async function suppressEmail({ email, reason, source, detail = null, mess
 /**
  * Opt back in. Keeps the row, so the history of the opt-out survives.
  *
- * Clears the g.ucla.edu / ucla.edu twin too: delivery treats the two as one
- * inbox, so an opt-out under the other spelling would otherwise keep blocking
- * mail after the page said it was lifted.
+ * The address itself is cleared whatever its reason, as it always was. Its
+ * g.ucla.edu / ucla.edu twin is cleared only when that row is also the
+ * person's own opt-out: delivery treats the two as one inbox, so that opt-out
+ * would otherwise keep blocking mail, but a bounce, complaint or admin block
+ * on the twin is not the person's to lift through a link.
  */
 export async function resubscribeEmail(email, client = prisma) {
+  const address = normalizeEmail(email);
+  const twins = emailVariants(address).filter((v) => v !== address);
   const { count } = await client.emailSuppression.updateMany({
-    where: { email: { in: emailVariants(email) }, resubscribedAt: null },
+    where: {
+      resubscribedAt: null,
+      OR: [{ email: address }, ...(twins.length ? [{ email: { in: twins }, reason: 'UNSUBSCRIBED' }] : [])],
+    },
     data: { resubscribedAt: new Date() },
   });
   return count > 0;

@@ -125,12 +125,21 @@ describe('the unsubscribe page and the other UCLA spelling', () => {
     });
   });
 
-  it('lifts the opt-out under both spellings', async () => {
+  it("lifts the person's own opt-out under the twin, never a bounce or admin block", async () => {
     prisma.emailSuppression.updateMany.mockResolvedValue({ count: 1 });
-    expect(await resubscribeEmail('joe@ucla.edu')).toBe(true);
+    expect(await resubscribeEmail('Joe@UCLA.edu')).toBe(true);
     expect(prisma.emailSuppression.updateMany.mock.calls[0][0].where).toEqual({
-      email: { in: ['joe@ucla.edu', 'joe@g.ucla.edu'] },
       resubscribedAt: null,
+      OR: [{ email: 'joe@ucla.edu' }, { email: { in: ['joe@g.ucla.edu'] }, reason: 'UNSUBSCRIBED' }],
+    });
+  });
+
+  it('clears only the address itself outside UCLA', async () => {
+    prisma.emailSuppression.updateMany.mockResolvedValue({ count: 0 });
+    await resubscribeEmail('joe@gmail.com');
+    expect(prisma.emailSuppression.updateMany.mock.calls[0][0].where).toEqual({
+      resubscribedAt: null,
+      OR: [{ email: 'joe@gmail.com' }],
     });
   });
 });

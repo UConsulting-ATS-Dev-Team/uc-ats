@@ -56,7 +56,9 @@ router.post('/resubscribe', async (req, res) => {
   if (!email) return;
   try {
     await resubscribeEmail(email);
-    res.json({ email, unsubscribed: false });
+    // Asked again rather than assumed: a bounce or admin block on the other
+    // UCLA spelling of this inbox survives a resubscribe and still holds mail.
+    res.json({ email, unsubscribed: await isSuppressed(email) });
   } catch (err) {
     console.error('[POST /api/unsubscribe/resubscribe]', err);
     res.status(500).json({ error: 'Could not resubscribe you. Please try again.' });
