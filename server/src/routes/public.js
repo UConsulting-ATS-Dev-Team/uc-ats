@@ -38,6 +38,7 @@ router.get('/active-cycle', async (req, res) => {
         name: cycle.name,
         startDate: cycle.startDate,
         endDate: cycle.endDate,
+        applicationDeadline: cycle.applicationDeadline,
       },
     });
   } catch (error) {
