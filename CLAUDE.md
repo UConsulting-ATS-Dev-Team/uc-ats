@@ -224,6 +224,8 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/integrations/luma` - The hourly Luma sync routine's three endpoints. No user
   session ever reaches these; the caller is a scheduled Claude agent holding
   `LUMA_SYNC_TOKEN` as a bearer token
+- `/api/admin/luma` - The admin side of that sync: the guests it could not settle, and
+  linking one to a candidate or member by hand
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -450,7 +452,38 @@ The system follows a **recruiting cycle-based workflow**:
   It never touches a `GOOGLE_FORM` row, and a person who answered both counts once.
 - A guest the ATS cannot resolve, one matched on a typed UID alone, and an `approval_status`
   it cannot read as going or not going are all **held and reported**, never guessed at.
-  Until the Phase 3 panel ships, the routine's hourly report is the only place they surface.
+  What counts as held is [server/src/services/luma/heldGuests.js](server/src/services/luma/heldGuests.js),
+  one definition read by both the panel and the per-event badge on the event list. A guest
+  can be held for more than one reason, so the counts exceed the number of guests.
+- Admins settle a held guest in Event Management → an event's Luma column → the guests
+  panel. Linking runs
+  [server/src/services/luma/linkGuest.js](server/src/services/luma/linkGuest.js), which
+  re-runs the same reconcile a sync would, so the RSVP and attendance follow immediately -
+  an event leaves the routine's list three days after it starts, so a later link would
+  otherwise never be applied. Unlinking is the undo, and the only one: a match that exists
+  is never re-decided by a sync.
+- An event's `lumaUrl` is what an admin pastes; `lumaEventId` is what the routine resolves
+  it to. **Changing `lumaUrl` clears both `lumaEventId` and `lumaLastSyncedAt`** - a stale
+  id makes the routine's next resolve fail with a conflict, and a stale timestamp reports a
+  never-read link as freshly synced. Guests already ingested are kept.
+- A Luma link satisfies `formStatus` on its own (it covers RSVP and the door), so
+  `resolveFormStatus` reads `lumaUrl OR (rsvpForm AND attendanceForm)`.
+- `eventCopy.js` deliberately does **not** copy `lumaUrl`: `lumaEventId` is unique, so two
+  ATS events on one Luma event would make the second one's sync fail.
+
+**Event sign-up confirmation emails:**
+- The Google Form event sync's own RSVP and attendance confirmations are behind an admin
+  switch ([server/src/services/eventEmailSettings.js](server/src/services/eventEmailSettings.js),
+  toggled on the Events page) and are **off**. Luma emails its own confirmation and calendar
+  invite the moment somebody registers, so ours would be a second message about the same
+  sign-up. It is a switch rather than deleted code because the Forms path survives until
+  Phase 4; turn it on if events ever move back.
+- **Off is the default in all three places** - the column, the service fallback and the
+  migration. A missing settings row and an unapplied migration both read as off, because an
+  unexpected duplicate to everyone who signs up is worse than an expected missing one.
+- The setting is read once per sync run, not per response, so a run agrees with itself.
+- The **member in-app RSVP confirmation is not covered by this switch** and still sends: a
+  member who RSVPs in the app never touched Luma, so nothing else has written to them.
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming

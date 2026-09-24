@@ -1,9 +1,17 @@
 # Luma integration plan
 
-Status (2026-09-22): **Phase 1 is merged** (PR #187) and its migration
-`20260922120000_luma_integration` is applied. **Phase 2 is written** — the sync endpoints
-and [luma-sync-routine.md](luma-sync-routine.md). Next: the manual steps below (the token
-and the routine, without which Phase 2 does nothing), then Phase 3.
+Status (2026-09-23): **Phases 1, 2 and 3 are written.** Phase 1 is merged (PR #187) with
+its migration `20260922120000_luma_integration` applied; Phase 2 is merged (PR #189).
+Phase 3 — the admin panel, the event link field and the candidate RSVP button — is on
+`feature/luma-phase-3` (PR #203) and carries migration
+`20260923190000_event_signup_email_toggle`, **which has already been applied to the live
+database by hand and recorded with `migrate resolve`** (CLAUDE.md, "Applying a migration").
+Sign-up confirmation emails are off, which is the default the migration inserts.
+
+**None of it does anything yet.** The manual steps below are what start it: `LUMA_SYNC_TOKEN`
+on Render and the hourly routine. Until those exist, `/api/integrations/luma` answers 503,
+no guest is ever ingested, and the Phase 3 panel correctly shows nothing. Phase 4 (retiring
+the Google event forms) waits for the end of the current cycle.
 
 ## Decision summary
 
@@ -285,7 +293,7 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   reads them until the Phase 3 panel exists. The routine prompt makes its hourly report say
   what is in them, so the holds are visible to a person in the meantime rather than silent.
 
-### Phase 3: admin and candidate UI (~2 days)
+### Phase 3: admin and candidate UI (done)
 
 - `EventManagement.jsx`:
   - A "Luma event link" field next to the Google Form fields. Linking it sets `formStatus`
@@ -299,6 +307,81 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   (`source = IN_APP`), and a Luma or form RSVP shows there as already made.
 - Also check `eventCopy.js` (copy the `lumaUrl`? Probably not; copied events need new Luma
   events) and `cycleBootstrap.js` (a `needsForms` stage should be satisfied by a Luma link).
+
+#### What Phase 3 actually did, beyond the plan above
+
+- **A Luma link satisfies the form shim on its own.** `resolveFormStatus` now takes
+  `lumaUrl` and reads `lumaUrl OR (rsvpForm AND attendanceForm)`, because Luma covers both
+  the RSVP and the door. Clearing the Luma link off an event that still has both Google
+  Forms therefore changes nothing, which is what lets the two run side by side.
+- **Repointing the link clears the last sync too**, not just `lumaEventId`. A stale
+  `lumaLastSyncedAt` would report an event that has never been read as freshly synced —
+  the one number the admin page uses to tell a working sync from a stopped one. The guests
+  already ingested are left alone: they did attend, whatever the event is now linked to.
+- **A link that is not a Luma link is refused where it is pasted** (`services/luma/lumaUrl.js`,
+  host must be `lu.ma` or `luma.com`). The alternative is a typo that fails an hour later
+  inside a scheduled agent nobody is watching. Only the host is checked; Luma's event paths
+  vary and constraining them would refuse links that work.
+- **The holds panel covers all three holds, not just the unmatched.** The plan asked for
+  "unmatched guests"; `summary.flagged` (matched on a typed UID alone) and
+  `summary.unknownStatus` (a status we will not read as going or not going) were equally
+  silent, so `services/luma/heldGuests.js` defines all three in one place and both the
+  panel (`/api/admin/luma/events/:id/guests`) and the per-event badge on the event list
+  (`/events/:id/stats`) read that one definition. A guest can be held for more than one
+  reason, so the counts add up to more than the number of guests.
+- **A hand link re-runs the reconcile, rather than waiting for the next sync.** Linking
+  writes the RSVP and attendance rows immediately (`services/luma/linkGuest.js` reuses
+  `reconcileRows`). Waiting would not do: an event leaves the routine's list three days
+  after it starts, so a link made after that would never have been applied at all.
+  Unlinking is the undo, and the only one — a match that exists is never re-decided by a
+  sync, so a wrong link cannot be corrected by waiting either.
+- **A sync and a hand link cannot race for the same guest.** Both decide who a guest is
+  from an unlocked read and then write every match field unconditionally, so whichever
+  committed second used to win outright — an admin's link could be undone by a sync that
+  had read the guest a moment earlier, taking the reconciled rows with it. Both now take
+  `pg_advisory_xact_lock` on the guest id first (`lockGuest` in `services/luma/ingestGuests.js`),
+  keyed per guest so guests never wait on each other.
+- **Member attendance needs a second lock, per member.** The guest lock does not cover it:
+  member attendance is not derived from one guest but from "is any guest of this member's
+  checked in?" across the event, so two *different* guests of one member settle the same row
+  while holding two different locks — and relinking both away at once leaves each
+  transaction seeing the other's old assignment, so the member stays marked present with
+  nobody checked in. `reconcileRows` therefore locks every member a guest is arriving at or
+  leaving (`lockMemberAttendance`), **in sorted order** so that opposite relinks queue
+  instead of deadlocking, and always after the guest lock, so the two lock classes cannot
+  cycle. The candidate tables need none of this: they carry `lumaGuestId` and are settled
+  per guest.
+- **Relinking re-settles the member the guest is leaving.** `member_event_attendance` keys
+  on (event, member) and carries no `lumaGuestId`, so it is worked out from all of an
+  event's guests rather than per guest — which means settling the *new* member cannot clear
+  the old one. Moving a checked-in guest from one member to another would otherwise credit
+  both for one door scan, permanently: a match that exists is never re-decided, so no later
+  sync would ever revisit it.
+- **A hand link clears `matchNote`.** The note is what marks a guest as still needing a
+  look; once a person has looked, it is answered. Provenance goes to the server log
+  instead, since nothing reads a note except the panel the link removes them from.
+- **Sealed candidates cannot be linked to.** A sealed record belongs to someone who became
+  a member, so their member account is what a guest of theirs should point at. Both the
+  people search and `linkGuest` refuse them.
+- **`eventCopy.js` deliberately does not carry `lumaUrl`**, and there is now a comment
+  saying why: `Events.lumaEventId` is unique, so two ATS events pointing at one Luma event
+  would make the second one's sync fail with a conflict nobody is watching for.
+- **The sign-up confirmation emails became a switch, not a deletion.** The Google Form
+  sync used to email every RSVP and attendance it recorded. Luma sends its own confirmation
+  and calendar invite the moment somebody registers, so that is now a second message about
+  the same sign-up — but the Forms path is still here until Phase 4, so it is an admin
+  switch (`services/eventEmailSettings.js`, a switch on the Events page) that is **off by
+  default**. Off is the safe direction: an unexpected duplicate to everyone who signs up is
+  worse than an expected missing one, so a missing settings row and an unapplied migration
+  both read as off. The member in-app RSVP confirmation is **not** covered by the switch
+  and still sends — a member who RSVPs in the app never touched Luma, so nobody else has
+  written to them.
+- **The event list's RSVP column links to Luma** where an event has a link, with the Google
+  Form kept as a secondary link so an event that has both still has its old responses one
+  click away.
+- **Still deferred:** the Phase 1 known gap, where an admin un-marking attendance that Luma
+  recorded has it put back by the next sync. Fixing it needs a per-guest override column,
+  and unlinking the guest is the workaround in the meantime.
 
 ### Phase 4: retire Google event forms (after the current cycle)
 

@@ -1483,6 +1483,20 @@ model CaseAssignment {
 /// EARLIER access: 0 unlocks exactly at the start time, 720 (30 days) is
 /// effectively no restriction. Read through
 /// server/src/services/caseVisibility.js, never directly.
+/// Whether the event form sync sends its own RSVP and attendance confirmation
+/// emails. Off while sign-ups run through Luma, which sends its own the moment
+/// somebody registers; on again if the club ever moves back to Google Forms,
+/// which is the whole reason the sending code was kept rather than deleted.
+/// See services/eventEmailSettings.js.
+model EventEmailSetting {
+  id                      String   @id @default("singleton")
+  sendSignupConfirmations Boolean  @default(false)
+  updatedById             String?
+  updatedAt               DateTime @updatedAt
+
+  @@map("event_email_settings")
+}
+
 model CaseVisibilitySetting {
   id            String   @id @default("singleton")
   leadTimeHours Int      @default(2)

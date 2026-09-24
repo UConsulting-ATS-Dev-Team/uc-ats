@@ -3,6 +3,25 @@ import { getResponses } from './google/forms.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { transformEventFormResponse, createDynamicEventMapping } from '../utils/eventDataMapper.js'
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from './emailNotifications.js'
+import { sendSignupConfirmations } from './eventEmailSettings.js'
+
+// Whether this sync sends confirmation emails is a switch, not a constant:
+// `sendSignupConfirmations()` (services/eventEmailSettings.js), which an admin
+// flips on the Events page and which is **off by default**.
+//
+// It is off because sign-ups happen on Luma now, and Luma sends its own
+// confirmation and calendar invite the moment somebody registers - an ATS email
+// on top of that is a second message about the same sign-up, arriving up to five
+// minutes later. It is a switch rather than a deletion because this Google Forms
+// path is still here (plan Phase 4 retires it), and a move back should be one
+// toggle rather than a revert.
+//
+// The setting is read once per sync run rather than per response, so a whole
+// run agrees with itself about whether it is sending.
+//
+// The member in-app RSVP confirmation (PUT /api/member/events/:eventId/rsvp) is
+// not covered by this switch and still sends: a member who RSVPs in the app
+// never touched Luma, so nobody else has written to them.
 
 // Transform event form responses using configuration-based mapping
 function transformEventResponse(response, eventId, formType) {
@@ -35,6 +54,10 @@ export async function syncEventAttendance(eventId) {
       console.warn(`Event ${eventId} has no attendance form URL. Skipping sync.`);
       return { processed: 0, errors: 0 };
     }
+
+    // Once per run, not once per response, so a whole run agrees with itself
+    // about whether it is sending.
+    const sendConfirmations = await sendSignupConfirmations();
 
     const formId = extractFormIdFromUrl(event.attendanceForm);
     if (!formId) {
@@ -130,21 +153,20 @@ export async function syncEventAttendance(eventId) {
           }
         });
 
-        // Send attendance confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendAttendanceConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation
-          );
-        } catch (emailError) {
-          console.error('Error sending attendance confirmation email:', emailError);
-          // Don't fail the sync if email fails
+        if (sendConfirmations) {
+          try {
+            const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
+            await sendAttendanceConfirmation(
+              candidate.email,
+              candidateName,
+              event.eventName,
+              formatEventDate(event.eventStartDate),
+              event.eventLocation
+            );
+          } catch (emailError) {
+            console.error('Error sending attendance confirmation email:', emailError);
+            // Don't fail the sync if email fails
+          }
         }
 
         successCount++;
@@ -181,6 +203,10 @@ export async function syncEventRSVP(eventId) {
       console.warn(`Event ${eventId} has no RSVP form URL. Skipping sync.`);
       return { processed: 0, errors: 0 };
     }
+
+    // Once per run, not once per response, so a whole run agrees with itself
+    // about whether it is sending.
+    const sendConfirmations = await sendSignupConfirmations();
 
     const formId = extractFormIdFromUrl(event.rsvpForm);
     if (!formId) {
@@ -277,25 +303,25 @@ export async function syncEventRSVP(eventId) {
           }
         });
 
-        // Send RSVP confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendRSVPConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation,
-            // Carries the calendar invite. The RSVP arrives through a Google Form
-            // rather than a request, so this is the one message that reaches the
-            // candidate about it - the date has to leave with something they can add.
-            event
-          );
-        } catch (emailError) {
-          console.error('Error sending RSVP confirmation email:', emailError);
-          // Don't fail the sync if email fails
+        if (sendConfirmations) {
+          try {
+            const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
+            await sendRSVPConfirmation(
+              candidate.email,
+              candidateName,
+              event.eventName,
+              formatEventDate(event.eventStartDate),
+              event.eventLocation,
+              // Carries the calendar invite. The RSVP arrives through a Google
+              // Form rather than a request, so when this is switched on it is
+              // the one message that reaches the candidate about it - the date
+              // has to leave with something they can add.
+              event
+            );
+          } catch (emailError) {
+            console.error('Error sending RSVP confirmation email:', emailError);
+            // Don't fail the sync if email fails
+          }
         }
 
         successCount++;
@@ -410,9 +436,11 @@ export async function syncMemberEventRSVP(eventId) {
           }
         });
 
-        // No confirmation email goes out from this form path. A member who RSVPs
-        // in the app (PUT /api/member/events/:eventId/rsvp) gets one, with the
-        // calendar invite; this legacy form is on its way out, so it stays silent.
+        // No confirmation email goes out from this form path, for the reason at
+        // the top of this file: whoever ran the sign-up already sent one. A
+        // member who RSVPs in the app (PUT /api/member/events/:eventId/rsvp)
+        // still gets one, with the calendar invite - nothing else sends them
+        // anything, so that one is not a duplicate of Luma's.
 
         successCount++;
         console.log(`Successfully processed member RSVP response ${transformedData.responseId} for member ${member.id}`);

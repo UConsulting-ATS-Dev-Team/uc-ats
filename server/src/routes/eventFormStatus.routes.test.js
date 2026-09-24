@@ -1,6 +1,10 @@
 // The form shim's durable state: PATCHing form links onto a timeline-generated
 // event must persist PENDING_FORM -> CONNECTED (and back), so the state survives
 // a refresh instead of being inferred from the URL fields in the UI.
+//
+// A Luma event link is the other way to satisfy it, and carries a rule of its
+// own: repointing an event at a different Luma event has to drop the resolved
+// evt-... id and the last-synced time that belonged to the old one.
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
@@ -112,6 +116,78 @@ describe('PATCH /api/admin/events/:id form status', () => {
 
     expect((await res.json()).formStatus).toBeNull();
     expect(prisma.events.update.mock.calls[0][0].data.formStatus).toBeUndefined();
+  });
+
+  it('connects on a Luma link alone, with no Google Forms at all', async () => {
+    const res = await patchEvent({ lumaUrl: 'https://lu.ma/f96xsz0q' });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).formStatus).toBe('CONNECTED');
+    expect(stored.lumaUrl).toBe('https://lu.ma/f96xsz0q');
+  });
+
+  it('refuses a link that is not a Luma link, rather than storing it for the routine to choke on', async () => {
+    const res = await patchEvent({ lumaUrl: 'https://forms.gle/oops' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/not a Luma link/);
+    expect(prisma.events.update).not.toHaveBeenCalled();
+  });
+
+  it('drops back to pending when the Luma link is cleared and nothing else covers the event', async () => {
+    stored = generatedEvent({ lumaUrl: 'https://lu.ma/f96xsz0q', formStatus: 'CONNECTED' });
+
+    const res = await patchEvent({ lumaUrl: '' });
+
+    expect((await res.json()).formStatus).toBe('PENDING_FORM');
+    expect(stored.lumaUrl).toBeNull();
+  });
+});
+
+describe('PATCH /api/admin/events/:id Luma link', () => {
+  const linked = (overrides = {}) => generatedEvent({
+    lumaUrl: 'https://lu.ma/first-event',
+    lumaEventId: 'evt-AAAA',
+    lumaLastSyncedAt: new Date('2026-09-23T10:00:00.000Z'),
+    formStatus: 'CONNECTED',
+    ...overrides
+  });
+
+  it('clears the resolved id and the last-synced time when the link is repointed', async () => {
+    stored = linked();
+
+    await patchEvent({ lumaUrl: 'https://lu.ma/second-event' });
+
+    const { data } = prisma.events.update.mock.calls[0][0];
+    expect(data).toMatchObject({ lumaUrl: 'https://lu.ma/second-event', lumaEventId: null, lumaLastSyncedAt: null });
+  });
+
+  it('clears them when the link is removed altogether', async () => {
+    stored = linked();
+
+    await patchEvent({ lumaUrl: '' });
+
+    expect(prisma.events.update.mock.calls[0][0].data).toMatchObject({ lumaEventId: null, lumaLastSyncedAt: null });
+  });
+
+  it('leaves the resolved id alone when the link is submitted unchanged', async () => {
+    stored = linked();
+
+    await patchEvent({ lumaUrl: 'https://lu.ma/first-event' });
+
+    const { data } = prisma.events.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty('lumaEventId');
+    expect(data).not.toHaveProperty('lumaLastSyncedAt');
+  });
+
+  it('leaves it alone when the edit does not mention the link at all', async () => {
+    stored = linked();
+
+    await patchEvent({ eventLocation: 'Kerckhoff 300' });
+
+    const { data } = prisma.events.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty('lumaUrl');
+    expect(data).not.toHaveProperty('lumaEventId');
   });
 
   it('does not touch the status when unrelated fields are edited', async () => {

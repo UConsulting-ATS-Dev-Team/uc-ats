@@ -51,6 +51,9 @@ import {
 } from '../services/cycleBootstrap.js';
 import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
 import { resolveFormStatus } from '../services/eventFormStatus.js';
+import { parseLumaUrl, lumaUrlChanged } from '../services/luma/lumaUrl.js';
+import { LUMA_HELD } from '../services/luma/heldGuests.js';
+import { getEventEmailSetting, setSendSignupConfirmations } from '../services/eventEmailSettings.js';
 import {
   activateCycleExclusively,
   isActiveCycleConflict,
@@ -1403,6 +1406,37 @@ router.get('/profile', async (req, res) => {
 // Event Management Routes
 
 // Get all events
+// Whether the Google Form event sync sends its own RSVP and attendance
+// confirmations. Off while sign-ups run through Luma, which sends its own; the
+// switch is what makes a move back to Forms a toggle rather than a revert.
+// Registered before the '/events/:id' routes so 'event-email-settings' is not
+// read as an event id.
+router.get('/event-email-settings', async (req, res) => {
+  try {
+    res.json(await getEventEmailSetting());
+  } catch (error) {
+    console.error('[GET /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to load event email settings' });
+  }
+});
+
+router.patch('/event-email-settings', async (req, res) => {
+  try {
+    const saved = await setSendSignupConfirmations(req.body?.sendSignupConfirmations, req.user?.id);
+    console.log(
+      `[events] signup confirmation emails turned ${saved.sendSignupConfirmations ? 'ON' : 'OFF'} `
+      + `by ${req.user?.id || 'an admin'}`
+    );
+    res.json(saved);
+  } catch (error) {
+    if (error?.code === 'INVALID_EVENT_EMAIL_SETTING') {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('[PATCH /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to save event email settings' });
+  }
+});
+
 router.get('/events', async (req, res) => {
   try {
     res.json(await loadEvents(prisma));
@@ -1426,6 +1460,7 @@ router.post('/events', async (req, res) => {
       showToCandidates,
       memberRsvpUrl,
       memberAttendanceForm,
+      lumaUrl,
       cycleId
     } = req.body;
 
@@ -1433,6 +1468,9 @@ router.post('/events', async (req, res) => {
     if (!eventName || !eventStartDate || !eventEndDate || !cycleId) {
       return res.status(400).json({ error: 'Event name, start date, end date, and cycle ID are required' });
     }
+
+    const luma = parseLumaUrl(lumaUrl);
+    if (luma.error) return res.status(400).json({ error: luma.error });
 
     // Validate that the cycle exists
     const cycle = await prisma.recruitingCycle.findUnique({
@@ -1454,6 +1492,9 @@ router.post('/events', async (req, res) => {
         showToCandidates: showToCandidates || false,
         memberRsvpUrl: memberRsvpUrl || null,
         memberAttendanceForm: memberAttendanceForm || null,
+        // No lumaEventId: an event is linked to a Luma event only by the sync
+        // routine resolving this URL, never by hand.
+        lumaUrl: luma.url,
         cycleId
       }
     });
@@ -1505,6 +1546,7 @@ router.patch('/events/:id', async (req, res) => {
       showToCandidates,
       memberRsvpUrl,
       memberAttendanceForm,
+      lumaUrl,
       cycleId
     } = req.body;
 
@@ -1528,11 +1570,26 @@ router.patch('/events/:id', async (req, res) => {
       }
     }
 
+    const luma = parseLumaUrl(lumaUrl);
+    if (lumaUrl !== undefined && luma.error) {
+      return res.status(400).json({ error: luma.error });
+    }
+
+    // Repointing an event at a different Luma event has to drop what the last
+    // one left behind. lumaEventId is what every page of guests is checked
+    // against and is unique across events, so a stale one makes the routine's
+    // next resolve fail with a conflict it cannot get past; a stale
+    // lumaLastSyncedAt would meanwhile report the new link as freshly synced
+    // when nothing has ever been read from it. The guests already ingested
+    // stay: they did attend, whatever the event is now linked to.
+    const relinked = lumaUrl !== undefined && lumaUrlChanged(existingEvent.lumaUrl, luma.url);
+
     // Keep the generated-event form shim state in step with the links.
     const nextFormStatus = resolveFormStatus({
       currentStatus: existingEvent.formStatus,
       rsvpForm: rsvpForm !== undefined ? rsvpForm : existingEvent.rsvpForm,
-      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm
+      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm,
+      lumaUrl: lumaUrl !== undefined ? luma.url : existingEvent.lumaUrl
     });
 
     // Update the event
@@ -1549,6 +1606,8 @@ router.patch('/events/:id', async (req, res) => {
         ...(showToCandidates !== undefined && { showToCandidates }),
         ...(memberRsvpUrl !== undefined && { memberRsvpUrl: memberRsvpUrl || null }),
         ...(memberAttendanceForm !== undefined && { memberAttendanceForm: memberAttendanceForm || null }),
+        ...(lumaUrl !== undefined && { lumaUrl: luma.url }),
+        ...(relinked && { lumaEventId: null, lumaLastSyncedAt: null }),
         ...(cycleId !== undefined && { cycleId })
       }
     });
@@ -1666,7 +1725,7 @@ router.get('/events/:id/stats', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount] = await Promise.all([
+    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount, lumaGuestCount, lumaHeldCount] = await Promise.all([
       prisma.events.findUnique({
         where: { id },
         select: { 
@@ -1676,13 +1735,21 @@ router.get('/events/:id/stats', async (req, res) => {
           rsvpForm: true,
           attendanceForm: true,
           memberRsvpUrl: true,
-          memberAttendanceForm: true
+          memberAttendanceForm: true,
+          lumaUrl: true,
+          lumaEventId: true,
+          lumaLastSyncedAt: true
         }
       }),
       prisma.eventRsvp.count({ where: { eventId: id } }),
       prisma.eventAttendance.count({ where: { eventId: id } }),
       prisma.memberEventRsvp.count({ where: { eventId: id } }),
-      prisma.memberEventAttendance.count({ where: { eventId: id } })
+      prisma.memberEventAttendance.count({ where: { eventId: id } }),
+      prisma.lumaGuest.count({ where: { eventId: id } }),
+      // Guests the sync could not settle. Counted here rather than in the panel
+      // so the event list can show a number without opening one panel per row;
+      // the predicate is the same one lumaAdmin.js lists by.
+      prisma.lumaGuest.count({ where: { eventId: id, ...LUMA_HELD } })
     ]);
 
     if (!event) {
@@ -1699,7 +1766,9 @@ router.get('/events/:id/stats', async (req, res) => {
         hasRsvpForm: !!event.rsvpForm,
         hasAttendanceForm: !!event.attendanceForm,
         hasMemberRsvpForm: !!event.memberRsvpUrl,
-        hasMemberAttendanceForm: !!event.memberAttendanceForm
+        hasMemberAttendanceForm: !!event.memberAttendanceForm,
+        lumaGuestCount,
+        lumaHeldCount
       }
     });
   } catch (error) {

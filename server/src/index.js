@@ -45,6 +45,7 @@ import emailTemplateRoutes from './routes/emailTemplates.js';
 import sesWebhookRoutes from './routes/sesWebhooks.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import lumaIntegrationRoutes from './routes/lumaIntegration.js';
+import lumaAdminRoutes from './routes/lumaAdmin.js';
 
 const app = express();
 
@@ -98,6 +99,7 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
+app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);

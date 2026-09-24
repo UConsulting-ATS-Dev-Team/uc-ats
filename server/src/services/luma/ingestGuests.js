@@ -23,7 +23,7 @@ import prisma from '../../prismaClient.js';
 // fresh id per event.
 const UID_LABEL = /\buid\b/i;
 const UID_DIGITS = /^\d{9}$/;
-const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
+export const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
 
 // Which approval_status values say the person is coming, and which say they are
 // not. The keys are list_guests's own approval_status filter enum, minus
@@ -43,6 +43,10 @@ const RSVP_FOR_STATUS = new Map([
   ['invited', false],
   ['waitlist', false]
 ]);
+
+// The statuses above, for callers that need to ask the database which guests
+// are being held because their status could not be read (the admin panel).
+export const READABLE_APPROVAL_STATUSES = [...RSVP_FOR_STATUS.keys()];
 
 export const MATCH_STATUS = {
   MATCHED_CANDIDATE: 'MATCHED_CANDIDATE',
@@ -358,7 +362,16 @@ async function reconcileMemberAttendance(tx, eventId, memberId) {
   return 'created';
 }
 
-async function reconcileRows(tx, eventId, guest, person, previous) {
+/**
+ * Settles one guest's rows from what Luma says about them and who the ATS
+ * decided they are. Exported because an admin linking an UNMATCHED guest by
+ * hand has to reach the same end state as a sync would (services/luma/linkGuest.js):
+ * the rows follow from the match, so changing the match has to re-run this.
+ *
+ * `guest` needs only lumaGuestId, approvalStatus and checkedInAt, which is what
+ * the stored LumaGuest row already carries.
+ */
+export async function reconcileRows(tx, eventId, guest, person, previous) {
   const lumaGuestId = guest.lumaGuestId;
   const rsvp = RSVP_FOR_STATUS.get(guest.approvalStatus);
   const attended = Boolean(guest.checkedInAt);
@@ -387,24 +400,86 @@ async function reconcileRows(tx, eventId, guest, person, previous) {
     record('attendance', await removeRow(tx.eventAttendance, lumaGuestId));
   }
 
+  // Every member this guest is arriving at or leaving, locked up front and in a
+  // fixed order. Up front because the reads below decide from them; in sorted
+  // order because a transaction moving a guest from A to B and one moving a
+  // guest from B to A would otherwise take the two locks in opposite orders and
+  // deadlock. The guest lock is already held, and no transaction ever waits on
+  // a guest lock while holding one of these, so the two classes cannot cycle.
+  const settling = [...new Set([person.userId, previous?.userId].filter(Boolean))].sort();
+  for (const memberId of settling) {
+    await lockMemberAttendance(tx, eventId, memberId);
+  }
+
   if (person.userId) {
     const target = { eventId, personField: 'memberId', personId: person.userId, lumaGuestId };
     record('rsvp', await reconcileRsvp(tx.memberEventRsvp, target));
     record('attendance', await reconcileMemberAttendance(tx, eventId, person.userId));
   } else {
     record('rsvp', await removeRow(tx.memberEventRsvp, lumaGuestId));
-    // A guest who was matched to a member before (and has since been relinked)
-    // leaves no member attendance behind - unless another guest of that
-    // member's is checked in, which is what the reconcile re-checks.
-    if (previous?.userId) {
-      record('attendance', await reconcileMemberAttendance(tx, eventId, previous.userId));
-    }
+  }
+
+  // A guest who was matched to a member before leaves no member attendance
+  // behind - unless another guest of that member's is checked in, which is what
+  // the reconcile re-checks.
+  //
+  // This runs whenever the member changed, not only when the guest stopped
+  // being a member's. member_event_attendance keys on (event, member) and
+  // carries no lumaGuestId, so settling the *new* member cannot clear the old
+  // one: relinking a checked-in guest from member A to member B would otherwise
+  // credit both, and one door scan would show up as two people present.
+  if (previous?.userId && previous.userId !== person.userId) {
+    const settled = await reconcileMemberAttendance(tx, eventId, previous.userId);
+    // Only reported when settling the new person had nothing to say, so a link
+    // that credits B is not summarised as a removal because it also cleared A.
+    if (effects.attendance === 'unchanged') record('attendance', settled);
   }
 
   return effects;
 }
 
+/**
+ * Serialises everything that decides who one Luma guest is.
+ *
+ * An hourly sync and an admin's hand link otherwise interleave: the sync reads a
+ * guest, the admin links them, and the sync then writes the match it decided
+ * before the link existed, silently undoing it. Nothing in the reads below takes
+ * a lock of its own, and the write that follows is unconditional, so the loser
+ * of that race loses the link *and* the rows reconciled from it.
+ *
+ * Both paths take this lock before their first read, so the later one sees the
+ * earlier one's result - and resolvePerson, which reuses an identity that is
+ * already there, keeps it.
+ *
+ * Keyed on the Luma guest id, so guests never wait on each other. It is released
+ * when the transaction ends, so callers have to be inside one.
+ */
+export async function lockGuest(tx, lumaGuestId) {
+  const key = `luma_guest_${lumaGuestId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
+}
+
+/**
+ * Serialises one member's attendance for one event.
+ *
+ * lockGuest is not enough here. Member attendance is not derived from a single
+ * guest - it is the answer to "is any guest of this member's checked in?" - so
+ * two *different* guests of the same member settle the same row. Relinking both
+ * away at once, each holding only its own guest lock, lets each transaction
+ * still see the other's old assignment, conclude the member is present, and
+ * leave the row behind: nobody is checked in, but the member stays marked
+ * present, and no later sync revisits it.
+ *
+ * Callers take these in a fixed order (sorted by member id) and always after
+ * the guest lock, so two transactions touching the same pair cannot deadlock.
+ */
+export async function lockMemberAttendance(tx, eventId, memberId) {
+  const key = `luma_member_attendance_${eventId}_${memberId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
+}
+
 async function ingestOne(tx, eventId, guest) {
+  await lockGuest(tx, guest.lumaGuestId);
   const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId: guest.lumaGuestId } });
   if (previous && previous.eventId !== eventId) {
     throw new Error(`guest ${guest.lumaGuestId} belongs to a different event`);
