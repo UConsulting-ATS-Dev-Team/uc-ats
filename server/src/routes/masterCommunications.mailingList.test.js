@@ -16,6 +16,7 @@ vi.mock('../prismaClient.js', () => ({
     candidate: { findMany: vi.fn() },
     application: { findMany: vi.fn() },
     meetingSignup: { findMany: vi.fn() },
+    mailingListContact: { findMany: vi.fn(), createMany: vi.fn() },
   },
 }));
 
@@ -26,11 +27,11 @@ const ALL = [admin, member];
 let server;
 let port;
 
-const upload = (csv, { user = admin, emailColumn, fileName = 'list.csv' } = {}) => {
+const upload = (csv, { user = admin, emailColumn, fileName = 'list.csv', path = 'dedupe' } = {}) => {
   const form = new FormData();
   form.append('file', new Blob([csv], { type: 'text/csv' }), fileName);
   if (emailColumn) form.append('emailColumn', emailColumn);
-  return fetch(`http://localhost:${port}/api/master-communications/mailing-list/dedupe`, {
+  return fetch(`http://localhost:${port}/api/master-communications/mailing-list/${path}`, {
     method: 'POST',
     headers: user ? { Authorization: `Bearer ${jwt.sign({ userId: user.id }, process.env.JWT_SECRET)}` } : {},
     body: form,
@@ -53,11 +54,13 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   prisma.user.findUnique.mockImplementation(({ where: { id } }) => ALL.find((u) => u.id === id) || null);
-  // The ATS already knows these four, one per table.
+  // The ATS already knows these five, one per table.
   prisma.user.findMany.mockResolvedValue([{ email: 'known-user@ucla.edu' }]);
   prisma.candidate.findMany.mockResolvedValue([{ email: 'known-candidate@ucla.edu' }]);
   prisma.application.findMany.mockResolvedValue([{ email: 'known-applicant@ucla.edu' }]);
   prisma.meetingSignup.findMany.mockResolvedValue([{ email: 'known-signup@ucla.edu' }]);
+  prisma.mailingListContact.findMany.mockResolvedValue([{ email: 'already-imported@ucla.edu' }]);
+  prisma.mailingListContact.createMany.mockImplementation(({ data }) => ({ count: data.length }));
 });
 
 describe('access', () => {
@@ -86,7 +89,7 @@ describe('dedup', () => {
 
     expect(body.emailColumn).toBe('Email');
     expect(body.rows).toBe(6);
-    expect(body.knownAddresses).toBe(4);
+    expect(body.knownAddresses).toBe(5);
     expect(body.keptCount).toBe(2);
     expect(body.summary.counts.kept).toBe(2);
     expect(body.summary.counts['already-in-system']).toBe(4);
@@ -190,5 +193,58 @@ describe('bad uploads', () => {
     const res = await upload('');
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/no rows/i);
+  });
+});
+
+describe('import', () => {
+  const importCsv = (csv, opts) => upload(csv, { ...opts, path: 'import' });
+
+  it('stores only the rows that survive dedup, with their names', async () => {
+    const csv = [
+      'First Name,Last Name,Email',
+      'New,Person,New@UCLA.edu',
+      'Known,User,known-user@ucla.edu',
+      'Imported,Before,already-imported@ucla.edu',
+      'New,Again,new@ucla.edu',
+    ].join('\n');
+    const res = await importCsv(csv);
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ imported: 1, keptCount: 1 });
+    expect(prisma.mailingListContact.createMany).toHaveBeenCalledWith({
+      data: [{
+        email: 'new@ucla.edu',
+        firstName: 'New',
+        lastName: 'Person',
+        sourceFile: 'list.csv',
+        importedById: admin.id,
+      }],
+      skipDuplicates: true,
+    });
+  });
+
+  it('splits a single Name column', async () => {
+    await importCsv('Name,Email\nJoe Bruin Jr,joe@ucla.edu\n');
+    expect(prisma.mailingListContact.createMany.mock.calls[0][0].data[0]).toMatchObject({
+      firstName: 'Joe',
+      lastName: 'Bruin Jr',
+    });
+  });
+
+  it('writes nothing when every row is already known', async () => {
+    const res = await importCsv('Email\nknown-user@ucla.edu\n');
+    expect(await res.json()).toEqual({ imported: 0, keptCount: 0 });
+    expect(prisma.mailingListContact.createMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses to guess when no email column can be found', async () => {
+    const res = await importCsv('Name,Contact\nJoe,joe@ucla.edu\n');
+    expect(res.status).toBe(400);
+    expect(prisma.mailingListContact.createMany).not.toHaveBeenCalled();
+  });
+
+  it('is admin-only', async () => {
+    expect((await importCsv('Email\na@ucla.edu\n', { user: member })).status).toBe(403);
+    expect(prisma.mailingListContact.createMany).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findMany: vi.fn() },
     application: { findMany: vi.fn() },
+    mailingListContact: { findMany: vi.fn() },
   },
 }));
 
@@ -54,6 +55,20 @@ describe('admins', () => {
   it('asks only for active accounts', async () => {
     await resolveRecipients({ audience: 'admins' });
     expect(whereOf()).toEqual({ role: 'ADMIN', isActive: true });
+  });
+});
+
+describe('mailing list', () => {
+  it('reaches every imported contact, with names for merge fields', async () => {
+    prisma.mailingListContact.findMany.mockResolvedValue([
+      { id: 'c1', email: 'joe@ucla.edu', firstName: 'Joe', lastName: 'Bruin' },
+      { id: 'c2', email: 'noname@ucla.edu', firstName: null, lastName: null },
+    ]);
+    const recipients = await resolveRecipients({ audience: 'mailing-list' });
+    expect(recipients).toEqual([
+      { id: 'c1', email: 'joe@ucla.edu', firstName: 'Joe', lastName: 'Bruin', fullName: 'Joe Bruin', audience: 'mailing-list' },
+      { id: 'c2', email: 'noname@ucla.edu', firstName: '', lastName: '', fullName: '', audience: 'mailing-list' },
+    ]);
   });
 });
 
