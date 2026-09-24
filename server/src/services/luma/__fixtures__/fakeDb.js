@@ -35,6 +35,13 @@ function uniqueError(target) {
   return Object.assign(new Error(`Unique constraint failed on ${target}`), { code: 'P2002' });
 }
 
+// Prisma hands back plain objects read out of the database, not handles on it.
+// Returning the stored row itself would let a caller holding a "before" copy
+// watch it change under them when something else updates it - which is exactly
+// the state reconcileRows compares against, so a fixture that shared references
+// would quietly agree with a bug that loses the old value.
+const detach = (row) => (row ? { ...row } : row);
+
 export function model(uniques, defaults = {}) {
   const rows = [];
   let next = 1;
@@ -48,33 +55,33 @@ export function model(uniques, defaults = {}) {
   const api = {
     rows,
     async findUnique({ where }) {
-      return rows.find((row) => matches(row, flattenUnique(where))) ?? null;
+      return detach(rows.find((row) => matches(row, flattenUnique(where)))) ?? null;
     },
     async findFirst({ where }) {
-      return rows.find((row) => matches(row, where)) ?? null;
+      return detach(rows.find((row) => matches(row, where))) ?? null;
     },
     async create({ data }) {
       const row = { id: `${defaults.prefix ?? 'row'}-${next++}`, ...defaults.values, ...data };
       check(row);
       rows.push(row);
-      return row;
+      return detach(row);
     },
     async update({ where, data }) {
-      const row = await api.findUnique({ where });
-      if (!row) throw new Error('Record to update not found');
-      check({ ...row, ...data }, row.id);
-      Object.assign(row, data);
-      return row;
+      const stored = rows.find((row) => matches(row, flattenUnique(where)));
+      if (!stored) throw new Error('Record to update not found');
+      check({ ...stored, ...data }, stored.id);
+      Object.assign(stored, data);
+      return detach(stored);
     },
     async upsert({ where, create, update }) {
       const row = await api.findUnique({ where });
       return row ? api.update({ where, data: update }) : api.create({ data: create });
     },
     async delete({ where }) {
-      const row = await api.findUnique({ where });
-      if (!row) throw new Error('Record to delete does not exist');
-      rows.splice(rows.indexOf(row), 1);
-      return row;
+      const stored = rows.find((row) => matches(row, flattenUnique(where)));
+      if (!stored) throw new Error('Record to delete does not exist');
+      rows.splice(rows.indexOf(stored), 1);
+      return detach(stored);
     },
     async deleteMany({ where }) {
       const doomed = rows.filter((row) => matches(row, where));
@@ -95,6 +102,15 @@ export function fakeDb() {
     eventAttendance: model([['responseId'], ['lumaGuestId'], ['eventId', 'candidateId']], { values: { source: 'GOOGLE_FORM' } }),
     memberEventRsvp: model([['responseId'], ['lumaGuestId'], ['eventId', 'memberId']], { values: { source: 'GOOGLE_FORM' } }),
     memberEventAttendance: model([['responseId'], ['eventId', 'memberId']], { values: { source: 'MANUAL' } }),
+    // Every raw statement the services run, as SQL text with its parameters, so
+    // a test can assert the per-guest advisory lock was taken. Nothing here
+    // emulates locking: these tests are single-threaded, and what is worth
+    // checking is that the lock is asked for before the first read.
+    raw: [],
+    $executeRaw: async (strings, ...values) => {
+      db.raw.push({ sql: strings.join('?'), values });
+      return 0;
+    },
     $transaction: async (fn) => fn(db)
   };
   db.events.rows.push({ id: EVENT_ID });

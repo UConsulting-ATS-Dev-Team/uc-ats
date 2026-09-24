@@ -203,3 +203,117 @@ describe('what it refuses', () => {
     expect(db.eventRsvp.rows).toHaveLength(0);
   });
 });
+
+// member_event_attendance keys on (event, member) and carries no lumaGuestId, so
+// it cannot be settled by pointing at the guest that caused it - it is worked out
+// from every guest of the event at once. Relinking therefore has to re-settle the
+// member the guest is *leaving* as well as the one it arrives at. Nothing else
+// ever will: a match that exists is never re-decided, so a stale credit left here
+// stays for good.
+describe('relinking a checked-in guest from one member to another', () => {
+  let scannedId;
+  let alice;
+  let bob;
+
+  const member = (email, studentId, firstName) =>
+    db.user.create({ data: { email, role: 'MEMBER', studentId, firstName } });
+
+  beforeEach(async () => {
+    const summary = await ingestGuests(EVENT_ID, [withoutUid(checkedIn)], { db });
+    scannedId = summary.unmatched[0].lumaGuestId;
+    alice = await member('alice@ucla.edu', '405000101', 'Alice');
+    bob = await member('bob@ucla.edu', '405000102', 'Bob');
+
+    await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, userId: alice.id }, { db });
+    expect(db.memberEventAttendance.rows).toMatchObject([{ memberId: alice.id, source: 'LUMA' }]);
+  });
+
+  it('moves the attendance rather than crediting both members', async () => {
+    await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, userId: bob.id }, { db });
+
+    expect(db.memberEventAttendance.rows).toMatchObject([{ memberId: bob.id, source: 'LUMA' }]);
+    expect(db.memberEventRsvp.rows).toMatchObject([{ memberId: bob.id, lumaGuestId: scannedId }]);
+  });
+
+  it('reports what the link did, not the cleanup it also had to do', async () => {
+    const result = await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, userId: bob.id }, { db });
+
+    expect(result.effects.attendance).toBe('created');
+  });
+
+  it('leaves the first member credited when another guest of theirs is still checked in', async () => {
+    // Alice registered twice and was scanned on both, so relinking one of the two
+    // says nothing about whether she was there.
+    const second = clone(checkedIn);
+    for (const row of [second, second.guest]) {
+      row.api_id = 'gst-secondRegistration';
+      row.id = 'gst-secondRegistration';
+      row.email = 'alice@ucla.edu';
+      row.user_email = 'alice@ucla.edu';
+    }
+    // Matched to Alice on her email, so this is her second scan, not a new person.
+    const again = await ingestGuests(EVENT_ID, [second], { db });
+    expect(again.matchStatus.MATCHED_MEMBER).toBe(1);
+    expect(db.memberEventAttendance.rows).toMatchObject([{ memberId: alice.id }]);
+
+    await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, userId: bob.id }, { db });
+
+    expect(db.memberEventAttendance.rows.map((row) => row.memberId).sort())
+      .toEqual([alice.id, bob.id].sort());
+  });
+
+  it('takes the credit away entirely when the guest turns out to be a candidate', async () => {
+    const candidate = await db.candidate.create({
+      data: { studentId: '405000103', email: 'notamember@example.com', firstName: 'Not', lastName: 'Member' }
+    });
+
+    await linkLumaGuest({ lumaGuestId: scannedId, eventId: EVENT_ID, candidateId: candidate.id }, { db });
+
+    expect(db.memberEventAttendance.rows).toHaveLength(0);
+    expect(db.memberEventRsvp.rows).toHaveLength(0);
+    expect(db.eventAttendance.rows).toMatchObject([{ candidateId: candidate.id, lumaGuestId: scannedId }]);
+  });
+});
+
+// A sync and a hand link both read the guest, decide, and write every match
+// field unconditionally. Without a lock the loser of that race writes over the
+// winner, and the link - plus the rows reconciled from it - is silently undone.
+describe('the per-guest lock', () => {
+  const locks = () => db.raw
+    .filter((statement) => statement.sql.includes('pg_advisory_xact_lock'))
+    .map((statement) => statement.values.join(','));
+
+  it('is taken by a sync, keyed on the guest', () => {
+    // The beforeEach above ingested one guest.
+    expect(locks()).toEqual([`luma_guest_${guestId}`]);
+  });
+
+  it('is taken by a hand link too, on the same key, or the two would not exclude each other', async () => {
+    db.raw.length = 0;
+    const candidate = await db.candidate.create({
+      data: { studentId: '405000104', email: 'locked@example.com', firstName: 'Lock', lastName: 'Ed' }
+    });
+
+    await linkLumaGuest({ lumaGuestId: guestId, eventId: EVENT_ID, candidateId: candidate.id }, { db });
+
+    expect(locks()).toEqual([`luma_guest_${guestId}`]);
+  });
+
+  it('is taken before the guest is read, not after the decision is made', async () => {
+    db.raw.length = 0;
+    const reads = [];
+    const findUnique = db.lumaGuest.findUnique;
+    db.lumaGuest.findUnique = async (args) => {
+      reads.push(db.raw.length);
+      return findUnique(args);
+    };
+
+    await linkLumaGuest({ lumaGuestId: guestId, eventId: EVENT_ID }, { db });
+
+    db.lumaGuest.findUnique = findUnique;
+    // Every read of the guest happened with the lock already held.
+    expect(reads.length).toBeGreaterThan(0);
+    expect(Math.min(...reads)).toBe(1);
+  });
+});
+

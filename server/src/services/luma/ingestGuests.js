@@ -406,18 +406,50 @@ export async function reconcileRows(tx, eventId, guest, person, previous) {
     record('attendance', await reconcileMemberAttendance(tx, eventId, person.userId));
   } else {
     record('rsvp', await removeRow(tx.memberEventRsvp, lumaGuestId));
-    // A guest who was matched to a member before (and has since been relinked)
-    // leaves no member attendance behind - unless another guest of that
-    // member's is checked in, which is what the reconcile re-checks.
-    if (previous?.userId) {
-      record('attendance', await reconcileMemberAttendance(tx, eventId, previous.userId));
-    }
+  }
+
+  // A guest who was matched to a member before leaves no member attendance
+  // behind - unless another guest of that member's is checked in, which is what
+  // the reconcile re-checks.
+  //
+  // This runs whenever the member changed, not only when the guest stopped
+  // being a member's. member_event_attendance keys on (event, member) and
+  // carries no lumaGuestId, so settling the *new* member cannot clear the old
+  // one: relinking a checked-in guest from member A to member B would otherwise
+  // credit both, and one door scan would show up as two people present.
+  if (previous?.userId && previous.userId !== person.userId) {
+    const settled = await reconcileMemberAttendance(tx, eventId, previous.userId);
+    // Only reported when settling the new person had nothing to say, so a link
+    // that credits B is not summarised as a removal because it also cleared A.
+    if (effects.attendance === 'unchanged') record('attendance', settled);
   }
 
   return effects;
 }
 
+/**
+ * Serialises everything that decides who one Luma guest is.
+ *
+ * An hourly sync and an admin's hand link otherwise interleave: the sync reads a
+ * guest, the admin links them, and the sync then writes the match it decided
+ * before the link existed, silently undoing it. Nothing in the reads below takes
+ * a lock of its own, and the write that follows is unconditional, so the loser
+ * of that race loses the link *and* the rows reconciled from it.
+ *
+ * Both paths take this lock before their first read, so the later one sees the
+ * earlier one's result - and resolvePerson, which reuses an identity that is
+ * already there, keeps it.
+ *
+ * Keyed on the Luma guest id, so guests never wait on each other. It is released
+ * when the transaction ends, so callers have to be inside one.
+ */
+export async function lockGuest(tx, lumaGuestId) {
+  const key = `luma_guest_${lumaGuestId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
+}
+
 async function ingestOne(tx, eventId, guest) {
+  await lockGuest(tx, guest.lumaGuestId);
   const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId: guest.lumaGuestId } });
   if (previous && previous.eventId !== eventId) {
     throw new Error(`guest ${guest.lumaGuestId} belongs to a different event`);

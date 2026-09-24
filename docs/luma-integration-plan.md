@@ -3,8 +3,10 @@
 Status (2026-09-23): **Phases 1, 2 and 3 are written.** Phase 1 is merged (PR #187) with
 its migration `20260922120000_luma_integration` applied; Phase 2 is merged (PR #189).
 Phase 3 — the admin panel, the event link field and the candidate RSVP button — is on
-`feature/luma-phase-3` and carries migration `20260923190000_event_signup_email_toggle`,
-**which still has to be applied by hand** (CLAUDE.md, "Applying a migration").
+`feature/luma-phase-3` (PR #203) and carries migration
+`20260923190000_event_signup_email_toggle`, **which has already been applied to the live
+database by hand and recorded with `migrate resolve`** (CLAUDE.md, "Applying a migration").
+Sign-up confirmation emails are off, which is the default the migration inserts.
 
 **None of it does anything yet.** The manual steps below are what start it: `LUMA_SYNC_TOKEN`
 on Render and the hourly routine. Until those exist, `/api/integrations/luma` answers 503,
@@ -333,6 +335,18 @@ comment includes a `SELECT` for previewing exactly what it will remove.
   after it starts, so a link made after that would never have been applied at all.
   Unlinking is the undo, and the only one — a match that exists is never re-decided by a
   sync, so a wrong link cannot be corrected by waiting either.
+- **A sync and a hand link cannot race for the same guest.** Both decide who a guest is
+  from an unlocked read and then write every match field unconditionally, so whichever
+  committed second used to win outright — an admin's link could be undone by a sync that
+  had read the guest a moment earlier, taking the reconciled rows with it. Both now take
+  `pg_advisory_xact_lock` on the guest id first (`lockGuest` in `services/luma/ingestGuests.js`),
+  keyed per guest so guests never wait on each other.
+- **Relinking re-settles the member the guest is leaving.** `member_event_attendance` keys
+  on (event, member) and carries no `lumaGuestId`, so it is worked out from all of an
+  event's guests rather than per guest — which means settling the *new* member cannot clear
+  the old one. Moving a checked-in guest from one member to another would otherwise credit
+  both for one door scan, permanently: a match that exists is never re-decided, so no later
+  sync would ever revisit it.
 - **A hand link clears `matchNote`.** The note is what marks a guest as still needing a
   look; once a person has looked, it is answered. Provenance goes to the server log
   instead, since nothing reads a note except the panel the link removes them from.

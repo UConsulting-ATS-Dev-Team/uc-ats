@@ -13,11 +13,12 @@
 //    would not do: an event leaves the routine's list three days after it
 //    starts, so a link made after that would never be applied at all.
 //  - **It sticks.** resolvePerson reuses an existing candidateId / userId
-//    instead of matching again, so an hourly sync will not undo this. Clearing
-//    the note is part of that: the note is what marks a guest as still needing a
-//    look, and one a person has settled no longer does.
+//    instead of matching again, so an hourly sync will not undo this - provided
+//    the sync reads the link rather than racing it, which is what lockGuest is
+//    for. Clearing the note is part of that: the note is what marks a guest as
+//    still needing a look, and one a person has settled no longer does.
 import prisma from '../../prismaClient.js';
-import { MATCH_STATUS, MEMBER_ROLES, reconcileRows } from './ingestGuests.js';
+import { MATCH_STATUS, MEMBER_ROLES, lockGuest, reconcileRows } from './ingestGuests.js';
 
 export class LinkError extends Error {
   constructor(status, message) {
@@ -49,6 +50,9 @@ export async function linkLumaGuest({ lumaGuestId, eventId, candidateId, userId,
   }
 
   return db.$transaction(async (tx) => {
+    // Before the read, not after: a sync running concurrently would otherwise
+    // write the match it decided before this link existed, and undo it.
+    await lockGuest(tx, lumaGuestId);
     const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId } });
     if (!previous) throw new LinkError(404, 'That Luma guest is not in the ATS');
     // The route reaches a guest through its event, so a mismatch means the id
