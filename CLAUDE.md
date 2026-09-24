@@ -362,6 +362,8 @@ The system follows a **recruiting cycle-based workflow**:
 - Members RSVP in the app from the Events page: `PUT` / `DELETE
   /api/member/events/:eventId/rsvp` (ADMIN/MEMBER, only before the event starts). There is
   no member form to fill in; going is a `member_event_rsvp` row with `source = IN_APP`.
+  Admins RSVP for themselves from Event Management's Member RSVP column, through the same
+  endpoints.
 - Cancelling removes only an `IN_APP` row. An RSVP from Luma or the legacy Google Form is
   shown as made but answers `409 RSVP_EXTERNAL` - it has to change where it was made.
 - Google Form, Luma and in-app rows coexist under the one-per-member-per-event index;

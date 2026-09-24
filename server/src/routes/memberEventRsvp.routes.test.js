@@ -27,8 +27,9 @@ vi.mock('../services/emailNotifications.js', () => ({
 }));
 
 const memberUser = { id: 'member-1', role: 'MEMBER', isActive: true, email: 'm@uc.org', fullName: 'Pam Beesly' };
+const adminUser = { id: 'admin-1', role: 'ADMIN', isActive: true, email: 'a@uc.org', fullName: 'Ada Admin' };
 const candidateUser = { id: 'user-1', role: 'USER', isActive: true, email: 'c@uc.org', fullName: 'Applicant' };
-const ALL_USERS = [memberUser, candidateUser];
+const ALL_USERS = [memberUser, adminUser, candidateUser];
 
 const future = new Date(Date.now() + 7 * 24 * 3600 * 1000);
 const past = new Date(Date.now() - 3600 * 1000);
@@ -111,6 +112,14 @@ describe('PUT /api/member/events/:eventId/rsvp', () => {
     expect(sendRSVPConfirmation).toHaveBeenCalledWith(
       'm@uc.org', 'Pam Beesly', 'Info Session', 'Oct 8', 'Ackerman', upcomingEvent
     );
+  });
+
+  it('lets an admin RSVP for themselves, from Event Management', async () => {
+    const res = await request('/api/member/events/evt-1/rsvp', { user: adminUser, method: 'PUT' });
+    expect(res.status).toBe(200);
+    expect(prisma.memberEventRsvp.create).toHaveBeenCalledWith({
+      data: { eventId: 'evt-1', memberId: 'admin-1', source: 'IN_APP' }
+    });
   });
 
   it('treats a second RSVP as done, not as an error, and sends no second email', async () => {

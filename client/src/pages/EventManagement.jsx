@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -83,6 +83,69 @@ export default function EventManagement() {
 
   const { user } = useAuth();
 
+  // The signed-in admin's own RSVP per event (eventId -> source), read from the
+  // same endpoint members use, so an admin RSVPs exactly as a member does.
+  const [myRsvps, setMyRsvps] = useState({});
+  const [myRsvpSaving, setMyRsvpSaving] = useState(null);
+  // Latest count refresh per event. Toggling twice quickly starts two refreshes,
+  // and only the newer one may write, or a stale count can land last.
+  const statsRequestSeq = useRef({});
+
+  const fetchMyRsvps = async () => {
+    try {
+      const mine = await apiClient.get('/member/events');
+      setMyRsvps(Object.fromEntries(
+        mine.filter((e) => e.hasMemberRsvpd).map((e) => [e.id, e.memberRsvpSource])
+      ));
+    } catch (e) {
+      console.warn('Failed to load your RSVPs:', e);
+    }
+  };
+
+  // Only an RSVP made here can be cancelled here; one from Luma or a form has
+  // to change where it was made (the server answers 409 RSVP_EXTERNAL).
+  const toggleMyRsvp = async (event) => {
+    const going = myRsvps[event.id] === 'IN_APP';
+    setMyRsvpSaving(event.id);
+    setError('');
+    try {
+      const path = `/member/events/${event.id}/rsvp`;
+      const status = going ? await apiClient.delete(path) : await apiClient.put(path, {});
+      setMyRsvps((prev) => {
+        const next = { ...prev };
+        if (status.hasMemberRsvpd) next[event.id] = status.memberRsvpSource;
+        else delete next[event.id];
+        return next;
+      });
+      // The RSVP is saved by now. A failed count refresh must not read as a
+      // failed save, or a retry would undo what just worked.
+      const seq = (statsRequestSeq.current[event.id] || 0) + 1;
+      statsRequestSeq.current[event.id] = seq;
+      apiClient.get(`/admin/events/${event.id}/stats`)
+        .then((stats) => {
+          if (statsRequestSeq.current[event.id] !== seq) return;
+          setEventStats((prev) => ({ ...prev, [event.id]: stats.stats }));
+        })
+        .catch((statsError) => console.warn('Failed to refresh RSVP count:', statsError));
+    } catch (e) {
+      setError(e.code === 'EVENT_STARTED'
+        ? 'That event has already started, so RSVPs are closed.'
+        : (e.serverMessage || 'Failed to save your RSVP'));
+    } finally {
+      setMyRsvpSaving(null);
+    }
+  };
+
+  const myRsvpLabel = (event) => {
+    if (myRsvpSaving === event.id) return 'Saving…';
+    switch (myRsvps[event.id]) {
+      case 'IN_APP': return 'Going ✓ · Cancel';
+      case 'LUMA': return "RSVP'd via Luma";
+      case 'GOOGLE_FORM': return "RSVP'd via form";
+      default: return 'RSVP';
+    }
+  };
+
   function formatForDateTimeLocal(date, timeZone) {
     const d = new Date(date);
     if (Number.isNaN(d.getTime())) return '';
@@ -110,7 +173,8 @@ export default function EventManagement() {
       setLoading(true);
       const data = await apiClient.get('/admin/events');
       setEvents(data);
-      
+      fetchMyRsvps();
+
       // Fetch stats for each event
       const stats = {};
       for (const event of data) {
@@ -805,34 +869,56 @@ export default function EventManagement() {
                   </TableCell>
                   <TableCell data-label="Member RSVP">
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.memberRsvpUrl ? (
-                        <>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Chip 
-                              label={`${stats.memberRsvpCount} RSVPs`} 
-                              size="small" 
-                              color="secondary" 
-                              variant="outlined"
-                            />
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() => window.open(event.memberRsvpUrl, '_blank')}
-                            >
-                              View Form
-                            </Button>
-                          </Stack>
+                      {/* Members RSVP in the app, so the count stands with or without a form. */}
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Chip
+                          label={`${stats.memberRsvpCount} RSVPs`}
+                          size="small"
+                          color="secondary"
+                          variant="outlined"
+                        />
+                        {event.memberRsvpUrl && (
                           <Button
                             size="small"
-                            variant="outlined"
-                            disabled={syncLoading[`${event.id}-member-rsvp`]}
-                            onClick={() => syncMemberRSVP(event.id)}
+                            variant="text"
+                            onClick={() => window.open(event.memberRsvpUrl, '_blank')}
                           >
-                            {syncLoading[`${event.id}-member-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                            View Form
                           </Button>
-                        </>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">No Form</Typography>
+                        )}
+                      </Stack>
+                      {(() => {
+                        const started = new Date(event.eventStartDate) <= new Date();
+                        const external = myRsvps[event.id] && myRsvps[event.id] !== 'IN_APP';
+                        return (
+                          <Tooltip
+                            title={external
+                              ? 'Change this RSVP where you made it'
+                              : started ? 'This event has started' : 'Your own RSVP'}
+                          >
+                            <span>
+                              <Button
+                                size="small"
+                                variant={myRsvps[event.id] ? 'contained' : 'outlined'}
+                                color={myRsvps[event.id] ? 'success' : 'primary'}
+                                disabled={myRsvpSaving === event.id || external || started}
+                                onClick={() => toggleMyRsvp(event)}
+                              >
+                                {myRsvpLabel(event)}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        );
+                      })()}
+                      {event.memberRsvpUrl && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={syncLoading[`${event.id}-member-rsvp`]}
+                          onClick={() => syncMemberRSVP(event.id)}
+                        >
+                          {syncLoading[`${event.id}-member-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                        </Button>
                       )}
                     </Stack>
                   </TableCell>
