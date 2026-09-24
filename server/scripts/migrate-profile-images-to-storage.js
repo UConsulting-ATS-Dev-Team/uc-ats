@@ -84,6 +84,9 @@ async function main() {
     return;
   }
 
+  let uploaded = 0;
+  let cleared = 0;
+  let skipped = 0;
   let failed = 0;
   for (const user of plan.upload) {
     try {
@@ -97,8 +100,10 @@ async function main() {
       });
       if (count === 0) {
         await removeProfileImage(url);
+        skipped += 1;
         console.log(`  skipped ${user.fullName}: image changed during the run`);
       } else {
+        uploaded += 1;
         console.log(`  uploaded ${user.fullName}`);
       }
     } catch (error) {
@@ -107,12 +112,16 @@ async function main() {
     }
   }
   for (const user of plan.clear) {
-    await prisma.user.updateMany({
+    const { count } = await prisma.user.updateMany({
       where: { id: user.id, profileImage: user.profileImage },
       data: { profileImage: null },
     });
+    if (count === 0) skipped += 1;
+    else cleared += 1;
   }
-  console.log(`Done. ${plan.upload.length - failed} uploaded, ${plan.clear.length} cleared, ${failed} failed.`);
+  console.log(
+    `Done. ${uploaded} uploaded, ${cleared} cleared, ${skipped} skipped (image changed during the run), ${failed} failed.`
+  );
   console.log('Signed-in users see the change within 5 minutes (user cache TTL).');
 
   await prisma.$disconnect();

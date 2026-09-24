@@ -55,7 +55,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  prisma.user.findUnique.mockImplementation(({ where: { id } }) => ALL.find((u) => u.id === id) || null);
+  prisma.user.findUnique.mockImplementation(async ({ where: { id } }) => ALL.find((u) => u.id === id) || null);
   prisma.user.update.mockImplementation(({ where: { id }, data }) => ({ ...ALL.find((u) => u.id === id), ...data }));
   storeProfileImage.mockResolvedValue(NEW_URL);
   removeProfileImage.mockResolvedValue();
@@ -111,6 +111,31 @@ describe('POST /api/users/:id/profile-image', () => {
     expect(res.status).toBe(500);
     expect(removeProfileImage).toHaveBeenCalledWith(NEW_URL);
     expect(removeProfileImage).not.toHaveBeenCalledWith(OLD_URL);
+    error.mockRestore();
+  });
+
+  it('keeps the new object when the write committed but the reply was lost', async () => {
+    // Deleting it here would leave the row pointing at a missing image.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prisma.user.update.mockRejectedValue(new Error('connection reset'));
+    prisma.user.findUnique
+      .mockResolvedValueOnce(member)
+      .mockResolvedValueOnce({ ...member, profileImage: NEW_URL });
+    await upload('member-1', { user: member, file: Buffer.from('x') });
+
+    expect(removeProfileImage).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('keeps the new object when the row cannot be re-read either', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prisma.user.update.mockRejectedValue(new Error('connection reset'));
+    prisma.user.findUnique
+      .mockResolvedValueOnce(member)
+      .mockRejectedValueOnce(new Error('connection reset'));
+    await upload('member-1', { user: member, file: Buffer.from('x') });
+
+    expect(removeProfileImage).not.toHaveBeenCalled();
     error.mockRestore();
   });
 

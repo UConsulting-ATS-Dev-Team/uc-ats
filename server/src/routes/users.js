@@ -285,8 +285,15 @@ router.post('/:id/profile-image', requireAuth, canEditProfileImage, profileImage
         }
       });
     } catch (error) {
-      // Nothing points at the new object, so it would never be cleaned up.
-      await removeProfileImage(fileUrl);
+      // An unused object would never be cleaned up, but the write may have
+      // committed before the connection dropped. Delete only when the row is
+      // confirmed not to point at it; a leaked object beats a dead avatar.
+      const current = await prisma.user
+        .findUnique({ where: { id }, select: { profileImage: true } })
+        .catch(() => null);
+      if (current && current.profileImage !== fileUrl) {
+        await removeProfileImage(fileUrl);
+      }
       throw error;
     }
     invalidateUserCache(id);
