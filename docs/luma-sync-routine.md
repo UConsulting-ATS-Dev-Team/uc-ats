@@ -30,26 +30,46 @@ thing standing in its way:
 
 What the prompt adds is the rule that the routine never writes to Luma at all.
 What it cannot add is a guarantee. If the routine is ever believed to have been
-talked into something, revoke the Luma sign-in and rotate `LUMA_SYNC_TOKEN`.
+talked into something, revoke the Luma sign-in and rotate the sync token
+(Event Management → Luma Sync Setup → *Generate a new one*).
 
 ## Setup (once)
 
-1. **Render**: set `LUMA_SYNC_TOKEN` on the web service. Generate it randomly,
-   at least 32 characters — the endpoints refuse a shorter one as a placeholder
-   and answer `503`, the same as if it were unset.
+1. **In the ATS**: Event Management → **Luma Sync Setup** → *Generate token*.
+   That is the whole server side of it. The token is stored, takes effect on the
+   next request with no redeploy, and the dialog hands back the routine prompt
+   with the token already in it.
 2. **The routine**, on one person's Claude account (record whose — it runs on
    their usage, and it stops if they leave):
    - Schedule: hourly, the shortest interval routines allow.
    - Connectors: **only** Luma, signed in as `uconsultingla@gmail.com`.
    - Network: Custom, allowing only `uconsultingats.com`.
-   - Environment: `LUMA_SYNC_TOKEN`, the same value as on Render.
-   - Prompt: everything in the next section.
+   - Prompt: paste what the dialog gives you.
+
+**The generated prompt carries the token, so the prompt is a secret.** That is
+the trade the panel makes: the alternative is a second place to configure, and
+it was the step that kept the sync from being set up at all. Paste it into the
+routine and nowhere else — not into a shared doc, a ticket or a Slack message.
+
+Rotating is the same button. The old token stops working the moment a new one is
+generated, so the routine fails hourly with `401` until its prompt is replaced;
+do the two together.
+
+`LUMA_SYNC_TOKEN` in the server environment still works and is checked alongside
+the generated one, so a deployment set up the old way keeps syncing and does not
+have to be migrated. Setting one does not disable the other. Only the generated
+token can be read or rotated from the ATS.
 
 Each Luma event still has to be created under the club account (or with that
 account added as a manager), carry a required question whose label contains
 "UID", and have its `luma.com/<slug>` link pasted into the ATS event.
 
 ## The prompt
+
+This is the prompt as it reads with no token filled in. **Copy the real one
+from Event Management → Luma Sync Setup**, which substitutes the token and the
+ATS host; it is built in `server/src/services/luma/syncPrompt.js`, and the two
+are kept in step by hand.
 
 ```text
 You are the UConsulting ATS event sync. You run hourly. Your whole job is to
@@ -70,8 +90,12 @@ delete_ticket_type, update_calendar, approve_calendar_event,
 reject_calendar_event. You never write anything to Luma. You never email,
 message, invite, approve, decline or check in anybody.
 
-Send `Authorization: Bearer $LUMA_SYNC_TOKEN` with every ATS request. Send guest
-data to no host but uconsultingats.com, and to no endpoint but these three.
+Send this header with every ATS request:
+
+  Authorization: Bearer <the generated token>
+
+That token is a secret. Send it to no host but uconsultingats.com, send guest
+data nowhere else, and never repeat it in your report.
 
 STEPS
 

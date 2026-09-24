@@ -13,6 +13,7 @@ import routes from './lumaIntegration.js';
 vi.mock('../prismaClient.js', () => ({
   default: {
     recruitingCycle: { findFirst: vi.fn() },
+    lumaSyncSetting: { findUnique: vi.fn() },
     events: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -84,6 +85,9 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.LUMA_SYNC_TOKEN = TOKEN;
+  // No generated token by default, so these tests keep exercising the
+  // environment one; the generated path has its own describe below.
+  prisma.lumaSyncSetting.findUnique.mockResolvedValue(null);
   cyclesAre();
   prisma.events.findMany.mockResolvedValue([]);
   prisma.events.findFirst.mockResolvedValue(EVENT);
@@ -136,6 +140,76 @@ describe('the sync token', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await call('/events', { token: 'short' });
     expect(res.status).toBe(503);
+  });
+});
+
+// The token an admin generates in Event Management, stored in the database so
+// it can be read back into the routine's prompt. It is accepted *alongside* the
+// environment one rather than instead of it: a deployment that already had
+// LUMA_SYNC_TOKEN set must not stop syncing the moment somebody generates one.
+describe('a generated sync token', () => {
+  const GENERATED = 'generated-token-long-enough-to-be-real-00';
+
+  const generated = (token = GENERATED) =>
+    prisma.lumaSyncSetting.findUnique.mockResolvedValue({
+      token,
+      tokenSetAt: new Date('2026-09-24T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-24T12:00:00.000Z'),
+      updatedById: 'admin-1'
+    });
+
+  it('is accepted', async () => {
+    generated();
+    const res = await call('/events', { token: GENERATED });
+    expect(res.status).toBe(200);
+  });
+
+  it('does not stop the environment token working', async () => {
+    generated();
+    const res = await call('/events', { token: TOKEN });
+    expect(res.status).toBe(200);
+  });
+
+  it('works when the environment has no token at all', async () => {
+    delete process.env.LUMA_SYNC_TOKEN;
+    generated();
+    const res = await call('/events', { token: GENERATED });
+    expect(res.status).toBe(200);
+  });
+
+  it('still turns away a token that is neither', async () => {
+    generated();
+    const res = await call('/events', { token: 'neither-of-the-two-but-long-enough-0000' });
+    expect(res.status).toBe(401);
+  });
+
+  // Same placeholder rule as the environment variable: a short stored value is
+  // no configuration, not a weak one.
+  it('is ignored while it is too short', async () => {
+    delete process.env.LUMA_SYNC_TOKEN;
+    generated('short');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call('/events', { token: 'short' });
+    expect(res.status).toBe(503);
+  });
+
+  // The table is created by a hand-applied migration, so the code can meet a
+  // database without it. Falling back keeps an existing deployment syncing.
+  it('falls back to the environment token when the table is missing', async () => {
+    const missing = Object.assign(new Error('no such table'), { code: 'P2021' });
+    prisma.lumaSyncSetting.findUnique.mockRejectedValue(missing);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call('/events', { token: TOKEN });
+    expect(res.status).toBe(200);
+  });
+
+  // Any other database failure is not a licence to wave the request through.
+  it('refuses rather than guessing when the read fails outright', async () => {
+    prisma.lumaSyncSetting.findUnique.mockRejectedValue(new Error('connection lost'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call('/events', { token: TOKEN });
+    expect(res.status).toBe(500);
+    expect(prisma.events.findMany).not.toHaveBeenCalled();
   });
 });
 

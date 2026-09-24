@@ -30,6 +30,7 @@ import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import LumaGuestsPanel, { relativeAge, staleSync } from '../components/LumaGuestsPanel';
+import LumaSyncSetupDialog from '../components/LumaSyncSetupDialog';
 import { useAuth } from '../context/AuthContext';
 import { formatInLA, localInputToUTC } from '../../../server/src/utils/timezoneUtils';
 
@@ -86,6 +87,9 @@ export default function EventManagement() {
 
   // Which event's Luma guest panel is open. Null when none is.
   const [lumaPanelEvent, setLumaPanelEvent] = useState(null);
+
+  // The token-and-prompt dialog that sets the hourly sync up.
+  const [syncSetupOpen, setSyncSetupOpen] = useState(false);
 
   // Whether the Google Form sync sends its own RSVP/attendance confirmations.
   // Null until it has been read, so the switch does not flicker through "off".
@@ -738,6 +742,12 @@ export default function EventManagement() {
           {user?.role === 'ADMIN' && (
             <Button variant="outlined" onClick={openCopyDialog}>
               Copy from Cycle
+            </Button>
+          )}
+          {/* The one setup step that used to need the Render dashboard. */}
+          {user?.role === 'ADMIN' && (
+            <Button variant="outlined" onClick={() => setSyncSetupOpen(true)}>
+              Luma Sync Setup
             </Button>
           )}
           <Button 
@@ -1621,6 +1631,8 @@ export default function EventManagement() {
         onClose={() => setLumaPanelEvent(null)}
         onChanged={fetchEvents}
       />
+
+      <LumaSyncSetupDialog open={syncSetupOpen} onClose={() => setSyncSetupOpen(false)} />
 
     </Box>
     </AccessControl>

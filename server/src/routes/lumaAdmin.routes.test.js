@@ -15,7 +15,8 @@ vi.mock('../prismaClient.js', () => ({
     events: { findUnique: vi.fn() },
     lumaGuest: { findMany: vi.fn(), count: vi.fn() },
     candidate: { findMany: vi.fn() },
-    user: { findMany: vi.fn() }
+    user: { findMany: vi.fn() },
+    lumaSyncSetting: { findUnique: vi.fn(), upsert: vi.fn() }
   }
 }));
 
@@ -104,6 +105,9 @@ beforeEach(() => {
   prisma.lumaGuest.count.mockResolvedValue(12);
   prisma.candidate.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
+  prisma.lumaSyncSetting.findUnique.mockResolvedValue(null);
+  prisma.lumaSyncSetting.upsert.mockResolvedValue({});
+  delete process.env.LUMA_SYNC_TOKEN;
 });
 
 describe('GET /events/:id/guests', () => {
@@ -243,5 +247,78 @@ describe('GET /people', () => {
   it('searches members by role, not by everyone with an account', async () => {
     await call('/people?q=be');
     expect(prisma.user.findMany.mock.calls[0][0].where).toMatchObject({ role: { in: ['MEMBER', 'ADMIN'] } });
+  });
+});
+
+// Setting the hourly sync up without leaving the app. This is the one endpoint
+// in the ATS that returns a live secret in a response body, which is the whole
+// feature: the token exists to be pasted into a Claude routine.
+describe('the sync token', () => {
+  const STORED = 'stored-token-long-enough-to-be-accepted-0';
+
+  const stored = (token = STORED) =>
+    prisma.lumaSyncSetting.findUnique.mockResolvedValue({
+      token,
+      tokenSetAt: new Date('2026-09-24T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-24T12:00:00.000Z'),
+      updatedById: 'admin-1'
+    });
+
+  it('reports nothing configured before one exists', async () => {
+    const body = await (await call('/sync-token')).json();
+    expect(body).toMatchObject({ token: null, configured: false, envTokenSet: false });
+  });
+
+  it('returns the token itself, because it has to be pasted somewhere', async () => {
+    stored();
+    const body = await (await call('/sync-token')).json();
+    expect(body.token).toBe(STORED);
+  });
+
+  it('hands back a prompt carrying the token', async () => {
+    stored();
+    const { prompt } = await (await call('/sync-token')).json();
+    expect(prompt).toContain(`Authorization: Bearer ${STORED}`);
+    expect(prompt).toContain('EVERY OTHER LUMA TOOL IS FORBIDDEN');
+  });
+
+  // Before anything is generated the prompt is still shown, so it must not read
+  // as though it would work.
+  it('does not render a usable prompt with no token', async () => {
+    const { prompt } = await (await call('/sync-token')).json();
+    expect(prompt).not.toContain('Bearer null');
+    expect(prompt).toContain('Event Management');
+  });
+
+  it('generates a token and records the admin who did it', async () => {
+    let created;
+    prisma.lumaSyncSetting.upsert.mockImplementation(({ create }) => {
+      created = create;
+      return Promise.resolve({});
+    });
+    prisma.lumaSyncSetting.findUnique.mockImplementation(() =>
+      Promise.resolve({ token: created.token, tokenSetAt: new Date(), updatedAt: new Date(), updatedById: 'admin-1' })
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const body = await (await call('/sync-token', { method: 'POST' })).json();
+
+    expect(created.updatedById).toBe('admin-1');
+    expect(body.token).toBe(created.token);
+    expect(body.prompt).toContain(created.token);
+  });
+
+  it('clears the stored token on delete', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await call('/sync-token', { method: 'DELETE' });
+    expect(prisma.lumaSyncSetting.upsert.mock.calls[0][0].update).toMatchObject({ token: null });
+  });
+
+  // Clearing cannot reach the server's environment, and the panel says so.
+  it('still reports the environment token as configured after a clear', async () => {
+    process.env.LUMA_SYNC_TOKEN = 'env-token-long-enough-to-be-accepted-000';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const body = await (await call('/sync-token', { method: 'DELETE' })).json();
+    expect(body).toMatchObject({ token: null, envTokenSet: true, configured: true });
   });
 });

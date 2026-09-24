@@ -21,6 +21,7 @@ import express from 'express';
 
 import prisma from '../prismaClient.js';
 import { ingestGuests } from '../services/luma/ingestGuests.js';
+import { acceptedSyncTokens } from '../services/luma/syncToken.js';
 import { CYCLE_AUDIENCE, resolveCycle } from '../services/activeCycle.js';
 
 const router = express.Router();
@@ -31,12 +32,6 @@ const router = express.Router();
 // index.js, which has already parsed the body by the time this router sees it -
 // a limit set here would never be consulted.
 const MAX_ENTRIES = 100;
-
-// A sync token is machine-generated and lives in two configuration screens; it
-// has no reason to be short, and this endpoint writes to the database. A token
-// under this length reads as a placeholder somebody meant to replace, and is
-// refused the same way as no token at all.
-const MIN_TOKEN_LENGTH = 32;
 
 const LUMA_EVENT_ID = /^evt-[A-Za-z0-9]+$/;
 
@@ -56,22 +51,36 @@ function tokenMatches(presented, expected) {
 }
 
 /**
- * Bearer LUMA_SYNC_TOKEN, compared in constant time.
+ * A bearer token the ATS accepts for sync, compared in constant time.
  *
- * Read from the environment per request rather than from config.js, like the
- * SES webhook's topic ARN: an unset value has to mean "refuse everything" at
- * request time, not "the server would not have started".
+ * Resolved per request rather than at boot, like the SES webhook's topic ARN:
+ * an unset value has to mean "refuse everything" at request time, not "the
+ * server would not have started". That is also what lets a token generated in
+ * Event Management work immediately, with no redeploy.
+ *
+ * Two tokens are accepted, not one — the generated one and LUMA_SYNC_TOKEN in
+ * the environment (services/luma/syncToken.js explains why both).
  */
-export function requireLumaSyncToken(req, res, next) {
-  const expected = process.env.LUMA_SYNC_TOKEN || '';
-  if (expected.length < MIN_TOKEN_LENGTH) {
-    console.error('[luma] LUMA_SYNC_TOKEN is unset or too short; refusing all sync requests');
+export async function requireLumaSyncToken(req, res, next) {
+  let accepted;
+  try {
+    accepted = await acceptedSyncTokens();
+  } catch (error) {
+    console.error('[luma] could not read the sync token:', error);
+    return res.status(500).json({ error: 'Could not verify the sync token' });
+  }
+
+  if (!accepted.length) {
+    console.error('[luma] no sync token is configured; refusing all sync requests');
     return res.status(503).json({ error: 'Luma sync is not configured' });
   }
 
   const header = req.get('authorization') || '';
   const presented = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (!presented || !tokenMatches(presented, expected)) {
+  // Every candidate is compared even once one has matched, so the work does not
+  // depend on which token was presented.
+  const matched = accepted.reduce((found, expected) => tokenMatches(presented, expected) || found, false);
+  if (!presented || !matched) {
     return res.status(401).json({ error: 'Invalid sync token' });
   }
   return next();

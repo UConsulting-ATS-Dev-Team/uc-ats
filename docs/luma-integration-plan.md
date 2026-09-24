@@ -8,8 +8,9 @@ Phase 3 — the admin panel, the event link field and the candidate RSVP button 
 database by hand and recorded with `migrate resolve`** (CLAUDE.md, "Applying a migration").
 Sign-up confirmation emails are off, which is the default the migration inserts.
 
-**None of it does anything yet.** The manual steps below are what start it: `LUMA_SYNC_TOKEN`
-on Render and the hourly routine. Until those exist, `/api/integrations/luma` answers 503,
+**None of it does anything yet.** The manual steps below are what start it: a sync token
+generated in Event Management, and the hourly routine. Until those exist,
+`/api/integrations/luma` answers 503,
 no guest is ever ingested, and the Phase 3 panel correctly shows nothing. Phase 4 (retiring
 the Google event forms) waits for the end of the current cycle.
 
@@ -395,14 +396,18 @@ to switch over.
 
 **One-time**
 
-1. Create the Claude routine (hourly). The prompt to paste, and the settings, are in
+1. Generate the sync token: **Event Management → Luma Sync Setup → Generate token**.
+   It is stored in the database and takes effect on the next request, with no redeploy,
+   and the same dialog hands back the routine prompt with the token already in it. Until
+   a token exists (or `LUMA_SYNC_TOKEN` is set in the environment) the endpoints answer
+   503. The generated prompt therefore **contains a secret**; paste it into the routine
+   and nowhere else.
+2. Create the Claude routine (hourly). The settings are in
    [luma-sync-routine.md](luma-sync-routine.md):
    - Attach **only** the Luma connector, signed in as uconsultingla@gmail.com.
    - Set network to Custom, allowing only the ATS's Render host.
-   - Put `LUMA_SYNC_TOKEN` in the routine environment.
+   - Paste the prompt from the dialog. No routine environment variable is needed.
    - Record who owns it: the routine lives on that person's Claude account and usage.
-2. Set `LUMA_SYNC_TOKEN` on the Render web service — random, at least 32 characters, or
-   the endpoints treat it as unset and answer 503.
 3. Delete the test event `evt-jdRdVNKwbFxwg0B` once Phase 1 tests are done.
 4. Decide on registration approval. The recommendation is none, because pending guests
    don't count as RSVPs.
