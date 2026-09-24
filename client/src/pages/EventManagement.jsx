@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -87,6 +87,9 @@ export default function EventManagement() {
   // same endpoint members use, so an admin RSVPs exactly as a member does.
   const [myRsvps, setMyRsvps] = useState({});
   const [myRsvpSaving, setMyRsvpSaving] = useState(null);
+  // Latest count refresh per event. Toggling twice quickly starts two refreshes,
+  // and only the newer one may write, or a stale count can land last.
+  const statsRequestSeq = useRef({});
 
   const fetchMyRsvps = async () => {
     try {
@@ -116,8 +119,13 @@ export default function EventManagement() {
       });
       // The RSVP is saved by now. A failed count refresh must not read as a
       // failed save, or a retry would undo what just worked.
+      const seq = (statsRequestSeq.current[event.id] || 0) + 1;
+      statsRequestSeq.current[event.id] = seq;
       apiClient.get(`/admin/events/${event.id}/stats`)
-        .then((stats) => setEventStats((prev) => ({ ...prev, [event.id]: stats.stats })))
+        .then((stats) => {
+          if (statsRequestSeq.current[event.id] !== seq) return;
+          setEventStats((prev) => ({ ...prev, [event.id]: stats.stats }));
+        })
         .catch((statsError) => console.warn('Failed to refresh RSVP count:', statsError));
     } catch (e) {
       setError(e.code === 'EVENT_STARTED'
