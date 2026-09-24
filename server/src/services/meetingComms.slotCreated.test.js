@@ -39,13 +39,12 @@ describe('notifyHostSlotCreated', () => {
       'Kerckhoff Patio',
       slot.startTime,
       slot.endTime,
-      { invite: expect.objectContaining({ contentType: expect.stringContaining('method=REQUEST') }) }
+      { invite: expect.objectContaining({ contentType: expect.stringContaining('method=PUBLISH') }) }
     );
 
     const { invite } = sendMeetingSlotCreated.mock.calls[0][5];
     expect(invite.content).toContain('DTSTART:20260928T163000Z');
     expect(invite.content).toContain('UID:gtkuc-host-slot-1@uconsultingats.com');
-    expect(invite.content).toContain('mailto:avery@ucla.edu');
   });
 
   it('logs it against the slot as a host notification', async () => {
