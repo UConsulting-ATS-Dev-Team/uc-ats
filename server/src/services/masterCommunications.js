@@ -60,6 +60,12 @@ const MERGE_FIELDS = {
     email: (r) => r.email,
     role: (r) => r.role || '',
   },
+  'mailing-list': {
+    firstName: (r) => r.firstName || '',
+    lastName: (r) => r.lastName || '',
+    fullName: (r) => r.fullName,
+    email: (r) => r.email,
+  },
 };
 
 function renderMessage(text, recipient) {
@@ -285,6 +291,23 @@ export async function resolveRecipients({ audience, filters = {} }) {
       fullName: u.fullName,
       audience: 'user',
       role: u.role,
+    }));
+  }
+
+  // People imported from the retired recruiting-interest mailing list. They
+  // have no account and no application, so no filter applies to them.
+  if (audience === 'mailing-list') {
+    const contacts = await prisma.mailingListContact.findMany({
+      select: { id: true, email: true, firstName: true, lastName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return contacts.map((c) => ({
+      id: c.id,
+      email: c.email,
+      firstName: c.firstName || '',
+      lastName: c.lastName || '',
+      fullName: fullName(c.firstName, c.lastName),
+      audience: 'mailing-list',
     }));
   }
 

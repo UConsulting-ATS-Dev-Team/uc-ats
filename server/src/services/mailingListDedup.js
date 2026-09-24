@@ -15,17 +15,23 @@ import {
   indexExistingEmails,
   dedupeMailingList,
   summarize,
+  detectNameColumns,
+  toContacts,
 } from '../utils/mailingListImport.js';
 
 // Every table holding a real person's address. DecisionMessage.email is left
 // out on purpose: it is a copy of Application.email made when a decision is
 // queued, so counting it would double-count the same person.
+//
+// Contacts already imported from an earlier upload count too, so running the
+// same export twice imports nobody the second time.
 export async function loadExistingEmailIndex(client = prisma) {
-  const [users, candidates, applications, meetingSignups] = await Promise.all([
+  const [users, candidates, applications, meetingSignups, mailingList] = await Promise.all([
     client.user.findMany({ select: { email: true } }),
     client.candidate.findMany({ select: { email: true } }),
     client.application.findMany({ select: { email: true } }),
     client.meetingSignup.findMany({ select: { email: true } }),
+    client.mailingListContact.findMany({ select: { email: true } }),
   ]);
 
   return indexExistingEmails([
@@ -33,7 +39,36 @@ export async function loadExistingEmailIndex(client = prisma) {
     ...candidates.map((c) => ({ email: c.email, source: 'candidate' })),
     ...applications.map((a) => ({ email: a.email, source: 'application' })),
     ...meetingSignups.map((m) => ({ email: m.email, source: 'meeting-signup' })),
+    ...mailingList.map((m) => ({ email: m.email, source: 'mailing-list' })),
   ]);
+}
+
+// Saves the rows of an upload that survive dedup as MailingListContacts, so
+// Master Communications can email them.
+//
+// The file is deduped again here rather than trusting a list the browser sends
+// back: between the preview and the click, someone on the list may have
+// applied, and the server is the only side that can see that.
+export async function importMailingListCsv({ content, emailColumnOverride, fileName, importedById, client = prisma }) {
+  const run = await dedupeMailingListCsv({ content, emailColumnOverride, client });
+  if (!run.emailColumn) return { ...run, imported: 0 };
+
+  const contacts = toContacts({
+    kept: run.kept,
+    emailColumn: run.emailColumn,
+    nameColumns: detectNameColumns(run.headers),
+  });
+
+  // skipDuplicates covers two admins importing the same file at once: the
+  // unique index on email decides, and the loser's rows are skipped.
+  const { count } = contacts.length
+    ? await client.mailingListContact.createMany({
+      data: contacts.map((c) => ({ ...c, sourceFile: fileName || null, importedById: importedById || null })),
+      skipDuplicates: true,
+    })
+    : { count: 0 };
+
+  return { ...run, imported: count };
 }
 
 // Reads a CSV export and returns everything either caller needs to report on

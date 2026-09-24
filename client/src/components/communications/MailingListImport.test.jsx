@@ -103,6 +103,42 @@ describe('a file that deduped cleanly', () => {
   });
 });
 
+describe('importing the survivors', () => {
+  it('sends the same file and column to /import, then says where to email them', async () => {
+    vi.spyOn(apiClient, 'post').mockImplementation((url) => Promise.resolve(
+      url.endsWith('/import') ? { imported: 2, keptCount: 2 } : deduped
+    ));
+    const user = userEvent.setup();
+    render(<MailingListImport />);
+    await pickFile(user);
+
+    await user.click(await screen.findByRole('button', { name: /Import 2 contacts/i }));
+
+    const [url, body] = apiClient.post.mock.calls[1];
+    expect(url).toBe('/master-communications/mailing-list/import');
+    expect(body.get('file')).toBeInstanceOf(File);
+    expect(body.get('emailColumn')).toBe('Email');
+    expect(await screen.findByText(/Imported 2 contacts/)).toBeInTheDocument();
+    expect(screen.getByText(/Mailing list \(imported\) audience/)).toBeInTheDocument();
+    // One import per preview: a second click would only find them all known.
+    expect(screen.getByRole('button', { name: /Import 2 contacts/i })).toBeDisabled();
+  });
+
+  it('shows the reason when the import fails', async () => {
+    vi.spyOn(apiClient, 'post').mockImplementation((url) => (
+      url.endsWith('/import')
+        ? Promise.reject(Object.assign(new Error('x'), { serverMessage: 'Pick the email column before importing' }))
+        : Promise.resolve(deduped)
+    ));
+    const user = userEvent.setup();
+    render(<MailingListImport />);
+    await pickFile(user);
+
+    await user.click(await screen.findByRole('button', { name: /Import 2 contacts/i }));
+    expect(await screen.findByText(/Pick the email column/)).toBeInTheDocument();
+  });
+});
+
 describe('a file whose email column could not be found', () => {
   it('offers the headers to pick from instead of failing', async () => {
     vi.spyOn(apiClient, 'post').mockResolvedValue({
