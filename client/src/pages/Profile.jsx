@@ -126,9 +126,9 @@ const Profile = () => {
             // photos to JPEG before upload.
             inputProps={{
               'data-testid': 'profile-image-input',
-              accept: 'image/jpeg,image/png,image/webp,image/gif',
+              accept: 'image/jpeg,image/png,image/webp',
             }}
-            helperText="Max file size: 10MB. Supported formats: JPG, PNG, WebP, GIF"
+            helperText="Max file size: 10MB. Supported formats: JPG, PNG, WebP"
             onChange={handleFileChange}
             sx={{ mb: 2 }}
           />

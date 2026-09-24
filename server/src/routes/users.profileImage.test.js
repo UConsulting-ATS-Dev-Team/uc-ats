@@ -103,6 +103,17 @@ describe('POST /api/users/:id/profile-image', () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
+  it('deletes the new object when the row cannot be saved', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prisma.user.update.mockRejectedValue(new Error('connection reset'));
+    const res = await upload('member-1', { user: member, file: Buffer.from('x') });
+
+    expect(res.status).toBe(500);
+    expect(removeProfileImage).toHaveBeenCalledWith(NEW_URL);
+    expect(removeProfileImage).not.toHaveBeenCalledWith(OLD_URL);
+    error.mockRestore();
+  });
+
   it('answers 503 when storage is not configured, and keeps the old image', async () => {
     storeProfileImage.mockRejectedValue(
       Object.assign(new Error('File storage is not configured.'), { code: 'STORAGE_NOT_CONFIGURED' })

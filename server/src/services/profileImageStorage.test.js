@@ -6,6 +6,7 @@ import sharp from 'sharp';
 const storage = {
   getBucket: vi.fn(),
   createBucket: vi.fn(),
+  updateBucket: vi.fn(),
   upload: vi.fn(),
   getPublicUrl: vi.fn(),
   remove: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('../supabaseClient.js', () => ({
     storage: {
       getBucket: (...a) => storage.getBucket(...a),
       createBucket: (...a) => storage.createBucket(...a),
+      updateBucket: (...a) => storage.updateBucket(...a),
       from: () => ({
         upload: (...a) => storage.upload(...a),
         getPublicUrl: (...a) => storage.getPublicUrl(...a),
@@ -44,7 +46,7 @@ const png = (width, height) =>
 beforeEach(() => {
   vi.clearAllMocks();
   available = true;
-  storage.getBucket.mockResolvedValue({ data: { name: 'profile-images' } });
+  storage.getBucket.mockResolvedValue({ data: { name: 'profile-images', public: true } });
   storage.upload.mockResolvedValue({ error: null });
   storage.getPublicUrl.mockImplementation((key) => ({ data: { publicUrl: PUBLIC + key } }));
   storage.remove.mockResolvedValue({ error: null });
@@ -97,6 +99,18 @@ describe('storeProfileImage', () => {
     expect(storage.createBucket).toHaveBeenCalledWith('profile-images', { public: true });
   });
 
+  it('makes an existing private bucket public', async () => {
+    // The saved URLs are public URLs; a private bucket would answer them 400.
+    vi.resetModules();
+    const fresh = await import('./profileImageStorage.js');
+    storage.getBucket.mockResolvedValue({ data: { name: 'profile-images', public: false } });
+    storage.updateBucket.mockResolvedValue({ error: null });
+
+    await fresh.storeProfileImage('user-1', await png(10, 10));
+
+    expect(storage.updateBucket).toHaveBeenCalledWith('profile-images', { public: true });
+  });
+
   it('refuses to fall back to the local disk in production', async () => {
     // The fallback there is the original bug: accepted, saved, gone at deploy.
     available = false;
@@ -125,6 +139,14 @@ describe('removeProfileImage', () => {
     await removeProfileImage('https://example.com/me.jpg');
     await removeProfileImage(null);
     expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('logs a delete that Supabase reports as failed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    storage.remove.mockResolvedValue({ error: { message: 'not allowed' } });
+    await removeProfileImage(`${PUBLIC}user-1/a.jpg`);
+    expect(warn).toHaveBeenCalledWith('[profileImageStorage] remove:', 'not allowed');
+    warn.mockRestore();
   });
 
   it('does not throw when the delete fails', async () => {

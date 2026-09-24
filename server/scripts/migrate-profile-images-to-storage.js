@@ -56,7 +56,9 @@ async function main() {
 
   const { default: prisma } = await import('../src/prismaClient.js');
   const { isSupabaseAvailable } = await import('../src/supabaseClient.js');
-  const { storeProfileImage, LOCAL_UPLOAD_DIR } = await import('../src/services/profileImageStorage.js');
+  const { storeProfileImage, removeProfileImage, LOCAL_UPLOAD_DIR } = await import(
+    '../src/services/profileImageStorage.js'
+  );
 
   if (apply && !isSupabaseAvailable()) {
     // storeProfileImage would fall back to the local disk, which is the thing
@@ -88,12 +90,17 @@ async function main() {
       const buffer = fs.readFileSync(path.join(LOCAL_UPLOAD_DIR, user.fileName));
       const url = await storeProfileImage(user.id, buffer);
       // Conditional on the old value, so a person who uploads a new image
-      // while this runs keeps theirs.
-      await prisma.user.updateMany({
+      // while this runs keeps theirs. The copy made here is then unused.
+      const { count } = await prisma.user.updateMany({
         where: { id: user.id, profileImage: user.profileImage },
         data: { profileImage: url },
       });
-      console.log(`  uploaded ${user.fullName}`);
+      if (count === 0) {
+        await removeProfileImage(url);
+        console.log(`  skipped ${user.fullName}: image changed during the run`);
+      } else {
+        console.log(`  uploaded ${user.fullName}`);
+      }
     } catch (error) {
       failed += 1;
       console.error(`  FAILED ${user.fullName}: ${error.message}`);

@@ -44,6 +44,11 @@ const ensureBucket = async () => {
     if (error && !/already exists/i.test(error.message)) {
       throw new Error(`Failed to create ${BUCKET} bucket: ${error.message}`);
     }
+  } else if (!data.public) {
+    // The URLs saved on user rows are public URLs, which a private bucket
+    // answers with 400. Flip it rather than store images nobody can load.
+    const { error } = await supabase.storage.updateBucket(BUCKET, { public: true });
+    if (error) throw new Error(`Failed to make ${BUCKET} bucket public: ${error.message}`);
   }
   bucketReady = true;
 };
@@ -52,6 +57,9 @@ const tagged = (message, code) => Object.assign(new Error(message), { code });
 
 /**
  * Decode, apply EXIF rotation, shrink and re-encode as JPEG.
+ *
+ * An animated GIF keeps only its first frame, which is why the profile page
+ * no longer offers GIF.
  *
  * Decoding is also the real format check: a file that sharp cannot read is
  * refused here rather than stored and shown broken. That includes iPhone HEIC,
@@ -67,7 +75,7 @@ export const normalizeProfileImage = async (buffer) => {
       .toBuffer();
   } catch {
     throw tagged(
-      "We couldn't read that image. Please upload a JPG, PNG, WebP or GIF. " +
+      "We couldn't read that image. Please upload a JPG, PNG or WebP. " +
         'iPhone HEIC photos need to be exported as JPG first.',
       'IMAGE_UNREADABLE'
     );
@@ -131,7 +139,8 @@ export const removeProfileImage = async (url) => {
   const key = bucketKeyFromUrl(url);
   if (!key || !isSupabaseAvailable()) return;
   try {
-    await supabase.storage.from(BUCKET).remove([key]);
+    const { error } = await supabase.storage.from(BUCKET).remove([key]);
+    if (error) console.warn('[profileImageStorage] remove:', error.message);
   } catch (error) {
     console.warn('[profileImageStorage] remove:', error.message);
   }

@@ -36,6 +36,15 @@ const profileImageUpload = (req, res, next) => {
   });
 };
 
+// Runs before the upload is buffered, so a request aimed at someone else's
+// account is refused without holding up to 10MB in memory first.
+const canEditProfileImage = (req, res, next) => {
+  if (req.user.role !== 'ADMIN' && req.user.id !== req.params.id) {
+    return res.status(403).json({ error: 'Access denied.' });
+  }
+  next();
+};
+
 // Get all users (admin only)
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -247,14 +256,9 @@ router.patch('/:id', requireAuth, async (req, res) => {
 });
 
 // Upload profile image
-router.post('/:id/profile-image', requireAuth, profileImageUpload, async (req, res) => {
+router.post('/:id/profile-image', requireAuth, canEditProfileImage, profileImageUpload, async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Check if user is admin or uploading their own image
-    if (req.user.role !== 'ADMIN' && req.user.id !== id) {
-      return res.status(403).json({ error: 'Access denied.' });
-    }
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -267,17 +271,24 @@ router.post('/:id/profile-image', requireAuth, profileImageUpload, async (req, r
 
     const fileUrl = await storeProfileImage(id, req.file.buffer);
 
-    const updatedUser = await prisma.user.update({
-      where: { id },
-      data: { profileImage: fileUrl },
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        profileImage: true,
-        role: true
-      }
-    });
+    let updatedUser;
+    try {
+      updatedUser = await prisma.user.update({
+        where: { id },
+        data: { profileImage: fileUrl },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          profileImage: true,
+          role: true
+        }
+      });
+    } catch (error) {
+      // Nothing points at the new object, so it would never be cleaned up.
+      await removeProfileImage(fileUrl);
+      throw error;
+    }
     invalidateUserCache(id);
 
     if (existing.profileImage && existing.profileImage !== fileUrl) {
