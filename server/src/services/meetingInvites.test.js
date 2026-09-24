@@ -33,12 +33,12 @@ describe('candidateMeetingInvite', () => {
   it('books the slot time and place, naming the host', () => {
     const invite = candidateMeetingInvite({ slot, ...candidate });
 
-    expect(invite.contentType).toContain('method=REQUEST');
+    expect(invite.contentType).toContain('method=PUBLISH');
     expect(invite.content).toContain('DTSTART:20261001T180000Z');
     expect(invite.content).toContain('DTEND:20261001T183000Z');
     expect(prop(invite, 'SUMMARY')).toBe('SUMMARY:Get to Know UC with Grace Hopper');
     expect(prop(invite, 'LOCATION')).toBe('LOCATION:Kerckhoff Coffee House');
-    expect(prop(invite, 'ATTENDEE')).toContain('mailto:ada@ucla.edu');
+    expect(prop(invite, 'ATTENDEE')).toBeNull();
   });
 
   it('cancels the same entry it booked', () => {
@@ -91,14 +91,13 @@ describe('hostMeetingInvite', () => {
     const second = hostMeetingInvite({ slot, ...host, attendeeNames: ['Ada Lovelace', 'Alan Turing'] });
 
     expect(prop(second, 'UID')).toBe(prop(first, 'UID'));
-    expect(second.contentType).toContain('method=REQUEST');
+    expect(second.contentType).toContain('method=PUBLISH');
     expect(prop(second, 'SUMMARY')).toBe('SUMMARY:Get to Know UC: Ada Lovelace\\, Alan Turing');
-    expect(prop(second, 'ATTENDEE')).toContain('mailto:grace@ucla.edu');
   });
 
   it('keeps the entry when one of two candidates cancels', () => {
     const invite = hostMeetingInvite({ slot, ...host, attendeeNames: ['Alan Turing'] });
-    expect(invite.contentType).toContain('method=REQUEST');
+    expect(invite.contentType).toContain('method=PUBLISH');
     expect(prop(invite, 'STATUS')).toBe('STATUS:CONFIRMED');
   });
 
@@ -106,7 +105,7 @@ describe('hostMeetingInvite', () => {
     // The host set this time aside when they opened the slot. The last candidate
     // leaving frees it for someone else; it does not take it off their calendar.
     const invite = hostMeetingInvite({ slot, ...host, attendeeNames: [] });
-    expect(invite.contentType).toContain('method=REQUEST');
+    expect(invite.contentType).toContain('method=PUBLISH');
     expect(prop(invite, 'STATUS')).toBe('STATUS:CONFIRMED');
     expect(prop(invite, 'SUMMARY')).toBe('SUMMARY:Get to Know UC (open slot)');
   });

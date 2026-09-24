@@ -80,6 +80,7 @@ const MERGE_FIELDS = {
   applicants: ['firstName', 'lastName', 'fullName', 'email', 'phoneNumber'],
   members: ['firstName', 'lastName', 'fullName', 'email', 'role'],
   admins: ['firstName', 'lastName', 'fullName', 'email', 'role'],
+  'mailing-list': ['firstName', 'lastName', 'fullName', 'email'],
 };
 
 const SELECT_PROPS = {
@@ -510,6 +511,7 @@ const MasterCommunications = () => {
       { value: 'applicants', label: 'Applicants' },
       { value: 'members', label: 'Members' },
       { value: 'admins', label: 'Admins' },
+      { value: 'mailing-list', label: 'Mailing list (imported)' },
     ];
   }, [channel]);
 
@@ -541,19 +543,22 @@ const MasterCommunications = () => {
         </TextField>
       </Grid>
 
-      <Grid item xs={12} sm={6} md={4}>
-        <TextField
-          select
-          fullWidth
-          label="Recruiting Cycles"
-          value={selectedCycles}
-          onChange={(e) => setSelectedCycles(e.target.value)}
-          SelectProps={{ multiple: true, ...SELECT_PROPS }}
-          helperText={selectedCycles.length > 1 ? 'Recipients are de-duplicated across cycles.' : ''}
-        >
-          {cycleMenuItems}
-        </TextField>
-      </Grid>
+      {/* Imported mailing-list contacts belong to no cycle. */}
+      {audience !== 'mailing-list' && (
+        <Grid item xs={12} sm={6} md={4}>
+          <TextField
+            select
+            fullWidth
+            label="Recruiting Cycles"
+            value={selectedCycles}
+            onChange={(e) => setSelectedCycles(e.target.value)}
+            SelectProps={{ multiple: true, ...SELECT_PROPS }}
+            helperText={selectedCycles.length > 1 ? 'Recipients are de-duplicated across cycles.' : ''}
+          >
+            {cycleMenuItems}
+          </TextField>
+        </Grid>
+      )}
 
       {audience === 'applicants' && (
         <>

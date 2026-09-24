@@ -119,3 +119,39 @@ export function summarize(results) {
   }
   return { total: results.length, counts, bySource };
 }
+
+// Which columns hold a name, so an imported contact can be greeted by one.
+// Exports vary: some split first and last, some carry one "Name" column, some
+// have none at all. A contact with no name is still worth importing.
+export function detectNameColumns(headers) {
+  const lower = headers.map((h) => h.toLowerCase().trim());
+  const find = (...names) => {
+    const i = lower.findIndex((h) => names.includes(h));
+    return i === -1 ? null : headers[i];
+  };
+  return {
+    first: find('first name', 'firstname', 'first', 'given name'),
+    last: find('last name', 'lastname', 'last', 'surname', 'family name'),
+    full: find('name', 'full name', 'fullname'),
+  };
+}
+
+// Turns the rows that survived dedup into contacts ready to store. A single
+// name column is split on its first space, which is wrong for some names but
+// only ever feeds a {{firstName}} greeting.
+export function toContacts({ kept, emailColumn, nameColumns }) {
+  return kept.map((record) => {
+    let firstName = nameColumns.first ? record[nameColumns.first] : '';
+    let lastName = nameColumns.last ? record[nameColumns.last] : '';
+    if (!firstName && !lastName && nameColumns.full) {
+      const [first, ...rest] = String(record[nameColumns.full] || '').trim().split(/\s+/);
+      firstName = first || '';
+      lastName = rest.join(' ');
+    }
+    return {
+      email: normalizeEmail(record[emailColumn]),
+      firstName: firstName || null,
+      lastName: lastName || null,
+    };
+  });
+}

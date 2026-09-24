@@ -140,13 +140,21 @@ export function buildInvite({
   }
 
   const cancelling = method === 'CANCEL';
+  // A REQUEST is an invitation: it names the person as an attendee and Gmail shows
+  // Yes / Maybe / No, each of which mails a reply to the organizer. Nobody wants
+  // those - the no-reply domain bounced them back to the sender, and a real inbox
+  // just fills up with "Accepted:". So a booking goes out as PUBLISH, an event to
+  // add rather than answer, with no attendee to reply as. Same UID and a higher
+  // SEQUENCE still update the entry once it is on their calendar. A CANCEL asks
+  // for no reply, so it stays a CANCEL.
+  const wireMethod = cancelling ? 'CANCEL' : 'PUBLISH';
 
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//UConsulting//ATS//EN',
     'CALSCALE:GREGORIAN',
-    `METHOD:${method}`,
+    `METHOD:${wireMethod}`,
     'BEGIN:VEVENT',
     `UID:${escapeText(uid)}`,
     `SEQUENCE:${Math.max(0, Math.floor(sequence))}`,
@@ -159,11 +167,16 @@ export function buildInvite({
   if (description) lines.push(`DESCRIPTION:${escapeText(description)}`);
   if (location) lines.push(`LOCATION:${escapeText(location)}`);
 
+  lines.push(`ORGANIZER;CN=${escapeText(organizerName)}:mailto:${organizerEmail}`);
+  if (cancelling) {
+    // Names whose entry is being removed. RSVP=FALSE: nothing to answer.
+    lines.push(
+      `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;RSVP=FALSE${
+        attendeeName ? `;CN=${escapeText(attendeeName)}` : ''
+      }:mailto:${attendeeEmail}`
+    );
+  }
   lines.push(
-    `ORGANIZER;CN=${escapeText(organizerName)}:mailto:${organizerEmail}`,
-    `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=${
-      cancelling ? 'FALSE' : 'TRUE'
-    }${attendeeName ? `;CN=${escapeText(attendeeName)}` : ''}:mailto:${attendeeEmail}`,
     `STATUS:${cancelling ? 'CANCELLED' : 'CONFIRMED'}`,
     'TRANSP:OPAQUE',
     'END:VEVENT',
@@ -176,9 +189,19 @@ export function buildInvite({
     filename: 'invite.ics',
     content,
     // The method must appear on the part's content type as well as inside the body,
-    // or Gmail renders the file as a download instead of an RSVP card.
-    contentType: `text/calendar; charset=utf-8; method=${method}`,
+    // or Gmail renders the file as a download instead of a calendar card.
+    contentType: `text/calendar; charset=utf-8; method=${wireMethod}`,
   };
+}
+
+/**
+ * The address every invite names as its ORGANIZER.
+ *
+ * Invites never ask for a reply (see buildInvite), so nothing is ever sent here;
+ * it only has to be a valid address. EMAIL_FROM, the no-reply sender.
+ */
+export function inviteOrganizerEmail() {
+  return (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
 }
 
 export { DEFAULT_DURATION_MINUTES, TIMEZONE };

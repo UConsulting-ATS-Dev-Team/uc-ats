@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
-import { buildInvite, inviteUid, sequenceFrom, describeWhen } from './calendarInvite.js';
+import { buildInvite, inviteUid, sequenceFrom, describeWhen, inviteOrganizerEmail } from './calendarInvite.js';
 import { describeRoster } from '../utils/candidateRoster.js';
 
 const SEND_ATTEMPTS = 3;
@@ -99,7 +99,7 @@ export function inviteFor(notification) {
     if (!uid) return null;
 
     const interview = slot.interview ?? notification.interview;
-    const organizerEmail = (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
+    const organizerEmail = inviteOrganizerEmail();
     if (!organizerEmail) return null;
 
     const where = slot.location || interview?.location || null;

@@ -18,17 +18,19 @@ import {
 } from '@mui/material';
 import {
   Download as DownloadIcon,
+  GroupAdd as GroupAddIcon,
   UploadFile as UploadFileIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 
 // The recruiting-interest mailing list is being retired. An admin drops the
 // export here and gets back the people the ATS has never heard of, ready to
-// save as a CSV.
+// save as a CSV or to import as contacts.
 //
-// Nothing is stored. The file goes up, the survivors come back in the same
-// response, and the browser saves them - so there is no half-finished import
-// to clean up if someone closes the tab.
+// Choosing a file stores nothing. The file goes up, the survivors come back in
+// the same response, and the browser can save them. Import is a separate click
+// that sends the same file again and stores the survivors, so they can be
+// emailed from Send as the "Mailing list" audience.
 //
 // scripts/import-mailing-list-csv.js is the same operation from the command
 // line, and uploads to Drive instead of downloading.
@@ -77,6 +79,9 @@ export default function MailingListImport() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showDropped, setShowDropped] = useState(false);
+  const [importing, setImporting] = useState(false);
+  // What the last import stored. Cleared by every new run, like `result`.
+  const [imported, setImported] = useState(null);
 
   const run = async (chosenFile, emailColumn) => {
     setLoading(true);
@@ -86,6 +91,7 @@ export default function MailingListImport() {
     // would offer a download of the old list under the new one's name.
     setResult(null);
     setShowDropped(false);
+    setImported(null);
     try {
       const form = new FormData();
       form.append('file', chosenFile);
@@ -138,13 +144,30 @@ export default function MailingListImport() {
     URL.revokeObjectURL(url);
   };
 
+  const handleImport = async () => {
+    setImporting(true);
+    setError('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('emailColumn', result.emailColumn);
+      const data = await apiClient.post('/master-communications/mailing-list/import', form);
+      setImported(data.imported);
+    } catch (err) {
+      setError(err.serverMessage || err.message || 'Could not import that file');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const needsColumn = result && !result.emailColumn;
 
   return (
     <Box>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Upload the mailing-list export. Everyone the ATS already knows about is dropped, and
-        what is left comes back as a CSV to download. Nothing is saved to the ATS.
+        Upload the mailing-list export. Everyone the ATS already knows about is dropped. What is
+        left can be downloaded as a CSV, or imported so you can email them from Send by choosing
+        the Mailing list audience. Nothing is saved until you click Import.
       </Alert>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -233,9 +256,29 @@ export default function MailingListImport() {
               the answer.
             </Alert>
           ) : (
-            <Button variant="contained" startIcon={<DownloadIcon />} onClick={handleDownload}>
-              Download {result.keptCount} row{result.keptCount === 1 ? '' : 's'}
-            </Button>
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+              <Button
+                variant="contained"
+                startIcon={<GroupAddIcon />}
+                onClick={handleImport}
+                disabled={importing || loading || imported !== null}
+              >
+                Import {result.keptCount} contact{result.keptCount === 1 ? '' : 's'}
+              </Button>
+              <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload}>
+                Download {result.keptCount} row{result.keptCount === 1 ? '' : 's'}
+              </Button>
+              {importing && <CircularProgress size={20} />}
+            </Stack>
+          )}
+
+          {imported !== null && (
+            <Alert severity="success" sx={{ mt: 2 }}>
+              Imported {imported} contact{imported === 1 ? '' : 's'}.
+              {imported < result.keptCount &&
+                ` ${result.keptCount - imported} were skipped because they reached the ATS since this preview.`}
+              {' '}To email them, open Send and choose the Mailing list (imported) audience.
+            </Alert>
           )}
 
           {result.dropped.length > 0 && (

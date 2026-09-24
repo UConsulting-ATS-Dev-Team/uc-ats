@@ -47,7 +47,7 @@ describe('inviteFor - which types carry an invite', () => {
     '%s books a seat, so it sends a REQUEST',
     (type) => {
       const invite = inviteFor(notification({ type }));
-      expect(invite.contentType).toContain('method=REQUEST');
+      expect(invite.contentType).toContain('method=PUBLISH');
       expect(invite.content).toContain('STATUS:CONFIRMED');
     }
   );
@@ -152,17 +152,10 @@ describe('inviteFor - staffing a session leaves the candidates alone', () => {
     expect(prop(inviteFor(interviewer), 'UID')).not.toBe(prop(inviteFor(candidate), 'UID'));
   });
 
-  it('addresses the invite only to the interviewer', () => {
-    const attendees = lines(inviteFor(interviewer)).filter((l) => l.startsWith('ATTENDEE'));
-    expect(attendees).toHaveLength(1);
-    expect(attendees[0]).toContain('mailto:member@ucla.edu');
-    expect(attendees[0]).not.toContain('candidate@ucla.edu');
-  });
-
-  it('never names other interviewers on a candidate invite', () => {
-    const attendees = lines(inviteFor(candidate)).filter((l) => l.startsWith('ATTENDEE'));
-    expect(attendees).toHaveLength(1);
-    expect(attendees[0]).toContain('mailto:candidate@ucla.edu');
+  it('names nobody on a booking - no attendee to RSVP as, and no one else exposed', () => {
+    expect(lines(inviteFor(interviewer)).filter((l) => l.startsWith('ATTENDEE'))).toHaveLength(0);
+    expect(lines(inviteFor(candidate)).filter((l) => l.startsWith('ATTENDEE'))).toHaveLength(0);
+    expect(lines(inviteFor(candidate)).join('\n')).not.toContain('member@ucla.edu');
   });
 });
 
@@ -176,10 +169,9 @@ describe('inviteFor - content', () => {
     expect(prop(invite, 'LOCATION')).toBe('LOCATION:UCLA');
   });
 
-  it('titles the entry with the interview and names the candidate as attendee', () => {
+  it('titles the entry with the interview', () => {
     const invite = inviteFor(notification());
     expect(prop(invite, 'SUMMARY')).toBe('SUMMARY:First Round Interview');
-    expect(prop(invite, 'ATTENDEE')).toContain('CN=Ada Lovelace');
   });
 });
 

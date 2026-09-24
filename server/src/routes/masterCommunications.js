@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
-import { dedupeMailingListCsv } from '../services/mailingListDedup.js';
+import { dedupeMailingListCsv, importMailingListCsv } from '../services/mailingListDedup.js';
 import { OUTCOMES } from '../utils/mailingListImport.js';
 import {
   listDrafts,
@@ -402,9 +402,10 @@ router.post('/imessage/log', requireAuth, requireAdmin, async (req, res) => {
 //
 // The recruiting-interest mailing list is being retired. An admin uploads the
 // export here and gets back what survives dedup against the ATS, plus a full
-// account of what was dropped and why. Nothing is written: the server holds the
-// file only for the length of the request, and the survivors go back in the
-// response for the browser to save.
+// account of what was dropped and why. /dedupe writes nothing: the server holds
+// the file only for the length of the request, and the survivors go back in the
+// response for the browser to save. /import runs the same dedup and stores the
+// survivors as MailingListContacts, the "Mailing list" audience of a send.
 //
 // scripts/import-mailing-list-csv.js is the same operation from the command
 // line, and uploads to Drive instead of downloading.
@@ -488,6 +489,34 @@ router.post('/mailing-list/dedupe', requireAuth, requireAdmin, csvUploadMiddlewa
   } catch (err) {
     console.error('[POST /api/master-communications/mailing-list/dedupe]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to read that mailing list' });
+  }
+});
+
+router.post('/mailing-list/import', requireAuth, requireAdmin, csvUploadMiddleware, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const run = await importMailingListCsv({
+      content: req.file.buffer.toString('utf-8'),
+      emailColumnOverride: req.body?.emailColumn || undefined,
+      fileName: req.file.originalname,
+      importedById: req.user.id,
+    });
+
+    if (!run.headers.length) {
+      return res.status(400).json({ error: 'That file has no rows in it' });
+    }
+    // Unlike /dedupe there is nothing useful to hand back here: importing
+    // needs to know which column holds the address, so the admin picks it
+    // first, on the preview.
+    if (!run.emailColumn) {
+      return res.status(400).json({ error: 'Pick the email column before importing' });
+    }
+
+    res.status(201).json({ imported: run.imported, keptCount: run.kept.length });
+  } catch (err) {
+    console.error('[POST /api/master-communications/mailing-list/import]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to import that mailing list' });
   }
 });
 

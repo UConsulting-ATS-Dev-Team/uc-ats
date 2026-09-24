@@ -2090,6 +2090,23 @@ model EmailTemplateCopy {
   @@map("email_template_copy")
 }
 
+/// A person from the retired recruiting-interest mailing list whom the ATS had
+/// no other record of when they were imported. They exist so Master
+/// Communications can email them, through the "Mailing list" audience.
+model MailingListContact {
+  id           String   @id @default(uuid())
+  /// Stored lowercased, like every other address in this schema.
+  email        String   @unique
+  firstName    String?
+  lastName     String?
+  /// Name of the CSV this contact came from.
+  sourceFile   String?
+  importedById String?
+  createdAt    DateTime @default(now())
+
+  @@map("mailing_list_contacts")
+}
+
 /// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the
 /// partial unique index `live_vote_sessions_single_open`, which Prisma cannot
 /// express and which lives in the migration SQL.

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
@@ -31,7 +31,13 @@ import {
   CheckCircle as CheckCircleIcon,
   Lock as LockIcon
 } from '@mui/icons-material';
-import { GtkucSlotCard, GtkucSlotGrid } from '../components/GtkucSlotGallery';
+import { GtkucBookedMeetingCard, GtkucSlotCard, GtkucSlotGrid, formatSlotDateTime } from '../components/GtkucSlotGallery';
+import {
+  MODIFY_CUTOFF_HOURS,
+  canModify,
+  currentCycleBooking,
+  errorText,
+} from '../utils/schedulingWindows';
 
 export default function CoffeeChatsPublic() {
   const { user, login, register } = useAuth();
@@ -56,6 +62,44 @@ export default function CoffeeChatsPublic() {
   const [authError, setAuthError] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [pendingSlotId, setPendingSlotId] = useState(null);
+
+  // One booking per cycle. A signed-in user who holds one sees it instead of
+  // the gallery, and gets the gallery back only to pick a new time for it.
+  const [mySignups, setMySignups] = useState([]);
+  const [changingTime, setChangingTime] = useState(false);
+  const [bookingBusy, setBookingBusy] = useState(false);
+
+  // Takes the account explicitly: right after a login from the dialog, the
+  // handlers still close over the render where `user` was null. Only the newest
+  // request may write, so a slow earlier answer cannot overwrite a fresh one.
+  const mineRequest = useRef(0);
+  const loadMine = useCallback(async (account) => {
+    const requestId = ++mineRequest.current;
+    if (!account) {
+      setMySignups([]);
+      return;
+    }
+    // Right after a login the context has not handed the API client its token yet.
+    const token = localStorage.getItem('token');
+    if (token) api.setToken(token);
+    try {
+      const data = await api.get('/meeting-signups/mine');
+      if (requestId !== mineRequest.current) return;
+      setMySignups(Array.isArray(data) ? data : []);
+    } catch (e) {
+      if (requestId !== mineRequest.current) return;
+      console.error('Failed to load your meeting signups:', e);
+      setMySignups([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMine(user);
+    // Keyed on the account, not the object: a profile update is not a new user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email, loadMine]);
+
+  const myBooking = user ? currentCycleBooking(mySignups, activeCycle, (s) => s.slot?.startTime) : null;
 
   const loadActiveCycle = async () => {
     try {
@@ -127,12 +171,73 @@ export default function CoffeeChatsPublic() {
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
       setForm({ studentId: '' });
       setSelectedSlot(null);
-      await load();
+      await Promise.all([load(), loadMine(account)]);
     } catch (e) {
-      setError(e.message || 'Failed to sign up for this meeting slot');
+      if (e.status === 409 && e.code === 'ALREADY_BOOKED') {
+        // They already hold this cycle's meeting. Show it instead of the gallery.
+        setSelectedSlot(null);
+        setChangingTime(false);
+        await loadMine(account);
+        setError(errorText(e, 'You already have a meeting booked this cycle.'));
+      } else {
+        setError(errorText(e, 'Failed to sign up for this meeting slot'));
+      }
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Move the booking to the selected slot. The server keeps the old seat if the
+  // new one is gone, so a failure leaves the current meeting as it was.
+  const moveBooking = async (slotId) => {
+    if (!myBooking) return;
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+    try {
+      const response = await api.put(`/meeting-signups/${myBooking.id}`, { slotId });
+      setSelectedSlot(null);
+      setChangingTime(false);
+      setSuccess(response?.message || 'Your meeting time has been changed.');
+      await Promise.all([load(), loadMine(user)]);
+    } catch (e) {
+      // A full slot: refresh the counts first, since load() clears the error.
+      if (e.status === 409) await load();
+      setError(errorText(e, 'Failed to change your meeting time'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancelBooking = async () => {
+    if (!myBooking) return;
+    if (!window.confirm('Cancel your Get to Know UC meeting? Your spot will go to someone else.')) return;
+    setError('');
+    setSuccess('');
+    setBookingBusy(true);
+    try {
+      await api.delete(`/meeting-signups/${myBooking.id}`);
+      setChangingTime(false);
+      setSelectedSlot(null);
+      setSuccess('Your meeting has been cancelled. You can book a new time below.');
+      await Promise.all([load(), loadMine(user)]);
+    } catch (e) {
+      setError(errorText(e, 'Failed to cancel your meeting'));
+    } finally {
+      setBookingBusy(false);
+    }
+  };
+
+  const startChangingTime = () => {
+    setError('');
+    setSuccess('');
+    setSelectedSlot(null);
+    setChangingTime(true);
+  };
+
+  const keepCurrentTime = () => {
+    setSelectedSlot(null);
+    setChangingTime(false);
   };
 
   const onSubmit = async (e) => {
@@ -145,6 +250,11 @@ export default function CoffeeChatsPublic() {
       setAuthError('');
       setAuthForm({ email: '', password: '', fullName: '', graduationClass: '', studentId: '' });
       setAuthOpen(true);
+      return;
+    }
+
+    if (myBooking && changingTime) {
+      await moveBooking(selectedSlot);
       return;
     }
 
@@ -220,6 +330,10 @@ export default function CoffeeChatsPublic() {
   };
 
   const availableSlots = getAvailableSlots();
+  const showBooked = Boolean(myBooking) && !changingTime;
+  const picking = Boolean(myBooking) && changingTime;
+  const gallerySlots = picking ? availableSlots.filter((s) => s.id !== myBooking.slotId) : availableSlots;
+  const bookingLocked = myBooking ? !canModify(myBooking.slot.startTime) : false;
   
   // Calculate total available spots and total spots
   // Note: slots is already filtered by active cycle, so totalSpots only counts spots from current cycle
@@ -313,7 +427,7 @@ export default function CoffeeChatsPublic() {
           <Box sx={{ textAlign: 'center' }}>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
               <Typography variant="body2">
-                <strong>Important:</strong> You can only sign up for one meeting slot. If you've already signed up for a different time slot, you'll need to cancel that signup first by reaching out to uconsultingla@gmail.com.
+                <strong>Important:</strong> You can hold one meeting slot per cycle. Change or cancel it yourself from your ATS account (on this page, or Get to Know UC in the candidate portal) up to {MODIFY_CUTOFF_HOURS} hours before it starts.
               </Typography>
             </Alert>
           </Box>
@@ -398,18 +512,60 @@ export default function CoffeeChatsPublic() {
       )}
 
       <Grid container spacing={{ xs: 2, md: 4 }}>
+        {showBooked && (
+          <Grid size={12}>
+            <Box sx={{ maxWidth: 720, mx: 'auto' }}>
+              <GtkucBookedMeetingCard
+                memberName={myBooking.slot.member?.fullName || 'UC Consulting Member'}
+                profile={allSlots.find((s) => s.id === myBooking.slotId)?.memberProfile}
+                startTime={myBooking.slot.startTime}
+                location={myBooking.slot.location}
+                locked={bookingLocked}
+                cutoffHours={MODIFY_CUTOFF_HOURS}
+                busy={bookingBusy}
+                onChangeTime={startChangingTime}
+                onCancel={cancelBooking}
+              />
+            </Box>
+          </Grid>
+        )}
+
         {/* Available Slots */}
+        {!showBooked && (
         <Grid size={12}>
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
-              Available Meeting Slots
-            </Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                alignItems: { xs: 'stretch', sm: 'center' },
+                justifyContent: 'space-between',
+                gap: 1.5,
+                mb: 3,
+              }}
+            >
+              <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
+                {picking ? 'Pick a new time' : 'Available Meeting Slots'}
+              </Typography>
+              {picking && (
+                <Button variant="outlined" onClick={keepCurrentTime} disabled={submitting} sx={{ minHeight: { xs: 44, md: 36 } }}>
+                  Keep my current time
+                </Button>
+              )}
+            </Box>
+
+            {picking && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                Your current meeting is {formatSlotDateTime(myBooking.slot.startTime)} with{' '}
+                {myBooking.slot.member?.fullName || 'a UC Consulting member'}. It stays booked until you confirm a new time.
+              </Alert>
+            )}
 
             {loading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
                 <CircularProgress />
               </Box>
-            ) : availableSlots.length === 0 ? (
+            ) : gallerySlots.length === 0 ? (
               <Box sx={{ textAlign: 'center', p: 4 }}>
                 <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
@@ -424,7 +580,7 @@ export default function CoffeeChatsPublic() {
               </Box>
             ) : (
               <GtkucSlotGrid>
-                {availableSlots.map((slot) => (
+                {gallerySlots.map((slot) => (
                   <GtkucSlotCard
                     key={slot.id}
                     slot={slot}
@@ -465,7 +621,7 @@ export default function CoffeeChatsPublic() {
                           color: 'primary.dark',
                           fontSize: { xs: '1.1rem', md: '1.25rem' }
                         }}>
-                          Sign Up for This Meeting
+                          {picking ? 'Move My Meeting Here' : 'Sign Up for This Meeting'}
                         </Typography>
 
                         <Box component="form" onSubmit={onSubmit}>
@@ -529,13 +685,17 @@ export default function CoffeeChatsPublic() {
                                 }
                               }}
                             >
-                              {submitting ? 'Signing Up...' : user ? 'Confirm Signup' : 'Log in & Confirm Signup'}
+                              {picking
+                                ? (submitting ? 'Changing...' : 'Confirm New Time')
+                                : submitting ? 'Signing Up...' : user ? 'Confirm Signup' : 'Log in & Confirm Signup'}
                             </Button>
                           </Stack>
                         </Box>
 
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block', textAlign: 'center' }}>
-                          You will receive a confirmation email with meeting details.
+                          {picking
+                            ? 'Your old time is released only once the new one is confirmed.'
+                            : 'You will receive a confirmation email with meeting details.'}
                         </Typography>
                       </Box>
                     )}
@@ -545,9 +705,10 @@ export default function CoffeeChatsPublic() {
             )}
           </Paper>
         </Grid>
+        )}
 
         {/* Instructions when no slot is selected */}
-        {!selectedSlot && (
+        {!selectedSlot && !showBooked && (
           <Grid size={12}>
             <Paper sx={{ p: { xs: 2, md: 3 }, textAlign: 'center' }}>
               <PeopleIcon sx={{ fontSize: { xs: 48, md: 60 }, color: 'grey.400', mb: 2 }} />
@@ -560,7 +721,9 @@ export default function CoffeeChatsPublic() {
               <Typography variant="body2" color="text.secondary" sx={{
                 fontSize: { xs: '0.9rem', md: '0.875rem' }
               }}>
-                Choose an available time slot from the list above to sign up for a meeting. The signup form will appear right below your selected slot.
+                {picking
+                  ? 'Choose a new time from the list above. The confirm button will appear right below the slot you pick.'
+                  : 'Choose an available time slot from the list above to sign up for a meeting. The signup form will appear right below your selected slot.'}
               </Typography>
             </Paper>
           </Grid>

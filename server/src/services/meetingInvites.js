@@ -34,13 +34,9 @@
 // host entry until their first signup.
 
 import prisma from '../prismaClient.js';
-import { buildInvite, inviteUid, describeWhen } from './calendarInvite.js';
+import { buildInvite, inviteUid, describeWhen, inviteOrganizerEmail } from './calendarInvite.js';
 
 const SUMMARY = 'Get to Know UC';
-
-function organizerEmail() {
-  return (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
-}
 
 let lastSequence = 0;
 
@@ -61,7 +57,7 @@ function joinLines(lines) {
  */
 export function candidateMeetingInvite({ slot, signupId, candidateEmail, candidateName, hostName, method = 'REQUEST' }) {
   try {
-    const organizer = organizerEmail();
+    const organizer = inviteOrganizerEmail();
     if (!slot?.id || !slot.startTime || !signupId || !candidateEmail || !organizer) return null;
 
     const when = describeWhen(slot.startTime, slot.endTime);
@@ -102,7 +98,7 @@ export function candidateMeetingInvite({ slot, signupId, candidateEmail, candida
  */
 export function hostMeetingInvite({ slot, hostEmail, hostName, attendeeNames = [], method = 'REQUEST' }) {
   try {
-    const organizer = organizerEmail();
+    const organizer = inviteOrganizerEmail();
     if (!slot?.id || !slot.startTime || !hostEmail || !organizer || !attendeeNames) return null;
 
     const names = attendeeNames.filter(Boolean);
