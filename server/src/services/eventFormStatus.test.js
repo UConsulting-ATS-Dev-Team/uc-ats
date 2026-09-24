@@ -8,6 +8,12 @@ describe('isFormReady', () => {
     expect(isFormReady({ rsvpForm: null, attendanceForm: 'https://forms.gle/b' })).toBe(false);
     expect(isFormReady({ rsvpForm: '   ', attendanceForm: 'https://forms.gle/b' })).toBe(false);
   });
+
+  it('takes a Luma link on its own, since it covers RSVP and the door', () => {
+    expect(isFormReady({ lumaUrl: 'https://luma.com/f96xsz0q' })).toBe(true);
+    expect(isFormReady({ rsvpForm: null, attendanceForm: null, lumaUrl: 'https://luma.com/f96xsz0q' })).toBe(true);
+    expect(isFormReady({ rsvpForm: 'https://forms.gle/a', lumaUrl: '  ' })).toBe(false);
+  });
 });
 
 describe('resolveFormStatus', () => {
@@ -31,6 +37,18 @@ describe('resolveFormStatus', () => {
     expect(
       resolveFormStatus({ currentStatus: 'PENDING_FORM', rsvpForm: null, attendanceForm: null })
     ).toBeUndefined();
+  });
+
+  it('connects on a Luma link alone, and only unlinks when nothing is left', () => {
+    expect(
+      resolveFormStatus({ currentStatus: 'PENDING_FORM', rsvpForm: null, attendanceForm: null, lumaUrl: 'https://luma.com/x' })
+    ).toBe('CONNECTED');
+    // The Google forms still stand on their own, so clearing the Luma link off
+    // an event that has both of them changes nothing.
+    expect(resolveFormStatus({ currentStatus: 'CONNECTED', ...links, lumaUrl: null })).toBeUndefined();
+    expect(
+      resolveFormStatus({ currentStatus: 'CONNECTED', rsvpForm: null, attendanceForm: null, lumaUrl: null })
+    ).toBe('PENDING_FORM');
   });
 
   it('never labels a manual or legacy event', () => {

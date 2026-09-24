@@ -20,6 +20,12 @@ export const PORTABLE_EVENT_FIELDS = [
   { name: 'attendanceForm', label: 'Attendance Form URL', required: false, editable: true, type: 'url' },
   { name: 'memberRsvpUrl', label: 'Member RSVP Form URL', required: false, editable: true, type: 'url' },
   { name: 'memberAttendanceForm', label: 'Member Attendance Form URL', required: false, editable: true, type: 'url' },
+  // `lumaUrl` is deliberately absent and must stay that way. A Luma event is a
+  // single event with its own guest list, so a copy into next cycle needs a new
+  // one; carrying the link over would point two ATS events at one Luma event,
+  // and `Events.lumaEventId` is unique, so the second to sync would fail with a
+  // conflict nobody is watching for. The copy is created unlinked and an admin
+  // pastes the new Luma link.
 ];
 
 function toIsoString(value) {

@@ -29,6 +29,7 @@ import {
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import LumaGuestsPanel, { relativeAge, staleSync } from '../components/LumaGuestsPanel';
 import { useAuth } from '../context/AuthContext';
 import { formatInLA, localInputToUTC } from '../../../server/src/utils/timezoneUtils';
 
@@ -54,6 +55,7 @@ export default function EventManagement() {
     showToCandidates: false,
     memberRsvpUrl: '',
     memberAttendanceForm: '',
+    lumaUrl: '',
     cycleId: ''
   });
   const [editForm, setEditForm] = useState({
@@ -66,6 +68,7 @@ export default function EventManagement() {
     showToCandidates: false,
     memberRsvpUrl: '',
     memberAttendanceForm: '',
+    lumaUrl: '',
     cycleId: ''
   });
 
@@ -80,6 +83,9 @@ export default function EventManagement() {
   const [copyForce, setCopyForce] = useState(false);
   const [copyError, setCopyError] = useState('');
   const [copySuccess, setCopySuccess] = useState('');
+
+  // Which event's Luma guest panel is open. Null when none is.
+  const [lumaPanelEvent, setLumaPanelEvent] = useState(null);
 
   const { user } = useAuth();
 
@@ -329,6 +335,7 @@ export default function EventManagement() {
         showToCandidates: false,
         memberRsvpUrl: '',
         memberAttendanceForm: '',
+        lumaUrl: '',
         cycleId: ''
       });
       
@@ -364,6 +371,7 @@ export default function EventManagement() {
       showToCandidates: event.showToCandidates,
       memberRsvpUrl: event.memberRsvpUrl || '',
       memberAttendanceForm: event.memberAttendanceForm || '',
+      lumaUrl: event.lumaUrl || '',
       cycleId: event.cycleId
     });
     setEditOpen(true);
@@ -693,13 +701,14 @@ export default function EventManagement() {
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Attendance</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member RSVP</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member Attendance</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Luma</TableCell>
               <TableCell align="right" sx={{ minWidth: { xs: 'auto', md: 120 } }}>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {filteredEvents.length === 0 && !loading ? (
               <TableRow>
-                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={12} align="center" sx={{ py: 4 }}>
                   <Typography variant="body1" color="text.secondary">
                     {activeCycle 
                       ? `No events found for ${activeCycle.name} cycle. Create a new event to get started.`
@@ -709,7 +718,7 @@ export default function EventManagement() {
               </TableRow>
             ) : (
               filteredEvents.map((event) => {
-                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false };
+                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false, lumaGuestCount: 0, lumaHeldCount: 0 };
               
                 return (
                   <TableRow key={event.id}>
@@ -869,6 +878,56 @@ export default function EventManagement() {
                       )}
                     </Stack>
                   </TableCell>
+                  <TableCell data-label="Luma">
+                    {/* Whether this event is on Luma, whether the routine has
+                        resolved the link yet, and whether it is still running.
+                        A link that never resolves and a sync that stopped look
+                        identical from the guest list alone, so they are told
+                        apart here rather than in the panel. */}
+                    <Stack spacing={1} alignItems="flex-start">
+                      {!event.lumaUrl ? (
+                        <Typography variant="body2" color="text.secondary">Not on Luma</Typography>
+                      ) : (
+                        <>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            {!event.lumaEventId ? (
+                              <Tooltip title="The link is saved. The sync routine resolves it to a Luma event id on its next hourly run.">
+                                <Chip label="Awaiting first sync" size="small" color="warning" variant="outlined" />
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title={staleSync(event.lumaLastSyncedAt)
+                                ? 'The routine runs hourly and has not finished a pass in over three hours. Check that it is still running.'
+                                : `Last finished sync: ${formatDateTime(event.lumaLastSyncedAt)}`}>
+                                <Chip
+                                  label={relativeAge(event.lumaLastSyncedAt) || 'Never synced'}
+                                  size="small"
+                                  color={staleSync(event.lumaLastSyncedAt) ? 'warning' : 'success'}
+                                  variant="outlined"
+                                />
+                              </Tooltip>
+                            )}
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() => window.open(event.lumaUrl, '_blank', 'noopener,noreferrer')}
+                            >
+                              View
+                            </Button>
+                          </Stack>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color={stats.lumaHeldCount > 0 ? 'warning' : 'primary'}
+                            onClick={() => setLumaPanelEvent(event)}
+                          >
+                            {stats.lumaHeldCount > 0
+                              ? `${stats.lumaHeldCount} to review`
+                              : `Guests (${stats.lumaGuestCount || 0})`}
+                          </Button>
+                        </>
+                      )}
+                    </Stack>
+                  </TableCell>
                   <TableCell data-label="Actions" align="right">
                     <Stack direction="row" spacing={1}>
                       <Tooltip title="Add to Google Calendar">
@@ -1005,6 +1064,15 @@ export default function EventManagement() {
             />
 
             <TextField
+              label="Luma Event Link"
+              value={form.lumaUrl}
+              onChange={(e) => setForm({ ...form, lumaUrl: e.target.value })}
+              fullWidth
+              placeholder="https://lu.ma/your-event"
+              helperText="Paste the event's Luma page (lu.ma/...). Luma then takes RSVPs and the door check-in for this event, and the hourly sync brings both back. Changing it makes the sync re-resolve the event from scratch."
+            />
+
+            <TextField
               label="Show to Candidates"
               select
               value={form.showToCandidates ? 'true' : 'false'}
@@ -1115,6 +1183,15 @@ export default function EventManagement() {
               fullWidth
               placeholder="https://forms.gle/..."
               helperText="Paste the Google Form URL for UC member attendance tracking"
+            />
+
+            <TextField
+              label="Luma Event Link"
+              value={editForm.lumaUrl}
+              onChange={(e) => setEditForm({ ...editForm, lumaUrl: e.target.value })}
+              fullWidth
+              placeholder="https://lu.ma/your-event"
+              helperText="Paste the event's Luma page (lu.ma/...). Luma then takes RSVPs and the door check-in for this event, and the hourly sync brings both back. Changing it makes the sync re-resolve the event from scratch."
             />
 
             <TextField
@@ -1372,6 +1449,16 @@ export default function EventManagement() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Linking a guest changes real RSVP and attendance rows, so the row's
+          counts are refetched when the panel reports a change. */}
+      <LumaGuestsPanel
+        open={Boolean(lumaPanelEvent)}
+        eventId={lumaPanelEvent?.id}
+        eventName={lumaPanelEvent?.eventName}
+        onClose={() => setLumaPanelEvent(null)}
+        onChanged={fetchEvents}
+      />
 
     </Box>
     </AccessControl>

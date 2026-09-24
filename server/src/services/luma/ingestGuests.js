@@ -23,7 +23,7 @@ import prisma from '../../prismaClient.js';
 // fresh id per event.
 const UID_LABEL = /\buid\b/i;
 const UID_DIGITS = /^\d{9}$/;
-const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
+export const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
 
 // Which approval_status values say the person is coming, and which say they are
 // not. The keys are list_guests's own approval_status filter enum, minus
@@ -43,6 +43,10 @@ const RSVP_FOR_STATUS = new Map([
   ['invited', false],
   ['waitlist', false]
 ]);
+
+// The statuses above, for callers that need to ask the database which guests
+// are being held because their status could not be read (the admin panel).
+export const READABLE_APPROVAL_STATUSES = [...RSVP_FOR_STATUS.keys()];
 
 export const MATCH_STATUS = {
   MATCHED_CANDIDATE: 'MATCHED_CANDIDATE',
@@ -358,7 +362,16 @@ async function reconcileMemberAttendance(tx, eventId, memberId) {
   return 'created';
 }
 
-async function reconcileRows(tx, eventId, guest, person, previous) {
+/**
+ * Settles one guest's rows from what Luma says about them and who the ATS
+ * decided they are. Exported because an admin linking an UNMATCHED guest by
+ * hand has to reach the same end state as a sync would (services/luma/linkGuest.js):
+ * the rows follow from the match, so changing the match has to re-run this.
+ *
+ * `guest` needs only lumaGuestId, approvalStatus and checkedInAt, which is what
+ * the stored LumaGuest row already carries.
+ */
+export async function reconcileRows(tx, eventId, guest, person, previous) {
   const lumaGuestId = guest.lumaGuestId;
   const rsvp = RSVP_FOR_STATUS.get(guest.approvalStatus);
   const attended = Boolean(guest.checkedInAt);

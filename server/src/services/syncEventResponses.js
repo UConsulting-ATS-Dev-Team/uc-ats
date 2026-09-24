@@ -2,7 +2,16 @@ import prisma from '../prismaClient.js';
 import { getResponses } from './google/forms.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { transformEventFormResponse, createDynamicEventMapping } from '../utils/eventDataMapper.js'
-import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from './emailNotifications.js'
+
+// Nothing here sends mail. Sign-ups for events now happen on Luma, which sends
+// its own confirmation and calendar invite the moment someone registers, so an
+// ATS confirmation on top of it is a second email about the same sign-up,
+// arriving up to five minutes later and disagreeing about nothing useful.
+//
+// This sync is the retiring Google Forms path (plan Phase 4) and was the last
+// thing sending those. It now only records rows. The templates themselves are
+// left in emailNotifications.js and are still reachable from the admin
+// test-email endpoint, so a one-off resend is still possible by hand.
 
 // Transform event form responses using configuration-based mapping
 function transformEventResponse(response, eventId, formType) {
@@ -129,23 +138,6 @@ export async function syncEventAttendance(eventId) {
             candidateId: candidate.id
           }
         });
-
-        // Send attendance confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendAttendanceConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation
-          );
-        } catch (emailError) {
-          console.error('Error sending attendance confirmation email:', emailError);
-          // Don't fail the sync if email fails
-        }
 
         successCount++;
       } catch (error) {
@@ -277,27 +269,6 @@ export async function syncEventRSVP(eventId) {
           }
         });
 
-        // Send RSVP confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendRSVPConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation,
-            // Carries the calendar invite. The RSVP arrives through a Google Form
-            // rather than a request, so this is the one message that reaches the
-            // candidate about it - the date has to leave with something they can add.
-            event
-          );
-        } catch (emailError) {
-          console.error('Error sending RSVP confirmation email:', emailError);
-          // Don't fail the sync if email fails
-        }
-
         successCount++;
       } catch (error) {
         console.error(`Error processing RSVP response ${response.responseId}:`, error);
@@ -410,9 +381,11 @@ export async function syncMemberEventRSVP(eventId) {
           }
         });
 
-        // No confirmation email goes out from this form path. A member who RSVPs
-        // in the app (PUT /api/member/events/:eventId/rsvp) gets one, with the
-        // calendar invite; this legacy form is on its way out, so it stays silent.
+        // No confirmation email goes out from this form path, for the reason at
+        // the top of this file: whoever ran the sign-up already sent one. A
+        // member who RSVPs in the app (PUT /api/member/events/:eventId/rsvp)
+        // still gets one, with the calendar invite - nothing else sends them
+        // anything, so that one is not a duplicate of Luma's.
 
         successCount++;
         console.log(`Successfully processed member RSVP response ${transformedData.responseId} for member ${member.id}`);
