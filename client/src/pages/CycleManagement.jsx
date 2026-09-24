@@ -31,6 +31,18 @@ import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
 import CycleOfferLetterDialog from '../components/CycleOfferLetterDialog';
 import CycleTimelineBootstrapDialog from '../components/CycleTimelineBootstrapDialog';
+import { formatInTimeZone } from 'date-fns-tz';
+
+const TIMEZONE = 'America/Los_Angeles';
+const EMPTY_FORM = { name: '', formUrl: '', startDate: '', endDate: '', applicationDeadline: '', isActive: false };
+
+// The deadline input is Pacific wall time (`YYYY-MM-DDTHH:mm`), the same shape the
+// server converts back, so an admin outside LA still edits it in Pacific.
+const toPacificInput = (value) =>
+  value ? formatInTimeZone(new Date(value), TIMEZONE, "yyyy-MM-dd'T'HH:mm") : '';
+
+const formatPacific = (value) =>
+  value ? formatInTimeZone(new Date(value), TIMEZONE, "MMM d, yyyy h:mm a zzz") : '-';
 
 export default function CycleManagement() {
   const { user } = useAuth();
@@ -43,7 +55,7 @@ export default function CycleManagement() {
   const [editOpen, setEditOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState(null);
   const [offerLetterCycleId, setOfferLetterCycleId] = useState(null);
-  const [form, setForm] = useState({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   // Which cycle the audience dialog is open for, and the audience chosen in it.
   const [activating, setActivating] = useState(null);
@@ -82,7 +94,7 @@ export default function CycleManagement() {
       setSubmitting(true);
       const created = await apiClient.post('/admin/cycles', form);
       setCreateOpen(false);
-      setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+      setForm(EMPTY_FORM);
       await fetchCycles();
       
       // If the cycle was created as active, notify other components
@@ -114,7 +126,7 @@ export default function CycleManagement() {
       await apiClient.patch(`/admin/cycles/${editingCycle.id}`, form);
       setEditOpen(false);
       setEditingCycle(null);
-      setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+      setForm(EMPTY_FORM);
       await fetchCycles();
       
       // If the cycle was activated (either newly activated or was already active), notify other components
@@ -135,6 +147,7 @@ export default function CycleManagement() {
       formUrl: cycle.formUrl || '',
       startDate: cycle.startDate ? new Date(cycle.startDate).toISOString().split('T')[0] : '',
       endDate: cycle.endDate ? new Date(cycle.endDate).toISOString().split('T')[0] : '',
+      applicationDeadline: toPacificInput(cycle.applicationDeadline),
       isActive: cycle.isActive
     });
     setEditOpen(true);
@@ -144,7 +157,7 @@ export default function CycleManagement() {
     if (submitting) return; // Prevent closing during submission
     setEditOpen(false);
     setEditingCycle(null);
-    setForm({ name: '', formUrl: '', startDate: '', endDate: '', isActive: false });
+    setForm(EMPTY_FORM);
     setError('');
   };
 
@@ -223,6 +236,7 @@ export default function CycleManagement() {
               <TableCell>Name</TableCell>
               <TableCell>Form URL</TableCell>
               <TableCell>Start</TableCell>
+              <TableCell>Application deadline</TableCell>
               <TableCell>End</TableCell>
               <TableCell>Members &amp; Candidates</TableCell>
               <TableCell>Admins</TableCell>
@@ -235,6 +249,7 @@ export default function CycleManagement() {
                 <TableCell data-label="Name">{c.name}</TableCell>
                 <TableCell data-label="Form URL" sx={{ maxWidth: { xs: 'none', md: 320 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: { xs: 'normal', md: 'nowrap' }, wordBreak: 'break-all' }}>{c.formUrl || '-'}</TableCell>
                 <TableCell data-label="Start">{c.startDate ? new Date(c.startDate).toLocaleDateString() : '-'}</TableCell>
+                <TableCell data-label="Application deadline">{formatPacific(c.applicationDeadline)}</TableCell>
                 <TableCell data-label="End">{c.endDate ? new Date(c.endDate).toLocaleDateString() : '-'}</TableCell>
                 <TableCell data-label="Members & Candidates">
                   {c.isActive ? <Chip size="small" color="primary" label="Active" /> : '—'}
@@ -342,6 +357,15 @@ export default function CycleManagement() {
               fullWidth 
               InputLabelProps={{ shrink: true }} 
             />
+            <TextField
+              label="Application deadline (Pacific)"
+              type="datetime-local"
+              value={form.applicationDeadline}
+              onChange={(e) => setForm({ ...form, applicationDeadline: e.target.value })}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+              helperText="When applications close. Shown to candidates on their dashboard."
+            />
             <TextField 
               label="End Date" 
               type="date" 
@@ -350,7 +374,7 @@ export default function CycleManagement() {
               fullWidth 
               InputLabelProps={{ shrink: true }}
               error={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate)}
-              helperText={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate) ? 'End date must be after start date' : ''}
+              helperText={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate) ? 'End date must be after start date' : 'When the whole cycle ends, not when applications close'}
             />
             <Stack direction="row" alignItems="center" spacing={1}>
               <Checkbox 
@@ -399,6 +423,15 @@ export default function CycleManagement() {
               fullWidth 
               InputLabelProps={{ shrink: true }} 
             />
+            <TextField
+              label="Application deadline (Pacific)"
+              type="datetime-local"
+              value={form.applicationDeadline}
+              onChange={(e) => setForm({ ...form, applicationDeadline: e.target.value })}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+              helperText="When applications close. Shown to candidates on their dashboard."
+            />
             <TextField 
               label="End Date" 
               type="date" 
@@ -407,7 +440,7 @@ export default function CycleManagement() {
               fullWidth 
               InputLabelProps={{ shrink: true }}
               error={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate)}
-              helperText={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate) ? 'End date must be after start date' : ''}
+              helperText={form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate) ? 'End date must be after start date' : 'When the whole cycle ends, not when applications close'}
             />
             <Stack direction="row" alignItems="center" spacing={1}>
               <Checkbox 

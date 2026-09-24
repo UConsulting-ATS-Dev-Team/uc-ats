@@ -1,7 +1,7 @@
 // The recruiting cycle open to candidates, and the two ways GTKUC pages scope
 // meeting slots to it.
 //
-// GET /api/active-cycle answers { cycle: { id, name, startDate, endDate } | null }.
+// GET /api/active-cycle answers { cycle: { id, name, startDate, endDate, applicationDeadline } | null }.
 // Pages used to read that response as the bare cycle, found no startDate, and
 // showed either every slot ever created or none at all. Read it here.
 

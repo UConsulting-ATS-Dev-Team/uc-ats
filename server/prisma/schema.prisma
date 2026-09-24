@@ -378,6 +378,9 @@ model RecruitingCycle {
   isAdminActive             Boolean                          @default(false)
   startDate                 DateTime?
   endDate                   DateTime?
+  // When applications close, as an absolute instant. Distinct from endDate, which
+  // is when the whole cycle ends (offers out), weeks after applications close.
+  applicationDeadline       DateTime?
   createdAt                 DateTime                         @default(now())
   formUrl                   String?
   resumeDeadline            String?

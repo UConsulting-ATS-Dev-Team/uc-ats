@@ -409,6 +409,17 @@ describe('commitCycleBootstrap', () => {
     expect(result.cycle.resumeDeadline).toBe('2026-09-20');
     expect(result.cycle.coverLetterDeadline).toBeNull();
   });
+
+  it('closes applications at 11:59 PM Pacific on the "Applications close" day', async () => {
+    const prisma = makePrisma();
+
+    const result = await commitCycleBootstrap({ prisma, name: 'Fall 2026', timeline: validTimeline() });
+
+    // applications_close is 2026-09-20; 23:59 PDT is 06:59 UTC on the 21st.
+    expect(result.cycle.applicationDeadline.toISOString()).toBe('2026-09-21T06:59:00.000Z');
+    // endDate is still the end of the whole cycle, not the application deadline.
+    expect(result.cycle.endDate.toISOString().slice(0, 10)).toBe('2026-10-15');
+  });
 });
 
 describe('timelineFromPriorCycle', () => {

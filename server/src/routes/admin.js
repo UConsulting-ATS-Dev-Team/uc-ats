@@ -10,7 +10,7 @@ import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../servic
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
-import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
   parseGraduationYear,
@@ -1099,10 +1099,28 @@ router.get('/cycles/active', async (req, res) => {
   }
 });
 
+// The admin form sends the application deadline as an LA-local
+// `YYYY-MM-DDTHH:mm` string. Blank clears it; anything else unparseable is refused
+// rather than stored as null, so a typo can't silently remove the deadline.
+// A time skipped by the spring-forward change (e.g. 02:30 that night) converts to
+// a different instant, so the result must convert back to exactly what was typed.
+const parseApplicationDeadline = (value) => {
+  if (value === null || value === undefined || String(value).trim() === '') return { value: null };
+  const input = String(value).trim().replace(' ', 'T');
+  const parsed = localInputToUTC(input);
+  if (!parsed) return { error: 'Application deadline must be a date and time' };
+  if (utcToLocalInput(parsed) !== input) {
+    return { error: 'Application deadline is not a real Pacific time (clocks skip that hour)' };
+  }
+  return { value: parsed };
+};
+
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
     const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+    const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
+    if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
     const activate = Boolean(isActive);
     // Create then activate in one transaction, so the single-active invariant is
     // never briefly broken and a losing concurrent activation leaves no cycle.
@@ -1113,6 +1131,7 @@ router.post('/cycles', async (req, res) => {
           formUrl: formUrl || null,
           startDate: startDate ? new Date(startDate) : null,
           endDate: endDate ? new Date(endDate) : null,
+          applicationDeadline: applicationDeadline.value,
           isActive: false,
           resumeDeadline: resumeDeadline || null,
           coverLetterDeadline: coverLetterDeadline || null,
@@ -1248,6 +1267,11 @@ router.patch('/cycles/:id', async (req, res) => {
     }
     if (videoDeadline !== undefined) {
       updateData.videoDeadline = videoDeadline || null;
+    }
+    if (req.body.applicationDeadline !== undefined) {
+      const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
+      if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
+      updateData.applicationDeadline = applicationDeadline.value;
     }
     
     console.log('[PATCH /api/admin/cycles/:id] Update data:', updateData);

@@ -1,72 +1,21 @@
-import { addDays, isValid, parseISO } from 'date-fns';
-import { fromZonedTime, formatInTimeZone } from 'date-fns-tz';
+import { isValid } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Los_Angeles';
 
 /**
- * Parse a cycle's endDate as an application-deadline cutoff.
+ * A cycle's application deadline, from RecruitingCycle.applicationDeadline.
  *
- * Cycle endDate values are calendar dates collected from an <input type="date">,
- * but Prisma stores them as DateTime (UTC midnight). We therefore treat a plain
- * date or a 00:00:00 timestamp as an all-day deadline ending at the end of the
- * stated calendar day in the organization's timezone (America/Los_Angeles).
- *
- * If a meaningful time is provided (non-midnight) with an explicit offset/Z,
- * we parse it as an absolute instant. Non-midnight times without an offset are
- * interpreted as Los Angeles local time.
+ * Not endDate: that is when the whole cycle ends (offers released), weeks after
+ * applications close. applicationDeadline is always a stored instant, so it is
+ * read as one and shown with its time.
  */
-function parseApplicationDeadline(raw) {
-  if (typeof raw !== 'string' || raw.trim() === '') {
-    return null;
-  }
-
-  const value = raw.trim();
-
-  // Matches:
-  //   2026-10-05
-  //   2026-10-05 10:00:00
-  //   2026-10-05T10:00:00
-  //   2026-10-05T10:00:00.000Z
-  //   2026-10-05T10:00:00-07:00
-  const isoPattern = /^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
-  const match = isoPattern.exec(value);
-  if (!match) {
-    return null;
-  }
-
-  const datePart = match[1];
-  const timePart = match[2];
-  const offset = match[3];
-
-  // A bare date or a midnight timestamp is an all-day deadline in PT.
-  if (!timePart || timePart === '00:00:00') {
-    const startOfDay = fromZonedTime(datePart, TIMEZONE);
-    if (!isValid(startOfDay)) {
-      return null;
-    }
-    const cutoff = addDays(startOfDay, 1);
-    // Display as the very end of the deadline day so formatting stays on the
-    // correct calendar date while comparisons use the cutoff instant.
-    const displayDate = new Date(cutoff.getTime() - 1);
-    return { cutoff, date: displayDate, hasTime: false, raw: value };
-  }
-
-  const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
-  let parsed;
-
-  if (offset) {
-    // Absolute timestamp (Z or explicit offset).
-    parsed = parseISO(normalized);
-  } else {
-    // No offset: interpret as local to the organization's timezone.
-    parsed = fromZonedTime(normalized, TIMEZONE);
-  }
-
-  if (!isValid(parsed)) {
-    return null;
-  }
-
-  return { cutoff: parsed, date: parsed, hasTime: true, raw: value };
+function cycleApplicationDeadline(cycle) {
+  const raw = cycle?.applicationDeadline;
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (!isValid(date)) return null;
+  return { cutoff: date, date, hasTime: true, raw: String(raw) };
 }
 
 /**
@@ -87,7 +36,7 @@ export function formatDeadline(date, hasTime) {
 
 /**
  * Given a candidate's applications, return the next future application deadline
- * from each application-linked RecruitingCycle (using cycle.endDate).
+ * from each application-linked RecruitingCycle (using cycle.applicationDeadline).
  * Returns null when no unambiguous future deadline exists.
  */
 export function getNextDeadline(applications, now = new Date()) {
@@ -103,7 +52,7 @@ export function getNextDeadline(applications, now = new Date()) {
       continue;
     }
 
-    const parsed = parseApplicationDeadline(cycle.endDate);
+    const parsed = cycleApplicationDeadline(cycle);
     if (parsed && parsed.cutoff.getTime() > now.getTime()) {
       candidates.push({
         ...parsed,
@@ -137,7 +86,7 @@ export function getNextDeadline(applications, now = new Date()) {
 export function getCycleDeadline(cycle, now = new Date()) {
   if (!cycle) return null;
 
-  const parsed = parseApplicationDeadline(cycle.endDate);
+  const parsed = cycleApplicationDeadline(cycle);
   if (!parsed || parsed.cutoff.getTime() <= now.getTime()) return null;
 
   return {

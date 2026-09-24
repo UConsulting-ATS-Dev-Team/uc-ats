@@ -43,6 +43,7 @@ describe('GET /api/active-cycle', () => {
       name: 'Fall 2026',
       startDate: new Date('2026-09-01T00:00:00Z'),
       endDate: new Date('2026-10-15T00:00:00Z'),
+      applicationDeadline: new Date('2026-10-02T06:59:00Z'),
       isActive: true,
       createdById: 'admin-1'
     });
@@ -55,7 +56,8 @@ describe('GET /api/active-cycle', () => {
         id: 'cycle-1',
         name: 'Fall 2026',
         startDate: '2026-09-01T00:00:00.000Z',
-        endDate: '2026-10-15T00:00:00.000Z'
+        endDate: '2026-10-15T00:00:00.000Z',
+        applicationDeadline: '2026-10-02T06:59:00.000Z'
       }
     });
   });
