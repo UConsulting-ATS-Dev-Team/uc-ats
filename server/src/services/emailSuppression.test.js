@@ -91,6 +91,22 @@ describe('applySuppressions', () => {
     ]);
   });
 
+  it('treats g.ucla.edu and ucla.edu as one inbox', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'gone@g.ucla.edu' }]);
+    prisma.user.findMany.mockResolvedValue([{ email: 'staff@g.ucla.edu' }]);
+
+    const { deliver, skipped } = await applySuppressions([
+      { id: '1', email: 'gone@ucla.edu' },
+      { id: '2', email: 'staff@ucla.edu' },
+    ]);
+
+    expect(skipped.map((r) => r.email)).toEqual(['gone@ucla.edu']);
+    expect(deliver).toEqual([expect.objectContaining({ email: 'staff@ucla.edu', marketing: false })]);
+    expect(prisma.emailSuppression.findMany.mock.calls[0][0].where.email.in).toEqual(
+      expect.arrayContaining(['gone@ucla.edu', 'gone@g.ucla.edu'])
+    );
+  });
+
   it('asks only about active staff', async () => {
     await applySuppressions(people);
     expect(prisma.user.findMany.mock.calls[0][0].where).toMatchObject({ role: { in: ['MEMBER', 'ADMIN'] }, isActive: true });

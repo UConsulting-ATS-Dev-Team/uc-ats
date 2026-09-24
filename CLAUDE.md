@@ -157,7 +157,9 @@ The route and the script each keep only their own presentation. Put changes to
 the dedup there, not in either caller.
 
 "Already in the ATS" means `User`, `Candidate`, `Application` or `MeetingSignup`,
-compared case-insensitively. `DecisionMessage.email` is excluded on purpose - it is
+compared case-insensitively, with `x@g.ucla.edu` and `x@ucla.edu` counted as the
+same person (`emailIdentityKey` in `utils/mailingListImport.js`; both spellings stay
+valid and are stored as written). `DecisionMessage.email` is excluded on purpose - it is
 a copy of `Application.email` made when a decision is queued, so counting it would
 double-count the same person.
 
@@ -267,7 +269,8 @@ The system follows a **recruiting cycle-based workflow**:
   tree and folds rule results; [audiencePeople.js](server/src/services/audiences/audiencePeople.js)
   builds the people and answers each rule. **A new rule goes in `RULE_TYPES`, in
   `MATCHERS`, and in the client's `RULES`** ([audienceRules.js](client/src/components/communications/audienceRules.js)).
-- A person is one lowercased address, merged across accounts, applications,
+- A person is one lowercased address (`x@g.ucla.edu` and `x@ucla.edu` are one inbox
+  and merge; so does an unsubscribe from either), merged across accounts, applications,
   candidates, mailing-list contacts, meeting signups and Luma guests. A candidate's
   addresses merge into one person, represented by their active account's address if
   any (so staff are recognised), else their latest application's.
