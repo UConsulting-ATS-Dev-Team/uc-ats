@@ -87,6 +87,11 @@ export default function EventManagement() {
   // Which event's Luma guest panel is open. Null when none is.
   const [lumaPanelEvent, setLumaPanelEvent] = useState(null);
 
+  // Whether the Google Form sync sends its own RSVP/attendance confirmations.
+  // Null until it has been read, so the switch does not flicker through "off".
+  const [signupEmails, setSignupEmails] = useState(null);
+  const [signupEmailsSaving, setSignupEmailsSaving] = useState(false);
+
   const { user } = useAuth();
 
   function formatForDateTimeLocal(date, timeZone) {
@@ -110,6 +115,37 @@ export default function EventManagement() {
     return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
 
+
+  const fetchSignupEmailSetting = async () => {
+    try {
+      const setting = await apiClient.get('/admin/event-email-settings');
+      setSignupEmails(setting.sendSignupConfirmations);
+    } catch (e) {
+      // A setting that cannot be read is not worth blocking the page for; the
+      // switch stays hidden rather than showing a state it does not know.
+      console.error('Failed to load event email settings', e);
+    }
+  };
+
+  const toggleSignupEmails = async (enabled) => {
+    try {
+      setSignupEmailsSaving(true);
+      setError('');
+      const saved = await apiClient.patch('/admin/event-email-settings', {
+        sendSignupConfirmations: enabled,
+      });
+      setSignupEmails(saved.sendSignupConfirmations);
+      setSuccessMessage(
+        saved.sendSignupConfirmations
+          ? 'Form sign-ups will now get an ATS confirmation email again.'
+          : 'ATS confirmation emails for form sign-ups are off. Luma sends its own.'
+      );
+    } catch (e) {
+      setError(e.message || 'Failed to save the email setting');
+    } finally {
+      setSignupEmailsSaving(false);
+    }
+  };
 
   const fetchEvents = async () => {
     try {
@@ -521,6 +557,7 @@ export default function EventManagement() {
   useEffect(() => {
     fetchEvents();
     fetchCycles();
+    fetchSignupEmailSetting();
     
     // Listen for cycle activation events and refresh when a new cycle is activated
     const handleCycleActivated = () => {
@@ -652,6 +689,33 @@ export default function EventManagement() {
         </Stack>
       </Stack>
 
+      {/* Sign-ups run through Luma, which sends its own confirmation and
+          calendar invite, so the ATS one is off. It is a switch rather than
+          deleted code because the Google Forms path is still here and a move
+          back should not need a release. Admins only: it changes what lands in
+          candidates' inboxes. */}
+      {user?.role === 'ADMIN' && signupEmails !== null && (
+        <Alert severity={signupEmails ? 'warning' : 'info'} sx={{ mb: 2 }}>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={signupEmails}
+                  disabled={signupEmailsSaving}
+                  onChange={(e) => toggleSignupEmails(e.target.checked)}
+                />
+              }
+              label="Send an ATS confirmation email for Google Form sign-ups"
+            />
+            <Typography variant="body2" color="text.secondary">
+              {signupEmails
+                ? 'On. Anyone who RSVPs on a Luma event AND a Google Form will get two emails — leave this off while Luma is in use.'
+                : 'Off, because Luma emails its own confirmation and calendar invite. Turn this on if events move back to Google Forms.'}
+            </Typography>
+          </Stack>
+        </Alert>
+      )}
+
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
       )}
@@ -747,35 +811,54 @@ export default function EventManagement() {
                     />
                   </TableCell>
                   <TableCell data-label="RSVP">
+                    {/* Where a candidate actually signs up. That is the Luma
+                        page wherever there is one, so it is the link this cell
+                        offers; the Google Form stays reachable underneath it,
+                        because an event that has both still has old responses
+                        worth opening. */}
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.rsvpForm ? (
+                      {event.lumaUrl || event.rsvpForm ? (
                         <>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Chip 
-                              label={`${stats.rsvpCount} RSVPs`} 
-                              size="small" 
-                              color="primary" 
+                            <Chip
+                              label={`${stats.rsvpCount} RSVPs`}
+                              size="small"
+                              color="primary"
                               variant="outlined"
                             />
                             <Button
                               size="small"
                               variant="text"
-                              onClick={() => window.open(event.rsvpForm, '_blank')}
+                              onClick={() => window.open(event.lumaUrl || event.rsvpForm, '_blank', 'noopener,noreferrer')}
                             >
-                              View Form
+                              {event.lumaUrl ? 'View Luma' : 'View Form'}
                             </Button>
+                            {event.lumaUrl && event.rsvpForm && (
+                              <Tooltip title="The Google Form this event used before Luma. Its responses still sync.">
+                                <Button
+                                  size="small"
+                                  variant="text"
+                                  color="inherit"
+                                  onClick={() => window.open(event.rsvpForm, '_blank', 'noopener,noreferrer')}
+                                >
+                                  Form
+                                </Button>
+                              </Tooltip>
+                            )}
                           </Stack>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            disabled={syncLoading[`${event.id}-rsvp`]}
-                            onClick={() => syncEventRSVP(event.id)}
-                          >
-                            {syncLoading[`${event.id}-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
-                          </Button>
+                          {event.rsvpForm && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={syncLoading[`${event.id}-rsvp`]}
+                              onClick={() => syncEventRSVP(event.id)}
+                            >
+                              {syncLoading[`${event.id}-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                            </Button>
+                          )}
                         </>
                       ) : (
-                        <Typography variant="body2" color="text.secondary">No Form</Typography>
+                        <Typography variant="body2" color="text.secondary">No sign-up link</Typography>
                       )}
                     </Stack>
                   </TableCell>
@@ -906,13 +989,6 @@ export default function EventManagement() {
                                 />
                               </Tooltip>
                             )}
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() => window.open(event.lumaUrl, '_blank', 'noopener,noreferrer')}
-                            >
-                              View
-                            </Button>
                           </Stack>
                           <Button
                             size="small"

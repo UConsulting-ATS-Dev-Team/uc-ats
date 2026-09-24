@@ -53,6 +53,7 @@ import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
 import { resolveFormStatus } from '../services/eventFormStatus.js';
 import { parseLumaUrl, lumaUrlChanged } from '../services/luma/lumaUrl.js';
 import { LUMA_HELD } from '../services/luma/heldGuests.js';
+import { getEventEmailSetting, setSendSignupConfirmations } from '../services/eventEmailSettings.js';
 import {
   activateCycleExclusively,
   isActiveCycleConflict,
@@ -1381,6 +1382,37 @@ router.get('/profile', async (req, res) => {
 // Event Management Routes
 
 // Get all events
+// Whether the Google Form event sync sends its own RSVP and attendance
+// confirmations. Off while sign-ups run through Luma, which sends its own; the
+// switch is what makes a move back to Forms a toggle rather than a revert.
+// Registered before the '/events/:id' routes so 'event-email-settings' is not
+// read as an event id.
+router.get('/event-email-settings', async (req, res) => {
+  try {
+    res.json(await getEventEmailSetting());
+  } catch (error) {
+    console.error('[GET /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to load event email settings' });
+  }
+});
+
+router.patch('/event-email-settings', async (req, res) => {
+  try {
+    const saved = await setSendSignupConfirmations(req.body?.sendSignupConfirmations, req.user?.id);
+    console.log(
+      `[events] signup confirmation emails turned ${saved.sendSignupConfirmations ? 'ON' : 'OFF'} `
+      + `by ${req.user?.id || 'an admin'}`
+    );
+    res.json(saved);
+  } catch (error) {
+    if (error?.code === 'INVALID_EVENT_EMAIL_SETTING') {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('[PATCH /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to save event email settings' });
+  }
+});
+
 router.get('/events', async (req, res) => {
   try {
     res.json(await loadEvents(prisma));

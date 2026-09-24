@@ -155,15 +155,16 @@ normal result, and it is the only case where nobody needs to read further.
 
 ## Reading the report
 
-Until the Phase 3 admin panel ships, **this report is the only place the held
-cases surface**. `unmatched`, `flagged` and `unknownStatus` are all decisions the
-ingest deliberately declines to make, and each one means a person's RSVP or
-attendance is missing or unverified:
+`unmatched`, `flagged` and `unknownStatus` are all decisions the ingest
+deliberately declines to make, and each one means a person's RSVP or attendance
+is missing or unverified. The same three are waiting in **Event Management → the
+event's Luma column → the guests button**, which is where they get settled; this
+report is what tells someone to go and look without opening every event.
 
 | What the report says | What it means | What to do |
 | --- | --- | --- |
-| `unmatched` | No candidate or member has that email, and there was no usable 9-digit UID | Find them in the ATS and link them by hand, or ask them for their UID |
-| `flagged` | Matched on a typed UID alone, name doesn't corroborate | Usually a nickname. Check it is not someone else's UID |
+| `unmatched` | No candidate or member has that email, and there was no usable 9-digit UID | Link them in the guests panel, or ask them for their UID |
+| `flagged` | Matched on a typed UID alone, name doesn't corroborate | Usually a nickname. Check in the guests panel that it is not someone else's UID |
 | `unknownStatus` | Luma sent an `approval_status` we don't read | Check what Luma means by it; if it should count, add it to `RSVP_FOR_STATUS` in `ingestGuests.js` |
 | `rejected` | Malformed entry: no guest id, no usable email, no status, or an unreadable check-in time | Look at the guest in Luma |
 | `failed` | The ATS errored on that guest | Check the server logs for `[luma]` |
@@ -172,9 +173,9 @@ attendance is missing or unverified:
 
 If the routine's owner leaves, the Luma sign-in is revoked, or the routine is
 paused, **sync stops with no error anywhere**. Nothing polls for it. The only
-signal is `lumaLastSyncedAt` on the event, which Phase 3 surfaces as "last synced
-X ago" with a warning past three hours. Until then, an event whose RSVPs stop
-growing is the symptom to watch for.
+signal is `lumaLastSyncedAt` on the event, which the Luma column in Event
+Management shows as "X ago" and turns amber past three hours (two missed runs).
+Nothing alerts on it, so someone still has to look at the page.
 
 `lumaLastSyncedAt` moves only when a page arrives marked `final`, so it means
 "the ATS has this event's whole guest list", not "something arrived". A routine
