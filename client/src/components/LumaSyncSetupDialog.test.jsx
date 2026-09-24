@@ -132,4 +132,21 @@ describe('when it cannot be loaded', () => {
     render(<LumaSyncSetupDialog open onClose={() => {}} />);
     expect(await screen.findByText('nope')).toBeInTheDocument();
   });
+
+  // The dialog stays mounted between opens, so a failed reload must not leave
+  // the previous token on screen: it may since have been rotated elsewhere, and
+  // offering it to be copied hands over a credential that no longer works.
+  it('drops the token it was showing rather than offering a stale one', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue(state());
+    const { rerender } = render(<LumaSyncSetupDialog open onClose={() => {}} />);
+    expect(await screen.findByDisplayValue(TOKEN)).toBeInTheDocument();
+
+    rerender(<LumaSyncSetupDialog open={false} onClose={() => {}} />);
+    get.mockRejectedValue({ response: { data: { error: 'gone' } } });
+    rerender(<LumaSyncSetupDialog open onClose={() => {}} />);
+
+    expect(await screen.findByText('gone')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(TOKEN)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /copy prompt/i })).not.toBeInTheDocument();
+  });
 });

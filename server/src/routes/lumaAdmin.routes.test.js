@@ -106,7 +106,7 @@ beforeEach(() => {
   prisma.candidate.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.lumaSyncSetting.findUnique.mockResolvedValue(null);
-  prisma.lumaSyncSetting.upsert.mockResolvedValue({});
+  prisma.lumaSyncSetting.upsert.mockImplementation(({ create }) => Promise.resolve(create));
   delete process.env.LUMA_SYNC_TOKEN;
 });
 
@@ -291,21 +291,41 @@ describe('the sync token', () => {
   });
 
   it('generates a token and records the admin who did it', async () => {
-    let created;
-    prisma.lumaSyncSetting.upsert.mockImplementation(({ create }) => {
-      created = create;
-      return Promise.resolve({});
-    });
-    prisma.lumaSyncSetting.findUnique.mockImplementation(() =>
-      Promise.resolve({ token: created.token, tokenSetAt: new Date(), updatedAt: new Date(), updatedById: 'admin-1' })
-    );
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const body = await (await call('/sync-token', { method: 'POST' })).json();
+    const { create } = prisma.lumaSyncSetting.upsert.mock.calls[0][0];
 
-    expect(created.updatedById).toBe('admin-1');
-    expect(body.token).toBe(created.token);
-    expect(body.prompt).toContain(created.token);
+    expect(create.updatedById).toBe('admin-1');
+    expect(body.token).toBe(create.token);
+    expect(body.prompt).toContain(create.token);
+  });
+
+  // A rotation that succeeded must not be reported as a failure: the previous
+  // token is already dead, so the admin would be left with one nobody can read.
+  it('still reports the new token when reading the row back would fail', async () => {
+    prisma.lumaSyncSetting.findUnique.mockRejectedValue(new Error('read failed'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call('/sync-token', { method: 'POST' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.token).toBeTruthy();
+  });
+
+  // The body is a reusable credential; nothing in between may keep a copy.
+  it('marks every token response non-storable', async () => {
+    stored();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const get = await call('/sync-token');
+    const post = await call('/sync-token', { method: 'POST' });
+    const del = await call('/sync-token', { method: 'DELETE' });
+
+    for (const res of [get, post, del]) {
+      expect(res.headers.get('cache-control')).toContain('no-store');
+    }
   });
 
   it('clears the stored token on delete', async () => {

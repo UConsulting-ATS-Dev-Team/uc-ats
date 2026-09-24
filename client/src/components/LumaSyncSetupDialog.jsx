@@ -62,6 +62,12 @@ export default function LumaSyncSetupDialog({ open, onClose }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
+    // Dropped before the request, not after it succeeds: the dialog stays
+    // mounted between opens, so a failed reload would otherwise leave the
+    // previous token on screen and copyable. If it was rotated or cleared
+    // elsewhere in the meantime, that is a credential that no longer works
+    // being offered as though it does.
+    setState(null);
     try {
       setState(await apiClient.get('/admin/luma/sync-token'));
     } catch (err) {
@@ -110,7 +116,11 @@ export default function LumaSyncSetupDialog({ open, onClose }) {
           <Stack spacing={2}>
             {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
 
-            {!state?.configured && (
+            {!state && !error && (
+              <Alert severity="error">Could not load the sync token.</Alert>
+            )}
+
+            {state && !state.configured && (
               <Alert severity="warning">
                 No sync token exists, so <code>/api/integrations/luma</code> answers 503 and nothing
                 syncs. Generate one to start.
@@ -124,6 +134,8 @@ export default function LumaSyncSetupDialog({ open, onClose }) {
               </Alert>
             )}
 
+            {state && (
+            <>
             <Box>
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                 <Typography variant="subtitle2">Sync token</Typography>
@@ -210,11 +222,16 @@ export default function LumaSyncSetupDialog({ open, onClose }) {
               />
             </Box>
 
+            </>
+            )}
+
+            {state && (
             <Typography variant="body2" color="text.secondary">
               Each event still needs creating under the club account, a required question whose label
               contains “UID”, and its Luma link pasted into the ATS event. Full setup and what the
               routine may do is in <Link href="https://github.com/UConsulting-ATS-Dev-Team/uc-ats/blob/main/docs/luma-sync-routine.md" target="_blank" rel="noopener noreferrer">docs/luma-sync-routine.md</Link>.
             </Typography>
+            )}
           </Stack>
         )}
       </DialogContent>

@@ -31,13 +31,15 @@ const TOKEN_BYTES = 32;
 // sync a deployment already had keeps working until the migration lands.
 const MISSING_TABLE = 'P2021';
 
+const SETTING_FIELDS = { token: true, tokenSetAt: true, updatedAt: true, updatedById: true };
+
 export const generateSyncToken = () => crypto.randomBytes(TOKEN_BYTES).toString('base64url');
 
 async function readSetting() {
   try {
     return await prisma.lumaSyncSetting.findUnique({
       where: { id: SETTING_ID },
-      select: { token: true, tokenSetAt: true, updatedAt: true, updatedById: true }
+      select: SETTING_FIELDS
     });
   } catch (error) {
     if (error?.code === MISSING_TABLE) {
@@ -67,8 +69,7 @@ export async function acceptedSyncTokens() {
 }
 
 /** What the admin screen shows: the token itself, and where it came from. */
-export async function getSyncTokenState() {
-  const row = await readSetting();
+function stateFrom(row) {
   const stored = usable(row?.token);
   const fromEnv = usable(process.env.LUMA_SYNC_TOKEN);
   return {
@@ -82,6 +83,10 @@ export async function getSyncTokenState() {
   };
 }
 
+export async function getSyncTokenState() {
+  return stateFrom(await readSetting());
+}
+
 /**
  * Generate a new token, replacing any stored one.
  *
@@ -93,20 +98,27 @@ export async function getSyncTokenState() {
  */
 export async function rotateSyncToken(userId) {
   const token = generateSyncToken();
-  await prisma.lumaSyncSetting.upsert({
+  const tokenSetAt = new Date();
+  // Reported from the write itself, never from a second read. The old token is
+  // already dead by the time this returns, so a read that failed here would
+  // have the route answer "could not generate" about a rotation that did
+  // happen — leaving the routine on a token nobody can see.
+  const saved = await prisma.lumaSyncSetting.upsert({
     where: { id: SETTING_ID },
-    update: { token, tokenSetAt: new Date(), updatedById: userId ?? null },
-    create: { id: SETTING_ID, token, tokenSetAt: new Date(), updatedById: userId ?? null }
+    update: { token, tokenSetAt, updatedById: userId ?? null },
+    create: { id: SETTING_ID, token, tokenSetAt, updatedById: userId ?? null },
+    select: SETTING_FIELDS
   });
-  return getSyncTokenState();
+  return stateFrom(saved);
 }
 
 /** Forget the stored token. Does not touch LUMA_SYNC_TOKEN in the environment. */
 export async function clearSyncToken(userId) {
-  await prisma.lumaSyncSetting.upsert({
+  const saved = await prisma.lumaSyncSetting.upsert({
     where: { id: SETTING_ID },
     update: { token: null, tokenSetAt: null, updatedById: userId ?? null },
-    create: { id: SETTING_ID, token: null, tokenSetAt: null, updatedById: userId ?? null }
+    create: { id: SETTING_ID, token: null, tokenSetAt: null, updatedById: userId ?? null },
+    select: SETTING_FIELDS
   });
-  return getSyncTokenState();
+  return stateFrom(saved);
 }

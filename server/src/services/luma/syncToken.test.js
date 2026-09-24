@@ -33,7 +33,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.LUMA_SYNC_TOKEN;
   prisma.lumaSyncSetting.findUnique.mockResolvedValue(null);
-  prisma.lumaSyncSetting.upsert.mockResolvedValue({});
+  // Prisma answers an upsert with the row it wrote, and rotate now reports
+  // from that rather than reading again.
+  prisma.lumaSyncSetting.upsert.mockImplementation(({ create }) => Promise.resolve(create));
 });
 
 afterEach(() => {
@@ -138,17 +140,22 @@ describe('getSyncTokenState', () => {
 
 describe('rotateSyncToken', () => {
   it('stores a new token and records who did it', async () => {
-    let saved;
-    prisma.lumaSyncSetting.upsert.mockImplementation(({ create }) => {
-      saved = create;
-      return Promise.resolve({});
-    });
-    prisma.lumaSyncSetting.findUnique.mockImplementation(() => Promise.resolve(row(saved.token)));
-
     const state = await rotateSyncToken('admin-1');
-    expect(saved.token.length).toBeGreaterThanOrEqual(MIN_TOKEN_LENGTH);
-    expect(saved.updatedById).toBe('admin-1');
-    expect(state.token).toBe(saved.token);
+    const { create } = prisma.lumaSyncSetting.upsert.mock.calls[0][0];
+
+    expect(create.token.length).toBeGreaterThanOrEqual(MIN_TOKEN_LENGTH);
+    expect(create.updatedById).toBe('admin-1');
+    expect(state.token).toBe(create.token);
+  });
+
+  // The old token is dead the moment the write lands. Reporting from a second
+  // read would let a read failure answer "could not generate" about a rotation
+  // that did happen, leaving the routine on a token nobody can see.
+  it('reports from the write, so it never needs a second read', async () => {
+    prisma.lumaSyncSetting.findUnique.mockRejectedValue(new Error('read failed'));
+    const state = await rotateSyncToken('admin-1');
+    expect(state.token).toBeTruthy();
+    expect(prisma.lumaSyncSetting.findUnique).not.toHaveBeenCalled();
   });
 
   it('replaces the previous one rather than adding a second', async () => {
@@ -171,8 +178,12 @@ describe('clearSyncToken', () => {
   // and saying otherwise in the UI would be a lie about what still works.
   it('leaves the environment token alone', async () => {
     process.env.LUMA_SYNC_TOKEN = FROM_ENV;
-    prisma.lumaSyncSetting.findUnique.mockResolvedValue(row(null));
     const state = await clearSyncToken('admin-1');
     expect(state).toMatchObject({ token: null, envTokenSet: true, configured: true });
+  });
+
+  it('reports from the write here too', async () => {
+    prisma.lumaSyncSetting.findUnique.mockRejectedValue(new Error('read failed'));
+    await expect(clearSyncToken('admin-1')).resolves.toMatchObject({ token: null });
   });
 });
