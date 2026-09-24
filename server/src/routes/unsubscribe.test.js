@@ -56,6 +56,18 @@ it('resubscribes', async () => {
   expect(suppression.resubscribeEmail).toHaveBeenCalledWith('joe@ucla.edu');
 });
 
+it('still reports success when the status read after a write fails', async () => {
+  suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
+  const res = await post('', { t: unsubscribeToken('joe@ucla.edu') });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: true, heldBack: false });
+
+  suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
+  const again = await post('/resubscribe', { t: unsubscribeToken('joe@ucla.edu') });
+  expect(again.status).toBe(200);
+  expect(await again.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false, heldBack: false });
+});
+
 it('accepts the RFC 8058 one-click POST, form-encoded body and all', async () => {
   const res = await fetch(`${base}/one-click?t=${token}`, {
     method: 'POST',
