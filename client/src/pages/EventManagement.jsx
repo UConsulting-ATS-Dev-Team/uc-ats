@@ -114,8 +114,11 @@ export default function EventManagement() {
         else delete next[event.id];
         return next;
       });
-      const stats = await apiClient.get(`/admin/events/${event.id}/stats`);
-      setEventStats((prev) => ({ ...prev, [event.id]: stats.stats }));
+      // The RSVP is saved by now. A failed count refresh must not read as a
+      // failed save, or a retry would undo what just worked.
+      apiClient.get(`/admin/events/${event.id}/stats`)
+        .then((stats) => setEventStats((prev) => ({ ...prev, [event.id]: stats.stats })))
+        .catch((statsError) => console.warn('Failed to refresh RSVP count:', statsError));
     } catch (e) {
       setError(e.code === 'EVENT_STARTED'
         ? 'That event has already started, so RSVPs are closed.'
