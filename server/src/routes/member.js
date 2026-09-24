@@ -12,7 +12,7 @@ import {
   getRosterForInterview
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
-import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
+import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
@@ -88,30 +88,124 @@ router.get('/events', requireAuth, async (req, res) => {
     });
 
 
-    // Build a Set of eventIds this member RSVP'd to
+    // Where each of this member's RSVPs came from, by event. The source is what
+    // lets the page offer Cancel only on an RSVP made here.
     const eventIds = events.map(e => e.id);
-    let rsvpsByEventId = new Set();
+    let rsvpSourceByEventId = new Map();
     if (eventIds.length > 0) {
       const memberRsvps = await prisma.memberEventRsvp.findMany({
         where: {
           memberId: userId,
           eventId: { in: eventIds }
         },
-        select: { eventId: true }
+        select: { eventId: true, source: true }
       });
-      rsvpsByEventId = new Set(memberRsvps.map(r => r.eventId));
+      rsvpSourceByEventId = new Map(memberRsvps.map(r => [r.eventId, r.source]));
     }
 
     const eventsWithStatus = events.map(event => ({
       ...event,
       memberRsvpUrl: event.memberRsvpUrl || null,
-      hasMemberRsvpd: rsvpsByEventId.has(event.id)
+      hasMemberRsvpd: rsvpSourceByEventId.has(event.id),
+      memberRsvpSource: rsvpSourceByEventId.get(event.id) ?? null
     }));
 
     res.json(eventsWithStatus);
   } catch (error) {
     console.error('[GET /api/member/events]', error);
     res.status(500).json({ error: 'Failed to fetch member events' });
+  }
+});
+
+/**
+ * A member's own RSVP, made from the Events page. Going is a row in
+ * member_event_rsvp, not going is no row, exactly as for Google Form and Luma
+ * RSVPs - so accountability and the dashboard read all three the same way.
+ *
+ * Only an IN_APP row is ever cancelled here. An RSVP that came from Luma or a
+ * form stands until it changes there: deleting it would be undone by the next
+ * sync (Luma) or leave the member registered somewhere we cannot see.
+ */
+async function loadOpenEvent(req, res) {
+  const event = await prisma.events.findUnique({ where: { id: req.params.eventId } });
+  if (!event) {
+    res.status(404).json({ error: 'Event not found' });
+    return null;
+  }
+  if (new Date(event.eventStartDate) <= new Date()) {
+    res.status(409).json({ error: 'This event has already started', code: 'EVENT_STARTED' });
+    return null;
+  }
+  return event;
+}
+
+router.put('/events/:eventId/rsvp', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const event = await loadOpenEvent(req, res);
+    if (!event) return;
+
+    const key = { eventId_memberId: { eventId: event.id, memberId: req.user.id } };
+    let created = false;
+    try {
+      await prisma.memberEventRsvp.create({
+        data: { eventId: event.id, memberId: req.user.id, source: 'IN_APP' }
+      });
+      created = true;
+    } catch (error) {
+      // Already RSVP'd, from here or elsewhere: a second click is not an error.
+      if (error?.code !== 'P2002') throw error;
+    }
+    const row = await prisma.memberEventRsvp.findUnique({ where: key, select: { source: true } });
+
+    if (created) {
+      // Best-effort: the RSVP is recorded whether or not the mail goes out.
+      const member = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { email: true, fullName: true }
+      });
+      if (member?.email) {
+        sendRSVPConfirmation(
+          member.email,
+          member.fullName || member.email,
+          event.eventName,
+          formatEventDate(event.eventStartDate),
+          event.eventLocation,
+          event
+        ).catch((error) => console.error('[PUT /api/member/events/:eventId/rsvp] confirmation', error));
+      }
+    }
+
+    res.json({ hasMemberRsvpd: Boolean(row), memberRsvpSource: row?.source ?? null });
+  } catch (error) {
+    console.error('[PUT /api/member/events/:eventId/rsvp]', error);
+    res.status(500).json({ error: 'Failed to save RSVP' });
+  }
+});
+
+router.delete('/events/:eventId/rsvp', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const event = await loadOpenEvent(req, res);
+    if (!event) return;
+
+    await prisma.memberEventRsvp.deleteMany({
+      where: { eventId: event.id, memberId: req.user.id, source: 'IN_APP' }
+    });
+    const remaining = await prisma.memberEventRsvp.findUnique({
+      where: { eventId_memberId: { eventId: event.id, memberId: req.user.id } },
+      select: { source: true }
+    });
+    if (remaining) {
+      return res.status(409).json({
+        error: 'This RSVP was made outside the ATS and has to be changed there',
+        code: 'RSVP_EXTERNAL',
+        memberRsvpSource: remaining.source
+      });
+    }
+
+    res.json({ hasMemberRsvpd: false, memberRsvpSource: null });
+  } catch (error) {
+    console.error('[DELETE /api/member/events/:eventId/rsvp]', error);
+    res.status(500).json({ error: 'Failed to cancel RSVP' });
   }
 });
 

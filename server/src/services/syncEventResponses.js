@@ -410,19 +410,9 @@ export async function syncMemberEventRSVP(eventId) {
           }
         });
 
-        // No confirmation email goes to members yet, so no calendar invite either -
-        // a member who RSVPs hears nothing back from here today.
-        //
-        // This is the hook point for when the integrated member RSVP form lands.
-        // eventInviteFor is already audience-neutral, so a member confirmation is the
-        // same shape as the candidate one further up this file:
-        //
-        //   sendRSVPConfirmation(member.email, memberName, event.eventName,
-        //                        formatEventDate(event.eventStartDate),
-        //                        event.eventLocation, event)
-        //
-        // Passing `event` as the last argument is what attaches the invite. The UID
-        // keys on the address, so members and candidates on one event never collide.
+        // No confirmation email goes out from this form path. A member who RSVPs
+        // in the app (PUT /api/member/events/:eventId/rsvp) gets one, with the
+        // calendar invite; this legacy form is on its way out, so it stays silent.
 
         successCount++;
         console.log(`Successfully processed member RSVP response ${transformedData.responseId} for member ${member.id}`);

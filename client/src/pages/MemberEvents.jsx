@@ -10,6 +10,8 @@ export default function MemberEvents() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [savingId, setSavingId] = useState(null);
+  const [rsvpErrors, setRsvpErrors] = useState({});
 
   const fetchEvents = async () => {
     try {
@@ -57,18 +59,47 @@ export default function MemberEvents() {
     };
   };
 
+  // RSVP straight from the page: members are signed in, so there is nothing a
+  // form would need to ask. Only an RSVP made here can be cancelled here; one
+  // from Luma or a Google Form has to be changed where it was made.
   const handleRSVP = async (event) => {
+    const going = event.memberRsvpSource === 'IN_APP';
+    setSavingId(event.id);
+    setRsvpErrors((prev) => ({ ...prev, [event.id]: null }));
     try {
-      if (event.memberRsvpUrl) {
-        // Open the member RSVP form in a new tab
-        window.open(event.memberRsvpUrl, '_blank');
-      } else {
-        alert('Member RSVP form not available for this event.');
+      const path = `/member/events/${event.id}/rsvp`;
+      const status = going ? await apiClient.delete(path) : await apiClient.put(path, {});
+      setEvents((prev) => prev.map((e) => (e.id === event.id ? { ...e, ...status } : e)));
+    } catch (err) {
+      console.error('Error saving RSVP:', err);
+      if (err.body?.memberRsvpSource !== undefined) {
+        setEvents((prev) => prev.map((e) => (e.id === event.id
+          ? { ...e, hasMemberRsvpd: true, memberRsvpSource: err.body.memberRsvpSource }
+          : e)));
       }
-    } catch (error) {
-      console.error('Error handling RSVP:', error);
+      setRsvpErrors((prev) => ({
+        ...prev,
+        [event.id]: err.code === 'EVENT_STARTED'
+          ? 'This event has already started.'
+          : (err.serverMessage || 'Could not save your RSVP. Please try again.')
+      }));
+    } finally {
+      setSavingId(null);
     }
   };
+
+  const rsvpButtonLabel = (event) => {
+    if (savingId === event.id) return 'Saving…';
+    switch (event.memberRsvpSource) {
+      case 'IN_APP': return 'Going ✓ · Cancel';
+      case 'LUMA': return "RSVP'd via Luma";
+      case 'GOOGLE_FORM': return "RSVP'd via form";
+      default: return 'RSVP';
+    }
+  };
+
+  // An RSVP from Luma or a form is shown, but not changeable from here.
+  const isExternalRsvp = (event) => event.hasMemberRsvpd && event.memberRsvpSource !== 'IN_APP';
 
   const handleAddToCalendar = (event) => {
     try {
@@ -179,12 +210,13 @@ export default function MemberEvents() {
               
               <div className="event-action">
                 <div className="event-buttons">
-                  <button 
+                  <button
                     className="rsvp-button"
                     onClick={() => handleRSVP(event)}
-                    disabled={!event.memberRsvpUrl}
+                    disabled={savingId === event.id || isExternalRsvp(event)}
+                    title={isExternalRsvp(event) ? 'Change this RSVP where you made it' : undefined}
                   >
-                    {event.memberRsvpUrl ? 'RSVP' : 'No RSVP Available'}
+                    {rsvpButtonLabel(event)}
                   </button>
                   <button 
                     className="calendar-button"
@@ -197,6 +229,9 @@ export default function MemberEvents() {
                     Add to Calendar
                   </button>
                 </div>
+                {rsvpErrors[event.id] && (
+                  <div className="error" role="alert">{rsvpErrors[event.id]}</div>
+                )}
               </div>
             </div>
           );

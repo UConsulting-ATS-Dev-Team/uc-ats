@@ -127,10 +127,10 @@ export default function MemberDashboard() {
         }
       }
       
-      // Add RSVP tasks for events that have member RSVP URLs and the member hasn't RSVP'd yet
-      const eventsNeedingRsvp = events.filter(event => 
-        event.memberRsvpUrl && 
-        event.eventStartDate && 
+      // Add RSVP tasks for upcoming events the member hasn't RSVP'd to. Every
+      // event can be RSVP'd to from the Events page, form link or not.
+      const eventsNeedingRsvp = events.filter(event =>
+        event.eventStartDate &&
         new Date(event.eventStartDate) > new Date() && // Only future events
         !event.hasMemberRsvpd
       );
@@ -152,8 +152,7 @@ export default function MemberDashboard() {
             day: 'numeric'
           }),
           items: 'Pending Response',
-          status: 'pending',
-          rsvpUrl: event.memberRsvpUrl
+          status: 'pending'
         });
       });
       
@@ -176,8 +175,8 @@ export default function MemberDashboard() {
       // Navigate to document grading page
       window.location.href = '/document-grading';
     } else if (task.type === 'rsvp') {
-      // Open RSVP form in new tab
-      window.open(task.rsvpUrl, '_blank');
+      // RSVP happens on the Events page
+      window.location.href = '/events';
     }
   };
 

@@ -243,8 +243,9 @@ comment includes a `SELECT` for previewing exactly what it will remove.
     to `CONNECTED`; this touches `services/eventFormStatus.js`.
   - Show "last synced X ago", with a warning after more than 3 hours.
   - An "Unmatched Luma guests" panel for linking a guest to a candidate by hand.
-- `CandidateEvents.jsx` and `MemberEvents.jsx`: the RSVP button opens `lumaUrl` when set,
-  and the Google Form otherwise.
+- `CandidateEvents.jsx`: the RSVP button opens `lumaUrl` when set, and the Google Form
+  otherwise. `MemberEvents.jsx` no longer opens any link: members RSVP in the app
+  (`source = IN_APP`), and a Luma or form RSVP shows there as already made.
 - Also check `eventCopy.js` (copy the `lumaUrl`? Probably not; copied events need new Luma
   events) and `cycleBootstrap.js` (a `needsForms` stage should be satisfied by a Luma link).
 
@@ -282,8 +283,8 @@ to switch over.
    camera, signed in as the club account. On the free tier there's no check-in-only role.
    For walk-ins, register them on the spot, including their UID, or check them in from the
    guest list. Express Mode helps at big events.
-10. Members register on the same Luma event, using the email or UID their ATS account
-    has. The separate member-RSVP form goes away.
+10. Members RSVP on the ATS Events page; no member form is needed. A member who also
+    registers on the Luma event (email or UID matching their account) still counts once.
 
 **Accepted limitations**
 
