@@ -10,7 +10,7 @@ import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../servic
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
-import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
   parseGraduationYear,
@@ -1102,10 +1102,17 @@ router.get('/cycles/active', async (req, res) => {
 // The admin form sends the application deadline as an LA-local
 // `YYYY-MM-DDTHH:mm` string. Blank clears it; anything else unparseable is refused
 // rather than stored as null, so a typo can't silently remove the deadline.
+// A time skipped by the spring-forward change (e.g. 02:30 that night) converts to
+// a different instant, so the result must convert back to exactly what was typed.
 const parseApplicationDeadline = (value) => {
   if (value === null || value === undefined || String(value).trim() === '') return { value: null };
-  const parsed = localInputToUTC(String(value).trim());
-  return parsed ? { value: parsed } : { error: 'Application deadline must be a date and time' };
+  const input = String(value).trim().replace(' ', 'T');
+  const parsed = localInputToUTC(input);
+  if (!parsed) return { error: 'Application deadline must be a date and time' };
+  if (utcToLocalInput(parsed) !== input) {
+    return { error: 'Application deadline is not a real Pacific time (clocks skip that hour)' };
+  }
+  return { value: parsed };
 };
 
 // Create a new cycle

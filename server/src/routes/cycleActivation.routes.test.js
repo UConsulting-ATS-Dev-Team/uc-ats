@@ -286,4 +286,22 @@ describe('application deadline', () => {
     expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
     expect(row('created')).toBeUndefined();
   });
+
+  it('refuses a Pacific time that the spring-forward change skips', async () => {
+    rows[1].applicationDeadline = new Date('2026-10-02T06:59:00Z');
+
+    // 2027-03-14 02:00-02:59 does not exist in Los Angeles.
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '2027-03-14T02:30' });
+
+    expect(res.status).toBe(400);
+    expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
+  });
+
+  it('accepts the hour just after the spring-forward gap', async () => {
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '2027-03-14T03:30' });
+
+    expect(res.status).toBe(200);
+    // 03:30 PDT is 10:30 UTC.
+    expect(row('next').applicationDeadline.toISOString()).toBe('2027-03-14T10:30:00.000Z');
+  });
 });
