@@ -7,10 +7,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { verifySnsMessage, stringToSign, interpretSesEvent, applySesEvent, isSnsUrl } from './sesEvents.js';
+import { suppressEmail } from './emailSuppression.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: { communicationLog: { updateMany: vi.fn() } },
 }));
+vi.mock('./emailSuppression.js', () => ({ suppressEmail: vi.fn() }));
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicPem = publicKey.export({ type: 'spki', format: 'pem' });
@@ -162,6 +164,33 @@ describe('applySesEvent', () => {
     });
     expect(prisma.communicationLog.updateMany).toHaveBeenCalledTimes(2);
     expect(count).toBe(2);
+  });
+
+  // Marketing sends stop going to an address that complained or does not
+  // exist. A soft bounce - a full mailbox - is worth trying again, so it does not.
+  it('unsubscribes a complaint and a permanent bounce, not a transient one', async () => {
+    await applySesEvent({ eventType: 'Complaint', mail, complaint: { complainedRecipients: [{ emailAddress: 'ryan@example.com' }] } });
+    expect(suppressEmail).toHaveBeenLastCalledWith(expect.objectContaining({ email: 'ryan@example.com', reason: 'COMPLAINED', source: 'SES' }));
+
+    await applySesEvent({
+      eventType: 'Bounce',
+      mail,
+      bounce: { bounceType: 'Permanent', bounceSubType: 'General', bouncedRecipients: [{ emailAddress: 'ryan@example.com', diagnosticCode: '550 user unknown' }] },
+    });
+    expect(suppressEmail).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'BOUNCED', detail: expect.stringContaining('550 user unknown') }));
+
+    suppressEmail.mockClear();
+    await applySesEvent({ eventType: 'Bounce', mail, bounce: { bounceType: 'Transient', bouncedRecipients: [{ emailAddress: 'ryan@example.com' }] } });
+    await applySesEvent({ eventType: 'Delivery', mail, delivery: { recipients: ['ryan@example.com'] } });
+    expect(suppressEmail).not.toHaveBeenCalled();
+  });
+
+  it('still reports the log update when recording the unsubscribe fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    prisma.communicationLog.updateMany.mockResolvedValue({ count: 1 });
+    suppressEmail.mockRejectedValueOnce(new Error('db down'));
+    const count = await applySesEvent({ eventType: 'Complaint', mail, complaint: { complainedRecipients: [{ emailAddress: 'ryan@example.com' }] } });
+    expect(count).toBe(1);
   });
 
   it('does nothing without an SES message id', async () => {

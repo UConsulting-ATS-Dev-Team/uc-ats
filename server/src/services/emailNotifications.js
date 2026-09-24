@@ -134,7 +134,7 @@ const addressesOf = (to) => {
  */
 const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
   const hasAttachments = Boolean(attachments && attachments.length > 0);
-  const { recipientName = null, attemptKey = null, ...context } = meta || {};
+  const { recipientName = null, attemptKey = null, listUnsubscribeUrl = null, ...context } = meta || {};
 
   // Never rejects. recordCommunication already swallows its own write failures,
   // but the mail is gone by the time this runs: if logging could throw here, a
@@ -175,6 +175,17 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
 
     if (hasAttachments) {
       mailOptions.attachments = attachments;
+    }
+
+    // RFC 8058 one-click unsubscribe, for Master Communications marketing mail
+    // only (services/emailSuppression.js). Gmail and Yahoo show their own
+    // Unsubscribe button from these and POST to the URL; bulk senders without
+    // them are more likely to land in spam.
+    if (listUnsubscribeUrl) {
+      mailOptions.headers = {
+        'List-Unsubscribe': `<${listUnsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      };
     }
 
     // The configuration set is what makes SES report deliveries, bounces and

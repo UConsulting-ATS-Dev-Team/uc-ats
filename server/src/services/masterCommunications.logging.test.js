@@ -15,6 +15,7 @@ vi.mock('../prismaClient.js', () => ({
     user: { findMany: vi.fn() },
     application: { findMany: vi.fn() },
     messageLog: { create: vi.fn() },
+    emailSuppression: { findMany: vi.fn() },
   },
 }));
 
@@ -33,6 +34,7 @@ beforeEach(() => {
   prisma.user.findMany.mockResolvedValue(members);
   prisma.application.findMany.mockResolvedValue([]);
   prisma.messageLog.create.mockResolvedValue({ id: 'campaign-1' });
+  prisma.emailSuppression.findMany.mockResolvedValue([]);
   sendEmail.mockResolvedValue({ success: true, messageId: 'ses-1' });
   recordCommunications.mockResolvedValue(2);
 });

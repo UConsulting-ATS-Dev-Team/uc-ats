@@ -119,7 +119,7 @@ describe('importing the survivors', () => {
     expect(body.get('file')).toBeInstanceOf(File);
     expect(body.get('emailColumn')).toBe('Email');
     expect(await screen.findByText(/Imported 2 contacts/)).toBeInTheDocument();
-    expect(screen.getByText(/Mailing list \(imported\) audience/)).toBeInTheDocument();
+    expect(screen.getByText(/choose Filtered audience and add “On the mailing list”/)).toBeInTheDocument();
     // One import per preview: a second click would only find them all known.
     expect(screen.getByRole('button', { name: /Import 2 contacts/i })).toBeDisabled();
   });

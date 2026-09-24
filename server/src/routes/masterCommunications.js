@@ -37,6 +37,14 @@ import {
   setMessagesExcluded,
   updateDecisionTemplate,
 } from '../services/decisionBatches.js';
+import {
+  listSavedAudiences,
+  createSavedAudience,
+  updateSavedAudience,
+  deleteSavedAudience,
+} from '../services/audiences/savedAudiences.js';
+import { listSuppressions, resubscribeEmail, suppressEmail } from '../services/emailSuppression.js';
+import prisma from '../prismaClient.js';
 
 const router = express.Router();
 
@@ -86,7 +94,7 @@ router.get('/drafts', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/drafts', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { name, channel, audience, filters, subject, body, cycleId } = req.body || {};
+    const { name, channel, audience, filters, subject, body, cycleId, savedAudienceId } = req.body || {};
     const draft = await createDraft({
       name,
       channel,
@@ -95,6 +103,7 @@ router.post('/drafts', requireAuth, requireAdmin, async (req, res) => {
       subject,
       body,
       cycleId,
+      savedAudienceId,
       createdById: req.user.id,
     });
     res.status(201).json({ draft });
@@ -266,9 +275,9 @@ router.get('/schedule', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/schedule', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { channel, audience, filters, subject, body, cycleId, templateId, scheduledAt } = req.body || {};
+    const { channel, audience, filters, subject, body, cycleId, templateId, scheduledAt, savedAudienceId } = req.body || {};
 
-    if (!channel || !audience || !body || !scheduledAt) {
+    if (!channel || !(audience || savedAudienceId) || !body || !scheduledAt) {
       return res.status(400).json({ error: 'channel, audience, body, and scheduledAt are required' });
     }
 
@@ -284,6 +293,7 @@ router.post('/schedule', requireAuth, requireAdmin, async (req, res) => {
       body,
       cycleId,
       templateId,
+      savedAudienceId,
       sentBy: req.user.id,
       scheduledAt,
     });
@@ -309,23 +319,23 @@ router.delete('/schedule/:id', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/preview', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { audience, filters } = req.body || {};
-    if (!audience) {
+    const { audience, filters, savedAudienceId } = req.body || {};
+    if (!audience && !savedAudienceId) {
       return res.status(400).json({ error: 'audience is required' });
     }
-    const result = await previewMasterCommunication({ audience, filters });
+    const result = await previewMasterCommunication({ audience, filters, savedAudienceId });
     res.json(result);
   } catch (err) {
-    console.error('[POST /api/master-communications/preview]', err);
+    if (!err.status) console.error('[POST /api/master-communications/preview]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to preview recipients' });
   }
 });
 
 router.post('/send', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { audience, channel, filters, subject, body, cycleId, templateId } = req.body || {};
+    const { audience, channel, filters, subject, body, cycleId, templateId, savedAudienceId } = req.body || {};
 
-    if (!audience || !channel || !body) {
+    if (!(audience || savedAudienceId) || !channel || !body) {
       return res.status(400).json({ error: 'audience, channel, and body are required' });
     }
 
@@ -342,6 +352,7 @@ router.post('/send', requireAuth, requireAdmin, async (req, res) => {
       sentBy: req.user.id,
       cycleId,
       templateId,
+      savedAudienceId,
     });
     res.json(result);
   } catch (err) {
@@ -352,15 +363,16 @@ router.post('/send', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/test', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { audience, filters, subject, body } = req.body || {};
+    const { audience, filters, subject, body, savedAudienceId } = req.body || {};
 
-    if (!audience || !subject || !body) {
+    if (!(audience || savedAudienceId) || !subject || !body) {
       return res.status(400).json({ error: 'audience, subject, and body are required' });
     }
 
     const result = await sendTestCommunication({
       audience,
       filters,
+      savedAudienceId,
       subject,
       body,
       user: req.user,
@@ -398,14 +410,122 @@ router.post('/imessage/log', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// Saved audiences ------------------------------------------------------------
+//
+// A filter tree with a name, re-run each time it is used. Shared across admins.
+
+const audienceRoute = (label, handler, status = 200) => async (req, res) => {
+  try {
+    res.status(status).json(await handler(req));
+  } catch (error) {
+    if (!error.status) console.error(`[${label}]`, error);
+    res.status(error.status || 500).json({ error: error.message || 'Audience request failed' });
+  }
+};
+
+router.get('/audiences', requireAuth, requireAdmin, audienceRoute(
+  'GET /api/master-communications/audiences',
+  async () => ({ audiences: await listSavedAudiences() })
+));
+
+router.post('/audiences', requireAuth, requireAdmin, audienceRoute(
+  'POST /api/master-communications/audiences',
+  async (req) => ({
+    audience: await createSavedAudience({
+      name: req.body?.name,
+      description: req.body?.description,
+      filters: req.body?.filters,
+      createdById: req.user.id,
+    }),
+  }),
+  201
+));
+
+router.patch('/audiences/:id', requireAuth, requireAdmin, audienceRoute(
+  'PATCH /api/master-communications/audiences/:id',
+  async (req) => ({
+    audience: await updateSavedAudience({
+      id: req.params.id,
+      updatedById: req.user.id,
+      name: req.body?.name,
+      description: req.body?.description,
+      filters: req.body?.filters,
+    }),
+  })
+));
+
+router.delete('/audiences/:id', requireAuth, requireAdmin, audienceRoute(
+  'DELETE /api/master-communications/audiences/:id',
+  (req) => deleteSavedAudience(req.params.id)
+));
+
+// The choices the filter builder offers that the page does not already load:
+// past email sends to pick from, and the mailing-list imports.
+router.get('/audience-options', requireAuth, requireAdmin, audienceRoute(
+  'GET /api/master-communications/audience-options',
+  async () => {
+    const [campaigns, imports] = await Promise.all([
+      prisma.messageLog.findMany({
+        where: { channel: 'email' },
+        orderBy: { sentAt: 'desc' },
+        take: 100,
+        select: { id: true, subject: true, sentAt: true, recipientCount: true },
+      }),
+      prisma.mailingListContact.groupBy({ by: ['sourceFile'], _count: { _all: true } }),
+    ]);
+    return {
+      campaigns,
+      mailingListImports: imports
+        .filter((i) => i.sourceFile)
+        .map((i) => ({ sourceFile: i.sourceFile, count: i._count._all })),
+    };
+  }
+));
+
+// Unsubscribes --------------------------------------------------------------
+//
+// Who is held back from marketing sends and why. People add themselves through
+// the footer link (routes/unsubscribe.js) and SES adds hard bounces and spam
+// complaints; these let an admin see the list and correct it by hand.
+
+router.get('/suppressions', requireAuth, requireAdmin, audienceRoute(
+  'GET /api/master-communications/suppressions',
+  (req) => listSuppressions({
+    search: req.query.search,
+    includeResubscribed: req.query.includeResubscribed === 'true',
+    limit: req.query.limit,
+    offset: req.query.offset,
+  })
+));
+
+router.post('/suppressions', requireAuth, requireAdmin, audienceRoute(
+  'POST /api/master-communications/suppressions',
+  async (req) => ({
+    suppression: await suppressEmail({
+      email: req.body?.email,
+      reason: 'ADMIN',
+      source: 'ADMIN',
+      detail: req.body?.note || null,
+      createdById: req.user.id,
+    }),
+  }),
+  201
+));
+
+router.delete('/suppressions/:email', requireAuth, requireAdmin, audienceRoute(
+  'DELETE /api/master-communications/suppressions/:email',
+  async (req) => ({ resubscribed: await resubscribeEmail(req.params.email) })
+));
+
 // Mailing list -------------------------------------------------------------
 //
 // The recruiting-interest mailing list is being retired. An admin uploads the
 // export here and gets back what survives dedup against the ATS, plus a full
 // account of what was dropped and why. /dedupe writes nothing: the server holds
 // the file only for the length of the request, and the survivors go back in the
-// response for the browser to save. /import runs the same dedup and stores the
-// survivors as MailingListContacts, the "Mailing list" audience of a send.
+// response for the browser to save. /import runs the same dedup and stores
+// every valid address - survivors and already-known alike - as
+// MailingListContacts, which the audience builder's "On the mailing list" reads.
 //
 // scripts/import-mailing-list-csv.js is the same operation from the command
 // line, and uploads to Drive instead of downloading.
@@ -476,6 +596,9 @@ router.post('/mailing-list/dedupe', requireAuth, requireAdmin, csvUploadMiddlewa
       knownAddresses: run.knownAddresses,
       summary: run.summary,
       keptCount: run.kept.length,
+      // What Import would store: the survivors plus the rows the ATS already
+      // knew from elsewhere, since "on the mailing list" is a filter of its own.
+      importableCount: run.importable.length,
       // Every dropped row with its line number and reason, so the run can be
       // reconciled against the source spreadsheet. A bare survivor count
       // cannot be checked by anyone.
@@ -513,7 +636,7 @@ router.post('/mailing-list/import', requireAuth, requireAdmin, csvUploadMiddlewa
       return res.status(400).json({ error: 'Pick the email column before importing' });
     }
 
-    res.status(201).json({ imported: run.imported, keptCount: run.kept.length });
+    res.status(201).json({ imported: run.imported, keptCount: run.kept.length, importableCount: run.importable.length });
   } catch (err) {
     console.error('[POST /api/master-communications/mailing-list/import]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to import that mailing list' });

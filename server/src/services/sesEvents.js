@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
+import { suppressEmail } from './emailSuppression.js';
 
 // What happens to an email after SES accepts it.
 //
@@ -198,7 +199,35 @@ export async function applySesEvent(event) {
     });
     updated += count;
   }
+
+  await suppressFromSesEvent(event, outcome);
   return updated;
+}
+
+/**
+ * A spam complaint, or a bounce SES calls permanent (the mailbox does not
+ * exist), takes the address off Master Communications marketing sends. A soft
+ * bounce - full mailbox, greylisting - does not: those are worth trying again.
+ *
+ * Runs whether or not a log row matched, since mail sent before the log existed
+ * bounces too. Never throws: SNS retries a failed post, and a suppression
+ * failure must not make it replay an event the log already applied.
+ */
+async function suppressFromSesEvent(event, outcome) {
+  let reason = null;
+  if (outcome.status === 'COMPLAINED') reason = 'COMPLAINED';
+  else if (outcome.status === 'BOUNCED' && event.bounce?.bounceType === 'Permanent') reason = 'BOUNCED';
+  if (!reason) return;
+
+  for (const entry of outcome.recipients) {
+    const { address, detail } = typeof entry === 'string' ? { address: entry, detail: outcome.detail } : entry;
+    if (!address) continue;
+    try {
+      await suppressEmail({ email: address, reason, source: 'SES', detail });
+    } catch (error) {
+      console.error('[sesEvents] could not record suppression:', error.message);
+    }
+  }
 }
 
 export default { verifySnsMessage, interpretSesEvent, applySesEvent, isSnsUrl };

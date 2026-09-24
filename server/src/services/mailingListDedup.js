@@ -17,6 +17,7 @@ import {
   summarize,
   detectNameColumns,
   toContacts,
+  OUTCOMES,
 } from '../utils/mailingListImport.js';
 
 // Every table holding a real person's address. DecisionMessage.email is left
@@ -43,8 +44,14 @@ export async function loadExistingEmailIndex(client = prisma) {
   ]);
 }
 
-// Saves the rows of an upload that survive dedup as MailingListContacts, so
-// Master Communications can email them.
+// Saves every valid address in an upload as a MailingListContact, so Master
+// Communications can filter on "is on the mailing list" and email them.
+//
+// That includes people the ATS already knew about. The dedup report still says
+// who they are, but leaving them out of the table would make "on the mailing
+// list" mean "on the mailing list and otherwise unknown", and the audience
+// filters combine the list with everything else the ATS holds anyway. One
+// person is still one recipient: audiences merge on the address.
 //
 // The file is deduped again here rather than trusting a list the browser sends
 // back: between the preview and the click, someone on the list may have
@@ -54,7 +61,7 @@ export async function importMailingListCsv({ content, emailColumnOverride, fileN
   if (!run.emailColumn) return { ...run, imported: 0 };
 
   const contacts = toContacts({
-    kept: run.kept,
+    kept: run.importable,
     emailColumn: run.emailColumn,
     nameColumns: detectNameColumns(run.headers),
   });
@@ -71,6 +78,22 @@ export async function importMailingListCsv({ content, emailColumnOverride, fileN
   return { ...run, imported: count };
 }
 
+// Rows worth storing: the survivors, plus rows the ATS knew from somewhere
+// other than an earlier import of this list. One per address, first row wins.
+function importableRows(results) {
+  const seen = new Set();
+  const rows = [];
+  for (const r of results) {
+    const keep =
+      r.outcome === OUTCOMES.KEPT ||
+      (r.outcome === OUTCOMES.ALREADY_IN_SYSTEM && !(r.sources || []).includes('mailing-list'));
+    if (!keep || seen.has(r.email)) continue;
+    seen.add(r.email);
+    rows.push(r.record);
+  }
+  return rows;
+}
+
 // Reads a CSV export and returns everything either caller needs to report on
 // the run, including the deduped file itself.
 //
@@ -83,7 +106,7 @@ export async function dedupeMailingListCsv({ content, emailColumnOverride, clien
   const emailColumn = detectEmailColumn(headers, emailColumnOverride);
 
   if (!emailColumn) {
-    return { headers, records, emailColumn: null, knownAddresses: 0, results: [], kept: [], summary: null, csv: null };
+    return { headers, records, emailColumn: null, knownAddresses: 0, results: [], kept: [], importable: [], summary: null, csv: null };
   }
 
   const existingIndex = await loadExistingEmailIndex(client);
@@ -101,6 +124,7 @@ export async function dedupeMailingListCsv({ content, emailColumnOverride, clien
     knownAddresses: existingIndex.size,
     results,
     kept,
+    importable: importableRows(results),
     summary: summarize(results),
     csv: toCsv(outputHeaders, kept),
   };

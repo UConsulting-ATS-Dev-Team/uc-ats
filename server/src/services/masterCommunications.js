@@ -3,6 +3,10 @@ import prisma from '../prismaClient.js';
 import { sendEmail } from './emailNotifications.js';
 import { sendSlackMessage } from './slackService.js';
 import { recordCommunications } from './communicationLog.js';
+import { resolveAudience, summarizeSources } from './audiences/audiencePeople.js';
+import { normalizeAudienceTree } from './audiences/audienceFilters.js';
+import { getSavedAudience, markSavedAudienceUsed } from './audiences/savedAudiences.js';
+import { applySuppressions, unsubscribeFooterHtml, unsubscribeUrls } from './emailSuppression.js';
 
 // Channels the server delivers itself. iMessage is absent on purpose: it leaves
 // from the admin's Messages app, so it can be neither sent nor scheduled here.
@@ -45,7 +49,16 @@ function dedupeApplicants(applications) {
   return [...seen.values()];
 }
 
+const PERSON_MERGE_FIELDS = {
+  firstName: (r) => r.firstName || '',
+  lastName: (r) => r.lastName || '',
+  fullName: (r) => r.fullName,
+  email: (r) => r.email,
+};
+
 const MERGE_FIELDS = {
+  // Anyone reached through a filtered audience (audiences/audiencePeople.js).
+  person: PERSON_MERGE_FIELDS,
   applicant: {
     firstName: (r) => r.firstName || '',
     lastName: (r) => r.lastName || '',
@@ -108,12 +121,17 @@ async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency =
     async (r) => {
       const subject = renderMessage(baseSubject, r);
       const body = renderMessage(baseBody, r);
-      const htmlBody = markdownToHtml(body);
+      // Marketing mail - anything to someone who is not active staff - carries
+      // an unsubscribe link in the footer and in the headers. applySuppressions
+      // has already held back whoever used one.
+      const unsubscribe = r.marketing ? unsubscribeUrls(r.email) : null;
+      const htmlBody = markdownToHtml(body) + (unsubscribe ? unsubscribeFooterHtml(unsubscribe.page) : '');
       let lastError = 'Unknown error';
 
       for (let attempt = 0; attempt <= retries; attempt++) {
         const result = await sendEmail(r.email, subject, htmlBody, [], {
           ...meta,
+          listUnsubscribeUrl: unsubscribe?.oneClick ?? null,
           recipientName: r.fullName || null,
           // Stable across this recipient's retries, so three attempts leave one
           // row showing how the send ended, not three showing how it went.
@@ -211,6 +229,14 @@ export async function listLogs({ cycleId, limit = 50 }) {
 }
 
 export async function resolveRecipients({ audience, filters = {} }) {
+  // The filter builder: any mix of sources and rules, combined with AND, OR and
+  // NOT (audiences/audienceFilters.js). The other audiences below predate it
+  // and stay for Slack, iMessage and the drafts and schedules saved with them.
+  if (audience === 'custom') {
+    const { recipients } = await resolveAudience(filters);
+    return recipients;
+  }
+
   if (audience === 'applicants') {
     const where = {};
 
@@ -328,16 +354,44 @@ async function logMessage({ templateId, channel, recipientCount, subject, body, 
   }
 }
 
-export async function previewMasterCommunication({ audience, filters }) {
-  const recipients = await resolveRecipients({ audience, filters });
+/**
+ * What a send is addressed to. A saved audience wins over whatever filters came
+ * with the request: it is read fresh, so a draft or schedule that points at one
+ * reaches whoever matches it now, not whoever matched when it was written.
+ */
+async function resolveAudienceSpec({ audience, filters, savedAudienceId }) {
+  if (savedAudienceId) {
+    const saved = await getSavedAudience(savedAudienceId);
+    return { audience: 'custom', filters: saved.filters, savedAudience: saved };
+  }
+  if (audience === 'custom') {
+    return { audience, filters: normalizeAudienceTree(filters), savedAudience: null };
+  }
+  return { audience, filters: filters || {}, savedAudience: null };
+}
+
+export async function previewMasterCommunication({ audience, filters, savedAudienceId }) {
+  const spec = await resolveAudienceSpec({ audience, filters, savedAudienceId });
+  const resolved = await resolveRecipients(spec);
+  const { deliver, skipped } = await applySuppressions(resolved);
   return {
-    audience,
-    count: recipients.length,
-    sample: recipients.slice(0, 10).map((r) => ({
+    audience: spec.audience,
+    count: deliver.length,
+    // Held back because they unsubscribed. Shown rather than silently dropped,
+    // so the count on the send button can be reconciled with the filters.
+    skipped: skipped.length,
+    // How many will get the unsubscribe footer; the rest are staff.
+    marketing: deliver.filter((r) => r.marketing).length,
+    sources: spec.audience === 'custom' ? summarizeSources(deliver) : null,
+    savedAudience: spec.savedAudience
+      ? { id: spec.savedAudience.id, lastUsedAt: spec.savedAudience.lastUsedAt, lastUsedCount: spec.savedAudience.lastUsedCount }
+      : null,
+    sample: deliver.slice(0, 10).map((r) => ({
       id: r.id,
       fullName: r.fullName,
       email: r.email,
       phoneNumber: r.phoneNumber,
+      sources: r.sources,
     })),
   };
 }
@@ -419,12 +473,20 @@ export async function sendMasterCommunication({
   sentBy,
   cycleId,
   templateId,
+  savedAudienceId,
 }) {
   assertServerSentChannel(channel);
 
-  const recipients = await resolveRecipients({ audience, filters });
+  const spec = await resolveAudienceSpec({ audience, filters, savedAudienceId });
+  if (channel === 'slack' && spec.audience === 'custom') {
+    const err = new Error('Slack messages can only be sent to members or admins');
+    err.status = 400;
+    throw err;
+  }
+  const resolved = await resolveRecipients(spec);
 
   if (channel === 'slack') {
+    const recipients = resolved;
     const hasNonUser = recipients.some((r) => r.audience !== 'user');
     if (hasNonUser) {
       const err = new Error('Slack messages can only be sent to users');
@@ -448,6 +510,8 @@ export async function sendMasterCommunication({
     const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
     return { channel, audience, sent: recipients.length, failed: 0, total: recipients.length, logId };
   }
+
+  const { deliver: recipients, skipped } = await applySuppressions(resolved);
 
   // Written before the send, not after it, so each per-recipient row in
   // communication_logs can name the campaign it belonged to. recipientCount is
@@ -473,9 +537,19 @@ export async function sendMasterCommunication({
   const sent = results.filter((r) => r.success).length;
   const failed = results.length - sent;
 
-  await notifyFailures({ channel, audience, failed, total: results.length, results });
+  await notifyFailures({ channel, audience: spec.savedAudience?.name || spec.audience, failed, total: results.length, results });
+  if (spec.savedAudience) await markSavedAudienceUsed(spec.savedAudience.id, recipients.length);
 
-  return { channel, audience, sent, failed, total: results.length, results, logId };
+  return {
+    channel,
+    audience: spec.audience,
+    sent,
+    failed,
+    total: results.length,
+    skipped: skipped.length,
+    results,
+    logId,
+  };
 }
 
 export async function scheduleMessage({
@@ -486,6 +560,7 @@ export async function scheduleMessage({
   body,
   cycleId,
   templateId,
+  savedAudienceId,
   sentBy,
   scheduledAt,
 }) {
@@ -495,11 +570,17 @@ export async function scheduleMessage({
     throw err;
   }
   assertServerSentChannel(channel);
+  // Checked now rather than when it fires: a schedule that can only fail is
+  // better refused while the admin is still looking at it.
+  const spec = await resolveAudienceSpec({ audience, filters, savedAudienceId });
   return prisma.messageSchedule.create({
     data: {
       channel,
-      audience,
-      filters,
+      audience: spec.audience,
+      // A copy of the saved audience's filters, used if it is deleted before
+      // this fires.
+      filters: spec.filters,
+      savedAudienceId: spec.savedAudience?.id || null,
       subject,
       body,
       cycleId,
@@ -532,6 +613,7 @@ export async function listScheduledMessages({ cycleId, status, limit = 50 }) {
       id: true,
       channel: true,
       audience: true,
+      savedAudience: { select: { id: true, name: true } },
       scheduledAt: true,
       status: true,
       subject: true,
@@ -583,6 +665,7 @@ export async function processScheduledMessages() {
         sentBy: s.sentBy,
         cycleId: s.cycleId,
         templateId: s.templateId,
+        savedAudienceId: s.savedAudienceId,
       });
       await prisma.messageSchedule.update({
         where: { id: s.id },
@@ -603,7 +686,7 @@ export async function processScheduledMessages() {
 // Sends the composed message to whoever pressed the button, so an admin can see
 // the real thing — merge fields resolved, markdown rendered — before it goes to
 // hundreds of people. Deliberately not logged to messageLog: a test is not a send.
-export async function sendTestCommunication({ audience, filters, subject, body, user }) {
+export async function sendTestCommunication({ audience, filters, savedAudienceId, subject, body, user }) {
   if (!user?.email) {
     const err = new Error('No email address on the requesting account');
     err.status = 400;
@@ -617,7 +700,8 @@ export async function sendTestCommunication({ audience, filters, subject, body, 
 
   // Render against a real recipient so merge fields show what the audience will
   // actually receive; fall back to the sender when the filters match nobody.
-  const recipients = await resolveRecipients({ audience, filters });
+  const spec = await resolveAudienceSpec({ audience, filters, savedAudienceId });
+  const { deliver: recipients } = await applySuppressions(await resolveRecipients(spec));
   const sample = recipients[0] || null;
   const nameParts = (user.fullName || '').split(' ');
   const mergeSource = sample || {
@@ -628,8 +712,12 @@ export async function sendTestCommunication({ audience, filters, subject, body, 
     fullName: user.fullName || user.email,
     phoneNumber: '',
     role: user.role,
-    audience: audience === 'applicants' ? 'applicant' : 'user',
+    audience: spec.audience === 'custom' ? 'person' : spec.audience === 'applicants' ? 'applicant' : 'user',
   };
+  // Shows the footer the audience will see. The link is the sender's own, not
+  // the sample recipient's: clicking it in a test must not unsubscribe a real
+  // person, and staff are exempt, so it does nothing to the sender either.
+  const footer = recipients.some((r) => r.marketing) ? unsubscribeFooterHtml(unsubscribeUrls(user.email).page) : '';
 
   const renderedSubject = renderMessage(subject, mergeSource);
   const renderedBody = renderMessage(body, mergeSource);
@@ -643,7 +731,7 @@ export async function sendTestCommunication({ audience, filters, subject, body, 
   const result = await sendEmail(
     user.email,
     `[TEST] ${renderedSubject}`,
-    banner + markdownToHtml(renderedBody),
+    banner + markdownToHtml(renderedBody) + footer,
     [],
     {
       category: 'TEST',
@@ -684,6 +772,8 @@ const DRAFT_SELECT = {
   subject: true,
   body: true,
   cycleId: true,
+  savedAudienceId: true,
+  savedAudience: { select: { id: true, name: true } },
   createdAt: true,
   updatedAt: true,
   creator: { select: { id: true, fullName: true, email: true } },
@@ -700,7 +790,7 @@ export async function listDrafts({ cycleId, limit = 100 }) {
   });
 }
 
-export async function createDraft({ name, channel, audience, filters, subject, body, cycleId, createdById }) {
+export async function createDraft({ name, channel, audience, filters, subject, body, cycleId, savedAudienceId, createdById }) {
   if (!name || !channel || !audience || !createdById) {
     const err = new Error('name, channel, and audience are required');
     err.status = 400;
@@ -719,6 +809,7 @@ export async function createDraft({ name, channel, audience, filters, subject, b
       subject: subject || '',
       body: body || '',
       cycleId: cycleId || null,
+      savedAudienceId: savedAudienceId || null,
       createdById,
     },
     select: DRAFT_SELECT,
@@ -745,6 +836,7 @@ export async function updateDraft({ id, updatedById, ...fields }) {
   }
   if (fields.filters !== undefined) data.filters = fields.filters ?? undefined;
   if (fields.cycleId !== undefined) data.cycleId = fields.cycleId || null;
+  if (fields.savedAudienceId !== undefined) data.savedAudienceId = fields.savedAudienceId || null;
 
   return prisma.messageDraft.update({ where: { id }, data, select: DRAFT_SELECT });
 }

@@ -199,7 +199,10 @@ describe('bad uploads', () => {
 describe('import', () => {
   const importCsv = (csv, opts) => upload(csv, { ...opts, path: 'import' });
 
-  it('stores only the rows that survive dedup, with their names', async () => {
+  // Already-known people are stored too: "on the mailing list" is an audience
+  // filter of its own, and leaving them out would make it mean "on the list and
+  // otherwise unknown". Only an earlier import of the list itself is skipped.
+  it('stores the survivors and the already-known rows, but not earlier imports', async () => {
     const csv = [
       'First Name,Last Name,Email',
       'New,Person,New@UCLA.edu',
@@ -210,15 +213,12 @@ describe('import', () => {
     const res = await importCsv(csv);
 
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ imported: 1, keptCount: 1 });
+    expect(await res.json()).toEqual({ imported: 2, keptCount: 1, importableCount: 2 });
     expect(prisma.mailingListContact.createMany).toHaveBeenCalledWith({
-      data: [{
-        email: 'new@ucla.edu',
-        firstName: 'New',
-        lastName: 'Person',
-        sourceFile: 'list.csv',
-        importedById: admin.id,
-      }],
+      data: [
+        { email: 'new@ucla.edu', firstName: 'New', lastName: 'Person', sourceFile: 'list.csv', importedById: admin.id },
+        { email: 'known-user@ucla.edu', firstName: 'Known', lastName: 'User', sourceFile: 'list.csv', importedById: admin.id },
+      ],
       skipDuplicates: true,
     });
   });
@@ -231,10 +231,15 @@ describe('import', () => {
     });
   });
 
-  it('writes nothing when every row is already known', async () => {
-    const res = await importCsv('Email\nknown-user@ucla.edu\n');
-    expect(await res.json()).toEqual({ imported: 0, keptCount: 0 });
+  it('writes nothing when every row was imported before', async () => {
+    const res = await importCsv('Email\nalready-imported@ucla.edu\n');
+    expect(await res.json()).toEqual({ imported: 0, keptCount: 0, importableCount: 0 });
     expect(prisma.mailingListContact.createMany).not.toHaveBeenCalled();
+  });
+
+  it('stores a known address once even when the file repeats it', async () => {
+    const res = await importCsv('Email\nknown-user@ucla.edu\nKNOWN-USER@ucla.edu\n');
+    expect(await res.json()).toMatchObject({ imported: 1, importableCount: 1 });
   });
 
   it('refuses to guess when no email column can be found', async () => {
