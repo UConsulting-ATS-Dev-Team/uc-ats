@@ -446,6 +446,12 @@ The system follows a **recruiting cycle-based workflow**:
 - The full design is [docs/luma-integration-plan.md](docs/luma-integration-plan.md), and the
   routine's prompt and setup are [docs/luma-sync-routine.md](docs/luma-sync-routine.md).
   **Read the plan before touching event sync code.**
+- Setting it up is **Event Management → Luma Sync Setup**: it generates the sync token
+  ([server/src/services/luma/syncToken.js](server/src/services/luma/syncToken.js)) and
+  renders the routine prompt with the token inlined
+  ([syncPrompt.js](server/src/services/luma/syncPrompt.js)). The token is stored in plain
+  text on purpose — it exists to be read back and pasted — so that prompt is a secret, and
+  `GET /api/admin/luma/sync-token` is the one endpoint here that returns a live one.
 - Rows carry `source` (`GOOGLE_FORM | LUMA`) and, for Luma, a unique `lumaGuestId`. The
   sync **reconciles rather than appends**: declining in Luma removes that guest's Luma RSVP,
   an undone check-in removes their attendance, and re-posting the same page changes nothing.
@@ -625,11 +631,14 @@ Required in `server/.env`:
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)
 - `EMAIL_USER`, `EMAIL_PASS` - Gmail credentials for nodemailer
 - `SLACK_WEBHOOK_URL` - (Optional) Slack webhook for admin notifications
-- `LUMA_SYNC_TOKEN` - (Optional) The bearer token the hourly Luma sync routine
-  authenticates with. Must be random and **at least 32 characters**: a shorter value is
+- `LUMA_SYNC_TOKEN` - (Optional, and no longer the usual way) A bearer token the hourly
+  Luma sync routine may authenticate with. The normal path is to generate one in
+  **Event Management → Luma Sync Setup**, which stores it in `luma_sync_settings` and
+  hands back the routine prompt with the token in it. Both are accepted, so a deployment
+  set up the old way keeps working and generating one does not switch this off. Must be
+  random and **at least 32 characters**: a shorter value, here or in the database, is
   treated as a placeholder somebody meant to replace, and `/api/integrations/luma` answers
-  503 exactly as if it were unset. The same value goes on the Render service and in the
-  routine's environment; read per request, so rotating it needs no redeploy of the routine.
+  503 exactly as if it were unset. Read per request, so neither needs a redeploy.
 - `UNSUBSCRIBE_SECRET` - (Optional) Signs Master Communications unsubscribe links;
   falls back to `JWT_SECRET`. Rotating it breaks every link already in an inbox.
 - `MARKETING_DRIVE_FOLDER_ID` - (Optional) Drive folder the one-time mailing-list

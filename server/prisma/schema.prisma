@@ -1497,6 +1497,16 @@ model EventEmailSetting {
   @@map("event_email_settings")
 }
 
+model LumaSyncSetting {
+  id          String    @id @default("singleton")
+  token       String?
+  tokenSetAt  DateTime?
+  updatedById String?
+  updatedAt   DateTime  @updatedAt
+
+  @@map("luma_sync_settings")
+}
+
 model CaseVisibilitySetting {
   id            String   @id @default("singleton")
   leadTimeHours Int      @default(2)
