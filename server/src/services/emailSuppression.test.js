@@ -5,7 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import {
   applySuppressions,
+  isSuppressed,
   readUnsubscribeToken,
+  resubscribeEmail,
   suppressEmail,
   unsubscribeToken,
   unsubscribeUrls,
@@ -13,7 +15,7 @@ import {
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
     user: { findMany: vi.fn() },
   },
 }));
@@ -110,5 +112,25 @@ describe('applySuppressions', () => {
   it('asks only about active staff', async () => {
     await applySuppressions(people);
     expect(prisma.user.findMany.mock.calls[0][0].where).toMatchObject({ role: { in: ['MEMBER', 'ADMIN'] }, isActive: true });
+  });
+});
+
+describe('the unsubscribe page and the other UCLA spelling', () => {
+  it('reports an opt-out stored under the twin spelling, as delivery does', async () => {
+    prisma.emailSuppression.count.mockResolvedValue(1);
+    expect(await isSuppressed('joe@ucla.edu')).toBe(true);
+    expect(prisma.emailSuppression.count.mock.calls[0][0].where).toEqual({
+      email: { in: ['joe@ucla.edu', 'joe@g.ucla.edu'] },
+      resubscribedAt: null,
+    });
+  });
+
+  it('lifts the opt-out under both spellings', async () => {
+    prisma.emailSuppression.updateMany.mockResolvedValue({ count: 1 });
+    expect(await resubscribeEmail('joe@ucla.edu')).toBe(true);
+    expect(prisma.emailSuppression.updateMany.mock.calls[0][0].where).toEqual({
+      email: { in: ['joe@ucla.edu', 'joe@g.ucla.edu'] },
+      resubscribedAt: null,
+    });
   });
 });

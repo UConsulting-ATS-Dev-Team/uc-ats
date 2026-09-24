@@ -120,22 +120,27 @@ export async function suppressEmail({ email, reason, source, detail = null, mess
   });
 }
 
-/** Opt back in. Keeps the row, so the history of the opt-out survives. */
+/**
+ * Opt back in. Keeps the row, so the history of the opt-out survives.
+ *
+ * Clears the g.ucla.edu / ucla.edu twin too: delivery treats the two as one
+ * inbox, so an opt-out under the other spelling would otherwise keep blocking
+ * mail after the page said it was lifted.
+ */
 export async function resubscribeEmail(email, client = prisma) {
-  const address = normalizeEmail(email);
   const { count } = await client.emailSuppression.updateMany({
-    where: { email: address, resubscribedAt: null },
+    where: { email: { in: emailVariants(email) }, resubscribedAt: null },
     data: { resubscribedAt: new Date() },
   });
   return count > 0;
 }
 
+/** Whether mail to `email` is held back - under either UCLA spelling, as delivery does. */
 export async function isSuppressed(email, client = prisma) {
-  const row = await client.emailSuppression.findUnique({
-    where: { email: normalizeEmail(email) },
-    select: { resubscribedAt: true },
+  const count = await client.emailSuppression.count({
+    where: { email: { in: emailVariants(email) }, resubscribedAt: null },
   });
-  return Boolean(row && !row.resubscribedAt);
+  return count > 0;
 }
 
 // Both lookups below also try each address's g.ucla.edu / ucla.edu twin, and
