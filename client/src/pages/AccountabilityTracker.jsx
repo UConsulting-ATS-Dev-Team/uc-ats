@@ -49,6 +49,7 @@ export default function AccountabilityTracker() {
   const [eventMembersLoading, setEventMembersLoading] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState({});
   const [search, setSearch] = useState('');
+  const [rsvpOnly, setRsvpOnly] = useState(true);
 
   const fetchCycles = async () => {
     try {
@@ -94,6 +95,8 @@ export default function AccountabilityTracker() {
 
   const openEventDialog = async (event) => {
     setEventDialog(event);
+    // Start from the RSVP list when there is one; walk-ins are one switch away.
+    setRsvpOnly(event.memberRsvpCount > 0);
     setEventMembersLoading(true);
     try {
       const result = await apiClient.get(`/admin/accountability/events/${event.id}/members`);
@@ -153,6 +156,15 @@ export default function AccountabilityTracker() {
         m.studentId?.toLowerCase().includes(term)
     );
   }, [leaderboard, search]);
+
+  // RSVP'd members first, so the check-in list reads top-down at the door.
+  const dialogMembers = useMemo(() => {
+    const list = rsvpOnly ? eventMembers.filter((m) => m.rsvpd) : eventMembers;
+    return [...list].sort((a, b) => Number(b.rsvpd) - Number(a.rsvpd));
+  }, [eventMembers, rsvpOnly]);
+  const rsvpdMembers = eventMembers.filter((m) => m.rsvpd);
+  const rsvpdAttended = rsvpdMembers.filter((m) => m.attended).length;
+  const walkIns = eventMembers.filter((m) => m.attended && !m.rsvpd).length;
 
   const topThree = leaderboard.slice(0, 3);
   const bottomThree = leaderboard.slice(-3).reverse();
@@ -317,6 +329,7 @@ export default function AccountabilityTracker() {
                       <TableCell />
                       <TableCell>Event</TableCell>
                       <TableCell>Date</TableCell>
+                      <TableCell align="right">RSVPs</TableCell>
                       <TableCell align="right">Attendance</TableCell>
                       <TableCell>Form</TableCell>
                       <TableCell align="right">Actions</TableCell>
@@ -337,6 +350,7 @@ export default function AccountabilityTracker() {
                           </TableCell>
                           <TableCell>{event.eventName}</TableCell>
                           <TableCell>{formatDate(event.eventStartDate)}</TableCell>
+                          <TableCell align="right">{event.memberRsvpCount ?? 0}</TableCell>
                           <TableCell align="right">{event.memberAttendanceCount}</TableCell>
                           <TableCell>
                             {event.memberAttendanceForm ? (
@@ -365,7 +379,7 @@ export default function AccountabilityTracker() {
                         </TableRow>
                         {expandedEvents[event.id] && (
                           <TableRow>
-                            <TableCell colSpan={6} sx={{ p: 0, borderBottom: 0 }}>
+                            <TableCell colSpan={7} sx={{ p: 0, borderBottom: 0 }}>
                               <Box p={2} bgcolor="action.hover">
                                 <Typography variant="subtitle2" gutterBottom>
                                   Quick check-in
@@ -399,18 +413,44 @@ export default function AccountabilityTracker() {
               <CircularProgress />
             </Box>
           ) : (
+            <>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} justifyContent="space-between" mb={1}>
+              <Typography variant="body2" color="text.secondary">
+                {rsvpdMembers.length > 0
+                  ? `Attended ${rsvpdAttended} of ${rsvpdMembers.length} RSVP'd`
+                  : 'No member RSVPs for this event'}
+                {walkIns > 0 && ` · ${walkIns} without an RSVP`}
+              </Typography>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Switch
+                  size="small"
+                  checked={rsvpOnly}
+                  onChange={(e) => setRsvpOnly(e.target.checked)}
+                  inputProps={{ 'aria-label': "Show RSVP'd members only" }}
+                />
+                <Typography variant="body2">RSVP'd only</Typography>
+              </Stack>
+            </Stack>
             <TableContainer>
               <Table size="small">
                 <TableHead>
                   <TableRow>
                     <TableCell>Member</TableCell>
                     <TableCell>Student ID</TableCell>
+                    <TableCell>RSVP</TableCell>
                     <TableCell align="right">Attended</TableCell>
                     <TableCell>Source</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {eventMembers.map((member) => (
+                  {dialogMembers.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center">
+                        No RSVP'd members. Turn off "RSVP'd only" to mark a walk-in.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {dialogMembers.map((member) => (
                     <TableRow key={member.id}>
                       <TableCell>
                         <Typography fontWeight={500}>{member.fullName}</Typography>
@@ -419,6 +459,18 @@ export default function AccountabilityTracker() {
                         </Typography>
                       </TableCell>
                       <TableCell>{member.studentId || '—'}</TableCell>
+                      <TableCell>
+                        {member.rsvpd ? (
+                          <Chip
+                            label={{ IN_APP: 'App', LUMA: 'Luma', GOOGLE_FORM: 'Form' }[member.rsvpSource] || 'Yes'}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                          />
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
                       <TableCell align="right">
                         <Switch
                           checked={member.attended}
@@ -437,6 +489,7 @@ export default function AccountabilityTracker() {
                 </TableBody>
               </Table>
             </TableContainer>
+            </>
           )}
         </DialogContent>
         <DialogActions>
