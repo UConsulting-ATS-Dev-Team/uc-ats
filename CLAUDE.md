@@ -214,6 +214,9 @@ The system follows a **recruiting cycle-based workflow**:
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
   (ADMIN/MEMBER read, admin-only write)
+- `/api/integrations/luma` - The hourly Luma sync routine's three endpoints. No user
+  session ever reaches these; the caller is a scheduled Claude agent holding
+  `LUMA_SYNC_TOKEN` as a bearer token
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -369,10 +372,28 @@ The system follows a **recruiting cycle-based workflow**:
 - Larger numbers mean earlier access. 0 opens the case exactly at the interview start;
   720 (30 days) is effectively no restriction.
 
+**Luma event sync:**
+- Luma is replacing the per-event Google Forms for RSVP and attendance. There is no Luma
+  API on our plan, so an **hourly Claude routine** reads guests through the Luma MCP
+  connector and posts them to `/api/integrations/luma`. The routine only relays; every
+  decision about who a guest is happens in
+  [server/src/services/luma/ingestGuests.js](server/src/services/luma/ingestGuests.js).
+- The full design is [docs/luma-integration-plan.md](docs/luma-integration-plan.md), and the
+  routine's prompt and setup are [docs/luma-sync-routine.md](docs/luma-sync-routine.md).
+  **Read the plan before touching event sync code.**
+- Rows carry `source` (`GOOGLE_FORM | LUMA`) and, for Luma, a unique `lumaGuestId`. The
+  sync **reconciles rather than appends**: declining in Luma removes that guest's Luma RSVP,
+  an undone check-in removes their attendance, and re-posting the same page changes nothing.
+  It never touches a `GOOGLE_FORM` row, and a person who answered both counts once.
+- A guest the ATS cannot resolve, one matched on a typed UID alone, and an `approval_status`
+  it cannot read as going or not going are all **held and reported**, never guessed at.
+  Until the Phase 3 panel ships, the routine's hourly report is the only place they surface.
+
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
 - [server/src/services/syncEventResponses.js](server/src/services/syncEventResponses.js) - Syncs event RSVP/attendance forms
+- [server/src/services/luma/ingestGuests.js](server/src/services/luma/ingestGuests.js) - Turns Luma guests into event rows; owns all Luma matching
 - [server/src/services/emailNotifications.js](server/src/services/emailNotifications.js) - Nodemailer integration for notifications
 - [server/src/services/google/forms.js](server/src/services/google/forms.js) - Google Forms API wrapper
 - [server/src/services/google/drive.js](server/src/services/google/drive.js) - Google Drive file operations
@@ -508,6 +529,11 @@ Required in `server/.env`:
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)
 - `EMAIL_USER`, `EMAIL_PASS` - Gmail credentials for nodemailer
 - `SLACK_WEBHOOK_URL` - (Optional) Slack webhook for admin notifications
+- `LUMA_SYNC_TOKEN` - (Optional) The bearer token the hourly Luma sync routine
+  authenticates with. Must be random and **at least 32 characters**: a shorter value is
+  treated as a placeholder somebody meant to replace, and `/api/integrations/luma` answers
+  503 exactly as if it were unset. The same value goes on the Render service and in the
+  routine's environment; read per request, so rotating it needs no redeploy of the routine.
 - `MARKETING_DRIVE_FOLDER_ID` - (Optional) Drive folder the one-time mailing-list
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
