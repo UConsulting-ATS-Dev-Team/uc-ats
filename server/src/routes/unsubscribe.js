@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  isSuppressed,
+  suppressionStatus,
   readUnsubscribeToken,
   resubscribeEmail,
   suppressEmail,
@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
   const email = resolveEmail(req, res);
   if (!email) return;
   try {
-    res.json({ email, unsubscribed: await isSuppressed(email) });
+    res.json({ email, ...(await suppressionStatus(email)) });
   } catch (err) {
     console.error('[GET /api/unsubscribe]', err);
     res.status(500).json({ error: 'Could not look that up' });
@@ -44,7 +44,7 @@ router.post('/', async (req, res) => {
   if (!email) return;
   try {
     await suppressEmail({ email, reason: 'UNSUBSCRIBED', source: 'LINK' });
-    res.json({ email, unsubscribed: true });
+    res.json({ email, ...(await suppressionStatus(email)) });
   } catch (err) {
     console.error('[POST /api/unsubscribe]', err);
     res.status(500).json({ error: 'Could not unsubscribe you. Please try again.' });
@@ -58,7 +58,7 @@ router.post('/resubscribe', async (req, res) => {
     await resubscribeEmail(email);
     // Asked again rather than assumed: a bounce or admin block on the other
     // UCLA spelling of this inbox survives a resubscribe and still holds mail.
-    res.json({ email, unsubscribed: await isSuppressed(email) });
+    res.json({ email, ...(await suppressionStatus(email)) });
   } catch (err) {
     console.error('[POST /api/unsubscribe/resubscribe]', err);
     res.status(500).json({ error: 'Could not resubscribe you. Please try again.' });

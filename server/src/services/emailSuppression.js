@@ -129,6 +129,10 @@ export async function suppressEmail({ email, reason, source, detail = null, mess
  * would otherwise keep blocking mail, but a bounce, complaint or admin block
  * on the twin is not the person's to lift through a link.
  */
+// Which active rows a link for `address` may lift. Shared by resubscribeEmail
+// and suppressionStatus so the page never offers to undo what it cannot.
+const liftableBy = (address) => (row) => row.email === address || row.reason === 'UNSUBSCRIBED';
+
 export async function resubscribeEmail(email, client = prisma) {
   const address = normalizeEmail(email);
   const twins = emailVariants(address).filter((v) => v !== address);
@@ -142,12 +146,22 @@ export async function resubscribeEmail(email, client = prisma) {
   return count > 0;
 }
 
-/** Whether mail to `email` is held back - under either UCLA spelling, as delivery does. */
-export async function isSuppressed(email, client = prisma) {
-  const count = await client.emailSuppression.count({
-    where: { email: { in: emailVariants(email) }, resubscribedAt: null },
+/**
+ * What the unsubscribe page tells the holder of a link for `email`, looking at
+ * both UCLA spellings as delivery does.
+ *
+ * `unsubscribed`: an opt-out is active that this link can lift by resubscribing.
+ * `heldBack`: mail is also held for a reason it cannot - a bounce, complaint or
+ * admin block on the other spelling - so resubscribing alone will not resume it.
+ */
+export async function suppressionStatus(email, client = prisma) {
+  const address = normalizeEmail(email);
+  const rows = await client.emailSuppression.findMany({
+    where: { email: { in: emailVariants(address) }, resubscribedAt: null },
+    select: { email: true, reason: true },
   });
-  return count > 0;
+  const liftable = liftableBy(address);
+  return { unsubscribed: rows.some(liftable), heldBack: rows.some((r) => !liftable(r)) };
 }
 
 // Both lookups below also try each address's g.ucla.edu / ucla.edu twin, and

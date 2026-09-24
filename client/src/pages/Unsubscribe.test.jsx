@@ -42,6 +42,19 @@ describe('Unsubscribe', () => {
     expect(screen.getByRole('button', { name: /resubscribe me/ })).toBeInTheDocument();
   });
 
+  it('explains when mail stays paused after resubscribing', async () => {
+    global.fetch = vi.fn((url, opts = {}) => {
+      if (!opts.method || opts.method === 'GET') return respond({ email: 'joe@ucla.edu', unsubscribed: true, heldBack: true });
+      return respond({ email: 'joe@ucla.edu', unsubscribed: false, heldBack: true });
+    });
+    const user = userEvent.setup();
+    renderAt('?t=abc.def');
+    expect(await screen.findByText(/resubscribing here will not start them again/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /resubscribe me/ }));
+    expect(await screen.findByText(/won't get them for now/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unsubscribe' })).toBeInTheDocument();
+  });
+
   it('explains a link with no token', async () => {
     renderAt('');
     expect(await screen.findByText(/incomplete/)).toBeInTheDocument();

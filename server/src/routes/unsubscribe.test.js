@@ -11,7 +11,7 @@ vi.mock('../services/emailSuppression.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    isSuppressed: vi.fn(async () => false),
+    suppressionStatus: vi.fn(async () => ({ unsubscribed: false, heldBack: false })),
     suppressEmail: vi.fn(async () => ({})),
     resubscribeEmail: vi.fn(async () => true),
   };
@@ -41,7 +41,7 @@ const post = (path, body) =>
 
 it('reports status on GET without unsubscribing', async () => {
   const res = await fetch(`${base}?t=${token}`);
-  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false });
+  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false, heldBack: false });
   expect(suppression.suppressEmail).not.toHaveBeenCalled();
 });
 

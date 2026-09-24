@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import {
   applySuppressions,
-  isSuppressed,
+  suppressionStatus,
   readUnsubscribeToken,
   resubscribeEmail,
   suppressEmail,
@@ -15,7 +15,7 @@ import {
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
+    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     user: { findMany: vi.fn() },
   },
 }));
@@ -116,13 +116,23 @@ describe('applySuppressions', () => {
 });
 
 describe('the unsubscribe page and the other UCLA spelling', () => {
-  it('reports an opt-out stored under the twin spelling, as delivery does', async () => {
-    prisma.emailSuppression.count.mockResolvedValue(1);
-    expect(await isSuppressed('joe@ucla.edu')).toBe(true);
-    expect(prisma.emailSuppression.count.mock.calls[0][0].where).toEqual({
+  it('reports an opt-out under the twin as one this link can lift', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@g.ucla.edu', reason: 'UNSUBSCRIBED' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: true, heldBack: false });
+    expect(prisma.emailSuppression.findMany.mock.calls[0][0].where).toEqual({
       email: { in: ['joe@ucla.edu', 'joe@g.ucla.edu'] },
       resubscribedAt: null,
     });
+  });
+
+  it('reports a bounce on the twin as held back, which resubscribing cannot lift', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@g.ucla.edu', reason: 'BOUNCED' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: false, heldBack: true });
+  });
+
+  it("counts any block on the link's own address as liftable", async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@ucla.edu', reason: 'ADMIN' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: true, heldBack: false });
   });
 
   it("lifts the person's own opt-out under the twin, never a bounce or admin block", async () => {
