@@ -1798,7 +1798,16 @@ router.get('/accountability', async (req, res) => {
           eventStartDate: true,
           eventEndDate: true,
           memberAttendanceForm: true,
-          _count: { select: { memberEventAttendance: true, memberEventRsvp: true } }
+          _count: {
+            select: {
+              memberEventAttendance: true,
+              // Counted over the same people the check-in dialog lists, so the
+              // two totals agree even after someone is deactivated or demoted.
+              memberEventRsvp: {
+                where: { member: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true } }
+              }
+            }
+          }
         },
         orderBy: { eventStartDate: 'desc' }
       })

@@ -95,5 +95,10 @@ describe('GET /api/admin/accountability', () => {
     const res = await get('/accountability');
     expect(res.status).toBe(200);
     expect((await res.json()).events[0]).toMatchObject({ memberAttendanceCount: 1, memberRsvpCount: 2 });
+    // The count covers the same people the check-in dialog lists.
+    const { select } = prisma.events.findMany.mock.calls[0][0];
+    expect(select._count.select.memberEventRsvp).toEqual({
+      where: { member: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true } }
+    });
   });
 });
