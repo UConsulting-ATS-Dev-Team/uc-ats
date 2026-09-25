@@ -68,6 +68,7 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
+    memberRsvpEnabled: true,
     memberAttendanceForm: '',
     lumaUrl: '',
     cycleId: ''
@@ -474,6 +475,7 @@ export default function EventManagement() {
       attendanceForm: event.attendanceForm || '',
       showToCandidates: event.showToCandidates,
       memberRsvpUrl: event.memberRsvpUrl || '',
+      memberRsvpEnabled: event.memberRsvpEnabled !== false,
       memberAttendanceForm: event.memberAttendanceForm || '',
       lumaUrl: event.lumaUrl || '',
       cycleId: event.cycleId
@@ -970,6 +972,9 @@ export default function EventManagement() {
                     </Stack>
                   </TableCell>
                   <TableCell data-label="Member RSVP">
+                    {event.memberRsvpEnabled === false ? (
+                      <Typography variant="body2" color="text.secondary">Off</Typography>
+                    ) : (
                     <Stack spacing={1} alignItems="flex-start">
                       {/* Members RSVP in the app, so the count stands with or without a form. */}
                       <Stack direction="row" spacing={1} alignItems="center">
@@ -1023,6 +1028,7 @@ export default function EventManagement() {
                         </Button>
                       )}
                     </Stack>
+                    )}
                   </TableCell>
                   <TableCell data-label="Member Attendance">
                     <Stack spacing={1} alignItems="flex-start">
@@ -1337,6 +1343,18 @@ export default function EventManagement() {
               fullWidth
               placeholder="https://forms.gle/..."
               helperText="Paste the Google Form URL for event attendance tracking"
+            />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editForm.memberRsvpEnabled}
+                  onChange={(e) => setEditForm({ ...editForm, memberRsvpEnabled: e.target.checked })}
+                />
+              }
+              label={editForm.memberRsvpEnabled
+                ? 'Member RSVP on'
+                : 'Member RSVP off. Members are not asked to RSVP to this event'}
             />
 
             <TextField

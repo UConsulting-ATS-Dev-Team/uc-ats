@@ -210,14 +210,18 @@ export default function MemberEvents() {
               
               <div className="event-action">
                 <div className="event-buttons">
-                  <button
-                    className="rsvp-button"
-                    onClick={() => handleRSVP(event)}
-                    disabled={savingId === event.id || isExternalRsvp(event)}
-                    title={isExternalRsvp(event) ? 'Change this RSVP where you made it' : undefined}
-                  >
-                    {rsvpButtonLabel(event)}
-                  </button>
+                  {/* An event with member RSVP turned off shows no button, except
+                      to someone who RSVP'd before it was turned off. */}
+                  {(event.memberRsvpEnabled !== false || event.hasMemberRsvpd) && (
+                    <button
+                      className="rsvp-button"
+                      onClick={() => handleRSVP(event)}
+                      disabled={savingId === event.id || isExternalRsvp(event)}
+                      title={isExternalRsvp(event) ? 'Change this RSVP where you made it' : undefined}
+                    >
+                      {rsvpButtonLabel(event)}
+                    </button>
+                  )}
                   <button 
                     className="calendar-button"
                     onClick={() => handleAddToCalendar(event)}

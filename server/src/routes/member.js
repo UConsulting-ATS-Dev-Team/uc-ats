@@ -161,6 +161,11 @@ router.put('/events/:eventId/rsvp', requireAuth, requireAdminOrMember, async (re
   try {
     const event = await loadOpenEvent(req, res);
     if (!event) return;
+    // Only new RSVPs are refused. Cancelling one made before RSVPs were turned
+    // off still works, so nobody is left holding an RSVP they cannot undo.
+    if (event.memberRsvpEnabled === false) {
+      return res.status(409).json({ error: 'Member RSVPs are turned off for this event', code: 'RSVP_DISABLED' });
+    }
 
     const key = { eventId_memberId: { eventId: event.id, memberId: req.user.id } };
     let created = false;
