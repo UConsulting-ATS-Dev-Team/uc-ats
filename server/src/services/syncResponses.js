@@ -6,6 +6,79 @@ import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 
+/**
+ * The candidate whose email this is, resolved so the answer never depends on
+ * which row the database hands back first.
+ *
+ * `Candidate.email` is unique but case-sensitive, so rows differing only in case
+ * can both exist and both match an insensitive compare. An exact hit is taken
+ * first; past that the oldest row wins, because it is the one most likely to
+ * carry the history everything else hangs off.
+ */
+async function findCandidateByEmail(email) {
+  const exact = await prisma.candidate.findUnique({ where: { email } });
+  if (exact) return exact;
+
+  const matches = await prisma.candidate.findMany({
+    where: { email: { equals: email, mode: 'insensitive' } },
+    orderBy: { createdAt: 'asc' },
+    take: 2
+  });
+  if (matches.length > 1) {
+    console.warn(
+      `[syncResponses] ${email} matches ${matches.length} candidate rows differing only in case; `
+      + `using the oldest (${matches[0].id}). These rows should be merged.`
+    );
+  }
+  return matches[0] ?? null;
+}
+
+/**
+ * Which candidate a new application belongs to.
+ *
+ * The UID answers wherever it can. It is what the Luma sync keys a candidate on,
+ * so it is the row carrying any event_rsvp / event_attendance history, and
+ * nothing re-points those rows afterwards: resolving to anything else strands a
+ * person's RSVPs and door scans on a record no application ever reaches.
+ *
+ * Both identifiers are still looked up, because two rows that disagree is worth
+ * knowing about - a UID typed wrong, or somebody else's. The conflict is logged
+ * and the UID still wins.
+ *
+ * It is deliberately **not** resolved to the address instead. That trade looks
+ * appealing from one direction (a stolen UID files your application onto its
+ * owner's record) and is worse from the other (your own UID with someone else's
+ * address files your application onto *theirs*) - the two cases are mirror
+ * images and no choice here is safe in both. What makes either of them exposure
+ * rather than just bad data is `GET /api/applications/:id` treating
+ * `application.studentId`, the form value, as proof of ownership. That is the
+ * place to fix it; until it is fixed, both resolutions leak the same way, and
+ * only the UID keeps the event history attached.
+ *
+ * Returns `emailTaken` alongside, because the caller backfills empty fields onto
+ * whichever row it gets: `Candidate.email` is unique and not nullable, so a row
+ * with an empty address would otherwise be handed one another candidate already
+ * owns, and the write would fail the whole response - every hour, forever, since
+ * a response with no application row is new again on the next run.
+ */
+async function resolveCandidate({ studentId, email }) {
+  const byUid = studentId
+    ? await prisma.candidate.findUnique({ where: { studentId } })
+    : null;
+  const byEmail = email ? await findCandidateByEmail(email) : null;
+
+  if (byUid && byEmail && byUid.id !== byEmail.id) {
+    console.warn(
+      `[syncResponses] conflicting identity: UID ${studentId} belongs to candidate ${byUid.id} `
+      + `but ${email} belongs to ${byEmail.id}. Filing under the UID, which is what carries `
+      + `any Luma event history; check whether the UID was mistyped.`
+    );
+  }
+
+  const candidate = byUid ?? byEmail;
+  return { candidate, emailTaken: Boolean(byEmail && candidate && byEmail.id !== candidate.id) };
+}
+
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
@@ -60,15 +133,33 @@ export default async function syncFormResponses() {
         const studentId = dbRecord.studentId;
         const emailFromForm = (dbRecord.email || '').trim();
 
-        // Prefer tying applications to an existing candidate by studentId or email
-        let candidate = await prisma.candidate.findFirst({
-          where: {
-            OR: [
-              studentId ? { studentId } : undefined,
-              emailFromForm ? { email: emailFromForm } : undefined
-            ].filter(Boolean)
-          }
+        // Two lookups rather than one OR, and the UID asked first.
+        //
+        // Both columns are unique, so each answers at most one row - but an OR
+        // across them can match two *different* candidates: the UID's owner and
+        // the address's owner. Those come apart whenever somebody registered on
+        // Luma under a personal address, or a UID was mistyped somewhere. The
+        // old `findFirst` then returned whichever row the database happened to
+        // hand back first, with no ordering to make it repeatable.
+        //
+        // The UID wins because it is what the Luma sync keys a candidate on, so
+        // it is the row carrying any event_rsvp / event_attendance history -
+        // and nothing re-points those rows afterwards. Choosing the address
+        // instead would strand a person's RSVPs and door scans on a record no
+        // application, and no candidate account, ever reaches.
+        //
+        // The address is compared case-insensitively: Luma emails are stored
+        // lowercased, a Google Form answer is stored however it was typed, and
+        // an exact compare turns "Maria@ucla.edu" into a second person.
+        //
+        // Both are still looked up, even once the UID has answered, because two
+        // rows that disagree is the one case neither identifier should decide on
+        // its own - see resolveCandidate.
+        const { candidate: matched, emailTaken } = await resolveCandidate({
+          studentId,
+          email: emailFromForm
         });
+        let candidate = matched;
 
         if (!candidate) {
           // No existing candidate, create a new one
@@ -87,7 +178,10 @@ export default async function syncFormResponses() {
           if (!candidate.studentId && studentId) updates.studentId = studentId;
           if (!candidate.firstName && dbRecord.firstName) updates.firstName = dbRecord.firstName;
           if (!candidate.lastName && dbRecord.lastName) updates.lastName = dbRecord.lastName;
-          if (!candidate.email && emailFromForm) updates.email = emailFromForm;
+          // Skipped when another candidate already holds this address: the
+          // column is unique, so writing it would fail the response rather than
+          // fill a gap, and the conflict above has already been logged.
+          if (!candidate.email && emailFromForm && !emailTaken) updates.email = emailFromForm;
 
           if (Object.keys(updates).length > 0) {
             candidate = await prisma.candidate.update({
