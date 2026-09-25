@@ -58,6 +58,12 @@ describe('the page', () => {
     ]);
   });
 
+  it('opens the unsubscribe list from its tab', async () => {
+    render(<MasterCommunications />);
+    await userEvent.click(screen.getByRole('tab', { name: /Unsubscribes/i }));
+    expect(await screen.findByText(/These addresses are skipped/)).toBeInTheDocument();
+  });
+
   it('opens the mailing list import from its tab', async () => {
     render(<MasterCommunications />);
     await userEvent.click(screen.getByRole('tab', { name: /Mailing List/i }));

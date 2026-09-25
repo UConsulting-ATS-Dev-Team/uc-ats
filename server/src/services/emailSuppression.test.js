@@ -67,6 +67,22 @@ describe('suppressEmail', () => {
     });
   });
 
+  it('keeps the earlier detail when opting out again without a new one', async () => {
+    prisma.emailSuppression.findUnique.mockResolvedValue({
+      email: 'joe@ucla.edu', detail: '550 mailbox not found', resubscribedAt: new Date(),
+    });
+    await suppressEmail({ email: 'joe@ucla.edu', reason: 'ADMIN', source: 'ADMIN' });
+    expect(prisma.emailSuppression.upsert.mock.calls[0][0].update.detail).toBe('550 mailbox not found');
+  });
+
+  it('replaces the earlier detail when a new one is given', async () => {
+    prisma.emailSuppression.findUnique.mockResolvedValue({
+      email: 'joe@ucla.edu', detail: 'old note', resubscribedAt: new Date(),
+    });
+    await suppressEmail({ email: 'joe@ucla.edu', reason: 'ADMIN', source: 'ADMIN', detail: 'asked again' });
+    expect(prisma.emailSuppression.upsert.mock.calls[0][0].update.detail).toBe('asked again');
+  });
+
   it('refuses an unknown reason', async () => {
     await expect(suppressEmail({ email: 'a@b.co', reason: 'BORED', source: 'LINK' })).rejects.toThrow(/Unknown/);
   });

@@ -56,17 +56,25 @@ export default function SuppressionsPanel() {
     return () => clearTimeout(t);
   }, [load]);
 
+  // Reloads only on success: load() clears the error, which would hide why
+  // the address was not added.
   const suppress = async (email, note) => {
     try {
       await apiClient.post('/master-communications/suppressions', { email, note: note || null });
       setNotice(`${email} will no longer get marketing sends`);
+      load();
       return true;
     } catch (e) {
       setError(e.message || 'Failed to add');
       return false;
-    } finally {
-      load();
     }
+  };
+
+  // A blank note keeps whatever the row already says.
+  const unsubscribeAgain = (email) => {
+    const note = window.prompt(`Stop marketing email to ${email} again? Add a note if you like.`, '');
+    if (note === null) return;
+    suppress(email, note.trim());
   };
 
   const add = async () => {
@@ -144,7 +152,7 @@ export default function SuppressionsPanel() {
                       <Typography variant="caption" color="text.secondary">
                         Resubscribed {new Date(row.resubscribedAt).toLocaleDateString()}
                       </Typography>
-                      <Button size="small" onClick={() => suppress(row.email)}>Unsubscribe again</Button>
+                      <Button size="small" onClick={() => unsubscribeAgain(row.email)}>Unsubscribe again</Button>
                     </Stack>
                   ) : (
                     <Button size="small" onClick={() => resubscribe(row.email)}>Resubscribe</Button>
