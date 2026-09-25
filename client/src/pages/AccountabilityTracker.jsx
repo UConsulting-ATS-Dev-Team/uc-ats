@@ -27,8 +27,10 @@ import {
   IconButton
 } from '@mui/material';
 import { ArrowPathIcon, TrophyIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
+import { Sms as SmsIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
+import ImessageSendDialog from '../components/communications/ImessageSendDialog';
 
 const formatDate = (value) => {
   if (!value) return '—';
@@ -57,6 +59,9 @@ export default function AccountabilityTracker() {
   const [savingPoints, setSavingPoints] = useState(false);
   const [reminder, setReminder] = useState(null);
   const [sendingReminders, setSendingReminders] = useState(false);
+  // The event whose RSVP'd members are being texted, with their ids.
+  const [textingEvent, setTextingEvent] = useState(null);
+  const [textingLoading, setTextingLoading] = useState({});
 
   const fetchCycles = async () => {
     try {
@@ -154,6 +159,27 @@ export default function AccountabilityTracker() {
       setError(e.message || 'Failed to sync member attendance');
     } finally {
       setSyncLoading((prev) => ({ ...prev, [eventId]: false }));
+    }
+  };
+
+  // The RSVP list is not part of the page data, so it is read when the button
+  // is pressed. Everyone who RSVP'd is included; the dialog says which of them
+  // have no phone number on file.
+  const openEventImessage = async (event) => {
+    setTextingLoading((prev) => ({ ...prev, [event.id]: true }));
+    setError('');
+    try {
+      const result = await apiClient.get(`/admin/accountability/events/${event.id}/members`);
+      const memberIds = result.members.filter((m) => m.rsvpd).map((m) => m.id);
+      if (memberIds.length === 0) {
+        setError(`No members have RSVP'd to ${event.eventName}`);
+        return;
+      }
+      setTextingEvent({ event, memberIds });
+    } catch (e) {
+      setError(e.message || "Failed to load RSVP'd members");
+    } finally {
+      setTextingLoading((prev) => ({ ...prev, [event.id]: false }));
     }
   };
 
@@ -495,6 +521,16 @@ export default function AccountabilityTracker() {
                               <Button size="small" variant="outlined" onClick={() => openEventDialog(event)}>
                                 Manage
                               </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={textingLoading[event.id] ? null : <SmsIcon fontSize="small" />}
+                                disabled={textingLoading[event.id] || !event.memberRsvpCount}
+                                onClick={() => openEventImessage(event)}
+                                sx={{ whiteSpace: 'nowrap' }}
+                              >
+                                {textingLoading[event.id] ? <CircularProgress size={16} /> : 'iMessage RSVPs'}
+                              </Button>
                             </Stack>
                           </TableCell>
                         </TableRow>
@@ -702,6 +738,20 @@ export default function AccountabilityTracker() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <ImessageSendDialog
+        open={Boolean(textingEvent)}
+        onClose={() => setTextingEvent(null)}
+        title="Send iMessage to RSVP'd members"
+        subtitle={
+          textingEvent
+            ? `${textingEvent.event.eventName} · ${formatDate(textingEvent.event.eventStartDate)} · ${textingEvent.memberIds.length} RSVP'd`
+            : ''
+        }
+        initialMemberIds={textingEvent?.memberIds ?? []}
+        cycleId={data?.cycle?.id}
+        onSent={setMessage}
+      />
     </Box>
   );
 }
