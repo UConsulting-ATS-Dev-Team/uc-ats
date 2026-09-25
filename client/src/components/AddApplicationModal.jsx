@@ -22,6 +22,7 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
     resumeUrl: '',
     headshotUrl: '',
     coverLetterUrl: '',
+    shortAnswer: '',
     videoUrl: ''
   });
   const [loading, setLoading] = useState(false);
@@ -99,6 +100,7 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
         resumeUrl: '',
         headshotUrl: '',
         coverLetterUrl: '',
+        shortAnswer: '',
         videoUrl: ''
       });
     } catch (err) {
@@ -353,6 +355,17 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
                 id="coverLetterUrl"
                 name="coverLetterUrl"
                 value={formData.coverLetterUrl}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="shortAnswer">Short Answer</label>
+              <textarea
+                id="shortAnswer"
+                name="shortAnswer"
+                rows={5}
+                value={formData.shortAnswer}
                 onChange={handleInputChange}
               />
             </div>

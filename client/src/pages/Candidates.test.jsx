@@ -116,7 +116,7 @@ describe('Candidates admin applications view', () => {
     await user.click(button);
 
     expect(screen.getByText('Resume')).toBeInTheDocument();
-    expect(screen.getByText('Cover Letter')).toBeInTheDocument();
+    expect(screen.getByText('Short Answer')).toBeInTheDocument();
     expect(screen.getByText('Video')).toBeInTheDocument();
 
     await waitFor(() => {

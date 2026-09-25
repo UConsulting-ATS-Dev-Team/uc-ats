@@ -23,6 +23,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
 import AccountabilityPointsCard from '../components/AccountabilityPointsCard';
+import { hasCoverLetter } from '../utils/coverLetter';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -85,7 +86,7 @@ export default function MemberDashboard() {
       // Add document grading tasks
       if (applications && applications.length > 0) {
         const applicationsWithResumes = applications.filter(app => app.resumeUrl && !app.hasResumeScore);
-        const applicationsWithCoverLetters = applications.filter(app => app.coverLetterUrl && !app.hasCoverLetterScore);
+        const applicationsWithCoverLetters = applications.filter(app => hasCoverLetter(app) && !app.hasCoverLetterScore);
         const applicationsWithVideos = applications.filter(app => app.videoUrl && !app.hasVideoScore);
         
         if (applicationsWithResumes.length > 0) {
@@ -104,7 +105,7 @@ export default function MemberDashboard() {
         if (applicationsWithCoverLetters.length > 0) {
           tasksList.push({
             id: 'grade-cover-letters',
-            title: 'Grade Cover Letters',
+            title: 'Grade Short Answers',
             type: 'document',
             documentType: 'coverLetter',
             dueDate: 'Oct 4th, Morning',
@@ -517,7 +518,7 @@ export default function MemberDashboard() {
                         <Box>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                             <Typography variant="body2" color="text.secondary">
-                              Cover Letter Reviews
+                              Short Answer Reviews
                             </Typography>
                             <Typography variant="body2" sx={{ fontWeight: 600 }}>
                               {calculateTeamProgress(userTeam).coverLetter}%

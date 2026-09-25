@@ -3277,6 +3277,7 @@ router.get('/interviews/:id/applications', async (req, res) => {
         graduationYear: true,
         resumeUrl: true,
         coverLetterUrl: true,
+        shortAnswer: true,
         videoUrl: true,
         headshotUrl: true,
         testFor: true,
@@ -4327,6 +4328,7 @@ router.get('/flagged-documents', async (req, res) => {
             graduationYear: true,
             resumeUrl: true,
             coverLetterUrl: true,
+            shortAnswer: true,
             videoUrl: true,
             candidateId: true,
             cycleId: true

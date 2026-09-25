@@ -470,7 +470,7 @@ const WELCOME_MEMBER = welcomeTemplate({
   intro: 'Your UConsulting ATS member account is set up. This is the tool we run recruitment out of.',
   bullets: [
     '- See the interviews you have been assigned to',
-    '- Grade resumes, cover letters and videos for your review team',
+    '- Grade resumes, short answers and videos for your review team',
     '- Submit evaluations after each interview',
   ].join('\n'),
   signature: 'UConsulting',

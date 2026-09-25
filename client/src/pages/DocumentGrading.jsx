@@ -47,6 +47,7 @@ import {
   Schedule as ScheduleIcon,
   Celebration as CelebrationIcon
 } from '@mui/icons-material';
+import { hasCoverLetter } from '../utils/coverLetter';
 
 // Confetti Component
 const Confetti = ({ active }) => {
@@ -136,7 +137,7 @@ export default function DocumentGrading() {
     
     // Count applications that have documents for each category
     const applicationsWithResumes = apps.filter(app => app.resumeUrl).length;
-    const applicationsWithCoverLetters = apps.filter(app => app.coverLetterUrl).length;
+    const applicationsWithCoverLetters = apps.filter(hasCoverLetter).length;
     const applicationsWithVideos = apps.filter(app => app.videoUrl).length;
     
     // Count applications that have been graded for each category
@@ -155,7 +156,7 @@ export default function DocumentGrading() {
         color: 'success'
       },
       {
-        title: 'Cover Letter Completion',
+        title: 'Short Answer Completion',
         icon: <EditIcon />,
         completed: coverLetterGraded,
         total: applicationsWithCoverLetters,
@@ -183,7 +184,7 @@ export default function DocumentGrading() {
     const apps = Array.isArray(applications) ? applications : [];
     
     const applicationsWithResumes = apps.filter(app => app.resumeUrl).length;
-    const applicationsWithCoverLetters = apps.filter(app => app.coverLetterUrl).length;
+    const applicationsWithCoverLetters = apps.filter(hasCoverLetter).length;
     const applicationsWithVideos = apps.filter(app => app.videoUrl).length;
     
     const resumeGraded = apps.filter(app => app.hasResumeScore).length;
@@ -299,8 +300,8 @@ export default function DocumentGrading() {
           isGraded = app.hasResumeScore;
           break;
         case 'coverLetter':
-          document = 'Cover Letter';
-          hasDocument = !!app.coverLetterUrl;
+          document = 'Short Answer';
+          hasDocument = hasCoverLetter(app);
           isGraded = app.hasCoverLetterScore;
           break;
         case 'video':
@@ -646,7 +647,7 @@ export default function DocumentGrading() {
             />
             <Tab
               icon={<EditIcon />}
-              label="Cover Letters"
+              label="Short Answers"
               iconPosition="start"
               sx={{ textTransform: 'none', fontWeight: 600 }}
             />

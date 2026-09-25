@@ -12,6 +12,7 @@ import AccessControl from '../components/AccessControl';
 import { LockedChip } from '../components/LockedRecord';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
+import { coverLetterLabel } from '../utils/coverLetter';
 import '../styles/ApplicationList.css';
 
 export default function Candidates() {
@@ -340,7 +341,7 @@ export default function Candidates() {
                               <div>Notes</div>
                               <div style={{ textAlign: 'right' }}>Score</div>
                             </div>
-                            {[{ key: 'resume', label: 'Resume', url: app.resumeUrl }, { key: 'cover', label: 'Cover Letter', url: app.coverLetterUrl }, { key: 'video', label: 'Video', url: app.videoUrl }].map(row => (
+                            {[{ key: 'resume', label: 'Resume', url: app.resumeUrl }, { key: 'cover', label: coverLetterLabel(app), url: app.coverLetterUrl }, { key: 'video', label: 'Video', url: app.videoUrl }].map(row => (
                               <div key={row.key} className="details-row">
                                 <div>
                                   <a href={row.url || '#'} target="_blank" rel="noreferrer" onClick={(e) => { if (!row.url) e.preventDefault(); }} className={`doc-link ${row.url ? '' : 'disabled'}`}>

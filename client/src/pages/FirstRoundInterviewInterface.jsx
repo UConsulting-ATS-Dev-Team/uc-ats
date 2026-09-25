@@ -952,6 +952,20 @@ export default function FirstRoundInterviewInterface() {
                             <DocumentTextIcon className="action-icon" />
                           </button>
                         )}
+                        {application.shortAnswer?.trim() && (
+                          <button 
+                            className="action-btn"
+                            onClick={() => setPreview({ 
+                              open: true, 
+                              text: application.shortAnswer.trim(), 
+                              kind: 'text', 
+                              title: `${application.name} – Short Answer` 
+                            })}
+                            title="Short Answer"
+                          >
+                            <DocumentTextIcon className="action-icon" />
+                          </button>
+                        )}
                         {application.videoUrl && (
                           <button 
                             className="action-btn"
@@ -1218,6 +1232,7 @@ export default function FirstRoundInterviewInterface() {
             onClose={() => setPreview({ open: false, src: '', kind: '', title: '' })}
             src={preview.src}
             kind={preview.kind}
+            text={preview.text}
             title={preview.title}
           />
         )}

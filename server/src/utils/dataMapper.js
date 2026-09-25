@@ -74,8 +74,14 @@ function transformValue(value, mapping) {
       return numValue;
     
     case 'string':
+      // A file upload answering a question mapped as text means the form's
+      // question type changed under the mapping; "[object Object]" is not an answer.
+      if (typeof value === 'object') {
+        console.warn(`${mapping.field} expected text but received a file upload. Skipping.`);
+        return mapping.required ? null : undefined;
+      }
       return String(value).trim();
-    
+
     case 'file':
       // Extract Google Drive file ID and create accessible URL via our API
       return generateFileUrl(value, mapping.file_type);

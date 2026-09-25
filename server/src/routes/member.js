@@ -18,6 +18,7 @@ import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
 import { resolveSignupContacts, logSignupContact } from '../services/meetingSignupContacts.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { hasCoverLetter } from '../utils/coverLetter.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
 import { scoreMembers } from '../services/accountabilityPoints.js';
@@ -294,6 +295,7 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       isTransferStudent: app.isTransferStudent,
       resumeUrl: app.resumeUrl,
       coverLetterUrl: app.coverLetterUrl,
+      shortAnswer: app.shortAnswer,
       videoUrl: app.videoUrl,
       groupId: app.candidate?.assignedGroupId,
       groupName: app.candidate?.assignedGroupId ? 
@@ -688,7 +690,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
       const resumeProgress = !latestApplication.resumeUrl ? 100 : 
         (teamMemberIds.length > 0 ? 
           Math.round((candidateResumeScores.length / teamMemberIds.length) * 100) : 0);
-      const coverLetterProgress = !latestApplication.coverLetterUrl ? 100 : 
+      const coverLetterProgress = !hasCoverLetter(latestApplication) ? 100 : 
         (teamMemberIds.length > 0 ? 
           Math.round((candidateCoverLetterScores.length / teamMemberIds.length) * 100) : 0);
       const videoProgress = !latestApplication.videoUrl ? 100 : 
@@ -1572,6 +1574,7 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
         graduationYear: true,
         resumeUrl: true,
         coverLetterUrl: true,
+        shortAnswer: true,
         videoUrl: true,
         headshotUrl: true,
         testFor: true,

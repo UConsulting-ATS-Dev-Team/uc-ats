@@ -33,6 +33,7 @@ import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 import { toSameOriginDocumentUrl } from '../utils/documentUrl';
+import { coverLetterLabel } from '../utils/coverLetter';
 
 const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const { user, token } = useAuth();
@@ -57,6 +58,12 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [scoreTwo, setScoreTwo] = useState('');
   const [scoreThree, setScoreThree] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Fall 2026 onward the cover letter slot holds a written answer, not a file.
+  // It is graded with the cover letter rubric and shown as text.
+  const shortAnswerText = documentType === 'coverLetter' && !application?.coverLetterUrl
+    ? application?.shortAnswer?.trim() || null
+    : null;
 
   // Get document-specific configuration
   const getDocumentConfig = () => {
@@ -99,8 +106,8 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
         };
       case 'coverLetter':
         return {
-          title: 'Cover Letter Grading',
-          previewTitle: 'Cover Letter Preview',
+          title: `${coverLetterLabel(application)} Grading`,
+          previewTitle: coverLetterLabel(application),
           icon: <EditIcon />,
           urlField: 'coverLetterUrl',
           rubricCategories: [
@@ -526,7 +533,16 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                 <Box sx={{ ml: 1 }}>{config.previewTitle}</Box>
               </Typography>
               
-              {previewLoading ? (
+              {shortAnswerText ? (
+                <Paper variant="outlined" sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+                  <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                    {shortAnswerText}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
+                    {shortAnswerText.split(/\s+/).filter(Boolean).length} words
+                  </Typography>
+                </Paper>
+              ) : previewLoading ? (
                 <Paper sx={{ p: 2, textAlign: 'center', height: 'calc(100% - 60px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
                   <CircularProgress size={48} sx={{ mb: 2 }} />
                   <Typography color="text.secondary">
@@ -631,7 +647,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
 
                   {existingScore && (
                     <Alert severity="info" sx={{ mb: 2 }}>
-                      You have already graded this {documentType}. Your previous scores are loaded below.
+                      You have already graded this {documentType === 'coverLetter' ? coverLetterLabel(application).toLowerCase() : documentType}. Your previous scores are loaded below.
                     </Alert>
                   )}
 

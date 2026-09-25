@@ -303,6 +303,9 @@ model Application {
   blindResumeUrl        String?
   headshotUrl           String
   coverLetterUrl        String?
+  // Fall 2026 onward: a written answer in place of the cover letter upload,
+  // graded through CoverLetterScore with the same rubric.
+  shortAnswer           String?
   videoUrl              String?
   rawResponses          Json
   approved              Boolean?
