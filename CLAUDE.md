@@ -176,7 +176,8 @@ The system follows a **recruiting cycle-based workflow**:
 
 1. **Recruiting Cycle** → Contains applications, events, interviews, and review teams
 2. **Application Submission** → Google Forms responses are auto-synced every 5 minutes via cron job
-3. **Candidate Creation** → Applications automatically create or link to Candidate records by `studentId` or `email`
+3. **Candidate Creation** → Applications automatically create or link to Candidate records,
+   by `studentId` **first** and then `email` (see "Matching an application to a candidate")
 4. **Document Review** → Review teams (Groups) evaluate resumes, cover letters, and videos with scoring rubrics
 5. **Interview Rounds** → Coffee Chat → Round 1 → Round 2 → Final Round with evaluations
 6. **Event Management** → Track RSVPs and attendance for recruitment events
@@ -461,6 +462,17 @@ The system follows a **recruiting cycle-based workflow**:
   What counts as held is [server/src/services/luma/heldGuests.js](server/src/services/luma/heldGuests.js),
   one definition read by both the panel and the per-event badge on the event list. A guest
   can be held for more than one reason, so the counts exceed the number of guests.
+- **A guest's history follows them into the ATS through the UID.** Someone can attend an
+  event months before applying: the sync creates a Candidate keyed on the UID they typed,
+  and their RSVP and attendance rows point at it. When their application arrives, form
+  sync finds that same candidate by `studentId` and the history is already attached - the
+  address they used on Luma is usually not the one on their application, which is why the
+  UID question is required per event. `syncResponses.lumaHandoff.test.js` pins that seam.
+- **But only while the event is still on the routine's list.** An unmatched guest is
+  retried every sync, and an event drops off three days after it starts, so someone who
+  applies later than that is never retried - their old RSVPs stay unlinked until an admin
+  links them by hand. Work the guests panel after each event rather than after
+  applications open.
 - Admins settle a held guest in Event Management → an event's Luma column → the guests
   panel. Linking runs
   [server/src/services/luma/linkGuest.js](server/src/services/luma/linkGuest.js), which
@@ -490,6 +502,23 @@ The system follows a **recruiting cycle-based workflow**:
 - The setting is read once per sync run, not per response, so a run agrees with itself.
 - The **member in-app RSVP confirmation is not covered by this switch** and still sends: a
   member who RSVPs in the app never touched Luma, so nothing else has written to them.
+
+**Matching an application to a candidate:**
+- [syncResponses.js](server/src/services/syncResponses.js) resolves the candidate a new
+  application belongs to by **`studentId` first, then `email`** - two lookups, in that
+  order, never one `OR`. Both columns are unique, so each answers at most one row, but an
+  `OR` across them can match two *different* people: the UID's owner and the address's
+  owner. That happens whenever somebody registered on Luma under a personal address, or a
+  UID was mistyped somewhere.
+- The UID wins because it is what the Luma sync keys a candidate on, so it is the row
+  carrying any `event_rsvp` / `event_attendance` history - **and nothing re-points those
+  rows afterwards.** Matching on the address instead would strand a person's RSVPs and
+  door scans on a record no application, and no candidate account, ever reaches.
+- The address is compared case-insensitively. Luma emails are stored lowercased and a
+  Google Form answer is stored as typed, so an exact compare makes `Maria@ucla.edu` a
+  second person.
+- A candidate found this way is **backfilled, never overwritten**: only fields that are
+  empty on the existing row are filled in from the application.
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming

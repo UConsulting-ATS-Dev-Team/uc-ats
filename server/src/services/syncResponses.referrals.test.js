@@ -16,7 +16,9 @@ import { referralNameKey } from './referrals.js';
 vi.mock('../prismaClient.js', () => {
   const client = {
     application: { findMany: vi.fn(), create: vi.fn() },
-    candidate: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    candidate: {
+      findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn()
+    },
     referral: { findMany: vi.fn(), updateMany: vi.fn() },
     $executeRaw: vi.fn(),
     $transaction: vi.fn((fn) => fn(client))
@@ -52,6 +54,8 @@ beforeEach(() => {
 
   prisma.application.findMany.mockResolvedValue([]);
   prisma.application.create.mockResolvedValue({ id: 'app-1' });
+  // The candidate lookup asks by studentId first, then falls back to email.
+  prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.create.mockResolvedValue(newCandidate);
   // Only this applicant carries that name in the cycle, so claiming is safe.

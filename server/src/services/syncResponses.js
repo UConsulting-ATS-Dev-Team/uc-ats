@@ -60,15 +60,33 @@ export default async function syncFormResponses() {
         const studentId = dbRecord.studentId;
         const emailFromForm = (dbRecord.email || '').trim();
 
-        // Prefer tying applications to an existing candidate by studentId or email
-        let candidate = await prisma.candidate.findFirst({
-          where: {
-            OR: [
-              studentId ? { studentId } : undefined,
-              emailFromForm ? { email: emailFromForm } : undefined
-            ].filter(Boolean)
-          }
-        });
+        // Two lookups rather than one OR, and the UID asked first.
+        //
+        // Both columns are unique, so each answers at most one row - but an OR
+        // across them can match two *different* candidates: the UID's owner and
+        // the address's owner. Those come apart whenever somebody registered on
+        // Luma under a personal address, or a UID was mistyped somewhere. The
+        // old `findFirst` then returned whichever row the database happened to
+        // hand back first, with no ordering to make it repeatable.
+        //
+        // The UID wins because it is what the Luma sync keys a candidate on, so
+        // it is the row carrying any event_rsvp / event_attendance history -
+        // and nothing re-points those rows afterwards. Choosing the address
+        // instead would strand a person's RSVPs and door scans on a record no
+        // application, and no candidate account, ever reaches.
+        //
+        // The address is compared case-insensitively: Luma emails are stored
+        // lowercased, a Google Form answer is stored however it was typed, and
+        // an exact compare turns "Maria@ucla.edu" into a second person.
+        let candidate = studentId
+          ? await prisma.candidate.findUnique({ where: { studentId } })
+          : null;
+
+        if (!candidate && emailFromForm) {
+          candidate = await prisma.candidate.findFirst({
+            where: { email: { equals: emailFromForm, mode: 'insensitive' } }
+          });
+        }
 
         if (!candidate) {
           // No existing candidate, create a new one
