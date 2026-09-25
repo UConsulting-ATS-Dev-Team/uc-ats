@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AdminMeetingSlots from './AdminMeetingSlots';
 import api from '../utils/api';
@@ -93,6 +93,29 @@ describe('AdminMeetingSlots time slots sorting', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open spots' }));
     expect(columnValues(1)).toEqual(['Bruin Cafe', 'Kerckhoff Patio']);
+  });
+});
+
+describe('AdminMeetingSlots status sorting over time', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('re-sorts by status when a slot ends while the page is open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Both slots upcoming, so the status sort falls back to start time.
+    vi.setSystemTime(new Date('2026-10-28T16:00:00.000Z'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<AdminMeetingSlots />);
+    await screen.findByText('Kerckhoff Patio');
+
+    await user.click(screen.getByRole('button', { name: 'Status' }));
+    expect(columnValues(1)).toEqual(['Kerckhoff Patio', 'Bruin Cafe']);
+
+    // Kerckhoff has no end time, so it is past an hour after it starts.
+    vi.setSystemTime(new Date('2026-10-28T17:31:00.000Z'));
+    await act(async () => { vi.advanceTimersByTime(60 * 1000); });
+
+    expect(columnValues(1)).toEqual(['Bruin Cafe', 'Kerckhoff Patio']);
+    expect(within(screen.getAllByRole('row')[2]).getByText('Past')).toBeTruthy();
   });
 });
 

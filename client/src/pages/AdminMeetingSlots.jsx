@@ -154,6 +154,15 @@ export default function AdminMeetingSlots() {
   const [attFilter, setAttFilter] = useState('all'); // 'all' | 'attended' | 'not'
   const [attSort, setAttSort] = useState({ field: 'slot', dir: 'asc' });
 
+  // One clock for every status on the page. The sort, the status filter and the
+  // badges all read it, so a slot that starts while the page is open moves to
+  // its new place in the order at the same moment its badge changes.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const [detailSlot, setDetailSlot] = useState(null);
   const [contactSlot, setContactSlot] = useState(null);
 
@@ -239,12 +248,12 @@ export default function AdminMeetingSlots() {
     const totalSignups = allSignups.length;
     const attended = allSignups.filter((s) => s.attended).length;
     const totalCapacity = cycleSlots.reduce((sum, s) => sum + (s.capacity || 0), 0);
-    const upcoming = cycleSlots.filter((s) => getSlotStatus(s) === 'upcoming').length;
+    const upcoming = cycleSlots.filter((s) => getSlotStatus(s, now) === 'upcoming').length;
     return {
       totalSlots, totalSignups, attended, totalCapacity, upcoming,
       attendanceRate: totalSignups > 0 ? Math.round((attended / totalSignups) * 100) : 0
     };
-  }, [cycleSlots]);
+  }, [cycleSlots, now]);
 
   // Time Slots tab — apply host / status / search filters, then the column sort.
   const visibleSlots = useMemo(() => {
@@ -252,15 +261,15 @@ export default function AdminMeetingSlots() {
     const filtered = cycleSlots.filter((slot) => {
       if (hostFilter === 'mine' && slot.memberId !== user?.id) return false;
       if (hostFilter !== 'all' && hostFilter !== 'mine' && slot.memberId !== hostFilter) return false;
-      if (statusFilter !== 'all' && getSlotStatus(slot) !== statusFilter) return false;
+      if (statusFilter !== 'all' && getSlotStatus(slot, now) !== statusFilter) return false;
       if (!q) return true;
       return (
         slot.location?.toLowerCase().includes(q) ||
         slot.member?.fullName?.toLowerCase().includes(q)
       );
     });
-    return sortRows(filtered, SLOT_SORT_KEYS, slotSort, { tiebreak: 'start' });
-  }, [cycleSlots, hostFilter, statusFilter, slotSearch, slotSort, user]);
+    return sortRows(filtered, SLOT_SORT_KEYS, slotSort, { tiebreak: 'start', now });
+  }, [cycleSlots, hostFilter, statusFilter, slotSearch, slotSort, user, now]);
 
   // Attendance tab — flattened signup rows, filtered then column-sorted.
   const attendanceRows = useMemo(() => {
@@ -587,6 +596,7 @@ export default function AdminMeetingSlots() {
           ) : tab === 0 ? (
             <TimeSlotsTab
               slots={visibleSlots}
+              now={now}
               totalInScope={cycleSlots.length}
               hostOptions={hostOptions}
               hostLabel={hostLabel}
@@ -728,7 +738,7 @@ export default function AdminMeetingSlots() {
 // ---- Time Slots tab ------------------------------------------------------
 
 function TimeSlotsTab({
-  slots, totalInScope, hostOptions, hostLabel,
+  slots, now, totalInScope, hostOptions, hostLabel,
   hostFilter, setHostFilter, statusFilter, setStatusFilter,
   search, setSearch, sort, onSort, onView, onEdit, onDelete
 }) {
@@ -792,7 +802,7 @@ function TimeSlotsTab({
               {slots.map((slot) => {
                 const signups = slot.signups || [];
                 const attended = signups.filter((s) => s.attended).length;
-                const status = getSlotStatus(slot);
+                const status = getSlotStatus(slot, now);
                 return (
                   <TableRow key={slot.id} hover sx={{ cursor: 'pointer' }} onClick={() => onView(slot)}>
                     <TableCell>
