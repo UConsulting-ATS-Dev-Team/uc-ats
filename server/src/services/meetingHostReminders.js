@@ -57,6 +57,21 @@ export async function findSlotsDueForHostReminder(now = new Date()) {
   });
 }
 
+/**
+ * Who signed up, with numbers where they can be found. A failed number lookup
+ * sends the reminder without numbers rather than failing it: names and emails
+ * are already on the slot, and a failure here would use up one of the
+ * reminder's attempts without an email ever being tried.
+ */
+async function attendeesFor(slot) {
+  try {
+    return await resolveSignupContacts(slot.signups);
+  } catch (error) {
+    console.error(`[gtkuc host reminders] phone lookup failed for slot ${slot.id}; sending without numbers:`, error);
+    return slot.signups.map((s) => ({ signupId: s.id, fullName: s.fullName, email: s.email, phoneNumber: null }));
+  }
+}
+
 /** Send one slot's reminder. Never throws. */
 export async function sendHostReminder(slot) {
   const host = slot.member;
@@ -64,9 +79,7 @@ export async function sendHostReminder(slot) {
 
   return sendAndLogMeetingCommunication(
     async () => {
-      // Inside the logged send, so a failed lookup is a FAILED row for this
-      // slot and the run carries on to the next one.
-      const attendees = await resolveSignupContacts(slot.signups);
+      const attendees = await attendeesFor(slot);
       const result = await sendMeetingHostReminder(
         host.email,
         hostName,

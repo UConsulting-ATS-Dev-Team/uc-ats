@@ -120,16 +120,19 @@ describe('sendDueHostReminders', () => {
     });
   });
 
-  it('logs a failed number lookup as FAILED and goes on to the next slot', async () => {
-    prisma.meetingSlot.findMany.mockResolvedValue([slotStarting(23), { ...slotStarting(22), id: 'slot-2' }]);
+  it('still sends when the number lookup fails, just without numbers', async () => {
+    // A failed lookup must not become a FAILED attempt: three of those would
+    // end the slot's reminder without an email ever being tried.
+    prisma.meetingSlot.findMany.mockResolvedValue([slotStarting(23)]);
     prisma.user.findMany.mockRejectedValueOnce(new Error('connection reset'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     expect(await sendDueHostReminders(NOW)).toBe(1);
+    expect(sendMeetingHostReminder.mock.calls[0][5]).toEqual([
+      { signupId: 'su-1', fullName: 'Jordan Rivera', email: 'jordan@ucla.edu', phoneNumber: null },
+    ]);
     expect(prisma.meetingCommunication.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ slotId: 'slot-1', status: 'FAILED', error: 'connection reset' }),
-    });
-    expect(prisma.meetingCommunication.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ slotId: 'slot-2', status: 'SENT' }),
+      data: expect.objectContaining({ slotId: 'slot-1', status: 'SENT' }),
     });
   });
 
