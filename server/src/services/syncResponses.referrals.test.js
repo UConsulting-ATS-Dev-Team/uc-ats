@@ -54,7 +54,8 @@ beforeEach(() => {
 
   prisma.application.findMany.mockResolvedValue([]);
   prisma.application.create.mockResolvedValue({ id: 'app-1' });
-  // The candidate lookup asks by studentId first, then falls back to email.
+  // The candidate lookup asks by studentId and by exact email, both through
+  // findUnique; findFirst is no longer used for it.
   prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.create.mockResolvedValue(newCandidate);
@@ -138,6 +139,9 @@ describe('form sync claims pre-application referrals', () => {
   });
 
   it('still records the application when claiming blows up', async () => {
+    // Resolved outright, so the candidate lookup never reaches findMany and the
+    // rejection below is only the referral ambiguity check.
+    prisma.candidate.findUnique.mockResolvedValue({ id: 'cand-1', ...applicant });
     prisma.candidate.findMany.mockRejectedValue(new Error('referrals lookup is on fire'));
 
     await syncFormResponses();

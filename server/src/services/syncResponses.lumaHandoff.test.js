@@ -1,4 +1,5 @@
-// What happens to somebody's Luma RSVPs when they finally apply.
+// Which candidate a new application belongs to, and what that means for
+// somebody's Luma history.
 //
 // Someone can turn up to an event months before applying. The Luma sync creates
 // a Candidate for them keyed on the UID they typed at registration, and their
@@ -9,8 +10,8 @@
 // candidate account, ever reaches.
 //
 // The UID is what carries that across, because the address they register with
-// on Luma is usually not the one on their application. This is the seam the two
-// halves meet at, so it is asserted here rather than assumed.
+// on Luma is usually not the one on their application. The interesting cases are
+// the ones where the two identifiers disagree.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { getResponses } from './google/forms.js';
@@ -51,10 +52,33 @@ const fromLuma = {
   email: 'mariachen99@gmail.com'
 };
 
+// findUnique answers both lookups - by studentId and by exact email - so the
+// fixtures reply according to which one was asked.
+let uidRow;
+let emailRow;
+const byUid = (row) => { uidRow = row; };
+const byEmail = (row) => { emailRow = row; };
+
+// An application with no UID on it, to exercise the address path on its own.
+const noUid = () =>
+  transformFormResponse.mockReturnValue({ ...applicant, studentId: '', responseID: 'resp-1' });
+
+const filedAgainst = () => {
+  const { data } = prisma.application.create.mock.calls[0][0];
+  return data.candidateId ?? data.candidate?.connect?.id;
+};
+
+const warnedAbout = (text) =>
+  console.warn.mock.calls.some(([first]) => typeof first === 'string' && first.includes(text));
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  uidRow = null;
+  emailRow = null;
 
   resolveCandidateCycle.mockResolvedValue(activeCycle);
   getResponses.mockResolvedValue([{ responseId: 'resp-1' }]);
@@ -62,11 +86,13 @@ beforeEach(() => {
 
   prisma.application.findMany.mockResolvedValue([]);
   prisma.application.create.mockResolvedValue({ id: 'app-1' });
-  prisma.candidate.findUnique.mockResolvedValue(null);
-  prisma.candidate.findFirst.mockResolvedValue(null);
-  prisma.candidate.create.mockResolvedValue({ id: 'cand-new', ...applicant });
+  prisma.candidate.findUnique.mockImplementation(({ where }) =>
+    Promise.resolve(where.studentId !== undefined ? uidRow : emailRow)
+  );
+  // Only reached as the case-insensitive address fallback.
   prisma.candidate.findMany.mockResolvedValue([]);
-  prisma.candidate.update.mockResolvedValue(fromLuma);
+  prisma.candidate.create.mockResolvedValue({ id: 'cand-new', ...applicant });
+  prisma.candidate.update.mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
   prisma.referral.findMany.mockResolvedValue([]);
   prisma.referral.updateMany.mockResolvedValue({ count: 0 });
   prisma.$executeRaw.mockResolvedValue(1);
@@ -74,67 +100,26 @@ beforeEach(() => {
 });
 
 describe('an applicant the Luma sync already created a candidate for', () => {
-  // The lookup is what decides this. If it only asked by email, the personal
-  // address on the Luma row would not be found and the RSVPs would be orphaned.
-  it('is looked for by UID before anything else', async () => {
+  it('is looked up by UID', async () => {
     await syncFormResponses();
 
     expect(prisma.candidate.findUnique).toHaveBeenCalledWith({ where: { studentId: UID } });
   });
 
-  // The two columns can point at different people, so the order has to be fixed
-  // rather than left to whichever row the database returns first.
-  it('takes the UID owner over the address owner, every time', async () => {
-    prisma.candidate.findUnique.mockResolvedValue(fromLuma);
-    prisma.candidate.findFirst.mockResolvedValue({ id: 'cand-other', ...applicant });
-
-    await syncFormResponses();
-
-    const { data } = prisma.application.create.mock.calls[0][0];
-    expect(data.candidateId ?? data.candidate?.connect?.id).toBe(fromLuma.id);
-    // No reason to have asked at all once the UID answered.
-    expect(prisma.candidate.findFirst).not.toHaveBeenCalled();
-  });
-
-  // A Google Form answer is stored as typed; a Luma email is lowercased.
-  it('still finds them when the form carries a differently-cased address', async () => {
-    transformFormResponse.mockReturnValue({
-      ...applicant, studentId: '', email: 'Maria@UCLA.edu', responseID: 'resp-1'
-    });
-    prisma.candidate.findFirst.mockResolvedValue(fromLuma);
-
-    await syncFormResponses();
-
-    const { where } = prisma.candidate.findFirst.mock.calls[0][0];
-    expect(where.email).toEqual({ equals: 'Maria@UCLA.edu', mode: 'insensitive' });
-    expect(prisma.candidate.create).not.toHaveBeenCalled();
-  });
-
   it('reuses that candidate rather than creating a second one', async () => {
-    prisma.candidate.findUnique.mockResolvedValue(fromLuma);
+    byUid(fromLuma);
 
     await syncFormResponses();
 
     expect(prisma.candidate.create).not.toHaveBeenCalled();
-    expect(prisma.application.create).toHaveBeenCalled();
-  });
-
-  // The application has to hang off the same candidate the event rows do, or
-  // the two halves of the person's history never meet.
-  it('files the application against the candidate holding the event rows', async () => {
-    prisma.candidate.findUnique.mockResolvedValue(fromLuma);
-
-    await syncFormResponses();
-
-    const { data } = prisma.application.create.mock.calls[0][0];
-    expect(data.candidateId ?? data.candidate?.connect?.id).toBe(fromLuma.id);
+    expect(filedAgainst()).toBe(fromLuma.id);
   });
 
   // The Luma row is built from a Luma profile name and a self-typed UID. An
   // application is corroborated, so it fills the gaps — without overwriting an
   // address somebody may since have been mailed at.
   it('backfills what the Luma row was missing without overwriting it', async () => {
-    prisma.candidate.findUnique.mockResolvedValue({ ...fromLuma, lastName: '', email: '' });
+    byUid({ ...fromLuma, lastName: '', email: '' });
 
     await syncFormResponses();
 
@@ -146,12 +131,101 @@ describe('an applicant the Luma sync already created a candidate for', () => {
   });
 
   it('leaves an address the Luma row already had alone', async () => {
-    prisma.candidate.findUnique.mockResolvedValue(fromLuma);
+    byUid(fromLuma);
 
     await syncFormResponses();
 
     const updated = prisma.candidate.update.mock.calls[0]?.[0]?.data ?? {};
     expect(updated.email).toBeUndefined();
+  });
+});
+
+describe('when the UID and the address point at different people', () => {
+  const addressOwner = { id: 'cand-address-owner', ...applicant };
+
+  // A UID is free text on a form; the address is where this applicant is
+  // actually reachable and what their own account matches on. Filing under the
+  // UID would put somebody's application onto a stranger's record.
+  it('files under the address owner, not the UID owner', async () => {
+    byUid(fromLuma);
+    byEmail(addressOwner);
+
+    await syncFormResponses();
+
+    expect(filedAgainst()).toBe(addressOwner.id);
+  });
+
+  it('says so in the logs rather than resolving it silently', async () => {
+    byUid(fromLuma);
+    byEmail(addressOwner);
+
+    await syncFormResponses();
+
+    expect(warnedAbout('conflicting identity')).toBe(true);
+  });
+
+  // Losing an application is worse than linking it imperfectly: an admin can
+  // move it, and the Luma history is one link away in the guests panel.
+  it('still records the application', async () => {
+    byUid(fromLuma);
+    byEmail(addressOwner);
+
+    await syncFormResponses();
+
+    expect(prisma.application.create).toHaveBeenCalled();
+  });
+
+  it('is not a conflict when both lookups land on the same row', async () => {
+    byUid(fromLuma);
+    byEmail(fromLuma);
+
+    await syncFormResponses();
+
+    expect(warnedAbout('conflicting identity')).toBe(false);
+    expect(filedAgainst()).toBe(fromLuma.id);
+  });
+});
+
+describe('the address lookup', () => {
+  // A Google Form answer is stored as typed; a Luma email is lowercased.
+  it('falls back to a case-insensitive match when there is no exact row', async () => {
+    noUid();
+    prisma.candidate.findMany.mockResolvedValue([fromLuma]);
+
+    await syncFormResponses();
+
+    const { where } = prisma.candidate.findMany.mock.calls[0][0];
+    expect(where.email).toEqual({ equals: 'maria@ucla.edu', mode: 'insensitive' });
+    expect(prisma.candidate.create).not.toHaveBeenCalled();
+    expect(filedAgainst()).toBe(fromLuma.id);
+  });
+
+  // Candidate.email is unique but case-sensitive, so these rows can both exist.
+  // Whichever is picked has to be the same one every run.
+  it('takes the oldest row when two differ only in case, and says so', async () => {
+    noUid();
+    const older = { id: 'cand-older', ...applicant };
+    prisma.candidate.findMany.mockResolvedValue([older, { id: 'cand-newer', ...applicant }]);
+
+    await syncFormResponses();
+
+    expect(prisma.candidate.findMany.mock.calls[0][0].orderBy).toEqual({ createdAt: 'asc' });
+    expect(filedAgainst()).toBe(older.id);
+    expect(warnedAbout('differing only in case')).toBe(true);
+  });
+
+  it('prefers an exact row over the insensitive fallback', async () => {
+    noUid();
+    byEmail({ id: 'cand-exact', ...applicant });
+
+    await syncFormResponses();
+
+    // findMany is also the referral ambiguity check, so what matters is that
+    // nothing asked it for this address.
+    const askedForAddress = prisma.candidate.findMany.mock.calls
+      .some(([args]) => args?.where?.email !== undefined);
+    expect(askedForAddress).toBe(false);
+    expect(filedAgainst()).toBe('cand-exact');
   });
 });
 

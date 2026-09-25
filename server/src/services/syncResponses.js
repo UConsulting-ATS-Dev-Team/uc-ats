@@ -6,6 +6,69 @@ import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 
+/**
+ * The candidate whose email this is, resolved so the answer never depends on
+ * which row the database hands back first.
+ *
+ * `Candidate.email` is unique but case-sensitive, so rows differing only in case
+ * can both exist and both match an insensitive compare. An exact hit is taken
+ * first; past that the oldest row wins, because it is the one most likely to
+ * carry the history everything else hangs off.
+ */
+async function findCandidateByEmail(email) {
+  const exact = await prisma.candidate.findUnique({ where: { email } });
+  if (exact) return exact;
+
+  const matches = await prisma.candidate.findMany({
+    where: { email: { equals: email, mode: 'insensitive' } },
+    orderBy: { createdAt: 'asc' },
+    take: 2
+  });
+  if (matches.length > 1) {
+    console.warn(
+      `[syncResponses] ${email} matches ${matches.length} candidate rows differing only in case; `
+      + `using the oldest (${matches[0].id}). These rows should be merged.`
+    );
+  }
+  return matches[0] ?? null;
+}
+
+/**
+ * Which candidate a new application belongs to.
+ *
+ * The UID is asked first and normally answers: it is what the Luma sync keys a
+ * candidate on, so it is the row carrying any event_rsvp / event_attendance
+ * history, and nothing re-points those rows afterwards.
+ *
+ * But both identifiers are looked up, because the interesting case is when they
+ * point at *two different people* - a UID typed wrong, or somebody else's. Then
+ * the UID is the one to distrust: it is free text on a form, whereas the address
+ * is where this applicant is actually reachable and what their own account will
+ * match on. So a conflict resolves to the address and is logged; the alternative
+ * files somebody's application onto a stranger's record.
+ *
+ * It is reported rather than refused because losing an application is worse than
+ * linking it imperfectly - an admin can move it, and the Luma history it may
+ * have missed is one link away in the guests panel.
+ */
+async function resolveCandidate({ studentId, email }) {
+  const byUid = studentId
+    ? await prisma.candidate.findUnique({ where: { studentId } })
+    : null;
+  const byEmail = email ? await findCandidateByEmail(email) : null;
+
+  if (byUid && byEmail && byUid.id !== byEmail.id) {
+    console.warn(
+      `[syncResponses] conflicting identity: UID ${studentId} belongs to candidate ${byUid.id} `
+      + `but ${email} belongs to ${byEmail.id}. Filing under the address; `
+      + `check whether the UID was mistyped.`
+    );
+    return byEmail;
+  }
+
+  return byUid ?? byEmail;
+}
+
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
@@ -78,15 +141,11 @@ export default async function syncFormResponses() {
         // The address is compared case-insensitively: Luma emails are stored
         // lowercased, a Google Form answer is stored however it was typed, and
         // an exact compare turns "Maria@ucla.edu" into a second person.
-        let candidate = studentId
-          ? await prisma.candidate.findUnique({ where: { studentId } })
-          : null;
-
-        if (!candidate && emailFromForm) {
-          candidate = await prisma.candidate.findFirst({
-            where: { email: { equals: emailFromForm, mode: 'insensitive' } }
-          });
-        }
+        //
+        // Both are still looked up, even once the UID has answered, because two
+        // rows that disagree is the one case neither identifier should decide on
+        // its own - see resolveCandidate.
+        let candidate = await resolveCandidate({ studentId, email: emailFromForm });
 
         if (!candidate) {
           // No existing candidate, create a new one

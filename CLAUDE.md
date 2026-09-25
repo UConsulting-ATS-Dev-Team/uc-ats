@@ -514,11 +514,23 @@ The system follows a **recruiting cycle-based workflow**:
   carrying any `event_rsvp` / `event_attendance` history - **and nothing re-points those
   rows afterwards.** Matching on the address instead would strand a person's RSVPs and
   door scans on a record no application, and no candidate account, ever reaches.
-- The address is compared case-insensitively. Luma emails are stored lowercased and a
-  Google Form answer is stored as typed, so an exact compare makes `Maria@ucla.edu` a
-  second person.
+- **When the two point at different people, the address wins and it is logged.** That is
+  a UID typed wrong, or somebody else's; the UID is free text on a form, while the address
+  is where the applicant is reachable and what their own account matches on. Filing under
+  the UID would put their application onto a stranger's record. It is reported rather than
+  refused, because losing an application is worse than linking it imperfectly - an admin
+  can move it, and any missed Luma history is one link away in the guests panel.
+- The address is compared case-insensitively, exact row first. Luma emails are stored
+  lowercased and a Google Form answer is stored as typed, so an exact compare makes
+  `Maria@ucla.edu` a second person. `Candidate.email` is unique but case-sensitive, so two
+  rows differing only in case can both exist and both match: the **oldest wins**, and the
+  collision is logged for someone to merge.
 - A candidate found this way is **backfilled, never overwritten**: only fields that are
   empty on the existing row are filled in from the application.
+- Note what this does *not* fix: `GET /api/applications/:id` treats
+  `application.studentId` - the UID as typed on the form - as proof of ownership, so
+  someone who types another person's UID exposes their own application to them whatever
+  candidate it links to. That check is the place to fix it, not here.
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
