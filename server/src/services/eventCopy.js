@@ -275,6 +275,9 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
             rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
             attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
             memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
+            // Read from the source, not the request: the preview does not offer
+            // it, so a copy of an event with member RSVP off stays off.
+            memberRsvpEnabled: source.memberRsvpEnabled !== false,
             memberAttendanceForm: evt.memberAttendanceForm ? evt.memberAttendanceForm.trim() : null,
             copiedFromCycleId: sourceCycleId,
             copiedFromEventId: evt.sourceEventId,
@@ -303,6 +306,7 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
                     rsvpForm: true,
                     attendanceForm: true,
                     memberRsvpUrl: true,
+                    memberRsvpEnabled: true,
                     memberAttendanceForm: true,
                     createdAt: true,
                     copiedFromCycleId: true,

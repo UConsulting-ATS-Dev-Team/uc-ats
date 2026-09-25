@@ -425,7 +425,7 @@ The system follows a **recruiting cycle-based workflow**:
   that need no member RSVP. Off means no RSVP button, no dashboard RSVP task, an "Off"
   Member RSVP column, and `409 RSVP_DISABLED` on a new in-app RSVP. Existing rows are
   kept and an in-app RSVP made before it was turned off can still be cancelled. Luma and
-  Google Form syncs ignore the switch.
+  Google Form syncs ignore the switch. Copying an event to another cycle keeps its setting.
 - Admins mark who actually came in Accountability Tracker → an event's Manage dialog,
   which opens on the RSVP'd members (any source). An RSVP never counts as attendance by
   itself; attendance is still only a `member_event_attendance` row, and a walk-in without
