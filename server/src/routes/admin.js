@@ -86,6 +86,17 @@ import {
 } from '../services/interviewRoster.js';
 import { ROUNDS } from '../utils/roundProgression.js';
 import { roundForPhase, saveRoundDecision } from '../services/stagingDecisions.js';
+import {
+  DEFAULT_REMINDER_MESSAGE,
+  DEFAULT_REMINDER_SUBJECT,
+  EVENT_POINT_TYPES,
+  REMINDER_MERGE_FIELDS,
+  isEventPointType,
+  scoreMembers,
+  sendReminders,
+  updatePointConfig
+} from '../services/accountabilityPoints.js';
+import { mergeFieldsUsed } from '../services/emailCopyRender.js';
 
 const router = express.Router();
 
@@ -1847,14 +1858,17 @@ async function getAccountabilityCycle(req) {
   });
 }
 
-function makeTimeFilter(cycle) {
-  const filter = {};
-  if (cycle?.startDate) filter.gte = cycle.startDate;
-  if (cycle?.endDate) filter.lte = cycle.endDate;
-  return Object.keys(filter).length > 0 ? filter : null;
+const ACCOUNTABILITY_MEMBER_SELECT = { id: true, fullName: true, email: true, studentId: true, role: true };
+
+function activeStaff() {
+  return prisma.user.findMany({
+    where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+    select: ACCOUNTABILITY_MEMBER_SELECT,
+    orderBy: { fullName: 'asc' }
+  });
 }
 
-// Get accountability summary for a cycle: leaderboard and events
+// Get accountability summary for a cycle: every member's points, and the events
 router.get('/accountability', async (req, res) => {
   try {
     const cycle = await getAccountabilityCycle(req);
@@ -1862,27 +1876,8 @@ router.get('/accountability', async (req, res) => {
       return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
     }
 
-    const members = await prisma.user.findMany({
-      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
-      select: { id: true, fullName: true, email: true, studentId: true, role: true },
-      orderBy: { fullName: 'asc' }
-    });
-
-    const memberIds = members.map(m => m.id);
-
-    const [eventAttendances, gtkucSlots, events] = await Promise.all([
-      prisma.memberEventAttendance.findMany({
-        where: { event: { cycleId: cycle.id }, memberId: { in: memberIds } },
-        select: { memberId: true }
-      }),
-      prisma.meetingSlot.findMany({
-        where: {
-          memberId: { in: memberIds },
-          signups: { some: { attended: true } },
-          ...(makeTimeFilter(cycle) ? { startTime: makeTimeFilter(cycle) } : {})
-        },
-        select: { memberId: true }
-      }),
+    const [scored, events] = await Promise.all([
+      activeStaff().then((members) => scoreMembers({ cycle, members })),
       prisma.events.findMany({
         where: { cycleId: cycle.id },
         select: {
@@ -1891,6 +1886,7 @@ router.get('/accountability', async (req, res) => {
           eventStartDate: true,
           eventEndDate: true,
           memberAttendanceForm: true,
+          pointType: true,
           _count: {
             select: {
               memberEventAttendance: true,
@@ -1906,29 +1902,19 @@ router.get('/accountability', async (req, res) => {
       })
     ]);
 
-    const eventCounts = eventAttendances.reduce((acc, curr) => {
-      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
-      return acc;
-    }, {});
-
-    const gtkucCounts = gtkucSlots.reduce((acc, curr) => {
-      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
-      return acc;
-    }, {});
-
-    const leaderboard = members.map(member => {
-      const eventCount = eventCounts[member.id] || 0;
-      const gtkucCount = gtkucCounts[member.id] || 0;
-      return {
-        ...member,
-        eventCount,
-        gtkucCount,
-        total: eventCount + gtkucCount
-      };
-    }).sort((a, b) => b.total - a.total);
+    // Most points first; ties by name so the order is stable between refreshes.
+    const leaderboard = [...scored.members].sort(
+      (a, b) => b.points - a.points || (a.fullName || '').localeCompare(b.fullName || '')
+    );
 
     res.json({
       cycle,
+      config: { ...scored.config, eventPointTypes: EVENT_POINT_TYPES },
+      reminderDefaults: {
+        subject: DEFAULT_REMINDER_SUBJECT,
+        message: DEFAULT_REMINDER_MESSAGE,
+        mergeFields: REMINDER_MERGE_FIELDS
+      },
       leaderboard,
       events: events.map(e => ({
         ...e,
@@ -1939,6 +1925,93 @@ router.get('/accountability', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/admin/accountability]', error);
     res.status(500).json({ error: 'Failed to fetch accountability summary' });
+  }
+});
+
+// Change what each type is worth and/or the target
+router.put('/accountability/config', async (req, res) => {
+  try {
+    const { points, targetPoints } = req.body || {};
+    const config = await updatePointConfig({ points, targetPoints }, req.user.id);
+    res.json({ ...config, eventPointTypes: EVENT_POINT_TYPES });
+  } catch (error) {
+    if (error.code === 'INVALID_ACCOUNTABILITY_CONFIG') {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('[PUT /api/admin/accountability/config]', error);
+    res.status(500).json({ error: 'Failed to save accountability points' });
+  }
+});
+
+// Tag an event with the accountability type attending it earns (null for none)
+router.put('/accountability/events/:id/point-type', async (req, res) => {
+  try {
+    const pointType = req.body?.pointType ?? null;
+    if (pointType !== null && !isEventPointType(pointType)) {
+      return res.status(400).json({ error: `pointType must be one of ${EVENT_POINT_TYPES.join(', ')}, or null` });
+    }
+    const event = await prisma.events.update({
+      where: { id: req.params.id },
+      data: { pointType },
+      select: { id: true, pointType: true }
+    });
+    res.json(event);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    console.error(`[PUT /api/admin/accountability/events/${req.params.id}/point-type]`, error);
+    res.status(500).json({ error: 'Failed to update event point type' });
+  }
+});
+
+// Email members who are under the target. Standing is recomputed here rather
+// than trusted from the page, so a member who got there since it loaded is
+// skipped. `memberIds` narrows the send; omitted, everyone under target gets one.
+router.post('/accountability/reminders', async (req, res) => {
+  try {
+    const { memberIds, subject, message } = req.body || {};
+    if (memberIds !== undefined && (!Array.isArray(memberIds) || memberIds.some((id) => typeof id !== 'string'))) {
+      return res.status(400).json({ error: 'memberIds must be an array of ids' });
+    }
+    for (const [name, text] of [['subject', subject], ['message', message]]) {
+      if (text === undefined) continue;
+      if (typeof text !== 'string' || !text.trim()) {
+        return res.status(400).json({ error: `${name} cannot be empty` });
+      }
+      const unknown = mergeFieldsUsed(text).filter((field) => !REMINDER_MERGE_FIELDS.includes(field));
+      if (unknown.length) {
+        return res.status(400).json({ error: `Unknown merge field in ${name}: {{${unknown.join('}}, {{')}}}` });
+      }
+    }
+
+    const cycle = await getAccountabilityCycle(req);
+    if (!cycle) {
+      return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
+    }
+
+    const { members } = await scoreMembers({ cycle, members: await activeStaff() });
+    const wanted = memberIds ? new Set(memberIds) : null;
+    const asked = wanted ? members.filter((m) => wanted.has(m.id)) : members;
+    const recipients = asked.filter((m) => !m.met && m.email);
+
+    const { sent, failed } = await sendReminders(recipients, {
+      subject,
+      message,
+      cycle,
+      triggeredById: req.user.id,
+      dashboardUrl: process.env.CLIENT_URL ? `${process.env.CLIENT_URL}/dashboard` : null
+    });
+
+    res.json({
+      sent: sent.length,
+      failed,
+      // Asked for, but already at target (or without an address) when it came to sending.
+      skipped: asked.length - recipients.length
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/accountability/reminders]', error);
+    res.status(500).json({ error: 'Failed to send accountability reminders' });
   }
 });
 

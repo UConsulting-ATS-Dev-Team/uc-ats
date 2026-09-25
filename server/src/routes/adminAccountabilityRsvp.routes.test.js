@@ -15,7 +15,16 @@ vi.mock('../prismaClient.js', () => ({
     recruitingCycle: { findUnique: vi.fn(), findFirst: vi.fn() },
     meetingSlot: { findMany: vi.fn() },
     memberEventAttendance: { findMany: vi.fn() },
-    memberEventRsvp: { findMany: vi.fn() }
+    memberEventRsvp: { findMany: vi.fn() },
+    // Read by the points on the summary; this file is about RSVPs, so they stay empty.
+    accountabilityPointValue: { findMany: vi.fn(async () => []) },
+    accountabilitySetting: { findUnique: vi.fn(async () => null) },
+    resumeScore: { findMany: vi.fn(async () => []) },
+    coverLetterScore: { findMany: vi.fn(async () => []) },
+    videoScore: { findMany: vi.fn(async () => []) },
+    interview: { findMany: vi.fn(async () => []) },
+    interviewSlotAssignment: { findMany: vi.fn(async () => []) },
+    interviewAssignment: { findMany: vi.fn(async () => []) }
   }
 }));
 

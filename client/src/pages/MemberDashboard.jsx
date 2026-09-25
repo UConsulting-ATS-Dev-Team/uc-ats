@@ -22,6 +22,7 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
+import AccountabilityPointsCard from '../components/AccountabilityPointsCard';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -216,6 +217,10 @@ export default function MemberDashboard() {
         <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
           Welcome, {user?.fullName}.
         </Typography>
+      </Box>
+
+      <Box sx={{ mb: 3 }}>
+        <AccountabilityPointsCard />
       </Box>
 
       {/* Tasks and Resources Container */}

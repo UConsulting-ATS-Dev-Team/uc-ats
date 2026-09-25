@@ -444,6 +444,31 @@ The system follows a **recruiting cycle-based workflow**:
   hand their number to the host. A sealed candidate's onboarding and applications are
   never read.
 
+**Accountability points:**
+- Every member needs a target number of points per cycle (3 by default), earned from nine
+  types of participation. **Each type counts once**, so the member's view reads as a
+  checklist of what is left. Admins edit the target and what each type is worth from the
+  Accountability page; members see their own standing on the dashboard
+  (`GET /api/member/accountability`).
+- [server/src/services/accountabilityPoints.js](server/src/services/accountabilityPoints.js)
+  owns the types, where each one's credit comes from, and the scoring. The types, labels
+  and credit sources are code; only the values live in the database
+  (`accountability_point_values`, `accountability_settings`), and a type with no row is
+  worth its default.
+- Credit is read from records the ATS already keeps, never entered twice: GTKUC is a
+  hosted slot somebody attended within the cycle's dates; Application Screen is any
+  resume, cover letter or video score this cycle; Coffee Chats, First Round and Final
+  Round are sitting on a started session of that interview type (all three roster
+  sources, via `interviewersWhoHaveSat` in `interviewRoster.js`); Info Sesh, Women's Night,
+  Case Workshop and Case Buddies are check-ins to an event an admin tagged with that
+  `Events.pointType`.
+- Points add up in hundredths, so 0.5 six times is exactly 3.
+- Reminders (`POST /api/admin/accountability/reminders`) re-score at send time and skip
+  anyone who reached the target since the page loaded. They go through `sendEmail` as
+  `ACCOUNTABILITY_REMINDER`, with the admin's subject and message (merge fields
+  `REMINDER_MERGE_FIELDS`) above a generated checklist.
+- `eventCopy.js` does not carry `pointType`; a copied event has to be tagged again.
+
 **Case book time restriction:**
 - A member may open a case only once they are close to the interview they run it in.
   The window is one global number of hours, held in the `CaseVisibilitySetting`
