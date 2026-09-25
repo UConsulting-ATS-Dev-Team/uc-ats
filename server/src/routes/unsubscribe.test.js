@@ -60,12 +60,12 @@ it('still reports success when the status read after a write fails', async () =>
   suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
   const res = await post('', { t: unsubscribeToken('joe@ucla.edu') });
   expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: true, heldBack: false });
+  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: true });
 
   suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
   const again = await post('/resubscribe', { t: unsubscribeToken('joe@ucla.edu') });
   expect(again.status).toBe(200);
-  expect(await again.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false, heldBack: false });
+  expect(await again.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false });
 });
 
 it('accepts the RFC 8058 one-click POST, form-encoded body and all', async () => {

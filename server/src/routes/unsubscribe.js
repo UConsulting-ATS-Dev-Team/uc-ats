@@ -31,13 +31,14 @@ function resolveEmail(req, res) {
 // The status after a write has succeeded. Best-effort: the write is what the
 // person asked for, and a failed follow-up read must not report it as failed -
 // they would retry something that already happened. Without the read, the
-// answer is what the write itself guarantees, with no held-back note.
+// answer is only what the write itself guarantees: `heldBack` is left out
+// rather than guessed, so the page keeps what it last knew.
 async function statusAfterWrite(email, unsubscribed) {
   try {
     return await suppressionStatus(email);
   } catch (err) {
     console.error('[unsubscribe] status lookup after write failed', err);
-    return { unsubscribed, heldBack: false };
+    return { unsubscribed };
   }
 }
 

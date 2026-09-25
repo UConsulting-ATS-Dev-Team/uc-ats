@@ -42,7 +42,9 @@ export default function Unsubscribe() {
     setBusy(true);
     try {
       const data = await call('POST', path, { t: token });
-      setState((s) => ({ ...s, unsubscribed: data.unsubscribed, heldBack: Boolean(data.heldBack), error: '' }));
+      // No heldBack means the server could not re-read it after the write; keep
+      // what the page already knew rather than dropping the paused-mail note.
+      setState((s) => ({ ...s, unsubscribed: data.unsubscribed, heldBack: data.heldBack ?? s.heldBack, error: '' }));
     } catch (e) {
       setState((s) => ({ ...s, error: e.message }));
     } finally {
