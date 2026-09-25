@@ -27,7 +27,7 @@
 // Rules answer with sets of person keys; audienceFilters.js combines them.
 
 import prisma from '../../prismaClient.js';
-import { normalizeEmail } from '../../utils/mailingListImport.js';
+import { normalizeEmail, emailIdentityKey } from '../../utils/mailingListImport.js';
 import { getRound } from '../../utils/roundProgression.js';
 import { redactApplication } from '../../utils/lockedRecords.js';
 import { evaluateAudienceTree, normalizeAudienceTree } from './audienceFilters.js';
@@ -131,18 +131,33 @@ export async function loadAudienceContext(client = prisma) {
   const sealed = candidates.filter((c) => c.recordsLockedAt);
   const sealedIds = new Set(sealed.map((c) => c.id));
   const sealedStudentIds = new Set(sealed.map((c) => c.studentId).filter(Boolean));
-  const sealedEmails = new Set(sealed.map((c) => normalizeEmail(c.email)));
+  const sealedEmails = new Set(sealed.map((c) => emailIdentityKey(c.email)));
   // Same rule as sealedRowPredicate: the candidate id when there is one, else
   // the two fields Candidate is unique on.
   const isSealed = (a) =>
     a.candidateId
       ? sealedIds.has(a.candidateId)
-      : sealedStudentIds.has(a.studentId) || sealedEmails.has(normalizeEmail(a.email));
+      : sealedStudentIds.has(a.studentId) || sealedEmails.has(emailIdentityKey(a.email));
   const applications = loadedApplications.map((a) => (isSealed(a) ? redactApplication(a) : a));
   for (const c of candidates) if (c.recordsLockedAt) c.onboarding = null;
 
-  // 1. Merge a candidate's addresses into one group.
+  // 1. Merge addresses that are one person into one group.
   const aliases = makeAliases();
+
+  // joe@g.ucla.edu and joe@ucla.edu are the same UCLA inbox. Both spellings stay
+  // real addresses (either may end up representing the person); they just share
+  // a group, so the person is reached once.
+  const byIdentity = new Map();
+  for (const row of [...users, ...applications, ...candidates, ...contacts, ...signups, ...lumaGuests]) {
+    const addr = normalizeEmail(row.email);
+    if (!addr) continue;
+    const identity = emailIdentityKey(addr);
+    const first = byIdentity.get(identity);
+    if (first === undefined) byIdentity.set(identity, addr);
+    else if (first !== addr) aliases.union(first, addr);
+  }
+
+  // Then a candidate's addresses.
   const appsByCandidate = new Map();
   for (const a of applications) {
     if (!a.candidateId) continue;
@@ -162,6 +177,12 @@ export async function loadAudienceContext(client = prisma) {
     const representative =
       addresses.find((addr) => activeUserEmails.has(addr)) || normalizeEmail(latest?.email) || addresses[0];
     aliases.promote(representative);
+  }
+  // An active account's address represents its group, so staff are recognised
+  // as staff even when they signed up as joe@ucla.edu and applied as
+  // joe@g.ucla.edu.
+  for (const addr of activeUserEmails) {
+    if (!activeUserEmails.has(aliases.find(addr))) aliases.promote(addr);
   }
   const keyOf = (email) => {
     const addr = normalizeEmail(email);

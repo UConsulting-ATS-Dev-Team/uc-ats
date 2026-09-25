@@ -17,6 +17,7 @@ import {
   summarize,
   detectNameColumns,
   toContacts,
+  emailIdentityKey,
   OUTCOMES,
 } from '../utils/mailingListImport.js';
 
@@ -87,8 +88,9 @@ function importableRows(results) {
     const keep =
       r.outcome === OUTCOMES.KEPT ||
       (r.outcome === OUTCOMES.ALREADY_IN_SYSTEM && !(r.sources || []).includes('mailing-list'));
-    if (!keep || seen.has(r.email)) continue;
-    seen.add(r.email);
+    const identity = emailIdentityKey(r.email);
+    if (!keep || seen.has(identity)) continue;
+    seen.add(identity);
     rows.push(r.record);
   }
   return rows;

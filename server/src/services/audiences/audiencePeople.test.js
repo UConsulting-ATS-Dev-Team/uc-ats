@@ -58,6 +58,16 @@ describe('identity', () => {
     expect(result.recipients[0].sources.sort()).toEqual(['account', 'applicant', 'mailing-list']);
   });
 
+  it('reaches joe@g.ucla.edu and joe@ucla.edu once, as the account address', async () => {
+    const client = fakeClient({
+      users: [user({ email: 'joe@ucla.edu', role: 'MEMBER' })],
+      applications: [app({ email: 'joe@g.ucla.edu' })],
+      contacts: [{ id: 'c1', email: 'JOE@g.ucla.edu', firstName: null, lastName: null, sourceFile: 'list.csv' }],
+    });
+    const result = await resolveAudience(all(any(rule('mailingList'), rule('applied'))), { client });
+    expect(result.recipients).toEqual([expect.objectContaining({ email: 'joe@ucla.edu', isStaff: true })]);
+  });
+
   it("merges a candidate's addresses and writes to their latest application's", async () => {
     const client = fakeClient({
       candidates: [{ id: 'cand', email: 'old@ucla.edu', firstName: 'A', lastName: 'B', onboarding: null }],

@@ -124,6 +124,12 @@ describe('matching rows to sealed candidates', () => {
     expect(rows.map(isLocked)).toEqual([true, false]);
   });
 
+  it('seals a row with no candidate under the g.ucla.edu spelling of a sealed address', async () => {
+    const twin = application({ id: 'g', candidateId: null, studentId: null, email: 'Sam@g.ucla.edu' });
+    const isLocked = await lockedRowPredicate(requestAs(exec), [twin]);
+    expect(isLocked(twin)).toBe(true);
+  });
+
   it('falls back to student ID and case-insensitive email for rows with no candidate', async () => {
     const byStudentId = application({ id: 'a', candidateId: null, email: 'someone-else@ucla.edu' });
     const byEmail = application({ id: 'b', candidateId: null, studentId: null, email: 'SAM@UCLA.EDU' });

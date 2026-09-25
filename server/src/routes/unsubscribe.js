@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  isSuppressed,
+  suppressionStatus,
   readUnsubscribeToken,
   resubscribeEmail,
   suppressEmail,
@@ -28,11 +28,25 @@ function resolveEmail(req, res) {
   return email;
 }
 
+// The status after a write has succeeded. Best-effort: the write is what the
+// person asked for, and a failed follow-up read must not report it as failed -
+// they would retry something that already happened. Without the read, the
+// answer is only what the write itself guarantees: `heldBack` is left out
+// rather than guessed, so the page keeps what it last knew.
+async function statusAfterWrite(email, unsubscribed) {
+  try {
+    return await suppressionStatus(email);
+  } catch (err) {
+    console.error('[unsubscribe] status lookup after write failed', err);
+    return { unsubscribed };
+  }
+}
+
 router.get('/', async (req, res) => {
   const email = resolveEmail(req, res);
   if (!email) return;
   try {
-    res.json({ email, unsubscribed: await isSuppressed(email) });
+    res.json({ email, ...(await suppressionStatus(email)) });
   } catch (err) {
     console.error('[GET /api/unsubscribe]', err);
     res.status(500).json({ error: 'Could not look that up' });
@@ -44,11 +58,11 @@ router.post('/', async (req, res) => {
   if (!email) return;
   try {
     await suppressEmail({ email, reason: 'UNSUBSCRIBED', source: 'LINK' });
-    res.json({ email, unsubscribed: true });
   } catch (err) {
     console.error('[POST /api/unsubscribe]', err);
-    res.status(500).json({ error: 'Could not unsubscribe you. Please try again.' });
+    return res.status(500).json({ error: 'Could not unsubscribe you. Please try again.' });
   }
+  res.json({ email, ...(await statusAfterWrite(email, true)) });
 });
 
 router.post('/resubscribe', async (req, res) => {
@@ -56,11 +70,13 @@ router.post('/resubscribe', async (req, res) => {
   if (!email) return;
   try {
     await resubscribeEmail(email);
-    res.json({ email, unsubscribed: false });
   } catch (err) {
     console.error('[POST /api/unsubscribe/resubscribe]', err);
-    res.status(500).json({ error: 'Could not resubscribe you. Please try again.' });
+    return res.status(500).json({ error: 'Could not resubscribe you. Please try again.' });
   }
+  // Asked again rather than assumed: a bounce or admin block on the other
+  // UCLA spelling of this inbox survives a resubscribe and still holds mail.
+  res.json({ email, ...(await statusAfterWrite(email, false)) });
 });
 
 // RFC 8058. The mailbox provider POSTs `List-Unsubscribe=One-Click` here when

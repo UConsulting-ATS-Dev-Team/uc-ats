@@ -11,7 +11,7 @@ vi.mock('../services/emailSuppression.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    isSuppressed: vi.fn(async () => false),
+    suppressionStatus: vi.fn(async () => ({ unsubscribed: false, heldBack: false })),
     suppressEmail: vi.fn(async () => ({})),
     resubscribeEmail: vi.fn(async () => true),
   };
@@ -41,7 +41,7 @@ const post = (path, body) =>
 
 it('reports status on GET without unsubscribing', async () => {
   const res = await fetch(`${base}?t=${token}`);
-  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false });
+  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false, heldBack: false });
   expect(suppression.suppressEmail).not.toHaveBeenCalled();
 });
 
@@ -54,6 +54,18 @@ it('unsubscribes on POST from the page', async () => {
 it('resubscribes', async () => {
   await post('/resubscribe', { t: unsubscribeToken('joe@ucla.edu') });
   expect(suppression.resubscribeEmail).toHaveBeenCalledWith('joe@ucla.edu');
+});
+
+it('still reports success when the status read after a write fails', async () => {
+  suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
+  const res = await post('', { t: unsubscribeToken('joe@ucla.edu') });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: true });
+
+  suppression.suppressionStatus.mockRejectedValueOnce(new Error('db down'));
+  const again = await post('/resubscribe', { t: unsubscribeToken('joe@ucla.edu') });
+  expect(again.status).toBe(200);
+  expect(await again.json()).toEqual({ email: 'joe@ucla.edu', unsubscribed: false });
 });
 
 it('accepts the RFC 8058 one-click POST, form-encoded body and all', async () => {

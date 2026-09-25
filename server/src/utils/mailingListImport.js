@@ -16,6 +16,30 @@ export function normalizeEmail(raw) {
   return (angled ? angled[1] : str).trim().toLowerCase();
 }
 
+// UCLA gives every student two spellings of one inbox: joe@g.ucla.edu (the
+// Google Workspace account) and joe@ucla.edu, which delivers to it. Both are
+// valid and both stay stored exactly as typed, but they are one person, so
+// anything asking "have we seen this person" compares this key, not the
+// address. Other subdomains (anderson.ucla.edu, ...) are separate mailboxes
+// and are left alone.
+const UCLA_GOOGLE_DOMAIN = /@g\.ucla\.edu$/;
+
+export function emailIdentityKey(raw) {
+  return normalizeEmail(raw).replace(UCLA_GOOGLE_DOMAIN, '@ucla.edu');
+}
+
+// Every stored spelling that emailIdentityKey treats as this address: the
+// address itself plus its g.ucla.edu / ucla.edu twin. For database lookups,
+// which match on the stored address.
+export function emailVariants(raw) {
+  const email = normalizeEmail(raw);
+  if (!email) return [];
+  const key = emailIdentityKey(email);
+  if (!key.endsWith('@ucla.edu')) return [email];
+  const google = key.replace(/@ucla\.edu$/, '@g.ucla.edu');
+  return email === key ? [email, google] : [email, key];
+}
+
 // Deliberately loose. This rejects what is obviously not an address so the
 // count of dropped rows means something; it is not an RFC 5322 validator, and a
 // one-time import is not the place to invent one.
@@ -44,7 +68,7 @@ export function detectEmailColumn(headers, override) {
 export function indexExistingEmails(existing) {
   const index = new Map();
   for (const { email, source } of existing) {
-    const key = normalizeEmail(email);
+    const key = emailIdentityKey(email);
     if (!key) continue;
     const sources = index.get(key);
     if (sources) sources.add(source);
@@ -87,19 +111,22 @@ export function dedupeMailingList({ records, emailColumn, existingIndex }) {
       continue;
     }
 
-    const firstSeenAt = seenInFile.get(email);
+    // joe@g.ucla.edu and joe@ucla.edu are one person, in the file and against
+    // the ATS alike. The row keeps the spelling it arrived with.
+    const identity = emailIdentityKey(email);
+    const firstSeenAt = seenInFile.get(identity);
     if (firstSeenAt !== undefined) {
       results.push({ ...base, outcome: OUTCOMES.DUPLICATE_IN_FILE, firstSeenAt });
       continue;
     }
 
-    const sources = existingIndex.get(email);
+    const sources = existingIndex.get(identity);
     if (sources) {
       results.push({ ...base, outcome: OUTCOMES.ALREADY_IN_SYSTEM, sources: [...sources].sort() });
       continue;
     }
 
-    seenInFile.set(email, record.__line);
+    seenInFile.set(identity, record.__line);
     results.push({ ...base, outcome: OUTCOMES.KEPT });
     kept.push(record);
   }

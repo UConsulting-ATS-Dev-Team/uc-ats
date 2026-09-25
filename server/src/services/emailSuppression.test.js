@@ -5,7 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import {
   applySuppressions,
+  suppressionStatus,
   readUnsubscribeToken,
+  resubscribeEmail,
   suppressEmail,
   unsubscribeToken,
   unsubscribeUrls,
@@ -13,7 +15,7 @@ import {
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+    emailSuppression: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     user: { findMany: vi.fn() },
   },
 }));
@@ -91,8 +93,63 @@ describe('applySuppressions', () => {
     ]);
   });
 
+  it('treats g.ucla.edu and ucla.edu as one inbox', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'gone@g.ucla.edu' }]);
+    prisma.user.findMany.mockResolvedValue([{ email: 'staff@g.ucla.edu' }]);
+
+    const { deliver, skipped } = await applySuppressions([
+      { id: '1', email: 'gone@ucla.edu' },
+      { id: '2', email: 'staff@ucla.edu' },
+    ]);
+
+    expect(skipped.map((r) => r.email)).toEqual(['gone@ucla.edu']);
+    expect(deliver).toEqual([expect.objectContaining({ email: 'staff@ucla.edu', marketing: false })]);
+    expect(prisma.emailSuppression.findMany.mock.calls[0][0].where.email.in).toEqual(
+      expect.arrayContaining(['gone@ucla.edu', 'gone@g.ucla.edu'])
+    );
+  });
+
   it('asks only about active staff', async () => {
     await applySuppressions(people);
     expect(prisma.user.findMany.mock.calls[0][0].where).toMatchObject({ role: { in: ['MEMBER', 'ADMIN'] }, isActive: true });
+  });
+});
+
+describe('the unsubscribe page and the other UCLA spelling', () => {
+  it('reports an opt-out under the twin as one this link can lift', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@g.ucla.edu', reason: 'UNSUBSCRIBED' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: true, heldBack: false });
+    expect(prisma.emailSuppression.findMany.mock.calls[0][0].where).toEqual({
+      email: { in: ['joe@ucla.edu', 'joe@g.ucla.edu'] },
+      resubscribedAt: null,
+    });
+  });
+
+  it('reports a bounce on the twin as held back, which resubscribing cannot lift', async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@g.ucla.edu', reason: 'BOUNCED' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: false, heldBack: true });
+  });
+
+  it("counts any block on the link's own address as liftable", async () => {
+    prisma.emailSuppression.findMany.mockResolvedValue([{ email: 'joe@ucla.edu', reason: 'ADMIN' }]);
+    expect(await suppressionStatus('joe@ucla.edu')).toEqual({ unsubscribed: true, heldBack: false });
+  });
+
+  it("lifts the person's own opt-out under the twin, never a bounce or admin block", async () => {
+    prisma.emailSuppression.updateMany.mockResolvedValue({ count: 1 });
+    expect(await resubscribeEmail('Joe@UCLA.edu')).toBe(true);
+    expect(prisma.emailSuppression.updateMany.mock.calls[0][0].where).toEqual({
+      resubscribedAt: null,
+      OR: [{ email: 'joe@ucla.edu' }, { email: { in: ['joe@g.ucla.edu'] }, reason: 'UNSUBSCRIBED' }],
+    });
+  });
+
+  it('clears only the address itself outside UCLA', async () => {
+    prisma.emailSuppression.updateMany.mockResolvedValue({ count: 0 });
+    await resubscribeEmail('joe@gmail.com');
+    expect(prisma.emailSuppression.updateMany.mock.calls[0][0].where).toEqual({
+      resubscribedAt: null,
+      OR: [{ email: 'joe@gmail.com' }],
+    });
   });
 });

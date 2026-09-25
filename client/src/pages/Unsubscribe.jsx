@@ -25,7 +25,7 @@ const call = async (method, path, body) => {
 export default function Unsubscribe() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('t') || '';
-  const [state, setState] = useState({ loading: true, email: '', unsubscribed: false, error: '' });
+  const [state, setState] = useState({ loading: true, email: '', unsubscribed: false, heldBack: false, error: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -34,7 +34,7 @@ export default function Unsubscribe() {
       return;
     }
     call('GET', `?t=${encodeURIComponent(token)}`)
-      .then((data) => setState({ loading: false, email: data.email, unsubscribed: data.unsubscribed, error: '' }))
+      .then((data) => setState({ loading: false, email: data.email, unsubscribed: data.unsubscribed, heldBack: Boolean(data.heldBack), error: '' }))
       .catch((e) => setState({ loading: false, email: '', unsubscribed: false, error: e.message }));
   }, [token]);
 
@@ -42,7 +42,9 @@ export default function Unsubscribe() {
     setBusy(true);
     try {
       const data = await call('POST', path, { t: token });
-      setState((s) => ({ ...s, unsubscribed: data.unsubscribed, error: '' }));
+      // No heldBack means the server could not re-read it after the write; keep
+      // what the page already knew rather than dropping the paused-mail note.
+      setState((s) => ({ ...s, unsubscribed: data.unsubscribed, heldBack: data.heldBack ?? s.heldBack, error: '' }));
     } catch (e) {
       setState((s) => ({ ...s, error: e.message }));
     } finally {
@@ -81,6 +83,17 @@ export default function Unsubscribe() {
             </Typography>
 
             {state.error && <Alert severity="error" sx={{ mb: 2 }}>{state.error}</Alert>}
+
+            {/* A bounce, complaint or admin block on the other spelling of a
+                UCLA inbox (g.ucla.edu / ucla.edu). Nothing on this page lifts it. */}
+            {state.heldBack && (
+              <Alert severity="info" sx={{ mb: 2, textAlign: 'left' }}>
+                We've also paused these emails to this inbox on our side, for example because an earlier
+                message wasn't delivered, so{' '}
+                {state.unsubscribed ? 'resubscribing here will not start them again' : "you won't get them for now"}.
+                Reply to any UConsulting email if you'd like them turned back on.
+              </Alert>
+            )}
 
             {state.unsubscribed ? (
               <Button variant="outlined" disabled={busy} onClick={() => act('/resubscribe')}>

@@ -16,7 +16,7 @@
 import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
-import { normalizeEmail } from '../utils/mailingListImport.js';
+import { normalizeEmail, emailIdentityKey, emailVariants } from '../utils/mailingListImport.js';
 
 export const SUPPRESSION_REASONS = ['UNSUBSCRIBED', 'BOUNCED', 'COMPLAINED', 'ADMIN'];
 export const SUPPRESSION_SOURCES = ['LINK', 'ONE_CLICK', 'SES', 'ADMIN'];
@@ -120,38 +120,68 @@ export async function suppressEmail({ email, reason, source, detail = null, mess
   });
 }
 
-/** Opt back in. Keeps the row, so the history of the opt-out survives. */
+/**
+ * Opt back in. Keeps the row, so the history of the opt-out survives.
+ *
+ * The address itself is cleared whatever its reason, as it always was. Its
+ * g.ucla.edu / ucla.edu twin is cleared only when that row is also the
+ * person's own opt-out: delivery treats the two as one inbox, so that opt-out
+ * would otherwise keep blocking mail, but a bounce, complaint or admin block
+ * on the twin is not the person's to lift through a link.
+ */
+// Which active rows a link for `address` may lift. Shared by resubscribeEmail
+// and suppressionStatus so the page never offers to undo what it cannot.
+const liftableBy = (address) => (row) => row.email === address || row.reason === 'UNSUBSCRIBED';
+
 export async function resubscribeEmail(email, client = prisma) {
   const address = normalizeEmail(email);
+  const twins = emailVariants(address).filter((v) => v !== address);
   const { count } = await client.emailSuppression.updateMany({
-    where: { email: address, resubscribedAt: null },
+    where: {
+      resubscribedAt: null,
+      OR: [{ email: address }, ...(twins.length ? [{ email: { in: twins }, reason: 'UNSUBSCRIBED' }] : [])],
+    },
     data: { resubscribedAt: new Date() },
   });
   return count > 0;
 }
 
-export async function isSuppressed(email, client = prisma) {
-  const row = await client.emailSuppression.findUnique({
-    where: { email: normalizeEmail(email) },
-    select: { resubscribedAt: true },
+/**
+ * What the unsubscribe page tells the holder of a link for `email`, looking at
+ * both UCLA spellings as delivery does.
+ *
+ * `unsubscribed`: an opt-out is active that this link can lift by resubscribing.
+ * `heldBack`: mail is also held for a reason it cannot - a bounce, complaint or
+ * admin block on the other spelling - so resubscribing alone will not resume it.
+ */
+export async function suppressionStatus(email, client = prisma) {
+  const address = normalizeEmail(email);
+  const rows = await client.emailSuppression.findMany({
+    where: { email: { in: emailVariants(address) }, resubscribedAt: null },
+    select: { email: true, reason: true },
   });
-  return Boolean(row && !row.resubscribedAt);
+  const liftable = liftableBy(address);
+  return { unsubscribed: rows.some(liftable), heldBack: rows.some((r) => !liftable(r)) };
 }
 
-/** The subset of `emails` currently opted out, lowercased. */
+// Both lookups below also try each address's g.ucla.edu / ucla.edu twin, and
+// answer with identity keys (emailIdentityKey), not addresses: opting out as
+// joe@g.ucla.edu opts joe@ucla.edu out too, since it is the same inbox.
+
+/** Identity keys of the `emails` currently opted out. */
 export async function loadSuppressedSet(emails, client = prisma) {
-  const addresses = [...new Set((emails || []).map(normalizeEmail).filter(Boolean))];
+  const addresses = [...new Set((emails || []).flatMap(emailVariants))];
   if (addresses.length === 0) return new Set();
   const rows = await client.emailSuppression.findMany({
     where: { email: { in: addresses }, resubscribedAt: null },
     select: { email: true },
   });
-  return new Set(rows.map((r) => r.email));
+  return new Set(rows.map((r) => emailIdentityKey(r.email)));
 }
 
-/** The subset of `emails` that belong to active staff, lowercased. */
+/** Identity keys of the `emails` that belong to active staff. */
 export async function loadStaffEmailSet(emails, client = prisma) {
-  const addresses = [...new Set((emails || []).map(normalizeEmail).filter(Boolean))];
+  const addresses = [...new Set((emails || []).flatMap(emailVariants))];
   if (addresses.length === 0) return new Set();
   const users = await client.user.findMany({
     where: {
@@ -161,7 +191,7 @@ export async function loadStaffEmailSet(emails, client = prisma) {
     },
     select: { email: true },
   });
-  return new Set(users.map((u) => normalizeEmail(u.email)));
+  return new Set(users.map((u) => emailIdentityKey(u.email)));
 }
 
 /**
@@ -181,7 +211,7 @@ export async function applySuppressions(recipients, client = prisma) {
   const deliver = [];
   const skipped = [];
   for (const r of recipients) {
-    const key = normalizeEmail(r.email);
+    const key = emailIdentityKey(r.email);
     const marketing = !staff.has(key);
     if (marketing && suppressed.has(key)) skipped.push({ ...r, marketing, skipReason: 'unsubscribed' });
     else deliver.push({ ...r, marketing });

@@ -1,6 +1,7 @@
 import prisma from '../prismaClient.js';
 import { isExecUnlocked } from '../services/execAccess.js';
 import { isOwnedBy } from './applicationOwnership.js';
+import { emailIdentityKey, emailVariants } from './mailingListImport.js';
 
 // Server-side enforcement of sealed recruiting records (Candidate.recordsLockedAt).
 //
@@ -103,7 +104,9 @@ export async function sealedRowPredicate(rows, { refOf = defaultRefOf, client = 
   const candidateIds = unique(refs.map((ref) => ref.candidateId));
   const orphans = refs.filter((ref) => !ref.candidateId);
   const studentIds = unique(orphans.map((ref) => ref.studentId));
-  const emails = unique(orphans.flatMap((ref) => (ref.email ? [ref.email, ref.email.toLowerCase()] : [])));
+  // joe@g.ucla.edu and joe@ucla.edu are one inbox (emailIdentityKey), so an
+  // orphan row under either spelling is sealed with the candidate.
+  const emails = unique(orphans.flatMap((ref) => (ref.email ? [ref.email, ...emailVariants(ref.email)] : [])));
 
   const anyOf = [];
   if (candidateIds.length) anyOf.push({ id: { in: candidateIds } });
@@ -119,14 +122,14 @@ export async function sealedRowPredicate(rows, { refOf = defaultRefOf, client = 
 
   const sealedIds = new Set(sealed.map((candidate) => candidate.id));
   const sealedStudentIds = new Set(sealed.map((candidate) => candidate.studentId));
-  const sealedEmails = new Set(sealed.map((candidate) => candidate.email?.toLowerCase()));
+  const sealedEmails = new Set(sealed.map((candidate) => emailIdentityKey(candidate.email)).filter(Boolean));
 
   return (row) => {
     const ref = refOf(row);
     if (ref.candidateId) return sealedIds.has(ref.candidateId);
     return Boolean(
       (ref.studentId && sealedStudentIds.has(ref.studentId)) ||
-      (ref.email && sealedEmails.has(ref.email.toLowerCase()))
+      (ref.email && sealedEmails.has(emailIdentityKey(ref.email)))
     );
   };
 }
