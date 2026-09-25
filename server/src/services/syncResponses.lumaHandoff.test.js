@@ -143,16 +143,17 @@ describe('an applicant the Luma sync already created a candidate for', () => {
 describe('when the UID and the address point at different people', () => {
   const addressOwner = { id: 'cand-address-owner', ...applicant };
 
-  // A UID is free text on a form; the address is where this applicant is
-  // actually reachable and what their own account matches on. Filing under the
-  // UID would put somebody's application onto a stranger's record.
-  it('files under the address owner, not the UID owner', async () => {
+  // The UID still wins: it is the row carrying the Luma event history, and
+  // nothing re-points those rows afterwards. Resolving to the address instead
+  // would strand the RSVPs — and would not buy safety, because the mirror case
+  // (own UID, somebody else's address) files the application onto *their* row.
+  it('files under the UID owner, keeping the event history attached', async () => {
     byUid(fromLuma);
     byEmail(addressOwner);
 
     await syncFormResponses();
 
-    expect(filedAgainst()).toBe(addressOwner.id);
+    expect(filedAgainst()).toBe(fromLuma.id);
   });
 
   it('says so in the logs rather than resolving it silently', async () => {
@@ -164,8 +165,6 @@ describe('when the UID and the address point at different people', () => {
     expect(warnedAbout('conflicting identity')).toBe(true);
   });
 
-  // Losing an application is worse than linking it imperfectly: an admin can
-  // move it, and the Luma history is one link away in the guests panel.
   it('still records the application', async () => {
     byUid(fromLuma);
     byEmail(addressOwner);
@@ -184,28 +183,45 @@ describe('when the UID and the address point at different people', () => {
     expect(warnedAbout('conflicting identity')).toBe(false);
     expect(filedAgainst()).toBe(fromLuma.id);
   });
+
+  it('is not a conflict when only the address matches', async () => {
+    byEmail(addressOwner);
+
+    await syncFormResponses();
+
+    expect(warnedAbout('conflicting identity')).toBe(false);
+    expect(filedAgainst()).toBe(addressOwner.id);
+  });
 });
 
 describe('the address lookup', () => {
   // A Google Form answer is stored as typed; a Luma email is lowercased.
   it('falls back to a case-insensitive match when there is no exact row', async () => {
     noUid();
-    prisma.candidate.findMany.mockResolvedValue([fromLuma]);
+    // The stored row differs from the form answer only in case, which is what
+    // the exact lookup above misses and this fallback exists for.
+    const storedLowercase = { id: 'cand-lowercase', ...applicant, email: 'maria@ucla.edu' };
+    transformFormResponse.mockReturnValue({
+      ...applicant, studentId: '', email: 'Maria@UCLA.edu', responseID: 'resp-1'
+    });
+    prisma.candidate.findMany.mockResolvedValue([storedLowercase]);
 
     await syncFormResponses();
 
     const { where } = prisma.candidate.findMany.mock.calls[0][0];
-    expect(where.email).toEqual({ equals: 'maria@ucla.edu', mode: 'insensitive' });
+    expect(where.email).toEqual({ equals: 'Maria@UCLA.edu', mode: 'insensitive' });
     expect(prisma.candidate.create).not.toHaveBeenCalled();
-    expect(filedAgainst()).toBe(fromLuma.id);
+    expect(filedAgainst()).toBe(storedLowercase.id);
   });
 
   // Candidate.email is unique but case-sensitive, so these rows can both exist.
   // Whichever is picked has to be the same one every run.
   it('takes the oldest row when two differ only in case, and says so', async () => {
     noUid();
-    const older = { id: 'cand-older', ...applicant };
-    prisma.candidate.findMany.mockResolvedValue([older, { id: 'cand-newer', ...applicant }]);
+    // Two rows the unique index allows, because it compares case-sensitively.
+    const older = { id: 'cand-older', ...applicant, email: 'maria@ucla.edu' };
+    const newer = { id: 'cand-newer', ...applicant, email: 'Maria@ucla.edu' };
+    prisma.candidate.findMany.mockResolvedValue([older, newer]);
 
     await syncFormResponses();
 

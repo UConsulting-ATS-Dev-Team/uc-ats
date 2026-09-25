@@ -36,20 +36,24 @@ async function findCandidateByEmail(email) {
 /**
  * Which candidate a new application belongs to.
  *
- * The UID is asked first and normally answers: it is what the Luma sync keys a
- * candidate on, so it is the row carrying any event_rsvp / event_attendance
- * history, and nothing re-points those rows afterwards.
+ * The UID answers wherever it can. It is what the Luma sync keys a candidate on,
+ * so it is the row carrying any event_rsvp / event_attendance history, and
+ * nothing re-points those rows afterwards: resolving to anything else strands a
+ * person's RSVPs and door scans on a record no application ever reaches.
  *
- * But both identifiers are looked up, because the interesting case is when they
- * point at *two different people* - a UID typed wrong, or somebody else's. Then
- * the UID is the one to distrust: it is free text on a form, whereas the address
- * is where this applicant is actually reachable and what their own account will
- * match on. So a conflict resolves to the address and is logged; the alternative
- * files somebody's application onto a stranger's record.
+ * Both identifiers are still looked up, because two rows that disagree is worth
+ * knowing about - a UID typed wrong, or somebody else's. The conflict is logged
+ * and the UID still wins.
  *
- * It is reported rather than refused because losing an application is worse than
- * linking it imperfectly - an admin can move it, and the Luma history it may
- * have missed is one link away in the guests panel.
+ * It is deliberately **not** resolved to the address instead. That trade looks
+ * appealing from one direction (a stolen UID files your application onto its
+ * owner's record) and is worse from the other (your own UID with someone else's
+ * address files your application onto *theirs*) - the two cases are mirror
+ * images and no choice here is safe in both. What makes either of them exposure
+ * rather than just bad data is `GET /api/applications/:id` treating
+ * `application.studentId`, the form value, as proof of ownership. That is the
+ * place to fix it; until it is fixed, both resolutions leak the same way, and
+ * only the UID keeps the event history attached.
  */
 async function resolveCandidate({ studentId, email }) {
   const byUid = studentId
@@ -60,10 +64,9 @@ async function resolveCandidate({ studentId, email }) {
   if (byUid && byEmail && byUid.id !== byEmail.id) {
     console.warn(
       `[syncResponses] conflicting identity: UID ${studentId} belongs to candidate ${byUid.id} `
-      + `but ${email} belongs to ${byEmail.id}. Filing under the address; `
-      + `check whether the UID was mistyped.`
+      + `but ${email} belongs to ${byEmail.id}. Filing under the UID, which is what carries `
+      + `any Luma event history; check whether the UID was mistyped.`
     );
-    return byEmail;
   }
 
   return byUid ?? byEmail;
