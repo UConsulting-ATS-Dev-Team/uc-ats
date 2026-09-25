@@ -4,6 +4,7 @@ import api from '../utils/api';
 import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
 import AccessControl from '../components/AccessControl';
 import GtkucProfileModal from '../components/GtkucProfileModal';
+import SlotContactDialog from '../components/meetings/SlotContactDialog';
 import {
   Box,
   Typography,
@@ -40,11 +41,12 @@ import {
   Visibility as VisibilityIcon,
   Event as EventIcon,
   Delete as DeleteIcon,
-  Badge as BadgeIcon
+  Badge as BadgeIcon,
+  Sms as SmsIcon
 } from '@mui/icons-material';
 
 export default function MemberMeetingSlots() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [slots, setSlots] = useState([]);
   const [allSlots, setAllSlots] = useState([]); // Store all slots for filtering
   const [activeCycle, setActiveCycle] = useState(null);
@@ -57,6 +59,7 @@ export default function MemberMeetingSlots() {
   const [editForm, setEditForm] = useState({ location: '', startTime: '', endTime: '', capacity: 2 });
   const [editDateError, setEditDateError] = useState('');
   const [notice, setNotice] = useState('');
+  const [contactSlot, setContactSlot] = useState(null);
   const [editInitial, setEditInitial] = useState(null);
   const [profileState, setProfileState] = useState(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -941,9 +944,19 @@ export default function MemberMeetingSlots() {
                     {slot.signups.length > 0 && (
                       <>
                         <Divider sx={{ my: 2 }} />
-                        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2 }}>
-                          Signups ({slot.signups.length})
-                        </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                            Signups ({slot.signups.length})
+                          </Typography>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<SmsIcon />}
+                            onClick={() => setContactSlot(slot)}
+                          >
+                            iMessage / email signups
+                          </Button>
+                        </Box>
                         <TableContainer className="responsive-table">
                           <Table size="small">
                             <TableHead>
@@ -1006,6 +1019,13 @@ export default function MemberMeetingSlots() {
           </Stack>
         )}
       </Paper>
+
+      <SlotContactDialog
+        open={!!contactSlot}
+        onClose={() => setContactSlot(null)}
+        slot={contactSlot}
+        hostName={user?.fullName}
+      />
     </Box>
     </AccessControl>
   );

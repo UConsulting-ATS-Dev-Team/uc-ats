@@ -196,6 +196,34 @@ const MEETING_SLOT_CREATED = {
   ],
 };
 
+const MEETING_HOST_REMINDER = {
+  mergeFields: ['memberName', 'location'],
+  fields: [
+    line('subject', 'Subject', 'Tomorrow: your Get to Know UC slot'),
+    line('greeting', 'Greeting', 'Hi {{memberName}},'),
+    block(
+      'intro',
+      'Before the slot details',
+      'Your Get to Know UC slot is in about 24 hours. Here is who signed up.'
+    ),
+    line('highlightsTitle', 'Grey box title', 'Before you meet, reach out to them'),
+    block(
+      'highlights',
+      'Grey box',
+      "• Text or email everyone who signed up today, so they have a way to reach you\n\n" +
+        '• Tell them exactly where to meet: the building, the floor and the spot, not just "{{location}}"\n\n' +
+        "• Say how to find you: what you'll be wearing, or where you'll be sitting\n\n" +
+        '• Share your number in case they are running late or cannot find you'
+    ),
+    block(
+      'outro',
+      'Closing',
+      'The button below opens your slot in the ATS, where you can start one group iMessage or email with everyone who signed up.'
+    ),
+    signOff(RECRUITMENT_TEAM),
+  ],
+};
+
 const MEETING_SIGNUP_NOTIFICATION = {
   mergeFields: ['memberName', 'candidateName', 'candidateEmail', 'location'],
   fields: [
@@ -713,6 +741,7 @@ const TRANSACTIONAL_TEMPLATES = {
   'offer-letter': OFFER_LETTER,
   'meeting-signup-confirmation': MEETING_SIGNUP_CONFIRMATION,
   'meeting-slot-created': MEETING_SLOT_CREATED,
+  'meeting-host-reminder': MEETING_HOST_REMINDER,
   'meeting-signup-notification': MEETING_SIGNUP_NOTIFICATION,
   'meeting-cancellation-candidate': MEETING_CANCELLATION_CANDIDATE,
   'meeting-cancellation-member': MEETING_CANCELLATION_MEMBER,

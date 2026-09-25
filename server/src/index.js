@@ -28,6 +28,7 @@ import liveVoteRoutes from './routes/liveVotes.js';
 import decisionGuideRoutes from './routes/decisionGuides.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
+import { sendDueHostReminders } from './services/meetingHostReminders.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import externalContainment from './middleware/externalContainment.js';
 import clientRoutes from './routes/client.js';
@@ -211,6 +212,22 @@ cron.schedule('* * * * *', async () => {
   const count = await processScheduledMessages();
   if (count > 0) {
     console.log(`Processed ${count} scheduled master communication(s)`);
+  }
+});
+
+// Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
+// skipped over rather than overlapped, so one slot cannot be reminded twice.
+let hostRemindersRunning = false;
+cron.schedule('*/15 * * * *', async () => {
+  if (hostRemindersRunning) return;
+  hostRemindersRunning = true;
+  try {
+    const sent = await sendDueHostReminders();
+    if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
+  } catch (error) {
+    console.error('[gtkuc host reminders] run failed:', error);
+  } finally {
+    hostRemindersRunning = false;
   }
 });
 

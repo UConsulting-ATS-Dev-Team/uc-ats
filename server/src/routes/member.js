@@ -16,6 +16,7 @@ import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate } f
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
+import { resolveSignupContacts, logSignupContact } from '../services/meetingSignupContacts.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
@@ -1190,6 +1191,54 @@ router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
     }
     console.error('[PUT /api/member/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
+  }
+});
+
+// The slot's host, or any admin, may reach the people booked into it.
+async function loadContactableSlot(req, res) {
+  const slot = await prisma.meetingSlot.findUnique({
+    where: { id: req.params.id },
+    include: { signups: { orderBy: { createdAt: 'asc' } } },
+  });
+  if (!slot) {
+    res.status(404).json({ error: 'Meeting slot not found' });
+    return null;
+  }
+  if (slot.memberId !== req.user.id && req.user.role !== 'ADMIN') {
+    res.status(403).json({ error: 'Not authorized to contact this slot\'s signups' });
+    return null;
+  }
+  return slot;
+}
+
+// Everyone booked into a slot, with the phone number found for each, for the
+// group iMessage and email buttons. See services/meetingSignupContacts.js.
+router.get('/meeting-slots/:id/contacts', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const slot = await loadContactableSlot(req, res);
+    if (!slot) return;
+    res.json({ contacts: await resolveSignupContacts(slot.signups) });
+  } catch (error) {
+    console.error('[GET /api/member/meeting-slots/:id/contacts]', error);
+    res.status(500).json({ error: 'Failed to load signup contacts' });
+  }
+});
+
+// Called after the page has opened Messages or the mail app, so the contact is
+// in the communications log. The recipients are re-resolved here rather than
+// taken from the request, so the log names who was actually in the slot.
+router.post('/meeting-slots/:id/contacts/log', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const slot = await loadContactableSlot(req, res);
+    if (!slot) return;
+    const { channel, body } = req.body || {};
+    const contacts = await resolveSignupContacts(slot.signups);
+    const logged = await logSignupContact({ channel, body, contacts, triggeredById: req.user.id });
+    res.status(201).json({ logged });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('[POST /api/member/meeting-slots/:id/contacts/log]', error);
+    res.status(500).json({ error: 'Failed to log the contact' });
   }
 });
 

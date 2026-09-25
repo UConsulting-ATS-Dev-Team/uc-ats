@@ -423,6 +423,21 @@ The system follows a **recruiting cycle-based workflow**:
   itself; attendance is still only a `member_event_attendance` row, and a walk-in without
   an RSVP is one switch away.
 
+**Get to Know UC host reminders and contact:**
+- A cron every 15 minutes emails each host about 24 hours before a slot that has signups:
+  who is coming, and a nudge to tell them exactly where to meet and how to find the host
+  ([server/src/services/meetingHostReminders.js](server/src/services/meetingHostReminders.js)).
+  It is logged as a `REMINDER` `MeetingCommunication` with no signup, and that row is the
+  dedupe: one `SENT` since the slot entered its 24-hour window means done, so a slot moved
+  to a later day is reminded again. Failed sends retry, three attempts at most.
+- The member and admin slot pages have an "iMessage / email signups" button: one group
+  iMessage (`sms://open?addresses=…`) or one email (`mailto:`) to everyone in the slot,
+  opened in the host's own app, logged as `OPENED` in the communications log.
+- `MeetingSignup` has no phone, so a number is found by email
+  ([server/src/services/meetingSignupContacts.js](server/src/services/meetingSignupContacts.js)):
+  `User.phoneNumber`, then candidate onboarding, then the latest application. A sealed
+  candidate's onboarding and applications are never read.
+
 **Case book time restriction:**
 - A member may open a case only once they are close to the interview they run it in.
   The window is one global number of hours, held in the `CaseVisibilitySetting`

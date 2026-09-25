@@ -178,6 +178,25 @@ const TRANSACTIONAL = [
     args: [SAMPLE_MEMBER, SAMPLE_LOCATION, SAMPLE_START, SAMPLE_END],
   },
   {
+    key: 'meeting-host-reminder',
+    label: 'GTKUC host reminder',
+    description: 'Reminds a member of their slot the day before, with who signed up and how to reach them.',
+    audience: 'Member',
+    category: 'Get to Know UC',
+    trigger: 'Sent to the slot owner about 24 hours before a slot that has signups.',
+    args: [
+      SAMPLE_MEMBER,
+      SAMPLE_LOCATION,
+      SAMPLE_START,
+      SAMPLE_END,
+      [
+        { fullName: SAMPLE_CANDIDATE, email: 'jordan.rivera@ucla.edu', phoneNumber: '+13105551234' },
+        { fullName: 'Sam Patel', email: 'sam.patel@ucla.edu', phoneNumber: null },
+      ],
+      'https://uconsultingats.com/member/meeting-slots',
+    ],
+  },
+  {
     key: 'meeting-signup-notification',
     label: 'GTKUC signup notice to member',
     description: 'Tells the hosting member who just booked one of their slots.',
