@@ -136,9 +136,13 @@ export async function updatePointConfig({ points = {}, targetPoints } = {}, user
   return loadPointConfig(client);
 }
 
+// GTKUC slots carry no cycle, so the cycle's dates are the only way to tell
+// this cycle's from last cycle's. A cycle with no start date starts when it was
+// created, or every attended slot ever would count toward it.
 function cycleWindow(cycle) {
   const window = {};
-  if (cycle?.startDate) window.gte = cycle.startDate;
+  const start = cycle?.startDate ?? cycle?.createdAt;
+  if (start) window.gte = start;
   if (cycle?.endDate) window.lte = cycle.endDate;
   return Object.keys(window).length ? window : null;
 }
@@ -154,7 +158,12 @@ export async function loadCompletions({ cycle, memberIds, now = new Date() }, cl
   const credit = (memberId, type) => completions.get(memberId)?.add(type);
   const window = cycleWindow(cycle);
   const interviewTypes = POINT_TYPES.filter((t) => t.source === 'INTERVIEW');
-  const scoreWhere = { cycleId: cycle.id, evaluatorId: { in: memberIds } };
+  // The legacy /applications/:id/grades route saved resume scores without a
+  // cycle; those count when the candidate applied in this one.
+  const scoreWhere = {
+    evaluatorId: { in: memberIds },
+    OR: [{ cycleId: cycle.id }, { cycleId: null, candidate: { applications: { some: { cycleId: cycle.id } } } }],
+  };
 
   const [gtkucSlots, eventAttendance, resumeScores, coverLetterScores, videoScores, interviews] = await Promise.all([
     client.meetingSlot.findMany({

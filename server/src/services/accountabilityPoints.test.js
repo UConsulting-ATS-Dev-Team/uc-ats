@@ -199,7 +199,23 @@ describe('loadCompletions', () => {
       gte: cycle.startDate,
       lte: cycle.endDate,
     });
-    expect(client.resumeScore.findMany.mock.calls[0][0].where.cycleId).toBe('cycle-1');
+    expect(client.resumeScore.findMany.mock.calls[0][0].where.OR[0]).toEqual({ cycleId: 'cycle-1' });
+  });
+
+  it('credits a score saved without a cycle when the candidate applied in this one', async () => {
+    const client = fakeClient();
+    await loadCompletions({ cycle, memberIds: ['grader'], now }, client);
+    expect(client.resumeScore.findMany.mock.calls[0][0].where.OR[1]).toEqual({
+      cycleId: null,
+      candidate: { applications: { some: { cycleId: 'cycle-1' } } },
+    });
+  });
+
+  it('bounds GTKUC by when a dateless cycle was created, so older slots do not count', async () => {
+    const client = fakeClient();
+    const createdAt = new Date('2026-08-15');
+    await loadCompletions({ cycle: { id: 'c', startDate: null, endDate: null, createdAt }, memberIds: ['m'], now }, client);
+    expect(client.meetingSlot.findMany.mock.calls[0][0].where.startTime).toEqual({ gte: createdAt });
   });
 
   it('ignores credit for someone it was not asked about', async () => {

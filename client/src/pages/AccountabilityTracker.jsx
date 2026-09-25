@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -73,18 +73,23 @@ export default function AccountabilityTracker() {
     }
   };
 
+  // Only the latest request may write, so a slow response for the cycle an
+  // admin just switched away from cannot replace the one they switched to.
+  const latestRequest = useRef(0);
   const fetchData = async () => {
     if (!selectedCycleId) return;
+    const request = ++latestRequest.current;
     setLoading(true);
     setError('');
     try {
       const result = await apiClient.get(`/admin/accountability?cycleId=${selectedCycleId}`);
-      setData(result);
+      if (request === latestRequest.current) setData(result);
     } catch (e) {
+      if (request !== latestRequest.current) return;
       setError(e.message || 'Failed to load accountability data');
       setData(null);
     } finally {
-      setLoading(false);
+      if (request === latestRequest.current) setLoading(false);
     }
   };
 
@@ -187,8 +192,10 @@ export default function AccountabilityTracker() {
   };
 
   // `members` is who the dialog is about: everyone under target, or one person.
+  // The cycle is the one they were scored in, not whatever is selected at Send.
   const openReminder = (members) => {
     setReminder({
+      cycleId: data.cycle.id,
       members,
       subject: data.reminderDefaults.subject,
       message: data.reminderDefaults.message
@@ -200,7 +207,7 @@ export default function AccountabilityTracker() {
     setError('');
     setMessage('');
     try {
-      const result = await apiClient.post(`/admin/accountability/reminders?cycleId=${selectedCycleId}`, {
+      const result = await apiClient.post(`/admin/accountability/reminders?cycleId=${reminder.cycleId}`, {
         memberIds: reminder.members.map((m) => m.id),
         subject: reminder.subject,
         message: reminder.message

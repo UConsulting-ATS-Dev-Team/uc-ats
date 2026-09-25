@@ -1849,12 +1849,12 @@ async function getAccountabilityCycle(req) {
   if (cycleId) {
     return prisma.recruitingCycle.findUnique({
       where: { id: cycleId },
-      select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+      select: { id: true, name: true, startDate: true, endDate: true, createdAt: true, isActive: true }
     });
   }
   return prisma.recruitingCycle.findFirst({
     where: { isActive: true },
-    select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+    select: { id: true, name: true, startDate: true, endDate: true, createdAt: true, isActive: true }
   });
 }
 
