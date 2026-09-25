@@ -224,6 +224,25 @@ const MEETING_HOST_REMINDER = {
   ],
 };
 
+const MEETING_ATTENDANCE_REMINDER = {
+  mergeFields: ['memberName', 'location'],
+  fields: [
+    line('subject', 'Subject', 'Mark attendance for your Get to Know UC slot'),
+    line('greeting', 'Greeting', 'Hi {{memberName}},'),
+    block(
+      'intro',
+      'Before the slot details',
+      'Your Get to Know UC slot at {{location}} is over. Please mark who showed up in the ATS.'
+    ),
+    block(
+      'outro',
+      'Closing',
+      "Attendance counts toward each candidate's application, so someone left unmarked loses credit for coming. The button below opens this slot; tick the box next to everyone who came."
+    ),
+    signOff(RECRUITMENT_TEAM),
+  ],
+};
+
 const MEETING_SIGNUP_NOTIFICATION = {
   mergeFields: ['memberName', 'candidateName', 'candidateEmail', 'location'],
   fields: [
@@ -742,6 +761,7 @@ const TRANSACTIONAL_TEMPLATES = {
   'meeting-signup-confirmation': MEETING_SIGNUP_CONFIRMATION,
   'meeting-slot-created': MEETING_SLOT_CREATED,
   'meeting-host-reminder': MEETING_HOST_REMINDER,
+  'meeting-attendance-reminder': MEETING_ATTENDANCE_REMINDER,
   'meeting-signup-notification': MEETING_SIGNUP_NOTIFICATION,
   'meeting-cancellation-candidate': MEETING_CANCELLATION_CANDIDATE,
   'meeting-cancellation-member': MEETING_CANCELLATION_MEMBER,

@@ -29,6 +29,7 @@ import decisionGuideRoutes from './routes/decisionGuides.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
 import { sendDueHostReminders } from './services/meetingHostReminders.js';
+import { sendDueAttendanceReminders } from './services/meetingAttendanceReminders.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import externalContainment from './middleware/externalContainment.js';
 import clientRoutes from './routes/client.js';
@@ -228,6 +229,21 @@ cron.schedule('*/15 * * * *', async () => {
     console.error('[gtkuc host reminders] run failed:', error);
   } finally {
     hostRemindersRunning = false;
+  }
+});
+
+// An hour after a Get to Know UC slot ends, ask its host to mark attendance.
+let attendanceRemindersRunning = false;
+cron.schedule('*/15 * * * *', async () => {
+  if (attendanceRemindersRunning) return;
+  attendanceRemindersRunning = true;
+  try {
+    const sent = await sendDueAttendanceReminders();
+    if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
+  } catch (error) {
+    console.error('[gtkuc attendance reminders] run failed:', error);
+  } finally {
+    attendanceRemindersRunning = false;
   }
 });
 
