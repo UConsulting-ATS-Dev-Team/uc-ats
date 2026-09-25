@@ -9,7 +9,7 @@ import {
 vi.mock('../prismaClient.js', () => {
   const prisma = {
     meetingSlot: { findMany: vi.fn() },
-    meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }) },
+    meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }), findMany: vi.fn() },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   };
@@ -48,6 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   sendMeetingAttendanceReminder.mockResolvedValue({ success: true });
   prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
+  prisma.meetingCommunication.findMany.mockResolvedValue([]);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
@@ -134,14 +135,31 @@ describe('sendDueAttendanceReminders', () => {
     });
   });
 
-  it('skips the tick when another instance holds the run lock', async () => {
+  it('skips a slot another instance is sending right now', async () => {
     // Old and new instances overlap during a deploy; only one may send.
     prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
     prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1)]);
 
     expect(await sendDueAttendanceReminders(NOW)).toBe(0);
-    expect(prisma.meetingSlot.findMany).not.toHaveBeenCalled();
     expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+  });
+
+  it('skips a slot another instance already sent once the lock is free', async () => {
+    // Both picked the slot; the other one sent and released the lock first.
+    prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1)]);
+    prisma.meetingCommunication.findMany.mockResolvedValue([reminder(-0.1)]);
+
+    expect(await sendDueAttendanceReminders(NOW)).toBe(0);
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+  });
+
+  it('carries on to the next slot when one slot errors', async () => {
+    prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1), { ...slotEnded(1.2), id: 'slot-2' }]);
+    prisma.$queryRaw.mockRejectedValueOnce(new Error('connection reset'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(await sendDueAttendanceReminders(NOW)).toBe(1);
+    expect(sendMeetingAttendanceReminder).toHaveBeenCalledTimes(1);
   });
 
   it('logs a failed send as FAILED and does not count it', async () => {

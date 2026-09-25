@@ -38,6 +38,20 @@ export const slotEndTime = (slot) =>
 export const attendanceUrlFor = (slotId) =>
   `${config.clientUrl}/member/meeting-slots?slot=${encodeURIComponent(slotId)}`;
 
+const REMINDER_LOG = { type: 'ATTENDANCE_REMINDER', signupId: null };
+
+/** Whether a slot's reminder log still calls for a send. */
+function stillDue(slot, communications) {
+  const ended = slotEndTime(slot).getTime();
+  const sinceEnded = communications.filter(
+    (c) =>
+      c.sentAt.getTime() >= ended &&
+      c.recipient.toLowerCase() === slot.member.email.toLowerCase()
+  );
+  if (sinceEnded.some((c) => c.status === 'SENT')) return false;
+  return sinceEnded.length < MAX_ATTEMPTS;
+}
+
 /** The slots a run should remind, with host, signups and prior reminders. */
 export async function findSlotsDueForAttendanceReminder(now = new Date()) {
   const latestEnd = new Date(now.getTime() - ATTENDANCE_DELAY_HOURS * HOUR_MS);
@@ -60,7 +74,7 @@ export async function findSlotsDueForAttendanceReminder(now = new Date()) {
       member: { select: { id: true, fullName: true, email: true, isActive: true } },
       signups: { orderBy: { createdAt: 'asc' } },
       communications: {
-        where: { type: 'ATTENDANCE_REMINDER', signupId: null },
+        where: REMINDER_LOG,
         select: { status: true, sentAt: true, recipient: true },
       },
     },
@@ -68,14 +82,7 @@ export async function findSlotsDueForAttendanceReminder(now = new Date()) {
 
   return slots.filter((slot) => {
     if (!slot.member?.email || slot.member.isActive === false) return false;
-    const ended = slotEndTime(slot).getTime();
-    const sinceEnded = slot.communications.filter(
-      (c) =>
-        c.sentAt.getTime() >= ended &&
-        c.recipient.toLowerCase() === slot.member.email.toLowerCase()
-    );
-    if (sinceEnded.some((c) => c.status === 'SENT')) return false;
-    return sinceEnded.length < MAX_ATTEMPTS;
+    return stillDue(slot, slot.communications);
   });
 }
 
@@ -110,32 +117,48 @@ export async function sendAttendanceReminder(slot) {
   );
 }
 
-const RUN_LOCK_KEY = 'gtkuc-attendance-reminders';
-const RUN_TIMEOUT_MS = 5 * 60 * 1000;
-
 /**
- * One cron tick. Returns how many reminders went out.
+ * Send one slot's reminder under a lock on that slot. Returns { ok }.
  *
  * The in-process flag in index.js only stops a run overlapping itself. During
  * a deploy the old and new instances both run the cron for a moment, and both
- * would pick the same slot before either logged it. A transaction-scoped
- * advisory lock makes one of them skip the tick instead; the next tick then
- * sees what the first one logged.
+ * can pick the same slot before either has logged it. So each send takes a
+ * transaction-scoped advisory lock on the slot and re-reads the log once it
+ * holds it: whoever comes second either finds the lock taken or finds the
+ * first one's SENT row. The lock covers one email, so a long batch never
+ * holds a transaction open.
  */
-export async function sendDueAttendanceReminders(now = new Date()) {
+async function sendUnderSlotLock(slot) {
   return prisma.$transaction(
     async (tx) => {
-      const [{ locked }] = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${RUN_LOCK_KEY})) AS locked`;
-      if (!locked) return 0;
+      const [{ locked }] =
+        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-attendance-reminder:${slot.id}`})) AS locked`;
+      if (!locked) return { ok: false };
 
-      const due = await findSlotsDueForAttendanceReminder(now);
-      let sent = 0;
-      for (const slot of due) {
-        const { ok } = await sendAttendanceReminder(slot);
-        if (ok) sent += 1;
-      }
-      return sent;
+      const log = await prisma.meetingCommunication.findMany({
+        where: { slotId: slot.id, ...REMINDER_LOG },
+        select: { status: true, sentAt: true, recipient: true },
+      });
+      if (!stillDue(slot, log)) return { ok: false };
+
+      return sendAttendanceReminder(slot);
     },
-    { timeout: RUN_TIMEOUT_MS }
+    { timeout: 60 * 1000 }
   );
+}
+
+/** One cron tick. Returns how many reminders went out. */
+export async function sendDueAttendanceReminders(now = new Date()) {
+  const due = await findSlotsDueForAttendanceReminder(now);
+  let sent = 0;
+  for (const slot of due) {
+    try {
+      const { ok } = await sendUnderSlotLock(slot);
+      if (ok) sent += 1;
+    } catch (error) {
+      // A lock or log read failing for one slot must not end the run for the rest.
+      console.error(`[gtkuc attendance reminders] slot ${slot.id} failed:`, error);
+    }
+  }
+  return sent;
 }
