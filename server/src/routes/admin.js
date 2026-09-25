@@ -4350,7 +4350,14 @@ router.get('/flagged-documents', async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json(flaggedDocuments);
+    // A flag carries its application's documents and short answer, so a sealed
+    // candidate's flag is cut down to identity like any other list row.
+    const isLocked = await lockedRowPredicate(req, flaggedDocuments, {
+      refOf: (flag) => ({ candidateId: flag.application?.candidateId, email: flag.application?.email })
+    });
+    res.json(flaggedDocuments.map((flag) => (
+      isLocked(flag) ? { ...flag, application: redactApplication(flag.application) } : flag
+    )));
   } catch (error) {
     console.error('[GET /api/admin/flagged-documents]', error);
     res.status(500).json({ error: 'Failed to fetch flagged documents' });
