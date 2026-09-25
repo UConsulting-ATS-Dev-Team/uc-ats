@@ -16,9 +16,15 @@ const signups = [
   { id: 'su-2', fullName: 'Sam Patel', email: 'sam@ucla.edu' },
 ];
 
+// Both signups have verified accounts, so their own records may be read.
+const verifiedAccounts = [
+  { email: 'jordan@ucla.edu', phoneNumber: null, emailVerifiedAt: new Date() },
+  { email: 'sam@ucla.edu', phoneNumber: null, emailVerifiedAt: new Date() },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
-  prisma.user.findMany.mockResolvedValue([]);
+  prisma.user.findMany.mockResolvedValue(verifiedAccounts);
   prisma.candidate.findMany.mockResolvedValue([]);
   prisma.application.findMany.mockResolvedValue([]);
 });
@@ -38,7 +44,10 @@ describe('resolveSignupContacts', () => {
   });
 
   it('prefers the account number, then onboarding, then the application', async () => {
-    prisma.user.findMany.mockResolvedValue([{ email: 'jordan@ucla.edu', phoneNumber: '+13105550001' }]);
+    prisma.user.findMany.mockResolvedValue([
+      { email: 'jordan@ucla.edu', phoneNumber: '+13105550001', emailVerifiedAt: new Date() },
+      verifiedAccounts[1],
+    ]);
     prisma.candidate.findMany.mockResolvedValue([
       { email: 'jordan@ucla.edu', onboarding: { phoneNumber: '3105550002' } },
       { email: 'sam@ucla.edu', onboarding: { phoneNumber: '3105550003' } },
@@ -65,6 +74,30 @@ describe('resolveSignupContacts', () => {
     expect(prisma.application.findMany.mock.calls[0][0].where.NOT).toEqual({
       candidate: { recordsLockedAt: { not: null } },
     });
+  });
+
+  it('reads no self-reported number for an address nobody has verified', async () => {
+    // Someone registered with Jordan's address and booked under it without
+    // verifying: Jordan's application number must not reach the host.
+    prisma.user.findMany.mockResolvedValue([
+      { email: 'jordan@ucla.edu', phoneNumber: null, emailVerifiedAt: null },
+      verifiedAccounts[1],
+    ]);
+    prisma.application.findMany.mockResolvedValue([{ email: 'sam@ucla.edu', phoneNumber: '3105550004' }]);
+
+    const contacts = await resolveSignupContacts(signups);
+    expect(contacts.map((c) => c.phoneNumber)).toEqual([null, '+13105550004']);
+    const asked = prisma.application.findMany.mock.calls[0][0].where.OR;
+    expect(asked).toEqual([{ email: { equals: 'sam@ucla.edu', mode: 'insensitive' } }]);
+  });
+
+  it('still uses a roster number on an unverified account, since only an admin sets it', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      { email: 'jordan@ucla.edu', phoneNumber: '+13105550001', emailVerifiedAt: null },
+    ]);
+    const contacts = await resolveSignupContacts(signups);
+    expect(contacts.map((c) => c.phoneNumber)).toEqual(['+13105550001', null]);
+    expect(prisma.application.findMany).not.toHaveBeenCalled();
   });
 
   it('asks nothing of the database for an empty slot', async () => {

@@ -8,6 +8,12 @@
 // Each is normalized to E.164, and one that does not normalize is skipped
 // rather than guessed at - a wrong digit texts a stranger.
 //
+// 2 and 3 are only read when the signup's address belongs to an account that
+// has verified it. Booking needs an account but not a verified one, so without
+// this anybody could register with someone else's address, book, and have that
+// person's application number handed to the host. User.phoneNumber needs no
+// such check: only an admin can set it (see routes/users.js).
+//
 // A sealed candidate's onboarding and application are never read: the seal
 // covers application content, and a sealed person is a member whose number,
 // if the org has one, is already on their account.
@@ -17,6 +23,7 @@ import { normalizePhoneNumber } from '../utils/phone.js';
 import { recordCommunications } from './communicationLog.js';
 
 const lower = (email) => String(email || '').trim().toLowerCase();
+const matchingAny = (emails) => emails.map((email) => ({ email: { equals: email, mode: 'insensitive' } }));
 
 /**
  * [{ signupId, fullName, email, phoneNumber }] in the order given. phoneNumber
@@ -25,32 +32,35 @@ const lower = (email) => String(email || '').trim().toLowerCase();
 export async function resolveSignupContacts(signups = []) {
   const emails = [...new Set(signups.map((s) => lower(s.email)).filter(Boolean))];
   if (emails.length === 0) return [];
-  const anyEmail = emails.map((email) => ({ email: { equals: email, mode: 'insensitive' } }));
 
-  const [users, candidates, applications] = await Promise.all([
-    prisma.user.findMany({
-      where: { OR: anyEmail, phoneNumber: { not: null } },
-      select: { email: true, phoneNumber: true },
-    }),
-    prisma.candidate.findMany({
-      where: { OR: anyEmail, recordsLockedAt: null },
-      select: {
-        email: true,
-        onboarding: { select: { phoneNumber: true } },
-      },
-    }),
-    // By the application's own email, not the candidate's: someone can apply
-    // under one address and book under it while their Candidate row holds
-    // another. Newest first, so the latest number is offered first.
-    prisma.application.findMany({
-      where: {
-        OR: anyEmail,
-        NOT: { candidate: { recordsLockedAt: { not: null } } },
-      },
-      orderBy: { submittedAt: 'desc' },
-      select: { email: true, phoneNumber: true },
-    }),
-  ]);
+  const users = await prisma.user.findMany({
+    where: { OR: matchingAny(emails) },
+    select: { email: true, phoneNumber: true, emailVerifiedAt: true },
+  });
+  const verified = users.filter((u) => u.emailVerifiedAt).map((u) => lower(u.email));
+
+  const [candidates, applications] = verified.length === 0
+    ? [[], []]
+    : await Promise.all([
+        prisma.candidate.findMany({
+          where: { OR: matchingAny(verified), recordsLockedAt: null },
+          select: {
+            email: true,
+            onboarding: { select: { phoneNumber: true } },
+          },
+        }),
+        // By the application's own email, not the candidate's: someone can apply
+        // under one address and book under it while their Candidate row holds
+        // another. Newest first, so the latest number is offered first.
+        prisma.application.findMany({
+          where: {
+            OR: matchingAny(verified),
+            NOT: { candidate: { recordsLockedAt: { not: null } } },
+          },
+          orderBy: { submittedAt: 'desc' },
+          select: { email: true, phoneNumber: true },
+        }),
+      ]);
 
   const phoneByEmail = new Map();
   const offer = (email, raw) => {

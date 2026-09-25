@@ -1225,14 +1225,20 @@ router.get('/meeting-slots/:id/contacts', requireAuth, requireAdminOrMember, asy
 });
 
 // Called after the page has opened Messages or the mail app, so the contact is
-// in the communications log. The recipients are re-resolved here rather than
-// taken from the request, so the log names who was actually in the slot.
+// in the communications log. `signupIds` is who the page put in the message,
+// which can differ from the slot now if someone booked or cancelled while the
+// dialog was open. Only ids still in this slot are logged, and their numbers
+// and addresses are re-resolved here rather than taken from the request.
 router.post('/meeting-slots/:id/contacts/log', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const slot = await loadContactableSlot(req, res);
     if (!slot) return;
-    const { channel, body } = req.body || {};
-    const contacts = await resolveSignupContacts(slot.signups);
+    const { channel, body, signupIds } = req.body || {};
+    if (!Array.isArray(signupIds)) {
+      return res.status(400).json({ error: 'signupIds must be an array' });
+    }
+    const messaged = new Set(signupIds);
+    const contacts = await resolveSignupContacts(slot.signups.filter((s) => messaged.has(s.id)));
     const logged = await logSignupContact({ channel, body, contacts, triggeredById: req.user.id });
     res.status(201).json({ logged });
   } catch (error) {

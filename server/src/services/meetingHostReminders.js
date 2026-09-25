@@ -61,10 +61,12 @@ export async function findSlotsDueForHostReminder(now = new Date()) {
 export async function sendHostReminder(slot) {
   const host = slot.member;
   const hostName = host.fullName || 'UC Consulting Member';
-  const attendees = await resolveSignupContacts(slot.signups);
 
   return sendAndLogMeetingCommunication(
     async () => {
+      // Inside the logged send, so a failed lookup is a FAILED row for this
+      // slot and the run carries on to the next one.
+      const attendees = await resolveSignupContacts(slot.signups);
       const result = await sendMeetingHostReminder(
         host.email,
         hostName,

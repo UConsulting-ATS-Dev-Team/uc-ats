@@ -435,8 +435,11 @@ The system follows a **recruiting cycle-based workflow**:
   opened in the host's own app, logged as `OPENED` in the communications log.
 - `MeetingSignup` has no phone, so a number is found by email
   ([server/src/services/meetingSignupContacts.js](server/src/services/meetingSignupContacts.js)):
-  `User.phoneNumber`, then candidate onboarding, then the latest application. A sealed
-  candidate's onboarding and applications are never read.
+  `User.phoneNumber`, then candidate onboarding, then the latest application. The last
+  two are read only when an account with that address has verified it: booking does not
+  require verification, so otherwise anyone could book under someone else's address and
+  hand their number to the host. A sealed candidate's onboarding and applications are
+  never read.
 
 **Case book time restriction:**
 - A member may open a case only once they are close to the interview they run it in.

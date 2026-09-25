@@ -66,6 +66,7 @@ describe('SlotContactDialog', () => {
     expect(api.post).toHaveBeenCalledWith('/member/meeting-slots/slot-1/contacts/log', {
       channel: 'imessage',
       body: expect.stringMatching(/^Hi Jordan/),
+      signupIds: ['su-1', 'su-2'],
     });
   });
 
@@ -75,7 +76,7 @@ describe('SlotContactDialog', () => {
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(hrefs[0]).toMatch(/^mailto:jordan@ucla\.edu,sam@ucla\.edu,lee@ucla\.edu\?subject=Get%20to%20Know%20UC/);
-    expect(api.post.mock.calls[0][1].channel).toBe('email');
+    expect(api.post.mock.calls[0][1]).toMatchObject({ channel: 'email', signupIds: ['su-1', 'su-2', 'su-3'] });
   });
 
   it('sends what the host edited, not the draft', async () => {
@@ -86,6 +87,23 @@ describe('SlotContactDialog', () => {
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(hrefs[0]).toContain('body=Meet%20at%20the%20Kerckhoff%20patio');
+  });
+
+  it('warns that the group sees each other\'s details', async () => {
+    renderDialog();
+    expect(await screen.findByText(/Everyone in the group sees each other/)).toBeInTheDocument();
+  });
+
+  it('drops the previous slot\'s people when the next slot fails to load', async () => {
+    const { rerender } = renderDialog();
+    await screen.findByRole('button', { name: /Email \(3\)/ });
+
+    api.get.mockRejectedValue(new Error('Server error'));
+    rerender(<SlotContactDialog open onClose={() => {}} slot={{ ...slot, id: 'slot-2' }} hostName="Avery Chen" />);
+
+    expect(await screen.findByText('Server error')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Email \(0\)/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Group iMessage \(0\)/ })).toBeDisabled();
   });
 
   it('turns the iMessage button off when nobody has a number', async () => {

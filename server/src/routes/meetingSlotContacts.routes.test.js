@@ -23,7 +23,10 @@ const adminUser = { id: 'admin-1', role: 'ADMIN', isActive: true, email: 'admin@
 const hostMember = { id: 'member-1', role: 'MEMBER', isActive: true, email: 'host@example.com', fullName: 'Host Member' };
 const otherMember = { id: 'member-2', role: 'MEMBER', isActive: true, email: 'other@example.com', fullName: 'Other Member' };
 
-const signups = [{ id: 'signup-1', slotId: 'slot-1', fullName: 'Cand One', email: 'one@ucla.edu' }];
+const signups = [
+  { id: 'signup-1', slotId: 'slot-1', fullName: 'Cand One', email: 'one@ucla.edu' },
+  { id: 'signup-2', slotId: 'slot-1', fullName: 'Cand Two', email: 'two@ucla.edu' },
+];
 const contacts = [{ signupId: 'signup-1', fullName: 'Cand One', email: 'one@ucla.edu', phoneNumber: '+13105551234' }];
 
 const tokenFor = (user) => jwt.sign({ userId: user.id }, process.env.JWT_SECRET);
@@ -92,13 +95,16 @@ describe('GET /api/member/meeting-slots/:id/contacts', () => {
 });
 
 describe('POST /api/member/meeting-slots/:id/contacts/log', () => {
-  it('logs against the slot\'s real signups, not a list from the request', async () => {
+  it('logs only the people who were in the message and are still in the slot', async () => {
     const res = await request('/api/member/meeting-slots/slot-1/contacts/log', {
       user: hostMember,
       method: 'POST',
-      body: { channel: 'imessage', body: 'Meet at the patio', contacts: [{ phoneNumber: '+19999999999' }] },
+      // signup-9 is not in this slot (cancelled, or never was); signup-2 booked
+      // after the dialog opened and was not messaged.
+      body: { channel: 'imessage', body: 'Meet at the patio', signupIds: ['signup-1', 'signup-9'] },
     });
     expect(res.status).toBe(201);
+    expect(resolveSignupContacts).toHaveBeenCalledWith([signups[0]]);
     expect(logSignupContact).toHaveBeenCalledWith({
       channel: 'imessage',
       body: 'Meet at the patio',
@@ -112,16 +118,26 @@ describe('POST /api/member/meeting-slots/:id/contacts/log', () => {
     const res = await request('/api/member/meeting-slots/slot-1/contacts/log', {
       user: hostMember,
       method: 'POST',
-      body: { channel: 'slack' },
+      body: { channel: 'slack', signupIds: [] },
     });
     expect(res.status).toBe(400);
+  });
+
+  it('refuses a log without the list of who was messaged', async () => {
+    const res = await request('/api/member/meeting-slots/slot-1/contacts/log', {
+      user: hostMember,
+      method: 'POST',
+      body: { channel: 'email' },
+    });
+    expect(res.status).toBe(400);
+    expect(logSignupContact).not.toHaveBeenCalled();
   });
 
   it('refuses another member', async () => {
     const res = await request('/api/member/meeting-slots/slot-1/contacts/log', {
       user: otherMember,
       method: 'POST',
-      body: { channel: 'email' },
+      body: { channel: 'email', signupIds: ['signup-1'] },
     });
     expect(res.status).toBe(403);
     expect(logSignupContact).not.toHaveBeenCalled();
