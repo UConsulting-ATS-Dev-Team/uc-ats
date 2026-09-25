@@ -159,10 +159,13 @@ export async function loadCompletions({ cycle, memberIds, now = new Date() }, cl
   const window = cycleWindow(cycle);
   const interviewTypes = POINT_TYPES.filter((t) => t.source === 'INTERVIEW');
   // The legacy /applications/:id/grades route saved resume scores without a
-  // cycle; those count when the candidate applied in this one.
+  // cycle. Those count when the candidate applied in this cycle and the score
+  // was written during it: a candidate who reapplies must not hand last
+  // cycle's grader a point for this one.
+  const legacyScore = { cycleId: null, candidate: { applications: { some: { cycleId: cycle.id } } } };
   const scoreWhere = {
     evaluatorId: { in: memberIds },
-    OR: [{ cycleId: cycle.id }, { cycleId: null, candidate: { applications: { some: { cycleId: cycle.id } } } }],
+    OR: [{ cycleId: cycle.id }, ...(window ? [{ ...legacyScore, createdAt: window }] : [])],
   };
 
   const [gtkucSlots, eventAttendance, resumeScores, coverLetterScores, videoScores, interviews] = await Promise.all([

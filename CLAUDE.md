@@ -458,7 +458,8 @@ The system follows a **recruiting cycle-based workflow**:
 - Credit is read from records the ATS already keeps, never entered twice: GTKUC is a
   hosted slot somebody attended within the cycle's dates (from its `createdAt` when it
   has no start date); Application Screen is any resume, cover letter or video score
-  this cycle, or a cycle-less legacy score on a candidate who applied in it; Coffee
+  this cycle, or a cycle-less legacy score written during it on a candidate who applied
+  in it; Coffee
   Chats, First Round and Final
   Round are sitting on a started session of that interview type (all three roster
   sources, via `interviewersWhoHaveSat` in `interviewRoster.js`); Info Sesh, Women's Night,
