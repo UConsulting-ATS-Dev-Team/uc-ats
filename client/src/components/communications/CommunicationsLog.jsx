@@ -34,6 +34,7 @@ const CATEGORY_LABELS = {
   MEETING: 'Coffee chat',
   INTERVIEW_SLOT: 'Interview slot',
   REVIEWER_REMINDER: 'Reviewer reminder',
+  ACCOUNTABILITY_REMINDER: 'Accountability reminder',
   MASTER_COMMUNICATION: 'Master communication',
   DECISION_BATCH: 'Decision batch',
   TEST: 'Test send',

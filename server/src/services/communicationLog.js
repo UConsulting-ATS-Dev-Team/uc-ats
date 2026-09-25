@@ -11,6 +11,7 @@ export const COMMUNICATION_CATEGORIES = [
   'MEETING',              // coffee chat signup, cancellation, reschedule
   'INTERVIEW_SLOT',       // slot invitations, reminders, changes
   'REVIEWER_REMINDER',
+  'ACCOUNTABILITY_REMINDER', // members under their points target, sent by an admin
   'MASTER_COMMUNICATION', // composed by hand in Master Communications
   'DECISION_BATCH',       // queued by Process All Decisions, sent by an admin
   'TEST',                 // "send this to me first"

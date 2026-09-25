@@ -652,6 +652,9 @@ model Events {
   lumaEventId             String?           @unique
   lumaLastSyncedAt        DateTime?
   lumaGuests              LumaGuest[]
+  // Which member accountability type attending this event earns. Only the
+  // event-credited types are legal here; see services/accountabilityPoints.js.
+  pointType               String?
 
   @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@unique([cycleId, generatedFromStage])
@@ -1495,6 +1498,29 @@ model EventEmailSetting {
   updatedAt               DateTime @updatedAt
 
   @@map("event_email_settings")
+}
+
+/// What each member accountability type is worth, once an admin has changed it
+/// from the default. The types themselves, their labels and where their credit
+/// comes from are code (services/accountabilityPoints.js); a type with no row
+/// here is worth its default.
+model AccountabilityPointValue {
+  type        String   @id
+  points      Decimal  @db.Decimal(4, 2)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("accountability_point_values")
+}
+
+/// How many accountability points a member needs in a cycle.
+model AccountabilitySetting {
+  id           String   @id @default("singleton")
+  targetPoints Decimal  @default(3) @db.Decimal(4, 2)
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
+
+  @@map("accountability_settings")
 }
 
 model LumaSyncSetting {

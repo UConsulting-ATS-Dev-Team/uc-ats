@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -35,6 +35,8 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
+const formatPoints = (value) => String(Number(value));
+
 export default function AccountabilityTracker() {
   const { user } = useAuth();
   const [cycles, setCycles] = useState([]);
@@ -50,6 +52,11 @@ export default function AccountabilityTracker() {
   const [expandedEvents, setExpandedEvents] = useState({});
   const [search, setSearch] = useState('');
   const [rsvpOnly, setRsvpOnly] = useState(true);
+  const [underTargetOnly, setUnderTargetOnly] = useState(false);
+  const [pointsDraft, setPointsDraft] = useState(null);
+  const [savingPoints, setSavingPoints] = useState(false);
+  const [reminder, setReminder] = useState(null);
+  const [sendingReminders, setSendingReminders] = useState(false);
 
   const fetchCycles = async () => {
     try {
@@ -66,18 +73,23 @@ export default function AccountabilityTracker() {
     }
   };
 
+  // Only the latest request may write, so a slow response for the cycle an
+  // admin just switched away from cannot replace the one they switched to.
+  const latestRequest = useRef(0);
   const fetchData = async () => {
     if (!selectedCycleId) return;
+    const request = ++latestRequest.current;
     setLoading(true);
     setError('');
     try {
       const result = await apiClient.get(`/admin/accountability?cycleId=${selectedCycleId}`);
-      setData(result);
+      if (request === latestRequest.current) setData(result);
     } catch (e) {
+      if (request !== latestRequest.current) return;
       setError(e.message || 'Failed to load accountability data');
       setData(null);
     } finally {
-      setLoading(false);
+      if (request === latestRequest.current) setLoading(false);
     }
   };
 
@@ -145,17 +157,92 @@ export default function AccountabilityTracker() {
     }
   };
 
+  const openPointsDialog = () => {
+    setPointsDraft({
+      targetPoints: String(data.config.targetPoints),
+      points: Object.fromEntries(data.config.types.map((t) => [t.key, String(t.points)]))
+    });
+  };
+
+  const savePoints = async () => {
+    setSavingPoints(true);
+    setError('');
+    try {
+      await apiClient.put('/admin/accountability/config', {
+        targetPoints: pointsDraft.targetPoints,
+        points: pointsDraft.points
+      });
+      setPointsDraft(null);
+      setMessage('Point values saved');
+      await fetchData();
+    } catch (e) {
+      setError(e.message || 'Failed to save point values');
+    } finally {
+      setSavingPoints(false);
+    }
+  };
+
+  const setEventPointType = async (eventId, pointType) => {
+    try {
+      await apiClient.put(`/admin/accountability/events/${eventId}/point-type`, { pointType: pointType || null });
+      await fetchData();
+    } catch (e) {
+      setError(e.message || 'Failed to update event point type');
+    }
+  };
+
+  // `members` is who the dialog is about: everyone under target, or one person.
+  // The cycle is the one they were scored in, not whatever is selected at Send.
+  const openReminder = (members) => {
+    setReminder({
+      cycleId: data.cycle.id,
+      members,
+      subject: data.reminderDefaults.subject,
+      message: data.reminderDefaults.message
+    });
+  };
+
+  const sendReminders = async () => {
+    setSendingReminders(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await apiClient.post(`/admin/accountability/reminders?cycleId=${reminder.cycleId}`, {
+        memberIds: reminder.members.map((m) => m.id),
+        subject: reminder.subject,
+        message: reminder.message
+      });
+      setReminder(null);
+      const parts = [`Sent ${result.sent} reminder${result.sent === 1 ? '' : 's'}`];
+      if (result.skipped) parts.push(`${result.skipped} skipped (already at target)`);
+      if (result.failed.length) {
+        setError(`Failed to send to ${result.failed.map((f) => f.email).join(', ')}`);
+      }
+      setMessage(parts.join(' · '));
+    } catch (e) {
+      setError(e.message || 'Failed to send reminders');
+    } finally {
+      setSendingReminders(false);
+    }
+  };
+
   const leaderboard = useMemo(() => data?.leaderboard || [], [data]);
+  const underTarget = useMemo(() => leaderboard.filter((m) => !m.met), [leaderboard]);
   const filteredLeaderboard = useMemo(() => {
     const term = search.toLowerCase();
-    if (!term) return leaderboard;
     return leaderboard.filter(
       (m) =>
-        m.fullName?.toLowerCase().includes(term) ||
-        m.email?.toLowerCase().includes(term) ||
-        m.studentId?.toLowerCase().includes(term)
+        (!underTargetOnly || !m.met) &&
+        (!term ||
+          m.fullName?.toLowerCase().includes(term) ||
+          m.email?.toLowerCase().includes(term) ||
+          m.studentId?.toLowerCase().includes(term))
     );
-  }, [leaderboard, search]);
+  }, [leaderboard, search, underTargetOnly]);
+  const pointTypeLabel = useMemo(
+    () => Object.fromEntries((data?.config.types || []).map((t) => [t.key, t.label])),
+    [data]
+  );
 
   // RSVP'd members first, so the check-in list reads top-down at the door.
   const dialogMembers = useMemo(() => {
@@ -165,9 +252,6 @@ export default function AccountabilityTracker() {
   const rsvpdMembers = eventMembers.filter((m) => m.rsvpd);
   const rsvpdAttended = rsvpdMembers.filter((m) => m.attended).length;
   const walkIns = eventMembers.filter((m) => m.attended && !m.rsvpd).length;
-
-  const topThree = leaderboard.slice(0, 3);
-  const bottomThree = leaderboard.slice(-3).reverse();
 
   if (!user || user.role !== 'ADMIN') {
     return (
@@ -236,12 +320,23 @@ export default function AccountabilityTracker() {
       {data && !loading && (
         <Stack spacing={4}>
           <Paper sx={{ p: 2 }}>
-            <Stack direction="row" spacing={2} alignItems="center" mb={2}>
-              <TrophyIcon style={{ width: '1.5rem', height: '1.5rem' }} />
-              <Typography variant="h6">Leaderboard</Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} mb={2}>
+              <Stack direction="row" spacing={2} alignItems="center" flexGrow={1}>
+                <TrophyIcon style={{ width: '1.5rem', height: '1.5rem' }} />
+                <Typography variant="h6">Points</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {leaderboard.length - underTarget.length} of {leaderboard.length} members have {formatPoints(data.config.targetPoints)} points
+                </Typography>
+              </Stack>
+              <Button variant="outlined" onClick={openPointsDialog}>
+                Edit point values
+              </Button>
+              <Button variant="contained" disabled={underTarget.length === 0} onClick={() => openReminder(underTarget)}>
+                Remind {underTarget.length} under target
+              </Button>
             </Stack>
 
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} mb={2}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} mb={2}>
               <TextField
                 label="Search members"
                 value={search}
@@ -249,15 +344,15 @@ export default function AccountabilityTracker() {
                 fullWidth
                 placeholder="Name, email, or student ID"
               />
-            </Stack>
-
-            <Stack direction="row" spacing={1} mb={2} flexWrap="wrap">
-              {topThree.map((m, i) => (
-                <Chip key={m.id} color="success" variant="outlined" label={`#${i + 1} ${m.fullName} (${m.total})`} />
-              ))}
-              {bottomThree.map((m, i) => (
-                <Chip key={`bottom-${m.id}`} color="error" variant="outlined" label={`Bottom ${i + 1} ${m.fullName} (${m.total})`} />
-              ))}
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ whiteSpace: 'nowrap' }}>
+                <Switch
+                  size="small"
+                  checked={underTargetOnly}
+                  onChange={(e) => setUnderTargetOnly(e.target.checked)}
+                  inputProps={{ 'aria-label': 'Show members under target only' }}
+                />
+                <Typography variant="body2">Under target only</Typography>
+              </Stack>
             </Stack>
 
             <TableContainer>
@@ -266,49 +361,54 @@ export default function AccountabilityTracker() {
                   <TableRow>
                     <TableCell>Rank</TableCell>
                     <TableCell>Member</TableCell>
-                    <TableCell align="right">Events</TableCell>
-                    <TableCell align="right">GTKUC</TableCell>
-                    <TableCell align="right">Total</TableCell>
+                    <TableCell>Done</TableCell>
+                    <TableCell align="right">Points</TableCell>
+                    <TableCell align="right" />
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {filteredLeaderboard.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
-                        No members match your search.
+                      <TableCell colSpan={5} align="center">
+                        No members match.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredLeaderboard.map((member, index) => {
-                      const rank = index + 1;
-                      const isTop = rank <= 3 && filteredLeaderboard === leaderboard;
-                      const isBottom = rank > leaderboard.length - 3 && filteredLeaderboard === leaderboard;
-                      return (
-                        <TableRow
-                          key={member.id}
-                          sx={{
-                            backgroundColor: isTop
-                              ? 'rgba(46, 125, 50, 0.08)'
-                              : isBottom
-                              ? 'rgba(211, 47, 47, 0.08)'
-                              : 'inherit'
-                          }}
-                        >
-                          <TableCell>{rank}</TableCell>
-                          <TableCell>
-                            <Typography fontWeight={500}>{member.fullName}</Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {member.email}
-                            </Typography>
-                          </TableCell>
-                          <TableCell align="right">{member.eventCount}</TableCell>
-                          <TableCell align="right">{member.gtkucCount}</TableCell>
-                          <TableCell align="right">
-                            <Chip label={member.total} color={isTop ? 'success' : isBottom ? 'error' : 'default'} size="small" />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
+                    filteredLeaderboard.map((member) => (
+                      <TableRow
+                        key={member.id}
+                        sx={{ backgroundColor: member.met ? 'rgba(46, 125, 50, 0.08)' : 'inherit' }}
+                      >
+                        <TableCell>{leaderboard.indexOf(member) + 1}</TableCell>
+                        <TableCell>
+                          <Typography fontWeight={500}>{member.fullName}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {member.email}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {member.types.filter((t) => t.done).map((t) => (
+                              <Chip key={t.key} label={t.label} size="small" variant="outlined" />
+                            ))}
+                          </Stack>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Chip
+                            label={`${formatPoints(member.points)} / ${formatPoints(member.targetPoints)}`}
+                            color={member.met ? 'success' : 'default'}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell align="right">
+                          {!member.met && (
+                            <Button size="small" onClick={() => openReminder([member])}>
+                              Remind
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
                   )}
                 </TableBody>
               </Table>
@@ -331,6 +431,8 @@ export default function AccountabilityTracker() {
                       <TableCell>Date</TableCell>
                       <TableCell align="right">RSVPs</TableCell>
                       <TableCell align="right">Attendance</TableCell>
+                      {/* Staging.css makes every MUI table `table-layout: fixed`, where only a header width sizes a column. */}
+                      <TableCell sx={{ width: 212 }}>Counts as</TableCell>
                       <TableCell>Form</TableCell>
                       <TableCell align="right">Actions</TableCell>
                     </TableRow>
@@ -352,6 +454,25 @@ export default function AccountabilityTracker() {
                           <TableCell>{formatDate(event.eventStartDate)}</TableCell>
                           <TableCell align="right">{event.memberRsvpCount ?? 0}</TableCell>
                           <TableCell align="right">{event.memberAttendanceCount}</TableCell>
+                          <TableCell>
+                            <Select
+                              size="small"
+                              sx={{ width: 180 }}
+                              value={event.pointType || ''}
+                              displayEmpty
+                              onChange={(e) => setEventPointType(event.id, e.target.value)}
+                              inputProps={{ 'aria-label': `Point type for ${event.eventName}` }}
+                            >
+                              <MenuItem value="">
+                                <em>No points</em>
+                              </MenuItem>
+                              {data.config.eventPointTypes.map((key) => (
+                                <MenuItem key={key} value={key}>
+                                  {pointTypeLabel[key]}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </TableCell>
                           <TableCell>
                             {event.memberAttendanceForm ? (
                               <Button size="small" variant="text" onClick={() => window.open(event.memberAttendanceForm, '_blank')}>
@@ -379,7 +500,7 @@ export default function AccountabilityTracker() {
                         </TableRow>
                         {expandedEvents[event.id] && (
                           <TableRow>
-                            <TableCell colSpan={7} sx={{ p: 0, borderBottom: 0 }}>
+                            <TableCell colSpan={8} sx={{ p: 0, borderBottom: 0 }}>
                               <Box p={2} bgcolor="action.hover">
                                 <Typography variant="subtitle2" gutterBottom>
                                   Quick check-in
@@ -494,6 +615,91 @@ export default function AccountabilityTracker() {
         </DialogContent>
         <DialogActions>
           <Button onClick={closeEventDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(pointsDraft)} onClose={() => setPointsDraft(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Point values</DialogTitle>
+        {pointsDraft && (
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" mb={2}>
+              Each type counts once per member per cycle. Changes apply to everyone's totals straight away.
+            </Typography>
+            <Stack spacing={2}>
+              <TextField
+                label="Points needed"
+                type="number"
+                size="small"
+                value={pointsDraft.targetPoints}
+                onChange={(e) => setPointsDraft((d) => ({ ...d, targetPoints: e.target.value }))}
+                inputProps={{ min: 0.01, step: 0.5 }}
+              />
+              {data.config.types.map((type) => (
+                <TextField
+                  key={type.key}
+                  label={type.label}
+                  type="number"
+                  size="small"
+                  value={pointsDraft.points[type.key]}
+                  onChange={(e) =>
+                    setPointsDraft((d) => ({ ...d, points: { ...d.points, [type.key]: e.target.value } }))
+                  }
+                  helperText={type.points !== type.defaultPoints ? `Default ${formatPoints(type.defaultPoints)}` : undefined}
+                  inputProps={{ min: 0, step: 0.5 }}
+                />
+              ))}
+            </Stack>
+          </DialogContent>
+        )}
+        <DialogActions>
+          <Button onClick={() => setPointsDraft(null)}>Cancel</Button>
+          <Button variant="contained" onClick={savePoints} disabled={savingPoints}>
+            {savingPoints ? <CircularProgress size={16} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(reminder)} onClose={() => !sendingReminders && setReminder(null)} fullWidth maxWidth="sm">
+        <DialogTitle>
+          {reminder?.members.length === 1
+            ? `Remind ${reminder.members[0].fullName}`
+            : `Remind ${reminder?.members.length} members under target`}
+        </DialogTitle>
+        {reminder && (
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" mb={2}>
+              Each person gets their own email with this message, their points, and a checklist of what they
+              have done and what's still open. Anyone who reaches the target before you send is skipped.
+            </Typography>
+            <Stack spacing={2}>
+              <TextField
+                label="Subject"
+                size="small"
+                value={reminder.subject}
+                onChange={(e) => setReminder((r) => ({ ...r, subject: e.target.value }))}
+              />
+              <TextField
+                label="Message"
+                multiline
+                minRows={4}
+                value={reminder.message}
+                onChange={(e) => setReminder((r) => ({ ...r, message: e.target.value }))}
+                helperText={`Markdown works. Merge fields: ${data.reminderDefaults.mergeFields.map((f) => `{{${f}}}`).join(' ')}`}
+              />
+            </Stack>
+          </DialogContent>
+        )}
+        <DialogActions>
+          <Button onClick={() => setReminder(null)} disabled={sendingReminders}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={sendReminders}
+            disabled={sendingReminders || !reminder?.subject.trim() || !reminder?.message.trim()}
+          >
+            {sendingReminders ? <CircularProgress size={16} /> : `Send ${reminder?.members.length ?? ''}`}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -404,3 +404,42 @@ export async function groupIdForCandidate(interviewId, applicationId, client = p
   );
   return group?.id ?? null;
 }
+
+/**
+ * Who sat on each of `interviews`, counting only sessions that have started.
+ *
+ * The bulk counterpart of interviewsAssignedTo, reading the same three places a
+ * member can be attached, for every member at once. "Has started" is per slot
+ * for slot assignments and per interview for the other two, which have no
+ * finer time than the interview's own. Returns one { interviewId, userId } per
+ * pair, deduplicated.
+ */
+export async function interviewersWhoHaveSat(interviews, { now = new Date() } = {}, client = prisma) {
+  if (!interviews?.length) return [];
+  const ids = interviews.map((interview) => interview.id);
+  const started = interviews.filter((interview) => new Date(interview.startDate) <= now);
+  const startedIds = started.map((interview) => interview.id);
+
+  const [slotAssignments, legacyAssignments] = await Promise.all([
+    client.interviewSlotAssignment.findMany({
+      where: { removedAt: null, interviewId: { in: ids }, slot: { startTime: { lte: now } } },
+      select: { interviewId: true, userId: true },
+    }),
+    startedIds.length
+      ? client.interviewAssignment.findMany({
+          where: { interviewId: { in: startedIds } },
+          select: { interviewId: true, userId: true },
+        })
+      : [],
+  ]);
+
+  const pairs = new Map();
+  const add = (interviewId, userId) => pairs.set(`${interviewId}|${userId}`, { interviewId, userId });
+  for (const row of [...slotAssignments, ...legacyAssignments]) add(row.interviewId, row.userId);
+  for (const interview of started) {
+    for (const group of parseLegacyConfig(interview).memberGroups ?? []) {
+      for (const userId of group.memberIds ?? []) add(interview.id, userId);
+    }
+  }
+  return [...pairs.values()];
+}

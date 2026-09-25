@@ -20,6 +20,7 @@ import { resolveSignupContacts, logSignupContact } from '../services/meetingSign
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
+import { scoreMembers } from '../services/accountabilityPoints.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -70,6 +71,22 @@ router.get('/candidate/:id', requireAuth, requireAdminOrMember, guardCandidate((
 router.post('/evaluations', requireAuth, requireAdminOrMember, guardApplication((req) => req.body?.applicationId));
 
 // Get events for members with per-user RSVP status
+// The caller's own accountability points for the current cycle: what they have
+// done, what each type is worth, and what is left to reach the target.
+router.get('/accountability', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) return res.json({ cycle: null, standing: null });
+
+    const { members } = await scoreMembers({ cycle, members: [{ id: req.user.id }] });
+    const { id, ...standing } = members[0];
+    res.json({ cycle: { id: cycle.id, name: cycle.name }, standing });
+  } catch (error) {
+    console.error('[GET /api/member/accountability]', error);
+    res.status(500).json({ error: 'Failed to fetch your accountability points' });
+  }
+});
+
 router.get('/events', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
