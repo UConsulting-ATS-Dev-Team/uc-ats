@@ -9,7 +9,7 @@ import {
 vi.mock('../prismaClient.js', () => {
   const prisma = {
     meetingSlot: { findMany: vi.fn() },
-    meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }), findMany: vi.fn() },
+    meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }) },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   };
@@ -44,11 +44,20 @@ const reminder = (hoursFromNow, status = 'SENT') => ({
   recipient: 'avery@ucla.edu',
 });
 
+// The batch read, then the re-read of each slot under its lock: answer the
+// first from `batch` and the rest from `current` (defaults to the batch),
+// honouring `where.id` the way the database would.
+const slotsInDb = (batch, current = batch) => {
+  prisma.meetingSlot.findMany.mockImplementation(({ where }) => {
+    const rows = where.id ? current.filter((s) => s.id === where.id) : batch;
+    return Promise.resolve(rows);
+  });
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   sendMeetingAttendanceReminder.mockResolvedValue({ success: true });
   prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
-  prisma.meetingCommunication.findMany.mockResolvedValue([]);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
@@ -146,15 +155,31 @@ describe('sendDueAttendanceReminders', () => {
 
   it('skips a slot another instance already sent once the lock is free', async () => {
     // Both picked the slot; the other one sent and released the lock first.
-    prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1)]);
-    prisma.meetingCommunication.findMany.mockResolvedValue([reminder(-0.1)]);
+    slotsInDb([slotEnded(1.1)], [slotEnded(1.1, [reminder(-0.1)])]);
 
     expect(await sendDueAttendanceReminders(NOW)).toBe(0);
     expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
   });
 
+  it('skips a slot the host finished marking after the batch was read', async () => {
+    // The re-read's `signups: { some: { attended: false } }` no longer matches.
+    slotsInDb([slotEnded(1.1)], []);
+
+    expect(await sendDueAttendanceReminders(NOW)).toBe(0);
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+    expect(prisma.meetingSlot.findMany.mock.calls[1][0].where.id).toBe('slot-1');
+  });
+
+  it('sends the slot as it is now, not as the batch read it', async () => {
+    const moved = { ...slotEnded(1.1), location: 'Powell Library steps' };
+    slotsInDb([slotEnded(1.1)], [moved]);
+
+    expect(await sendDueAttendanceReminders(NOW)).toBe(1);
+    expect(sendMeetingAttendanceReminder.mock.calls[0][2]).toBe('Powell Library steps');
+  });
+
   it('carries on to the next slot when one slot errors', async () => {
-    prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1), { ...slotEnded(1.2), id: 'slot-2' }]);
+    slotsInDb([slotEnded(1.1), { ...slotEnded(1.2), id: 'slot-2' }]);
     prisma.$queryRaw.mockRejectedValueOnce(new Error('connection reset'));
     vi.spyOn(console, 'error').mockImplementation(() => {});
 

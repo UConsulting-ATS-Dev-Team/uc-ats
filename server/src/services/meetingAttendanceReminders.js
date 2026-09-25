@@ -52,12 +52,16 @@ function stillDue(slot, communications) {
   return sinceEnded.length < MAX_ATTEMPTS;
 }
 
-/** The slots a run should remind, with host, signups and prior reminders. */
-export async function findSlotsDueForAttendanceReminder(now = new Date()) {
+/**
+ * The slots a run should remind, with host, signups and prior reminders.
+ * Pass `slotId` to ask the same question of one slot.
+ */
+export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId = null) {
   const latestEnd = new Date(now.getTime() - ATTENDANCE_DELAY_HOURS * HOUR_MS);
   const earliestEnd = new Date(latestEnd.getTime() - LOOKBACK_HOURS * HOUR_MS);
   const slots = await prisma.meetingSlot.findMany({
     where: {
+      ...(slotId ? { id: slotId } : {}),
       OR: [
         { endTime: { gt: earliestEnd, lte: latestEnd } },
         {
@@ -123,25 +127,24 @@ export async function sendAttendanceReminder(slot) {
  * The in-process flag in index.js only stops a run overlapping itself. During
  * a deploy the old and new instances both run the cron for a moment, and both
  * can pick the same slot before either has logged it. So each send takes a
- * transaction-scoped advisory lock on the slot and re-reads the log once it
- * holds it: whoever comes second either finds the lock taken or finds the
- * first one's SENT row. The lock covers one email, so a long batch never
- * holds a transaction open.
+ * transaction-scoped advisory lock on the slot and asks whether it is due all
+ * over again once it holds it: whoever comes second either finds the lock
+ * taken or finds the first one's SENT row. Re-asking also catches a slot that
+ * was fully marked or moved since the batch was read, and sends the slot as
+ * it is now. The lock covers one email, so a long batch never holds a
+ * transaction open.
  */
-async function sendUnderSlotLock(slot) {
+async function sendUnderSlotLock(slot, now) {
   return prisma.$transaction(
     async (tx) => {
       const [{ locked }] =
         await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-attendance-reminder:${slot.id}`})) AS locked`;
       if (!locked) return { ok: false };
 
-      const log = await prisma.meetingCommunication.findMany({
-        where: { slotId: slot.id, ...REMINDER_LOG },
-        select: { status: true, sentAt: true, recipient: true },
-      });
-      if (!stillDue(slot, log)) return { ok: false };
+      const [current] = await findSlotsDueForAttendanceReminder(now, slot.id);
+      if (!current) return { ok: false };
 
-      return sendAttendanceReminder(slot);
+      return sendAttendanceReminder(current);
     },
     { timeout: 60 * 1000 }
   );
@@ -153,7 +156,7 @@ export async function sendDueAttendanceReminders(now = new Date()) {
   let sent = 0;
   for (const slot of due) {
     try {
-      const { ok } = await sendUnderSlotLock(slot);
+      const { ok } = await sendUnderSlotLock(slot, now);
       if (ok) sent += 1;
     } catch (error) {
       // A lock or log read failing for one slot must not end the run for the rest.
