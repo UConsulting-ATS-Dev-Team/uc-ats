@@ -20,9 +20,9 @@ export const COMMUNICATION_CATEGORIES = [
 export const COMMUNICATION_CHANNELS = ['email', 'slack', 'imessage'];
 
 // SENT means the provider accepted it; FAILED means it never left, or SES
-// refused it. OPENED is only ever an iMessage: the server hands the
-// conversation to the admin's Messages app and cannot observe what happens
-// next, so claiming it was sent would be a lie.
+// refused it. OPENED means the server handed the message to the sender's own
+// app - an iMessage, or a GTKUC host's mailto: email to their signups - and
+// cannot observe what happens next, so claiming it was sent would be a lie.
 //
 // DELIVERED, DELAYED, BOUNCED and COMPLAINED arrive later, from SES through
 // /api/webhooks/ses (services/sesEvents.js), and only for email.

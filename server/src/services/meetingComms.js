@@ -13,6 +13,7 @@ export const MEETING_COMM_SUBJECTS = {
   RESCHEDULED: 'Meeting Rescheduled - Get to Know UC',
   RESCHEDULED_TO_HOST: 'Get to Know UC - Meeting Rescheduled',
   REMINDER: 'Reminder - Get to Know UC',
+  HOST_REMINDER: 'Tomorrow: your Get to Know UC slot',
 };
 
 /**

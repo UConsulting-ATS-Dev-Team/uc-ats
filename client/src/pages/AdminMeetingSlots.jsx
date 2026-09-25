@@ -43,6 +43,7 @@ import {
   Link
 } from '@mui/material';
 import GtkucProfileModal from '../components/GtkucProfileModal';
+import SlotContactDialog from '../components/meetings/SlotContactDialog';
 import {
   Add as AddIcon,
   Badge as BadgeIcon,
@@ -58,7 +59,8 @@ import {
   EventAvailable as EventAvailableIcon,
   PercentOutlined as PercentIcon,
   OpenInNew as OpenInNewIcon,
-  LinkedIn as LinkedInIcon
+  LinkedIn as LinkedInIcon,
+  Sms as SmsIcon
 } from '@mui/icons-material';
 
 // ---- helpers -------------------------------------------------------------
@@ -105,7 +107,7 @@ const COMM_TYPE_META = {
   CONFIRMATION: { label: 'Signup confirmation', color: 'info' },
   HOST_NOTIFICATION: { label: 'Host notified', color: 'default' },
   CANCELLATION: { label: 'Cancellation', color: 'warning' },
-  REMINDER: { label: 'Reminder', color: 'secondary' }
+  REMINDER: { label: 'Host reminder', color: 'secondary' }
 };
 
 const emptyForm = { memberId: '', location: '', startTime: '', endTime: '', capacity: 2 };
@@ -139,6 +141,7 @@ export default function AdminMeetingSlots() {
   const [attFilter, setAttFilter] = useState('all'); // 'all' | 'attended' | 'not'
 
   const [detailSlot, setDetailSlot] = useState(null);
+  const [contactSlot, setContactSlot] = useState(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -605,6 +608,14 @@ export default function AdminMeetingSlots() {
         onToggleAttendance={setAttendance}
         onDeleteSignup={deleteSignup}
         onEdit={(s) => { setDetailSlot(null); openEdit(s); }}
+        onContact={setContactSlot}
+      />
+
+      <SlotContactDialog
+        open={!!contactSlot}
+        onClose={() => setContactSlot(null)}
+        slot={contactSlot}
+        hostName={contactSlot?.member?.fullName}
       />
 
       {/* Create/Edit dialog */}
@@ -943,7 +954,7 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, onToggle, o
 
 // ---- Slot detail dialog --------------------------------------------------
 
-function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, onDeleteSignup, onEdit }) {
+function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, onDeleteSignup, onEdit, onContact }) {
   if (!slot) return null;
   const signups = slot.signups || [];
   const comms = slot.communications || [];
@@ -1003,7 +1014,14 @@ function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, on
         </Grid>
 
         {/* Signups */}
-        <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 3 }} gutterBottom>Signups ({signups.length})</Typography>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 3, mb: 1 }}>
+          <Typography variant="subtitle1" fontWeight={600}>Signups ({signups.length})</Typography>
+          {signups.length > 0 && (
+            <Button size="small" variant="outlined" startIcon={<SmsIcon />} onClick={() => onContact(slot)}>
+              iMessage / email signups
+            </Button>
+          )}
+        </Stack>
         {signups.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No one has signed up yet.</Typography>
         ) : (

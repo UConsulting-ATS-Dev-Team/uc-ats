@@ -577,6 +577,85 @@ export const sendMeetingSlotCreated = async (memberEmail, memberName, location, 
   }
 };
 
+// The day-before reminder to a GTKUC host, listing everyone booked so they can
+// reach out with where exactly to meet. `attendees` is [{ fullName, email,
+// phoneNumber }]; `ctaUrl` arrives finished, like every link in this module.
+const createMeetingHostReminderEmail = async (memberName, location, startTime, endTime, attendees = [], ctaUrl = null) => {
+  const copy = await resolveEmailCopy('meeting-host-reminder');
+  const values = { memberName, location };
+  const rows = attendees
+    .map(
+      (a) => `<p style="color: #004085; margin: 8px 0;"><strong>${escapeHtml(a.fullName)}</strong> - ${escapeHtml(a.email)}${
+        a.phoneNumber ? ` - ${escapeHtml(a.phoneNumber)}` : ''
+      }</p>`
+    )
+    .join('');
+
+  return {
+    subject: copySubject(copy.subject, values),
+    html: `
+        <div style="padding: 30px 20px;">
+
+          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
+
+          ${copyHtml(copy.intro, values)}
+
+          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
+            <h4 style="color: #155724; margin: 0 0 15px 0;">Slot Details</h4>
+            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
+            ${endTime ? `<p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>` : ''}
+            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
+          </div>
+
+          <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
+            <h4 style="color: #004085; margin: 0 0 15px 0;">Signed Up (${attendees.length})</h4>
+            ${rows}
+          </div>
+
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
+            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
+          </div>
+
+          ${copyHtml(copy.outro, values)}
+
+          ${
+            ctaUrl
+              ? `<p style="text-align: center; margin: 30px 0;">
+            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Contact your signups</a>
+          </p>`
+              : ''
+          }
+
+          ${copySignOff(copy.signOff, values)}
+        </div>
+
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `
+  };
+};
+
+export const sendMeetingHostReminder = async (memberEmail, memberName, location, startTime, endTime, attendees, ctaUrl) => {
+  try {
+    const emailContent = await createMeetingHostReminderEmail(memberName, location, startTime, endTime, attendees, ctaUrl);
+    const result = await sendEmail(memberEmail, emailContent.subject, emailContent.html, [], { category: 'MEETING', recipientName: memberName });
+
+    if (result.success) {
+      console.log(`Meeting host reminder sent to ${memberEmail}`);
+    } else {
+      console.error(`Failed to send meeting host reminder to ${memberEmail}:`, result.error);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error in sendMeetingHostReminder:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Create meeting signup notification email template for members
 const createMeetingSignupNotificationEmail = async (memberName, candidateName, candidateEmail, studentId, location, startTime, endTime) => {
   const copy = await resolveEmailCopy('meeting-signup-notification');
@@ -1510,6 +1589,7 @@ export const TEMPLATE_BUILDERS = {
   'offer-letter': createOfferLetterEmail,
   'meeting-signup-confirmation': createMeetingSignupConfirmationEmail,
   'meeting-slot-created': createMeetingSlotCreatedEmail,
+  'meeting-host-reminder': createMeetingHostReminderEmail,
   'meeting-signup-notification': createMeetingSignupNotificationEmail,
   'meeting-cancellation-candidate': createMeetingCancellationEmail,
   'meeting-cancellation-member': createMeetingCancellationMemberEmail,
