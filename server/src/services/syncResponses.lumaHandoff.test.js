@@ -184,6 +184,30 @@ describe('when the UID and the address point at different people', () => {
     expect(filedAgainst()).toBe(fromLuma.id);
   });
 
+  // Candidate.email is unique and not nullable, so a row can legitimately hold
+  // an empty address - and handing it one another candidate owns fails the whole
+  // response. With no application row written, the same response is new again on
+  // the next run, so it would fail every hour forever.
+  it('does not backfill an address another candidate already owns', async () => {
+    byUid({ ...fromLuma, email: '' });
+    byEmail({ id: 'cand-address-owner', ...applicant });
+
+    await syncFormResponses();
+
+    const updated = prisma.candidate.update.mock.calls[0]?.[0]?.data ?? {};
+    expect(updated.email).toBeUndefined();
+    expect(prisma.application.create).toHaveBeenCalled();
+  });
+
+  it('still backfills the other gaps on that row', async () => {
+    byUid({ ...fromLuma, email: '', lastName: '' });
+    byEmail({ id: 'cand-address-owner', ...applicant });
+
+    await syncFormResponses();
+
+    expect(prisma.candidate.update.mock.calls[0][0].data.lastName).toBe('Chen');
+  });
+
   it('is not a conflict when only the address matches', async () => {
     byEmail(addressOwner);
 

@@ -54,6 +54,12 @@ async function findCandidateByEmail(email) {
  * `application.studentId`, the form value, as proof of ownership. That is the
  * place to fix it; until it is fixed, both resolutions leak the same way, and
  * only the UID keeps the event history attached.
+ *
+ * Returns `emailTaken` alongside, because the caller backfills empty fields onto
+ * whichever row it gets: `Candidate.email` is unique and not nullable, so a row
+ * with an empty address would otherwise be handed one another candidate already
+ * owns, and the write would fail the whole response - every hour, forever, since
+ * a response with no application row is new again on the next run.
  */
 async function resolveCandidate({ studentId, email }) {
   const byUid = studentId
@@ -69,7 +75,8 @@ async function resolveCandidate({ studentId, email }) {
     );
   }
 
-  return byUid ?? byEmail;
+  const candidate = byUid ?? byEmail;
+  return { candidate, emailTaken: Boolean(byEmail && candidate && byEmail.id !== candidate.id) };
 }
 
 export default async function syncFormResponses() {
@@ -148,7 +155,11 @@ export default async function syncFormResponses() {
         // Both are still looked up, even once the UID has answered, because two
         // rows that disagree is the one case neither identifier should decide on
         // its own - see resolveCandidate.
-        let candidate = await resolveCandidate({ studentId, email: emailFromForm });
+        const { candidate: matched, emailTaken } = await resolveCandidate({
+          studentId,
+          email: emailFromForm
+        });
+        let candidate = matched;
 
         if (!candidate) {
           // No existing candidate, create a new one
@@ -167,7 +178,10 @@ export default async function syncFormResponses() {
           if (!candidate.studentId && studentId) updates.studentId = studentId;
           if (!candidate.firstName && dbRecord.firstName) updates.firstName = dbRecord.firstName;
           if (!candidate.lastName && dbRecord.lastName) updates.lastName = dbRecord.lastName;
-          if (!candidate.email && emailFromForm) updates.email = emailFromForm;
+          // Skipped when another candidate already holds this address: the
+          // column is unique, so writing it would fail the response rather than
+          // fill a gap, and the conflict above has already been logged.
+          if (!candidate.email && emailFromForm && !emailTaken) updates.email = emailFromForm;
 
           if (Object.keys(updates).length > 0) {
             candidate = await prisma.candidate.update({
