@@ -107,7 +107,8 @@ const COMM_TYPE_META = {
   CONFIRMATION: { label: 'Signup confirmation', color: 'info' },
   HOST_NOTIFICATION: { label: 'Host notified', color: 'default' },
   CANCELLATION: { label: 'Cancellation', color: 'warning' },
-  REMINDER: { label: 'Host reminder', color: 'secondary' }
+  REMINDER: { label: 'Host reminder', color: 'secondary' },
+  ATTENDANCE_REMINDER: { label: 'Attendance reminder', color: 'secondary' }
 };
 
 const emptyForm = { memberId: '', location: '', startTime: '', endTime: '', capacity: 2 };

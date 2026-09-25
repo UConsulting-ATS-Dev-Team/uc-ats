@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
@@ -63,6 +64,11 @@ export default function MemberMeetingSlots() {
   const [editInitial, setEditInitial] = useState(null);
   const [profileState, setProfileState] = useState(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  // ?slot=<id> comes from the attendance reminder email's button: open the
+  // page on that slot, once, so the host lands on the boxes to tick.
+  const [searchParams] = useSearchParams();
+  const focusSlotId = searchParams.get('slot');
+  const focusedOnce = useRef(false);
 
   useEffect(() => {
     api.setToken(token);
@@ -115,6 +121,13 @@ export default function MemberMeetingSlots() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!focusSlotId || focusedOnce.current || loading) return;
+    if (!slots.some((s) => s.id === focusSlotId)) return;
+    focusedOnce.current = true;
+    document.getElementById(`slot-${focusSlotId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusSlotId, loading, slots]);
 
   useEffect(() => {
     load();
@@ -881,7 +894,12 @@ export default function MemberMeetingSlots() {
               const attendedCount = slot.signups.filter(s => s.attended).length;
               
               return (
-                <Card key={slot.id} variant="outlined">
+                <Card
+                  key={slot.id}
+                  id={`slot-${slot.id}`}
+                  variant="outlined"
+                  sx={slot.id === focusSlotId ? { borderColor: 'primary.main', borderWidth: 2 } : undefined}
+                >
                   <CardContent>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
                       <Box>

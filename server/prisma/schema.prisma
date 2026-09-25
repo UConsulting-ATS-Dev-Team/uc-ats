@@ -1661,6 +1661,7 @@ enum MeetingCommunicationType {
   CANCELLATION
   RESCHEDULED
   REMINDER
+  ATTENDANCE_REMINDER
 }
 
 /// Where a candidate stands in a slot.
