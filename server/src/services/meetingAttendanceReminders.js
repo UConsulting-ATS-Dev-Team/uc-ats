@@ -54,12 +54,13 @@ function stillDue(slot, communications) {
 
 /**
  * The slots a run should remind, with host, signups and prior reminders.
- * Pass `slotId` to ask the same question of one slot.
+ * Pass `slotId` to ask the same question of one slot, and `db` to ask it
+ * inside a transaction.
  */
-export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId = null) {
+export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId = null, db = prisma) {
   const latestEnd = new Date(now.getTime() - ATTENDANCE_DELAY_HOURS * HOUR_MS);
   const earliestEnd = new Date(latestEnd.getTime() - LOOKBACK_HOURS * HOUR_MS);
-  const slots = await prisma.meetingSlot.findMany({
+  const slots = await db.meetingSlot.findMany({
     where: {
       ...(slotId ? { id: slotId } : {}),
       OR: [
@@ -141,7 +142,7 @@ async function sendUnderSlotLock(slot, now) {
         await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-attendance-reminder:${slot.id}`})) AS locked`;
       if (!locked) return { ok: false };
 
-      const [current] = await findSlotsDueForAttendanceReminder(now, slot.id);
+      const [current] = await findSlotsDueForAttendanceReminder(now, slot.id, tx);
       if (!current) return { ok: false };
 
       return sendAttendanceReminder(current);
