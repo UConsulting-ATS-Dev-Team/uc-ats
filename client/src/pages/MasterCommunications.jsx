@@ -69,6 +69,8 @@ const CHANNELS = [
   // job with a list of addresses, but it composes nothing - the composer state
   // below is untouched while this tab is open.
   { key: 'mailing-list', label: 'Mailing List' },
+  // Who is held back from marketing sends. Also not a send channel.
+  { key: 'unsubscribes', label: 'Unsubscribes' },
 ];
 
 // Staging links here after processing decisions: ?tab=decisions&batch=<id>.
@@ -987,13 +989,6 @@ const MasterCommunications = () => {
         >
           Bulk sends
         </Button>
-        <Button
-          size="small"
-          variant={logView === 'unsubscribes' ? 'contained' : 'outlined'}
-          onClick={() => setLogView('unsubscribes')}
-        >
-          Unsubscribes
-        </Button>
       </Stack>
 
       {logView === 'all' && (
@@ -1003,7 +998,6 @@ const MasterCommunications = () => {
         />
       )}
       {logView === 'bulk' && renderBulkSendLog()}
-      {logView === 'unsubscribes' && <SuppressionsPanel />}
     </Box>
   );
 
@@ -1142,6 +1136,7 @@ const MasterCommunications = () => {
             />
           </TabPanel>
           <TabPanel value={tab} index={8}><MailingListImport /></TabPanel>
+          <TabPanel value={tab} index={9}><SuppressionsPanel /></TabPanel>
         </Paper>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>

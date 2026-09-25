@@ -54,8 +54,14 @@ describe('the page', () => {
     // catches the next one that does not.
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
       'Email', 'Slack', 'iMessage', 'Drafts', 'Templates', 'Logs', 'Scheduled', 'Decisions',
-      'Mailing List',
+      'Mailing List', 'Unsubscribes',
     ]);
+  });
+
+  it('opens the unsubscribe list from its tab', async () => {
+    render(<MasterCommunications />);
+    await userEvent.click(screen.getByRole('tab', { name: /Unsubscribes/i }));
+    expect(await screen.findByText(/These addresses are skipped/)).toBeInTheDocument();
   });
 
   it('opens the mailing list import from its tab', async () => {

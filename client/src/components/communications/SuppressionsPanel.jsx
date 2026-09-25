@@ -35,6 +35,7 @@ export default function SuppressionsPanel() {
   const [search, setSearch] = useState('');
   const [includeResubscribed, setIncludeResubscribed] = useState(false);
   const [newEmail, setNewEmail] = useState('');
+  const [newNote, setNewNote] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -55,14 +56,31 @@ export default function SuppressionsPanel() {
     return () => clearTimeout(t);
   }, [load]);
 
-  const add = async () => {
+  // Reloads only on success: load() clears the error, which would hide why
+  // the address was not added.
+  const suppress = async (email, note) => {
     try {
-      await apiClient.post('/master-communications/suppressions', { email: newEmail.trim() });
-      setNotice(`${newEmail.trim()} will no longer get marketing sends`);
-      setNewEmail('');
+      await apiClient.post('/master-communications/suppressions', { email, note: note || null });
+      setNotice(`${email} will no longer get marketing sends`);
       load();
+      return true;
     } catch (e) {
       setError(e.message || 'Failed to add');
+      return false;
+    }
+  };
+
+  // A blank note keeps whatever the row already says.
+  const unsubscribeAgain = (email) => {
+    const note = window.prompt(`Stop marketing email to ${email} again? Add a note if you like.`, '');
+    if (note === null) return;
+    suppress(email, note.trim());
+  };
+
+  const add = async () => {
+    if (await suppress(newEmail.trim(), newNote.trim())) {
+      setNewEmail('');
+      setNewNote('');
     }
   };
 
@@ -100,6 +118,7 @@ export default function SuppressionsPanel() {
         />
         <Box sx={{ flexGrow: 1 }} />
         <TextField size="small" label="Add an address" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+        <TextField size="small" label="Note (optional)" value={newNote} onChange={(e) => setNewNote(e.target.value)} />
         <Button variant="outlined" onClick={add} disabled={!newEmail.includes('@')}>Unsubscribe</Button>
       </Stack>
 
@@ -129,9 +148,12 @@ export default function SuppressionsPanel() {
                 <TableCell>{new Date(row.updatedAt).toLocaleDateString()}</TableCell>
                 <TableCell align="right">
                   {row.resubscribedAt ? (
-                    <Typography variant="caption" color="text.secondary">
-                      Resubscribed {new Date(row.resubscribedAt).toLocaleDateString()}
-                    </Typography>
+                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end">
+                      <Typography variant="caption" color="text.secondary">
+                        Resubscribed {new Date(row.resubscribedAt).toLocaleDateString()}
+                      </Typography>
+                      <Button size="small" onClick={() => unsubscribeAgain(row.email)}>Unsubscribe again</Button>
+                    </Stack>
                   ) : (
                     <Button size="small" onClick={() => resubscribe(row.email)}>Resubscribe</Button>
                   )}

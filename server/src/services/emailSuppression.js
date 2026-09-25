@@ -88,6 +88,10 @@ export function unsubscribeFooterHtml(url) {
  * reason: the first thing that happened is the useful history, and an SES
  * bounce arriving for someone who already unsubscribed changes nothing about
  * whether we may email them.
+ *
+ * Opting out again after a resubscribe keeps the row's earlier detail unless a
+ * new one is given, so a bounce message or an admin's note is not lost to a
+ * second opt-out that had nothing to add.
  */
 export async function suppressEmail({ email, reason, source, detail = null, messageLogId = null, createdById = null }, client = prisma) {
   const address = normalizeEmail(email);
@@ -108,7 +112,7 @@ export async function suppressEmail({ email, reason, source, detail = null, mess
   const data = {
     reason,
     source,
-    detail: detail ? String(detail).slice(0, 2000) : null,
+    detail: detail ? String(detail).slice(0, 2000) : existing?.detail ?? null,
     messageLogId,
     createdById,
     resubscribedAt: null,
