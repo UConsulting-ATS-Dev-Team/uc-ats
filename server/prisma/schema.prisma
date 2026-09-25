@@ -630,6 +630,9 @@ model Events {
   cycleId            String
   createdAt          DateTime          @default(now())
   memberRsvpUrl      String?
+  // Off hides member RSVP for this event: members get no RSVP button and the
+  // server refuses new in-app RSVPs. Rows already recorded are kept.
+  memberRsvpEnabled  Boolean           @default(true)
   showToCandidates   Boolean           @default(false)
   copiedFromCycleId  String?
   copiedFromEventId  String?

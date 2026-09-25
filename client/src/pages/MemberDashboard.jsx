@@ -129,8 +129,10 @@ export default function MemberDashboard() {
       }
       
       // Add RSVP tasks for upcoming events the member hasn't RSVP'd to. Every
-      // event can be RSVP'd to from the Events page, form link or not.
+      // event with member RSVP on can be RSVP'd to from the Events page, form
+      // link or not.
       const eventsNeedingRsvp = events.filter(event =>
+        event.memberRsvpEnabled !== false &&
         event.eventStartDate &&
         new Date(event.eventStartDate) > new Date() && // Only future events
         !event.hasMemberRsvpd

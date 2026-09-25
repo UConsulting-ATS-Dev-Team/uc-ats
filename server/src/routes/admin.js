@@ -1556,6 +1556,7 @@ router.patch('/events/:id', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberRsvpEnabled,
       memberAttendanceForm,
       lumaUrl,
       cycleId
@@ -1616,6 +1617,7 @@ router.patch('/events/:id', async (req, res) => {
         ...(attendanceForm !== undefined && { attendanceForm: attendanceForm || null }),
         ...(showToCandidates !== undefined && { showToCandidates }),
         ...(memberRsvpUrl !== undefined && { memberRsvpUrl: memberRsvpUrl || null }),
+        ...(typeof memberRsvpEnabled === 'boolean' && { memberRsvpEnabled }),
         ...(memberAttendanceForm !== undefined && { memberAttendanceForm: memberAttendanceForm || null }),
         ...(lumaUrl !== undefined && { lumaUrl: luma.url }),
         ...(relinked && { lumaEventId: null, lumaLastSyncedAt: null }),

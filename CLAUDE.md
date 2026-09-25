@@ -421,6 +421,11 @@ The system follows a **recruiting cycle-based workflow**:
 - Google Form, Luma and in-app rows coexist under the one-per-member-per-event index;
   whichever wrote first stands, and neither sync ever removes another source's row.
 - A new in-app RSVP sends the RSVP confirmation (with calendar invite) best-effort.
+- `Events.memberRsvpEnabled` (default on) is the admin's switch in Edit Event for events
+  that need no member RSVP. Off means no RSVP button, no dashboard RSVP task, an "Off"
+  Member RSVP column, and `409 RSVP_DISABLED` on a new in-app RSVP. Existing rows are
+  kept and an in-app RSVP made before it was turned off can still be cancelled. Luma and
+  Google Form syncs ignore the switch. Copying an event to another cycle keeps its setting.
 - Admins mark who actually came in Accountability Tracker → an event's Manage dialog,
   which opens on the RSVP'd members (any source). An RSVP never counts as attendance by
   itself; attendance is still only a `member_event_attendance` row, and a walk-in without

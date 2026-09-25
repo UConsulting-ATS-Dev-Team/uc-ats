@@ -35,7 +35,8 @@ const future = new Date(Date.now() + 7 * 24 * 3600 * 1000);
 const past = new Date(Date.now() - 3600 * 1000);
 const upcomingEvent = { id: 'evt-1', eventName: 'Info Session', eventStartDate: future, eventLocation: 'Ackerman' };
 const startedEvent = { id: 'evt-2', eventName: 'Mixer', eventStartDate: past, eventLocation: null };
-const EVENTS = [upcomingEvent, startedEvent];
+const rsvpOffEvent = { id: 'evt-3', eventName: 'Workshop', eventStartDate: future, eventLocation: null, memberRsvpEnabled: false };
+const EVENTS = [upcomingEvent, startedEvent, rsvpOffEvent];
 
 // One member's RSVPs, keyed by event, standing in for member_event_rsvp.
 let rows;
@@ -147,6 +148,23 @@ describe('PUT /api/member/events/:eventId/rsvp', () => {
   it('404s an unknown event', async () => {
     const res = await request('/api/member/events/nope/rsvp', { user: memberUser, method: 'PUT' });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('member RSVP turned off for an event', () => {
+  it('refuses a new RSVP', async () => {
+    const res = await request('/api/member/events/evt-3/rsvp', { user: memberUser, method: 'PUT' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('RSVP_DISABLED');
+    expect(prisma.memberEventRsvp.create).not.toHaveBeenCalled();
+    expect(sendRSVPConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('still cancels an in-app RSVP made before it was turned off', async () => {
+    rows.set('evt-3', { eventId: 'evt-3', memberId: 'member-1', source: 'IN_APP' });
+    const res = await request('/api/member/events/evt-3/rsvp', { user: memberUser, method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(rows.has('evt-3')).toBe(false);
   });
 });
 
