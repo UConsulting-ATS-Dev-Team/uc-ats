@@ -59,9 +59,15 @@ export default function AccountabilityTracker() {
   const [savingPoints, setSavingPoints] = useState(false);
   const [reminder, setReminder] = useState(null);
   const [sendingReminders, setSendingReminders] = useState(false);
-  // The event whose RSVP'd members are being texted, with their ids.
+  // The event whose RSVP'd members are being texted, with their ids and the
+  // cycle the event was listed under.
   const [textingEvent, setTextingEvent] = useState(null);
   const [textingLoading, setTextingLoading] = useState({});
+  // Bumped by every click and every cycle switch. A response for an earlier
+  // click, or for a cycle the admin has left, is dropped: the dialog seeds its
+  // recipients once on open, so a late response would put one event's name
+  // over another event's people.
+  const latestTextingRequest = useRef(0);
 
   const fetchCycles = async () => {
     try {
@@ -103,6 +109,7 @@ export default function AccountabilityTracker() {
   }, []);
 
   useEffect(() => {
+    latestTextingRequest.current += 1;
     fetchData();
   }, [selectedCycleId]);
 
@@ -166,18 +173,21 @@ export default function AccountabilityTracker() {
   // is pressed. Everyone who RSVP'd is included; the dialog says which of them
   // have no phone number on file.
   const openEventImessage = async (event) => {
+    const request = ++latestTextingRequest.current;
+    const cycleId = data.cycle.id;
     setTextingLoading((prev) => ({ ...prev, [event.id]: true }));
     setError('');
     try {
       const result = await apiClient.get(`/admin/accountability/events/${event.id}/members`);
+      if (request !== latestTextingRequest.current) return;
       const memberIds = result.members.filter((m) => m.rsvpd).map((m) => m.id);
       if (memberIds.length === 0) {
         setError(`No members have RSVP'd to ${event.eventName}`);
         return;
       }
-      setTextingEvent({ event, memberIds });
+      setTextingEvent({ event, memberIds, cycleId });
     } catch (e) {
-      setError(e.message || "Failed to load RSVP'd members");
+      if (request === latestTextingRequest.current) setError(e.message || "Failed to load RSVP'd members");
     } finally {
       setTextingLoading((prev) => ({ ...prev, [event.id]: false }));
     }
@@ -749,7 +759,7 @@ export default function AccountabilityTracker() {
             : ''
         }
         initialMemberIds={textingEvent?.memberIds ?? []}
-        cycleId={data?.cycle?.id}
+        cycleId={textingEvent?.cycleId}
         onSent={setMessage}
       />
     </Box>
