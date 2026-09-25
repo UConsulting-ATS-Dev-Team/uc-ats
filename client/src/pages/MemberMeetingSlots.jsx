@@ -65,10 +65,10 @@ export default function MemberMeetingSlots() {
   const [profileState, setProfileState] = useState(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   // ?slot=<id> comes from the attendance reminder email's button: open the
-  // page on that slot, once, so the host lands on the boxes to tick.
+  // page on that slot, once per link, so the host lands on the boxes to tick.
   const [searchParams] = useSearchParams();
   const focusSlotId = searchParams.get('slot');
-  const focusedOnce = useRef(false);
+  const focusedSlotId = useRef(null);
 
   useEffect(() => {
     api.setToken(token);
@@ -114,7 +114,13 @@ export default function MemberMeetingSlots() {
       // Load active cycle and filter slots
       const cycle = await loadActiveCycle();
       const filtered = filterSlotsByCycle(data, cycle);
-      setSlots(filtered);
+      // A linked slot stays visible even when the cycle filter would hide it
+      // (it ended just before a new cycle started, or none is active), or the
+      // email's button would open a page without the slot it asks about.
+      const linked = focusSlotId && !filtered.some((s) => s.id === focusSlotId)
+        ? data.find((s) => s.id === focusSlotId)
+        : null;
+      setSlots(linked ? [linked, ...filtered] : filtered);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
     } finally {
@@ -123,9 +129,9 @@ export default function MemberMeetingSlots() {
   };
 
   useEffect(() => {
-    if (!focusSlotId || focusedOnce.current || loading) return;
+    if (!focusSlotId || focusedSlotId.current === focusSlotId || loading) return;
     if (!slots.some((s) => s.id === focusSlotId)) return;
-    focusedOnce.current = true;
+    focusedSlotId.current = focusSlotId;
     document.getElementById(`slot-${focusSlotId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [focusSlotId, loading, slots]);
 

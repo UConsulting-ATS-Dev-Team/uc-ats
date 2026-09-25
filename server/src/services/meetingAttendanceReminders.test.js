@@ -6,12 +6,15 @@ import {
   sendDueAttendanceReminders,
 } from './meetingAttendanceReminders.js';
 
-vi.mock('../prismaClient.js', () => ({
-  default: {
+vi.mock('../prismaClient.js', () => {
+  const prisma = {
     meetingSlot: { findMany: vi.fn() },
     meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }) },
-  },
-}));
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
+  };
+  return { default: prisma };
+});
 
 vi.mock('./emailNotifications.js', () => ({
   sendMeetingAttendanceReminder: vi.fn(),
@@ -44,6 +47,8 @@ const reminder = (hoursFromNow, status = 'SENT') => ({
 beforeEach(() => {
   vi.clearAllMocks();
   sendMeetingAttendanceReminder.mockResolvedValue({ success: true });
+  prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
 describe('findSlotsDueForAttendanceReminder', () => {
@@ -127,6 +132,16 @@ describe('sendDueAttendanceReminders', () => {
         status: 'SENT',
       }),
     });
+  });
+
+  it('skips the tick when another instance holds the run lock', async () => {
+    // Old and new instances overlap during a deploy; only one may send.
+    prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
+    prisma.meetingSlot.findMany.mockResolvedValue([slotEnded(1.1)]);
+
+    expect(await sendDueAttendanceReminders(NOW)).toBe(0);
+    expect(prisma.meetingSlot.findMany).not.toHaveBeenCalled();
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
   });
 
   it('logs a failed send as FAILED and does not count it', async () => {

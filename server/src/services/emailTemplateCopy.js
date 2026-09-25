@@ -232,7 +232,7 @@ const MEETING_ATTENDANCE_REMINDER = {
     block(
       'intro',
       'Before the slot details',
-      'Your Get to Know UC slot at {{location}} ended about an hour ago. Please mark who showed up in the ATS.'
+      'Your Get to Know UC slot at {{location}} is over. Please mark who showed up in the ATS.'
     ),
     block(
       'outro',

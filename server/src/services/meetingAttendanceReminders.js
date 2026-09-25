@@ -110,13 +110,32 @@ export async function sendAttendanceReminder(slot) {
   );
 }
 
-/** One cron tick. Returns how many reminders went out. */
+const RUN_LOCK_KEY = 'gtkuc-attendance-reminders';
+const RUN_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * One cron tick. Returns how many reminders went out.
+ *
+ * The in-process flag in index.js only stops a run overlapping itself. During
+ * a deploy the old and new instances both run the cron for a moment, and both
+ * would pick the same slot before either logged it. A transaction-scoped
+ * advisory lock makes one of them skip the tick instead; the next tick then
+ * sees what the first one logged.
+ */
 export async function sendDueAttendanceReminders(now = new Date()) {
-  const due = await findSlotsDueForAttendanceReminder(now);
-  let sent = 0;
-  for (const slot of due) {
-    const { ok } = await sendAttendanceReminder(slot);
-    if (ok) sent += 1;
-  }
-  return sent;
+  return prisma.$transaction(
+    async (tx) => {
+      const [{ locked }] = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${RUN_LOCK_KEY})) AS locked`;
+      if (!locked) return 0;
+
+      const due = await findSlotsDueForAttendanceReminder(now);
+      let sent = 0;
+      for (const slot of due) {
+        const { ok } = await sendAttendanceReminder(slot);
+        if (ok) sent += 1;
+      }
+      return sent;
+    },
+    { timeout: RUN_TIMEOUT_MS }
+  );
 }
