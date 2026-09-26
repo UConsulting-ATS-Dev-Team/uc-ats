@@ -72,7 +72,7 @@ describe('AccountabilityTracker event iMessage', () => {
     mockApiClient([event()]);
     render(<AccountabilityTracker />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'iMessage RSVPs' }, slow));
+    fireEvent.click(await screen.findByRole('button', { name: /^iMessage RSVP'd members of / }, slow));
 
     const dialog = within(await screen.findByRole('dialog', {}, slow));
     expect(dialog.getByText("Send iMessage to RSVP'd members")).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe('AccountabilityTracker event iMessage', () => {
     mockApiClient([event()], { withoutPhone: ['m2'] });
     render(<AccountabilityTracker />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'iMessage RSVPs' }, slow));
+    fireEvent.click(await screen.findByRole('button', { name: /^iMessage RSVP'd members of / }, slow));
 
     const dialog = within(await screen.findByRole('dialog', {}, slow));
     expect(await dialog.findByText(/Bob Jones has no phone on file/, {}, slow)).toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('AccountabilityTracker event iMessage', () => {
     });
     render(<AccountabilityTracker />);
 
-    const [first, second] = await screen.findAllByRole('button', { name: 'iMessage RSVPs' }, slow);
+    const [first, second] = await screen.findAllByRole('button', { name: /^iMessage RSVP'd members of / }, slow);
     fireEvent.click(first);
     fireEvent.click(second);
 
@@ -121,6 +121,6 @@ describe('AccountabilityTracker event iMessage', () => {
     mockApiClient([event({ memberRsvpCount: 0 })]);
     render(<AccountabilityTracker />);
 
-    expect(await screen.findByRole('button', { name: 'iMessage RSVPs' }, slow)).toBeDisabled();
+    expect(await screen.findByRole('button', { name: /^iMessage RSVP'd members of / }, slow)).toBeDisabled();
   });
 });

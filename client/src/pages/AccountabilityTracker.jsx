@@ -38,11 +38,13 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
-// Renders "Fri, Oct 9 · 7:30 PM". A cycle's events share a year, so printing it only adds width.
+// Renders "Fri, Oct 9 · 7:30 PM". The year shows only when it is not this one,
+// so a fall cycle's January events still read unambiguously.
 const formatEventDate = (value) => {
   if (!value) return '—';
   const date = new Date(value);
-  const day = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const year = date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric';
+  const day = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year });
   const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   return `${day} · ${time}`;
 };
