@@ -57,6 +57,20 @@ describe('saving the theme', () => {
     expect(prisma.emailTheme.deleteMany).toHaveBeenCalled();
   });
 
+  it('stores a cleared footer as "no footer", not as "use the default"', async () => {
+    expect(normalizeTheme({ ...THEME_DEFAULTS, footerText: '   ' })).toEqual({ footerText: '' });
+
+    await saveEmailTheme({ theme: { ...THEME_DEFAULTS, footerText: '' } });
+    expect(prisma.emailTheme.upsert.mock.calls[0][0].update.footerText).toBe('');
+
+    prisma.emailTheme.findUnique.mockResolvedValue({ id: 'default', footerText: '' });
+    expect((await resolveEmailTheme()).footerText).toBe('');
+  });
+
+  it('keeps the shipped footer when the field is not sent at all', () => {
+    expect(normalizeTheme({ accentColor: '#112233' })).toEqual({ accentColor: '#112233' });
+  });
+
   it('resolves to the defaults when the table is missing', async () => {
     prisma.emailTheme.findUnique.mockRejectedValue(new Error('does not exist'));
     expect(await resolveEmailTheme()).toEqual(THEME_DEFAULTS);

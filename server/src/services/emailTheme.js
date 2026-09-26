@@ -69,6 +69,15 @@ export function normalizeTheme(input) {
   const theme = {};
   for (const field of THEME_FIELDS) {
     const value = trimmed(input[field]);
+
+    // The footer is the one field whose default is not empty, so a blank one
+    // is a choice ("no footer") rather than "use the default". It is stored as
+    // '' to tell the two apart; null still means the shipped footer.
+    if (field === 'footerText' && !value && typeof input[field] === 'string') {
+      theme.footerText = '';
+      continue;
+    }
+
     if (!value || value === THEME_DEFAULTS[field]) continue;
 
     if (COLOUR_FIELDS.includes(field)) {
@@ -120,6 +129,8 @@ const storedTheme = (row) => {
   for (const field of THEME_FIELDS) {
     if (row?.[field]) stored[field] = row[field];
   }
+  // '' is a stored "no footer", which the truthiness check above skips.
+  if (row?.footerText === '') stored.footerText = '';
   return stored;
 };
 

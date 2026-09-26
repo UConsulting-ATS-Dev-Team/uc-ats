@@ -107,6 +107,12 @@ describe('what an admin can and cannot inject', () => {
     expect(html).toContain('&lt;i&gt;hi&lt;/i&gt;');
   });
 
+  it('draws no footer at all when the theme has cleared it', () => {
+    const html = renderEmailLayout({ parts: [], theme: { ...theme, footerText: '' }, style: designed });
+    expect(html).not.toContain(THEME_DEFAULTS.footerText);
+    expect(html).not.toContain('font-size: 12px');
+  });
+
   it('shows the logo instead of the brand text when one is set', () => {
     const html = renderEmailLayout({
       parts: [],
