@@ -35,6 +35,16 @@ beforeEach(() => {
 
 const rowOf = (i = 0) => recordCommunication.mock.calls[i][0];
 
+describe('every send carries a text version', () => {
+  it('derives text/plain from the HTML', async () => {
+    await sendEmail('ryan@example.com', 'Subject', '<p>Hello <a href="https://x.test/a">there</a></p>');
+
+    const { html, text } = sendMail.mock.calls[0][0];
+    expect(html).toContain('<p>');
+    expect(text).toBe('Hello there [https://x.test/a]');
+  });
+});
+
 describe('every send is recorded', () => {
   it('records a successful send with the provider id', async () => {
     const result = await sendEmail('ryan@example.com', 'Subject', '<p>Body</p>');

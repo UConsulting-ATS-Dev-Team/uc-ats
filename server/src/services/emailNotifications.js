@@ -10,7 +10,8 @@ import {
   resolveEmailCopy,
   slotCopyKey,
 } from './emailTemplateCopy.js';
-import { copyHtml, copyLine, copySignOff, copySubject } from './emailCopyRender.js';
+import { copySubject } from './emailCopyRender.js';
+import { composeEmail, htmlToPlainText, part } from './emailLayout.js';
 
 // Single reusable SES client. Credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
 // are picked up automatically from the environment by the AWS SDK credential chain.
@@ -36,81 +37,46 @@ const createTransporter = () => {
 };
 
 // Email templates
-const createRSVPConfirmationEmail = async (candidateName, eventName, eventDate, eventLocation) => {
-  const copy = await resolveEmailCopy('rsvp-confirmation');
+//
+// Each builder says what its email contains and hands that to composeEmail
+// (emailLayout.js), which draws it in the admin's theme and format. No builder
+// writes layout HTML. The one exception is the escaped HTML a builder composes
+// from data for a card line (an attendee list, a struck-out old time), which
+// the layout places without re-escaping.
+
+// "Date & Time" / "Duration" rows as every meeting card has always shown them.
+const meetingTimeRows = (startTime, endTime) => [
+  { label: 'Date & Time', value: formatEmailDateTime(startTime) },
+  endTime ? { label: 'Duration', value: `${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}` } : null,
+];
+
+const eventConfirmationEmail = async (key, candidateName, eventName, eventDate, eventLocation) => {
+  const copy = await resolveEmailCopy(key);
   const values = { candidateName, eventName, eventDate, eventLocation };
 
-  return {
+  return composeEmail(key, {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 10px 0;">Event Details</h4>
-            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${escapeHtml(eventName)}</p>
-            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${escapeHtml(eventLocation)}</p>` : ''}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({
+        title: 'Event Details',
+        rows: [
+          { label: 'Event', value: eventName },
+          eventLocation ? { label: 'Location', value: eventLocation } : null,
+        ],
+      }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
-const createAttendanceConfirmationEmail = async (candidateName, eventName, eventDate, eventLocation) => {
-  const copy = await resolveEmailCopy('attendance-confirmation');
-  const values = { candidateName, eventName, eventDate, eventLocation };
+const createRSVPConfirmationEmail = (...args) => eventConfirmationEmail('rsvp-confirmation', ...args);
 
-  return {
-    subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 10px 0;">Event Details</h4>
-            <p style="color: #666; margin: 5px 0;"><strong>Event:</strong> ${escapeHtml(eventName)}</p>
-            ${eventLocation ? `<p style="color: #666; margin: 5px 0;"><strong>Location:</strong> ${escapeHtml(eventLocation)}</p>` : ''}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
-};
+const createAttendanceConfirmationEmail = (...args) => eventConfirmationEmail('attendance-confirmation', ...args);
 
 // Send email function
 // `to` is usually one address, but nodemailer also accepts an array or a
@@ -170,7 +136,11 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
       replyTo: process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,
-      html: html
+      html: html,
+      // Every message goes as multipart/alternative. An HTML-only email is a
+      // spam signal to Gmail and unreadable in a text client, and deriving the
+      // text from the HTML means the two can never disagree.
+      text: htmlToPlainText(html)
     };
 
     if (hasAttachments) {
@@ -265,81 +235,28 @@ export const formatEventDate = (date) => {
   return formatEmailDateTime(date);
 };
 
-// Create acceptance email template
-const createAcceptanceEmail = async (candidateName, currentCycleName) => {
-  const copy = await resolveEmailCopy('application-acceptance');
+// The coffee-chat advance and the rejection: same shape, different tone.
+const applicationDecisionEmail = async (key, tone, candidateName, currentCycleName) => {
+  const copy = await resolveEmailCopy(key);
   const values = { candidateName, cycleName: currentCycleName };
 
-  return {
+  return composeEmail(key, {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #28a745; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 10px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { color: '#155724', spacing: 'snug' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({ tone, titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
-// Create rejection email template
-const createRejectionEmail = async (candidateName, currentCycleName) => {
-  const copy = await resolveEmailCopy('application-rejection');
-  const values = { candidateName, cycleName: currentCycleName };
+const createAcceptanceEmail = (...args) => applicationDecisionEmail('application-acceptance', 'success', ...args);
 
-  return {
-    subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
-            <h4 style="color: #721c24; margin: 0 0 10px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { color: '#721c24', spacing: 'snug' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
-};
+const createRejectionEmail = (...args) => applicationDecisionEmail('application-rejection', 'danger', ...args);
 
 // Send acceptance email
 export const sendAcceptanceEmail = async (candidateEmail, candidateName, currentCycleName) => {
@@ -401,38 +318,26 @@ const createOfferLetterEmail = async (candidateName, currentCycleName, offerDeta
     ? escapeHtml(additionalNotes).replace(/\n/g, '<br>')
     : '';
 
-  return {
+  return composeEmail('offer-letter', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #10b981; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d1fae5; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10b981;">
-            <h4 style="color: #065f46; margin: 0 0 10px 0;">Offer Details</h4>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Position:</strong> ${escapeHtml(position)}</p>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Start Date:</strong> ${escapeHtml(startDate || 'To be determined')}</p>
-            <p style="color: #065f46; margin: 5px 0;"><strong>Response Deadline:</strong> ${escapeHtml(responseDeadline)}</p>
-            ${additionalNotesE ? `<p style="color: #065f46; margin: 5px 0;"><strong>Additional Notes:</strong><br>${additionalNotesE}</p>` : ''}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.copy(copy.intro),
+      part.card({
+        tone: 'success',
+        title: 'Offer Details',
+        rows: [
+          { label: 'Position', value: position },
+          { label: 'Start Date', value: startDate || 'To be determined' },
+          { label: 'Response Deadline', value: responseDeadline },
+          additionalNotesE ? { label: 'Additional Notes', html: `<br>${additionalNotesE}` } : null,
+        ],
+      }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send offer letter email
@@ -464,39 +369,26 @@ const createMeetingSignupConfirmationEmail = async (candidateName, memberName, l
   const copy = await resolveEmailCopy('meeting-signup-confirmation');
   const values = { candidateName, memberName, location };
 
-  return {
+  return composeEmail('meeting-signup-confirmation', {
     subject: copySubject(copy.subject, values),
-    html: `
-        <div style="padding: 30px 20px;">
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
-            <h4 style="color: #004085; margin: 0 0 15px 0;">Meeting Details</h4>
-            <p style="color: #004085; margin: 8px 0;"><strong>Member:</strong> ${escapeHtml(memberName)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({
+        tone: 'info',
+        title: 'Meeting Details',
+        rows: [
+          { label: 'Member', value: memberName },
+          ...meetingTimeRows(startTime, endTime),
+          { label: 'Location', value: location },
+        ],
+      }),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send meeting signup confirmation email
@@ -525,39 +417,40 @@ const createMeetingSlotCreatedEmail = async (memberName, location, startTime, en
   const copy = await resolveEmailCopy('meeting-slot-created');
   const values = { memberName, location };
 
-  return {
+  return composeEmail('meeting-slot-created', {
     subject: copySubject(copy.subject, values),
-    html: `
-        <div style="padding: 30px 20px;">
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 15px 0;">Slot Details</h4>
-            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            ${endTime ? `<p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>` : ''}
-            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      slotDetailsCard(location, startTime, endTime),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
+
+// The host's own slot, as every GTKUC host email shows it.
+function slotDetailsCard(location, startTime, endTime) {
+  return part.card({
+    tone: 'success',
+    title: 'Slot Details',
+    rows: [...meetingTimeRows(startTime, endTime), { label: 'Location', value: location }],
+  });
+}
+
+// Who booked, one line each. `extra` adds the tail of a line (a phone number,
+// "marked attended") as escaped HTML.
+function signupsCard(attendees, extra) {
+  return part.card({
+    tone: 'info',
+    title: `Signed Up (${attendees.length})`,
+    lines: attendees.map(
+      (a) => `<strong>${escapeHtml(a.fullName)}</strong> - ${escapeHtml(a.email)}${extra(a)}`
+    ),
+  });
+}
 
 export const sendMeetingSlotCreated = async (memberEmail, memberName, location, startTime, endTime, { invite } = {}) => {
   try {
@@ -583,59 +476,21 @@ export const sendMeetingSlotCreated = async (memberEmail, memberName, location, 
 const createMeetingHostReminderEmail = async (memberName, location, startTime, endTime, attendees = [], ctaUrl = null) => {
   const copy = await resolveEmailCopy('meeting-host-reminder');
   const values = { memberName, location };
-  const rows = attendees
-    .map(
-      (a) => `<p style="color: #004085; margin: 8px 0;"><strong>${escapeHtml(a.fullName)}</strong> - ${escapeHtml(a.email)}${
-        a.phoneNumber ? ` - ${escapeHtml(a.phoneNumber)}` : ''
-      }</p>`
-    )
-    .join('');
 
-  return {
+  return composeEmail('meeting-host-reminder', {
     subject: copySubject(copy.subject, values),
-    html: `
-        <div style="padding: 30px 20px;">
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 15px 0;">Slot Details</h4>
-            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            ${endTime ? `<p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>` : ''}
-            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
-            <h4 style="color: #004085; margin: 0 0 15px 0;">Signed Up (${attendees.length})</h4>
-            ${rows}
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${
-            ctaUrl
-              ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Contact your signups</a>
-          </p>`
-              : ''
-          }
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      slotDetailsCard(location, startTime, endTime),
+      signupsCard(attendees, (a) => (a.phoneNumber ? ` - ${escapeHtml(a.phoneNumber)}` : '')),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.button(ctaUrl, 'Contact your signups'),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 export const sendMeetingHostReminder = async (memberEmail, memberName, location, startTime, endTime, attendees, ctaUrl) => {
@@ -660,54 +515,20 @@ export const sendMeetingHostReminder = async (memberEmail, memberName, location,
 const createMeetingAttendanceReminderEmail = async (memberName, location, startTime, endTime, attendees = [], ctaUrl = null) => {
   const copy = await resolveEmailCopy('meeting-attendance-reminder');
   const values = { memberName, location };
-  const rows = attendees
-    .map(
-      (a) => `<p style="color: #004085; margin: 8px 0;"><strong>${escapeHtml(a.fullName)}</strong> - ${escapeHtml(a.email)}${
-        a.attended ? ' - <em>marked attended</em>' : ''
-      }</p>`
-    )
-    .join('');
 
-  return {
+  return composeEmail('meeting-attendance-reminder', {
     subject: copySubject(copy.subject, values),
-    html: `
-        <div style="padding: 30px 20px;">
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 15px 0;">Slot Details</h4>
-            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            ${endTime ? `<p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>` : ''}
-            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
-            <h4 style="color: #004085; margin: 0 0 15px 0;">Signed Up (${attendees.length})</h4>
-            ${rows}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${
-            ctaUrl
-              ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Mark attendance</a>
-          </p>`
-              : ''
-          }
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      slotDetailsCard(location, startTime, endTime),
+      signupsCard(attendees, (a) => (a.attended ? ' - <em>marked attended</em>' : '')),
+      part.copy(copy.outro),
+      part.button(ctaUrl, 'Mark attendance'),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 export const sendMeetingAttendanceReminder = async (memberEmail, memberName, location, startTime, endTime, attendees, ctaUrl) => {
@@ -733,42 +554,30 @@ const createMeetingSignupNotificationEmail = async (memberName, candidateName, c
   const copy = await resolveEmailCopy('meeting-signup-notification');
   const values = { memberName, candidateName, candidateEmail, location };
 
-  return {
+  return composeEmail('meeting-signup-notification', {
     subject: copySubject(copy.subject, values),
-    html: `
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h4 style="color: #155724; margin: 0 0 15px 0;">Meeting Details</h4>
-            <p style="color: #155724; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            <p style="color: #155724; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
-            <p style="color: #155724; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #cce7ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff;">
-            <h4 style="color: #004085; margin: 0 0 15px 0;">Candidate Information</h4>
-            <p style="color: #004085; margin: 8px 0;"><strong>Name:</strong> ${escapeHtml(candidateName)}</p>
-            <p style="color: #004085; margin: 8px 0;"><strong>Email:</strong> ${escapeHtml(candidateEmail)}</p>
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({
+        tone: 'success',
+        title: 'Meeting Details',
+        rows: [...meetingTimeRows(startTime, endTime), { label: 'Location', value: location }],
+      }),
+      part.card({
+        tone: 'info',
+        title: 'Candidate Information',
+        rows: [
+          { label: 'Name', value: candidateName },
+          { label: 'Email', value: candidateEmail },
+        ],
+      }),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send meeting signup notification email to member
@@ -795,45 +604,27 @@ const createMeetingCancellationEmail = async (candidateName, memberName, locatio
   const copy = await resolveEmailCopy('meeting-cancellation-candidate');
   const values = { candidateName, memberName, location };
 
-  return {
+  return composeEmail('meeting-cancellation-candidate', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
-            <h4 style="color: #721c24; margin: 0 0 15px 0;">Cancelled Meeting Details</h4>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Member:</strong> ${escapeHtml(memberName)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({
+        tone: 'danger',
+        title: 'Cancelled Meeting Details',
+        rows: [
+          { label: 'Member', value: memberName },
+          ...meetingTimeRows(startTime, endTime),
+          { label: 'Location', value: location },
+        ],
+      }),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Create password reset email template
@@ -843,52 +634,19 @@ const createPasswordResetEmail = async (resetLink) => {
   const copy = await resolveEmailCopy('password-reset');
   const values = {};
 
-  return {
+  return composeEmail('password-reset', {
     subject: copySubject(copy.subject, values),
-    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Reset Your Password</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-              <h2 style="color: #042742; margin: 0;">UConsulting ATS</h2>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
-              ${copyHtml(copy.intro, values)}
-              <p style="text-align: center; margin: 30px 0;">
-                <a href="${resetLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Reset Password</a>
-              </p>
-              ${copyHtml(copy.linkFallback, values)}
-              <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
-                <a href="${resetLink}" style="color: #0C74C1; text-decoration: underline;">${resetLink}</a>
-              </p>
-              ${copyHtml(copy.ignoreNotice, values)}
-              ${copySignOff(copy.signOff, values)}
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.copy(copy.intro),
+      part.button(resetLink, 'Reset Password'),
+      part.copy(copy.linkFallback),
+      part.link(resetLink),
+      part.copy(copy.ignoreNotice),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Create password reset confirmation email template
@@ -896,45 +654,16 @@ const createPasswordResetConfirmationEmail = async (fullName) => {
   const copy = await resolveEmailCopy('password-reset-confirmation');
   const values = { firstName: fullName?.trim().split(' ')[0] || 'there' };
 
-  return {
+  return composeEmail('password-reset-confirmation', {
     subject: copySubject(copy.subject, values),
-    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Password Reset Confirmation</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-              <h2 style="color: #042742; margin: 0;">UConsulting ATS</h2>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${copyLine(copy.greeting, values)}</p>
-              ${copyHtml(copy.intro, values)}
-              ${copySignOff(copy.signOff, values)}
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send password reset email
@@ -1020,44 +749,26 @@ const createMeetingCancellationMemberEmail = async (memberName, location, startT
   const intro = candidateName ? copy.introCandidateCancelled : copy.introSlotCancelled;
   const impact = candidateName ? copy.impactCandidateCancelled : copy.impactSlotCancelled;
 
-  return {
+  return composeEmail('meeting-cancellation-member', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #dc3545; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(intro, values)}
-
-          <div style="background-color: #f8d7da; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc3545;">
-            <h4 style="color: #721c24; margin: 0 0 15px 0;">Cancelled Meeting Details</h4>
-            ${candidateName ? `<p style="color: #721c24; margin: 8px 0;"><strong>Candidate:</strong> ${escapeHtml(candidateName)}</p>` : ''}
-            <p style="color: #721c24; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(startTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(startTime)} - ${formatEmailTime(endTime)}</p>
-            <p style="color: #721c24; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(location)}</p>
-          </div>
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(impact, values, { spacing: 'tight' })}
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(intro),
+      part.card({
+        tone: 'danger',
+        title: 'Cancelled Meeting Details',
+        rows: [
+          candidateName ? { label: 'Candidate', value: candidateName } : null,
+          ...meetingTimeRows(startTime, endTime),
+          { label: 'Location', value: location },
+        ],
+      }),
+      part.card({ titleText: copy.highlightsTitle, copy: [impact, copy.highlights] }),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send meeting cancellation email to the HOST member.
@@ -1090,31 +801,26 @@ export const sendMeetingCancellationToMember = async (memberEmail, memberName, l
 // `next` and `previous` are each { location, startTime, endTime }. Only the
 // fields that actually differ are listed under "Previously", because repeating
 // an unchanged location under a strikethrough heading reads like it moved too.
-const renderRescheduleDetails = (next, previous) => {
-  const changedRows = [];
+const rescheduleDetailParts = (next, previous) => {
+  const changedLines = [];
   if (String(previous.startTime) !== String(next.startTime) || String(previous.endTime) !== String(next.endTime)) {
-    changedRows.push(
-      `<p style="color: #6c757d; margin: 8px 0;"><s>${formatEmailDateTime(previous.startTime)}` +
-      `${previous.endTime ? ` (until ${formatEmailTime(previous.endTime)})` : ''}</s></p>`
+    changedLines.push(
+      `<s>${escapeHtml(formatEmailDateTime(previous.startTime))}` +
+      `${previous.endTime ? ` (until ${escapeHtml(formatEmailTime(previous.endTime))})` : ''}</s>`
     );
   }
   if (previous.location !== next.location) {
-    changedRows.push(`<p style="color: #6c757d; margin: 8px 0;"><s>${escapeHtml(previous.location)}</s></p>`);
+    changedLines.push(`<s>${escapeHtml(previous.location)}</s>`);
   }
 
-  return `
-          <div style="background-color: #d1e7dd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #198754;">
-            <h4 style="color: #0f5132; margin: 0 0 15px 0;">New Meeting Details</h4>
-            <p style="color: #0f5132; margin: 8px 0;"><strong>Date &amp; Time:</strong> ${formatEmailDateTime(next.startTime)}</p>
-            ${next.endTime ? `<p style="color: #0f5132; margin: 8px 0;"><strong>Duration:</strong> ${formatEmailTime(next.startTime)} - ${formatEmailTime(next.endTime)}</p>` : ''}
-            <p style="color: #0f5132; margin: 8px 0;"><strong>Location:</strong> ${escapeHtml(next.location)}</p>
-          </div>
-
-          ${changedRows.length ? `
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #6c757d; margin: 0 0 15px 0;">Previously</h4>
-            ${changedRows.join('\n            ')}
-          </div>` : ''}`;
+  return [
+    part.card({
+      tone: 'success',
+      title: 'New Meeting Details',
+      rows: [...meetingTimeRows(next.startTime, next.endTime), { label: 'Location', value: next.location }],
+    }),
+    changedLines.length ? part.card({ tone: 'muted', title: 'Previously', lines: changedLines }) : null,
+  ].filter(Boolean);
 };
 
 // Reschedule notice directed at a signed-up CANDIDATE.
@@ -1122,36 +828,18 @@ const createMeetingRescheduleEmail = async (candidateName, memberName, next, pre
   const copy = await resolveEmailCopy('meeting-reschedule-candidate');
   const values = { candidateName, memberName };
 
-  return {
+  return composeEmail('meeting-reschedule-candidate', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-${renderRescheduleDetails(next, previous)}
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      ...rescheduleDetailParts(next, previous),
+      part.card({ titleText: copy.highlightsTitle, copy: [copy.highlights] }),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send the reschedule notice to a signed-up candidate.
@@ -1181,37 +869,18 @@ const createMeetingRescheduleMemberEmail = async (memberName, next, previous, op
   const values = { memberName, signupCount: signupCount ?? 0 };
   const impact = signupCount ? copy.impactWithSignups : copy.impactWithoutSignups;
 
-  return {
+  return composeEmail('meeting-reschedule-member', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #fd7e14; padding: 20px; text-align: center; color: white;">
-          <h2 style="color: white; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-${renderRescheduleDetails(next, previous)}
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 15px 0;">${copyLine(copy.highlightsTitle, values)}</h4>
-            ${copyHtml(impact, values, { spacing: 'tight' })}
-            ${copyHtml(copy.highlights, values, { spacing: 'tight' })}
-          </div>
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      ...rescheduleDetailParts(next, previous),
+      part.card({ titleText: copy.highlightsTitle, copy: [impact, copy.highlights] }),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send the reschedule notice to the HOST member.
@@ -1240,44 +909,27 @@ const createReviewerReminderEmail = async (reviewerName, teamName, cycleName, pr
   const values = { reviewerName, teamName, cycleName };
   const { completed, eligible, completedTotal, expectedTotal, completionPercent, gradingUrl } = progress;
 
-  return {
+  return composeEmail('reviewer-reminder', {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #333; margin: 0;">UConsulting ATS</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">${copyLine(copy.greeting, values)}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 10px 0;">Your current progress</h4>
-            <p style="color: #666; margin: 5px 0;"><strong>Overall:</strong> ${completedTotal}/${expectedTotal} (${completionPercent}% complete)</p>
-            <p style="color: #666; margin: 5px 0;"><strong>Resume:</strong> ${completed.resume}/${eligible.resume}</p>
-            <p style="color: #666; margin: 5px 0;"><strong>Short Answer:</strong> ${completed.coverLetter}/${eligible.coverLetter}</p>
-            <p style="color: #666; margin: 5px 0;"><strong>Video:</strong> ${completed.video}/${eligible.video}</p>
-          </div>
-
-          ${copyHtml(copy.outro, values)}
-
-          <p style="text-align: center; margin: 30px 0;">
-            <a href="${gradingUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Grade Applications</a>
-          </p>
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.card({
+        title: 'Your current progress',
+        rows: [
+          { label: 'Overall', value: `${completedTotal}/${expectedTotal} (${completionPercent}% complete)` },
+          { label: 'Resume', value: `${completed.resume}/${eligible.resume}` },
+          { label: 'Short Answer', value: `${completed.coverLetter}/${eligible.coverLetter}` },
+          { label: 'Video', value: `${completed.video}/${eligible.video}` },
+        ],
+      }),
+      part.copy(copy.outro),
+      part.button(gradingUrl, 'Grade Applications'),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 // Send a reviewer reminder email with team/progress context and a link to the grading workflow.
@@ -1393,59 +1045,36 @@ export const renderInterviewSlotEmail = async (
   // point of the message is that a booking is gone.
   const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(type);
 
-  const title = escapeHtml(values.interviewTitle);
-  const when = hasSession
-    ? escapeHtml(`${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}`)
-    : '';
-  const where = escapeHtml(slot.location || interview.location || '');
-  const blockLabel = slot.label ? escapeHtml(slot.label) : null;
+  const where = slot.location || interview.location || '';
   // Who the interviewer is seeing. Arrives already narrowed to interviewer
   // notifications, so a candidate's own email can never grow this line.
   const roster = describeRoster(notification.candidateRoster);
-  const who = roster ? escapeHtml(roster) : null;
 
-  return `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #042742; margin: 0;">UConsulting</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin-bottom: 20px;">${copyLine(copy.heading, values)}</h3>
-
-          ${copyHtml(body, values)}
-
-          ${
-            !showDetails
-              ? ''
-              : `<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #333; margin: 0 0 10px 0;">${title}</h4>
-            ${blockLabel ? `<p style="color: #666; margin: 5px 0;"><strong>Session:</strong> ${blockLabel}</p>` : ''}
-            <p style="color: #666; margin: 5px 0;"><strong>When:</strong> ${when}</p>
-            ${where ? `<p style="color: #666; margin: 5px 0;"><strong>Where:</strong> ${where}</p>` : ''}
-            ${who ? `<p style="color: #666; margin: 5px 0;"><strong>Who you're seeing:</strong> ${who}</p>` : ''}
-          </div>`
-          }
-
-          ${
-            ctaUrl
-              ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">${escapeHtml(ctaLabel)}</a>
-          </p>`
-              : ''
-          }
-
-          <p style="color: #666; line-height: 1.6; margin-bottom: 20px;">
-            Best regards,<br>
-            UConsulting Recruitment
-          </p>
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `;
+  // Returns the HTML alone: the subject was stamped when the notification was
+  // queued (slotNotificationSubject), and every caller wants only the body.
+  const { html } = await composeEmail(slotCopyKey(type), {
+    subject: values.interviewTitle,
+    values,
+    brand: 'UConsulting',
+    parts: [
+      part.heading(copy.heading),
+      part.copy(body),
+      showDetails
+        ? part.card({
+            title: values.interviewTitle,
+            rows: [
+              slot.label ? { label: 'Session', value: slot.label } : null,
+              { label: 'When', value: `${formatEmailDateTime(slot.startTime)} - ${formatEmailTime(slot.endTime)}` },
+              where ? { label: 'Where', value: where } : null,
+              roster ? { label: "Who you're seeing", value: roster } : null,
+            ],
+          })
+        : null,
+      part.button(ctaUrl, ctaLabel),
+      part.signOff('Best regards,\nUConsulting Recruitment'),
+    ].filter(Boolean),
+  });
+  return html;
 };
 
 // ---------------------------------------------------------------------------
@@ -1459,55 +1088,22 @@ const createEmailVerificationEmail = async (fullName, verifyLink) => {
   // escaped by copyLine on its way into the greeting.
   const copy = await resolveEmailCopy('email-verification');
   const values = { fullName };
-  const greeting = fullName ? copyLine(copy.greeting, values) : copyLine(copy.greetingNoName, values);
 
-  return {
+  return composeEmail('email-verification', {
     subject: copySubject(copy.subject, values),
-    html: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Verify Your Email</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4; padding: 20px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-              <h2 style="color: #042742; margin: 0;">UConsulting Talent Network</h2>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 30px 20px;">
-              <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
-              <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${greeting}</p>
-              ${copyHtml(copy.intro, values)}
-              <p style="text-align: center; margin: 30px 0;">
-                <a href="${verifyLink}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Verify Email</a>
-              </p>
-              ${copyHtml(copy.linkFallback, values)}
-              <p style="color: #0C74C1; word-break: break-all; margin: 0 0 20px 0;">
-                <a href="${verifyLink}" style="color: #0C74C1; text-decoration: underline;">${verifyLink}</a>
-              </p>
-              ${copyHtml(copy.ignoreNotice, values)}
-              ${copySignOff(copy.signOff, values)}
-            </td>
-          </tr>
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-              <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
-  };
+    values,
+    brand: 'UConsulting Talent Network',
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(fullName ? copy.greeting : copy.greetingNoName),
+      part.copy(copy.intro),
+      part.button(verifyLink, 'Verify Email'),
+      part.copy(copy.linkFallback),
+      part.link(verifyLink),
+      part.copy(copy.ignoreNotice),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 /**
@@ -1573,42 +1169,20 @@ const createWelcomeEmail = async (fullName, audience, ctaUrl) => {
   const which = WELCOME_AUDIENCES[audience] ?? WELCOME_AUDIENCES.candidate;
   const copy = await resolveEmailCopy(which.key);
   const values = { fullName };
-  const greeting = fullName ? copyLine(copy.greeting, values) : copyLine(copy.greetingNoName, values);
 
-  return {
+  return composeEmail(which.key, {
     subject: copySubject(copy.subject, values),
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-          <h2 style="color: #042742; margin: 0;">${escapeHtml(which.brand)}</h2>
-        </div>
-
-        <div style="padding: 30px 20px;">
-          <h3 style="color: #333; margin: 0 0 20px 0;">${copyLine(copy.heading, values)}</h3>
-
-          <p style="color: #666; line-height: 1.6; margin: 0 0 20px 0;">${greeting}</p>
-
-          ${copyHtml(copy.intro, values)}
-
-          ${copyHtml(copy.bullets, values)}
-
-          ${
-            ctaUrl
-              ? `<p style="text-align: center; margin: 30px 0;">
-            <a href="${ctaUrl}" style="background-color: #0C74C1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">${escapeHtml(which.ctaLabel)}</a>
-          </p>`
-              : ''
-          }
-
-          ${copySignOff(copy.signOff, values)}
-        </div>
-
-        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-          <p style="margin: 0;">This is an automated message. Please do not reply to this email.</p>
-        </div>
-      </div>
-    `
-  };
+    values,
+    brand: which.brand,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(fullName ? copy.greeting : copy.greetingNoName),
+      part.copy(copy.intro),
+      part.copy(copy.bullets),
+      part.button(ctaUrl, which.ctaLabel),
+      part.signOff(copy.signOff),
+    ],
+  });
 };
 
 /**

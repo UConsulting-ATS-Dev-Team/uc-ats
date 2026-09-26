@@ -6,6 +6,8 @@ import {
   UnknownEmailTemplateError,
 } from '../services/emailTemplatePreview.js';
 import { getEmailCopy, resetEmailCopy, saveEmailCopy } from '../services/emailTemplateCopy.js';
+import { getEmailTheme, resetEmailTheme, saveEmailTheme } from '../services/emailTheme.js';
+import { getEmailStyle, resetEmailStyle, saveEmailStyle } from '../services/emailTemplateStyle.js';
 
 // The automatic emails: what each one says, and what an admin may change about
 // it. Rules live in services/emailTemplateCopy.js; this file only maps HTTP
@@ -39,9 +41,38 @@ const templateRoute = (label, fallback, handler) => async (req, res) => {
 router.get('/', templateRoute('GET /api/admin/email-templates', 'Failed to load email templates',
   () => listEmailTemplates()));
 
+// The theme every automatic email is drawn in. Registered before the /:key
+// routes only for readability; none of them has a one-segment path.
+router.get('/theme', templateRoute('GET /api/admin/email-templates/theme', 'Failed to load the email theme',
+  () => getEmailTheme()));
+
+router.put('/theme', templateRoute('PUT /api/admin/email-templates/theme', 'Failed to save the email theme',
+  (req) => saveEmailTheme({ theme: req.body?.theme, user: req.user })));
+
+// Back to the look the code ships.
+router.delete('/theme', templateRoute('DELETE /api/admin/email-templates/theme', 'Failed to reset the email theme',
+  () => resetEmailTheme()));
+
 // GET /api/admin/email-templates/:key/preview
 router.get('/:key/preview', templateRoute('GET /api/admin/email-templates/:key/preview', 'Failed to render email template',
   (req) => renderEmailTemplatePreview(req.params.key)));
+
+// POST /api/admin/email-templates/:key/preview - the same render with an
+// unsaved { theme, style } applied, for the editors. Saves nothing.
+router.post('/:key/preview', templateRoute('POST /api/admin/email-templates/:key/preview', 'Failed to render email template',
+  (req) => renderEmailTemplatePreview(req.params.key, {
+    draft: { theme: req.body?.theme ?? null, style: req.body?.style ?? null },
+  })));
+
+// GET /api/admin/email-templates/:key/style - Designed or Plain, header colour.
+router.get('/:key/style', templateRoute('GET /api/admin/email-templates/:key/style', 'Failed to load this email style',
+  (req) => getEmailStyle(req.params.key)));
+
+router.put('/:key/style', templateRoute('PUT /api/admin/email-templates/:key/style', 'Failed to save this email style',
+  (req) => saveEmailStyle({ key: req.params.key, style: req.body?.style, user: req.user })));
+
+router.delete('/:key/style', templateRoute('DELETE /api/admin/email-templates/:key/style', 'Failed to reset this email style',
+  (req) => resetEmailStyle({ key: req.params.key })));
 
 // GET /api/admin/email-templates/:key/copy - the editable fields, what is
 // stored, and the wording each falls back to.

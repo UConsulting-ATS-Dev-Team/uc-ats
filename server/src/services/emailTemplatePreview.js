@@ -4,7 +4,7 @@ import {
   renderInterviewSlotEmail,
   slotNotificationSubject,
 } from './emailNotifications.js';
-import { decisionTemplatesForRound, renderDecisionEmail } from './decisionTemplates.js';
+import { decisionTemplatesForRound, renderDecisionLetter } from './decisionTemplates.js';
 import {
   DECISION_COPY_KEY,
   DECISION_ROUND_OUTCOMES,
@@ -12,25 +12,28 @@ import {
   isEditableTemplate,
   slotCopyKey,
 } from './emailTemplateCopy.js';
+import { htmlToPlainText, withDraftPresentation } from './emailLayout.js';
+import { THEME_DEFAULTS, normalizeTheme } from './emailTheme.js';
+import { defaultStyle, normalizeStyle, resolveEmailStyle, styledTemplateKeys } from './emailTemplateStyle.js';
 import config from '../config.js';
 
 /**
  * Preview for every message the ATS sends without anyone composing it.
  *
- * Three separate systems write these emails, which is the first thing worth
- * knowing about them:
+ * Three families of email, each with its own builder:
  *
- *   - `emailNotifications.js` builds 19 one-off emails, each with its own markup.
- *   - `renderInterviewSlotEmail` writes the 12 interview-slot notifications
- *     from a shared layout keyed by notification type.
+ *   - `emailNotifications.js` builds 19 one-off emails.
+ *   - `renderInterviewSlotEmail` writes the 12 interview-slot notifications,
+ *     keyed by notification type.
  *   - `decisionTemplates.js` renders the round decision wording from Markdown
  *     with merge fields. Those have a second editor as well: an admin can
  *     rewrite one batch's wording in Master Communications before it goes out.
  *
- * All three end up at `sendEmail`, and all three now take their words from
- * emailTemplateCopy.js, so what this page previews is what an admin edits on
- * it. Rendering reaches the database for that copy and nothing else, so a
- * preview is still the render call with the send left off.
+ * All three take their words from emailTemplateCopy.js and are drawn by one
+ * layout (emailLayout.js) in the admin's theme and per-email style, so what
+ * this page previews is what an admin edits on it. Rendering reads the copy,
+ * theme and style and nothing else, so a preview is still the render call with
+ * the send left off.
  *
  * Master Communications itself is not catalogued. Nothing there is automatic:
  * an admin writes each message, and it already previews what it will send.
@@ -593,12 +596,12 @@ const DECISION = DECISION_ROUNDS.flatMap(({ round, name }) =>
     source: SOURCE.DECISION,
     render: async () => {
       const templates = await decisionTemplatesForRound(round);
-      return renderDecisionEmail(templates[outcome], SAMPLE_DECISION_RECIPIENT, {
+      return renderDecisionLetter(templates[outcome], SAMPLE_DECISION_RECIPIENT, {
         cycleName: SAMPLE_CYCLE,
         round,
         preview: true,
         loginUrl: `${config.clientUrl}/login`,
-      });
+      }, outcome);
     },
   }))
 );
@@ -642,10 +645,11 @@ function describe(entry) {
  * which emails no longer read the way the repo ships them.
  */
 export async function listEmailTemplates({ client } = {}) {
-  const edited = await customizedTemplateKeys(client ? { client } : {});
+  const options = client ? { client } : {};
+  const [reworded, restyled] = await Promise.all([customizedTemplateKeys(options), styledTemplateKeys(options)]);
   return TEMPLATE_CATALOG.map((entry) => ({
     ...describe(entry),
-    customized: edited.has(entry.copyKey),
+    customized: reworded.has(entry.copyKey) || restyled.has(entry.copyKey),
   }));
 }
 
@@ -657,14 +661,27 @@ export async function listEmailTemplates({ client } = {}) {
  * candidates receive something else would make the page a liar. Attachments are
  * the one thing a preview cannot show, so a template that carries one says so
  * in `alsoAttaches`.
+ *
+ * `draft` renders with a theme or style that is not saved yet, so the Theme
+ * and Style editors can show a change before anyone commits to it. Both are
+ * validated exactly as a save would be, and an invalid draft is refused rather
+ * than previewed as something that could never be sent.
  */
-export async function renderEmailTemplatePreview(key) {
+export async function renderEmailTemplatePreview(key, { draft = null } = {}) {
   const entry = CATALOG_BY_KEY.get(key);
   if (!entry) throw new UnknownEmailTemplateError(key);
 
-  const { subject, html } = await entry.render();
+  const theme = draft?.theme ? { ...THEME_DEFAULTS, ...normalizeTheme(draft.theme) } : null;
+  const style = draft?.style
+    ? { ...defaultStyle(entry.copyKey), ...normalizeStyle(entry.copyKey, draft.style) }
+    : await resolveEmailStyle(entry.copyKey);
 
-  return { ...describe(entry), subject, html };
+  const { subject, html } = await withDraftPresentation(
+    { theme, styles: draft?.style ? { [entry.copyKey]: style } : null },
+    () => entry.render()
+  );
+
+  return { ...describe(entry), subject, html, text: htmlToPlainText(html), format: style.format };
 }
 
 export { TEMPLATE_CATALOG };

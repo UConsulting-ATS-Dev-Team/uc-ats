@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
-import { DECISION_OUTCOMES, outcomeLabel, renderDecisionEmail } from './decisionTemplates.js';
+import { DECISION_OUTCOMES, outcomeLabel, renderDecisionLetter } from './decisionTemplates.js';
 import { getRound } from '../utils/roundProgression.js';
 import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
 
@@ -208,7 +208,7 @@ export async function previewDecisionEmail({ batchId, outcome, messageId }, clie
   const batch = await loadBatch(batchId, client);
   const template = templateFor(batch, outcome);
   const recipient = await sampleRecipient(batchId, outcome, messageId, client);
-  const { subject, html } = renderDecisionEmail(template, recipient, await renderContext(batch, client, { preview: true }));
+  const { subject, html } = await renderDecisionLetter(template, recipient, await renderContext(batch, client, { preview: true }), outcome);
   return {
     subject,
     html,
@@ -230,7 +230,7 @@ export async function sendDecisionTest({ batchId, outcome, user }, client = pris
   const batch = await loadBatch(batchId, client);
   const template = templateFor(batch, outcome);
   const recipient = await sampleRecipient(batchId, outcome, null, client);
-  const { subject, html } = renderDecisionEmail(template, recipient, await renderContext(batch, client, { preview: true }));
+  const { subject, html } = await renderDecisionLetter(template, recipient, await renderContext(batch, client, { preview: true }), outcome);
 
   const name = [recipient.firstName, recipient.lastName].filter(Boolean).join(' ');
   const banner =
@@ -238,7 +238,11 @@ export async function sendDecisionTest({ batchId, outcome, user }, client = pris
     `<strong>Test email</strong> - nobody else received this. Merge fields were filled in for ${name || 'a sample recipient'}.` +
     '</div>';
 
-  const result = await sendEmail(user.email, `[TEST] ${subject}`, banner + html, [], {
+  // Inside <body>, not in front of the document: before a doctype it is
+  // invalid markup that some clients drop entirely.
+  const withBanner = /<body[^>]*>/i.test(html) ? html.replace(/(<body[^>]*>)/i, `$1${banner}`) : banner + html;
+
+  const result = await sendEmail(user.email, `[TEST] ${subject}`, withBanner, [], {
     category: 'TEST',
     trigger: 'MANUAL',
     recipientName: user.fullName || null,
@@ -260,7 +264,7 @@ async function mintInviteLink(userId, client) {
   return `${config.clientUrl}/reset-password?token=${resetToken}`;
 }
 
-async function sendOne(messageId, { template, context, sentBy, cycleId }, client) {
+async function sendOne(messageId, { template, outcome, context, sentBy, cycleId }, client) {
   // Claim the message first. Only one sender can move it out of PENDING, so a
   // double click, or two admins sending at once, cannot email anyone twice.
   const { count } = await client.decisionMessage.updateMany({
@@ -273,7 +277,7 @@ async function sendOne(messageId, { template, context, sentBy, cycleId }, client
 
   try {
     const setPasswordLink = message.needsInvite && message.userId ? await mintInviteLink(message.userId, client) : null;
-    const { subject, html } = renderDecisionEmail(template, message, { ...context, setPasswordLink });
+    const { subject, html } = await renderDecisionLetter(template, message, { ...context, setPasswordLink }, outcome);
 
     let result = { success: false, error: 'Not attempted' };
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
@@ -334,7 +338,7 @@ export async function sendDecisionEmails({ batchId, outcome, expectedCount, sent
   }
   if (pending.length === 0) return { sent: 0, failed: 0, skipped: 0, total: 0 };
 
-  const shared = { template, context: await renderContext(batch, client), sentBy, cycleId: batch.cycleId };
+  const shared = { template, outcome, context: await renderContext(batch, client), sentBy, cycleId: batch.cycleId };
   const queue = pending.map((message) => message.id);
   const results = [];
   await Promise.all(

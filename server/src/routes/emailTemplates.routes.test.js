@@ -7,6 +7,8 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
     emailTemplateCopy: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
+    emailTheme: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
+    emailTemplateStyle: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     $disconnect: vi.fn(),
   },
 }));
@@ -74,6 +76,12 @@ describe('/api/admin/email-templates', () => {
     prisma.emailTemplateCopy.findMany.mockResolvedValue([]);
     prisma.emailTemplateCopy.deleteMany.mockResolvedValue({ count: 0 });
     prisma.emailTemplateCopy.upsert.mockResolvedValue({});
+    prisma.emailTheme.findUnique.mockResolvedValue(null);
+    prisma.emailTheme.upsert.mockResolvedValue({});
+    prisma.emailTheme.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.emailTemplateStyle.findMany.mockResolvedValue([]);
+    prisma.emailTemplateStyle.upsert.mockResolvedValue({});
+    prisma.emailTemplateStyle.deleteMany.mockResolvedValue({ count: 0 });
   });
 
   function request(path, token, init = {}) {
@@ -90,6 +98,7 @@ describe('/api/admin/email-templates', () => {
   const get = (path, token) => request(path, token);
   const put = (path, token, body) => request(path, token, { method: 'PUT', body });
   const del = (path, token) => request(path, token, { method: 'DELETE' });
+  const post = (path, token, body) => request(path, token, { method: 'POST', body });
 
   describe('listing', () => {
     it('returns the catalog to an admin', async () => {
@@ -300,6 +309,120 @@ describe('/api/admin/email-templates', () => {
 
       expect(body.html).toContain('You are on the list');
       expect(body.html).not.toContain('>RSVP Confirmation<');
+    });
+  });
+
+  describe('every email is drawn by the shared layout', () => {
+    // Five Get to Know UC emails used to go out with no header and no page
+    // wrapper at all - the builders started halfway down the markup. Drawing
+    // everything from one layout is what makes that impossible now.
+    it('gives every Designed email a header and footer, and every Plain one neither', async () => {
+      const list = await (await get('', tokenFor(adminUser))).json();
+
+      for (const { key } of list) {
+        const body = await (await get(`/${key}/preview`, tokenFor(adminUser))).json();
+        if (body.format === 'DESIGNED') {
+          expect(body.html, `${key} header`).toMatch(/<h2 style="color: #[0-9a-f]+; margin: 0;/i);
+          expect(body.html, `${key} footer`).toContain('This is an automated message');
+        } else {
+          expect(body.format, key).toBe('PLAIN');
+          expect(body.html, `${key} header`).not.toContain('<h2');
+        }
+        expect(body.text, `${key} text part`).toBeTruthy();
+        expect(body.text, `${key} text part`).not.toMatch(/<[a-z]/i);
+      }
+    });
+
+    it('keeps the decision letters Plain, as they always were', async () => {
+      const body = await (await get('/decision-round-1-rejected/preview', tokenFor(adminUser))).json();
+      expect(body.format).toBe('PLAIN');
+    });
+  });
+
+  describe('theme', () => {
+    it('returns the defaults and the font choices', async () => {
+      const body = await (await get('/theme', tokenFor(adminUser))).json();
+
+      expect(body.customized).toBe(false);
+      expect(body.values.accentColor).toBe('#0C74C1');
+      expect(body.fonts.map((font) => font.id)).toContain('georgia');
+    });
+
+    it('saves a change', async () => {
+      // The row as it reads back after the upsert.
+      prisma.emailTheme.findUnique.mockResolvedValue({ id: 'default', accentColor: '#112233', updatedAt: new Date() });
+
+      const res = await put('/theme', tokenFor(adminUser), { theme: { accentColor: '#112233' } });
+
+      expect(res.status).toBe(200);
+      expect(prisma.emailTheme.upsert).toHaveBeenCalled();
+      expect((await res.json()).values.accentColor).toBe('#112233');
+    });
+
+    it('refuses something that is not a colour, and saves nothing', async () => {
+      const res = await put('/theme', tokenFor(adminUser), { theme: { accentColor: 'red;display:none' } });
+
+      expect(res.status).toBe(400);
+      expect(prisma.emailTheme.upsert).not.toHaveBeenCalled();
+    });
+
+    it('is admin-only', async () => {
+      expect((await get('/theme', tokenFor(memberUser))).status).toBe(403);
+      expect((await put('/theme', tokenFor(memberUser), { theme: {} })).status).toBe(403);
+      expect((await del('/theme', tokenFor(memberUser))).status).toBe(403);
+    });
+
+    it('applies to every email', async () => {
+      prisma.emailTheme.findUnique.mockResolvedValue({ id: 'default', brandName: 'UC Recruiting' });
+
+      const reset = await (await get('/password-reset/preview', tokenFor(adminUser))).json();
+      const slot = await (await get('/slot-confirmation/preview', tokenFor(adminUser))).json();
+
+      expect(reset.html).toContain('UC Recruiting</h2>');
+      expect(slot.html).toContain('UC Recruiting</h2>');
+    });
+  });
+
+  describe('style', () => {
+    it('saves Plain for one email', async () => {
+      const res = await put('/password-reset/style', tokenFor(adminUser), { style: { format: 'PLAIN' } });
+
+      expect(res.status).toBe(200);
+      expect(prisma.emailTemplateStyle.upsert.mock.calls[0][0]).toMatchObject({
+        where: { templateKey: 'password-reset' },
+        update: { format: 'PLAIN', banner: null },
+      });
+    });
+
+    it('404s a template that does not exist', async () => {
+      expect((await put('/nope/style', tokenFor(adminUser), { style: { format: 'PLAIN' } })).status).toBe(404);
+    });
+
+    it('is admin-only', async () => {
+      expect((await put('/password-reset/style', tokenFor(memberUser), { style: {} })).status).toBe(403);
+    });
+  });
+
+  describe('previewing an unsaved change', () => {
+    it('renders the draft and stores nothing', async () => {
+      const res = await post('/password-reset/preview', tokenFor(adminUser), {
+        theme: { accentColor: '#abcdef' },
+        style: { format: 'PLAIN' },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.format).toBe('PLAIN');
+      expect(body.html).toContain('#abcdef');
+      expect(body.html).not.toContain('<h2');
+      expect(prisma.emailTheme.upsert).not.toHaveBeenCalled();
+      expect(prisma.emailTemplateStyle.upsert).not.toHaveBeenCalled();
+      expect(sendMail).not.toHaveBeenCalled();
+    });
+
+    it('refuses a draft that could never be saved', async () => {
+      const res = await post('/password-reset/preview', tokenFor(adminUser), { theme: { logoUrl: 'http://x.test/a.png' } });
+      expect(res.status).toBe(400);
     });
   });
 });
