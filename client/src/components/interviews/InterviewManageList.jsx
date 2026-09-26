@@ -4,18 +4,15 @@ import {
   Alert,
   Box,
   Button,
-  Card,
-  CardActions,
-  CardContent,
   Checkbox,
   Chip,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
   IconButton,
+  Menu,
   MenuItem,
   Stack,
   TextField,
@@ -23,34 +20,26 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon,
-  CalendarMonth as CalendarIcon,
-  Delete as DeleteIcon,
   EditCalendar as EditIcon,
-  Groups as GroupsIcon,
   HelpOutline as QuestionIcon,
-  LocationOn as LocationIcon,
+  MoreVert as MoreIcon,
   PlayArrow as PlayIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
-import InterviewCreateDialog from './InterviewCreateDialog';
 import InterviewEditDialog from './InterviewEditDialog';
+import InterviewSlotSetup from './InterviewSlotSetup';
 import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
 
 /**
- * Creating interviews and running them.
+ * The interviews in one round, and everything you do to set one up or run it.
  *
- * The other half of the Interviews page. Rosters and times are handled by the
- * Sessions view; this is the paperwork - make an interview exist, start one
- * today, set its questions.
+ * Scoped to the round tab it sits under. It used to list every round's
+ * interviews beneath whichever round was selected, which made the tab above it
+ * look like it meant nothing.
+ *
+ * Sessions come from the round's own overview data rather than a roster fetch
+ * per interview: the page already has them.
  */
-
-const TYPE_LABEL = {
-  COFFEE_CHAT: 'Coffee Chat',
-  ROUND_ONE: 'First Round',
-  ROUND_TWO: 'Final Round',
-  FINAL_ROUND: 'Final Round',
-  DELIBERATIONS: 'Deliberations',
-};
 
 /// Where a live session of each type runs. These routes and their ?groupIds=
 /// contract are what the interview interfaces read; unchanged.
@@ -61,15 +50,16 @@ const INTERFACE_FOR_TYPE = {
 };
 const DEFAULT_INTERFACE = '/admin/interview-interface';
 
-export default function InterviewManageList({ cycle, onChanged }) {
+const sessionHeading = (slot) => slot.label || formatTimeRange(slot.startTime, slot.endTime);
+
+export default function InterviewManageList({ round, onChanged }) {
   const navigate = useNavigate();
-  const [interviews, setInterviews] = useState([]);
-  const [rostersById, setRostersById] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [details, setDetails] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const [createOpen, setCreateOpen] = useState(false);
+  const [setupFor, setSetupFor] = useState(null);
+  const [menu, setMenu] = useState(null);
   const [editing, setEditing] = useState(null);
   const [startFor, setStartFor] = useState(null);
   const [chosenSessions, setChosenSessions] = useState([]);
@@ -77,51 +67,45 @@ export default function InterviewManageList({ cycle, onChanged }) {
   const [questionSession, setQuestionSession] = useState('');
   const [questions, setQuestions] = useState([]);
 
+  // The overview carries id, title, date and status. Editing needs location,
+  // dress code and end date too, so the full records come from one list call.
   const load = useCallback(async () => {
     try {
-      setError('');
       const list = await apiClient.get('/admin/interviews');
-      const scoped = (list || []).filter((i) => !cycle?.id || i.cycleId === cycle.id);
-      setInterviews(scoped);
-
-      // One roster per interview, so each card can say how many sessions and
-      // candidates it has without anything needing to be opened.
-      const rosters = await Promise.all(
-        scoped.map((interview) =>
-          apiClient
-            .get(`/admin/interviews/${interview.id}/roster`)
-            .then((roster) => [interview.id, roster])
-            .catch(() => [interview.id, null])
-        )
-      );
-      setRostersById(Object.fromEntries(rosters));
+      setDetails(Object.fromEntries((list || []).map((i) => [i.id, i])));
     } catch (e) {
       setError(e.message || 'Failed to load interviews.');
-    } finally {
-      setLoading(false);
     }
-  }, [cycle?.id]);
+  }, []);
 
+  // Refetched whenever the page reloads its overview, so a Refresh picks up an
+  // edit someone else made to location or dress code as well.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, round]);
 
-  const byRound = useMemo(() => {
-    const groups = new Map();
-    for (const interview of interviews) {
-      const label = TYPE_LABEL[interview.interviewType] ?? 'Other';
-      groups.set(label, [...(groups.get(label) ?? []), interview]);
-    }
-    return [...groups.entries()];
-  }, [interviews]);
+  // The overview is the fresher of the two for what it carries, so it wins.
+  const interviews = useMemo(
+    () => (round?.interviews ?? []).map((i) => ({ ...details[i.id], ...i, loaded: Boolean(details[i.id]) })),
+    [round, details]
+  );
+
+  const sessionsOf = useCallback(
+    (interviewId) => (round?.slots ?? []).filter((slot) => slot.interviewId === interviewId),
+    [round]
+  );
+
+  const changed = async () => {
+    await load();
+    onChanged?.();
+  };
 
   const deleteInterview = async (interview) => {
     if (!window.confirm(`Delete "${interview.title}"? Its sessions and rosters go with it.`)) return;
     setBusy(true);
     try {
       await apiClient.delete(`/admin/interviews/${interview.id}`);
-      await load();
-      onChanged?.();
+      await changed();
     } catch (e) {
       setError(e.message || 'Failed to delete that interview.');
     } finally {
@@ -157,7 +141,7 @@ export default function InterviewManageList({ cycle, onChanged }) {
   };
 
   const openQuestions = async (interview) => {
-    const first = rostersById[interview.id]?.slots?.[0]?.id ?? '';
+    const first = sessionsOf(interview.id)[0]?.id ?? '';
     setQuestionsFor(interview);
     setQuestionSession(first);
     setQuestions([]);
@@ -180,142 +164,129 @@ export default function InterviewManageList({ cycle, onChanged }) {
     }
   };
 
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        <CircularProgress size={28} />
-      </Box>
-    );
-  }
-
   return (
     <Box>
-      <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }}>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          New interview
-        </Button>
-      </Stack>
-
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
         </Alert>
       )}
 
-      {interviews.length === 0 && (
-        <Card variant="outlined">
-          <CardContent sx={{ textAlign: 'center', py: 5 }}>
-            <CalendarIcon color="disabled" sx={{ fontSize: 44, mb: 1 }} />
-            <Typography variant="h6" gutterBottom>
-              No interviews in this cycle yet
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Create one, then add the sessions candidates book into from the Sessions view.
-            </Typography>
-          </CardContent>
-        </Card>
-      )}
+      <Stack divider={<Divider />}>
+        {interviews.map((interview) => {
+          const sessions = sessionsOf(interview.id);
+          return (
+            <Box key={interview.id} sx={{ py: 1.5 }} data-testid={`interview-row-${interview.id}`}>
+              <Stack
+                direction={{ xs: 'column', md: 'row' }}
+                justifyContent="space-between"
+                alignItems={{ xs: 'flex-start', md: 'center' }}
+                spacing={1}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle1" fontWeight={700} noWrap>
+                      {interview.title}
+                    </Typography>
+                    {interview.status && <Chip size="small" variant="outlined" label={interview.status} />}
+                    {sessions.length === 0 && <Chip size="small" color="warning" label="No sessions yet" />}
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary">
+                    {[
+                      formatDateTime(interview.startDate),
+                      interview.location,
+                      `${sessions.length} session${sessions.length === 1 ? '' : 's'}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </Typography>
+                </Box>
 
-      {byRound.map(([label, group]) => (
-        <Box key={label} sx={{ mb: 4 }}>
-          <Typography variant="overline" color="text.secondary">
-            {label}
-          </Typography>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {group.map((interview) => {
-              const sessions = rostersById[interview.id]?.slots ?? [];
-              const candidates = sessions.reduce(
-                (n, s) => n + s.signups.filter((x) => x.status === 'CONFIRMED').length,
-                0
-              );
-              const interviewers = sessions.reduce((n, s) => n + s.interviewers.length, 0);
-              const unscheduled = rostersById[interview.id]?.unassigned?.length ?? 0;
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+                  <Button
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={() => setSetupFor(setupFor === interview.id ? null : interview.id)}
+                  >
+                    Add sessions
+                  </Button>
+                  {/* Waits for the full record: the dialog saves location and
+                      dress code back, and opened on overview data alone it
+                      would save them as blank. */}
+                  <Button
+                    size="small"
+                    startIcon={<EditIcon />}
+                    disabled={!interview.loaded}
+                    onClick={() => setEditing(interview)}
+                  >
+                    Edit times &amp; seats
+                  </Button>
+                  <Button
+                    size="small"
+                    startIcon={<QuestionIcon />}
+                    disabled={sessions.length === 0}
+                    onClick={() => openQuestions(interview)}
+                  >
+                    Questions
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<PlayIcon />}
+                    disabled={sessions.length === 0}
+                    onClick={() => {
+                      setStartFor(interview);
+                      setChosenSessions([]);
+                    }}
+                  >
+                    Run a session
+                  </Button>
+                  <IconButton
+                    size="small"
+                    aria-label={`More actions for ${interview.title}`}
+                    onClick={(e) => setMenu({ anchor: e.currentTarget, interview })}
+                  >
+                    <MoreIcon fontSize="small" />
+                  </IconButton>
+                </Stack>
+              </Stack>
 
-              return (
-                <Card key={interview.id} variant="outlined">
-                  <CardContent>
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                          <Typography variant="h6">{interview.title}</Typography>
-                          <Chip size="small" variant="outlined" label={TYPE_LABEL[interview.interviewType]} />
-                          {interview.status && <Chip size="small" label={interview.status} />}
-                        </Stack>
-                        <Typography variant="body2" color="text.secondary">
-                          {formatDateTime(interview.startDate)}
-                        </Typography>
-                        {interview.location && (
-                          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5 }}>
-                            <LocationIcon fontSize="small" color="disabled" />
-                            <Typography variant="body2" color="text.secondary">
-                              {interview.location}
-                            </Typography>
-                          </Stack>
-                        )}
-                      </Box>
-                      <IconButton size="small" onClick={() => deleteInterview(interview)} disabled={busy}>
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Stack>
+              {setupFor === interview.id && (
+                <Box sx={{ mt: 2 }}>
+                  <InterviewSlotSetup
+                    interviewId={interview.id}
+                    interviewType={interview.interviewType ?? round?.interviewType}
+                    onCreated={async () => {
+                      setSetupFor(null);
+                      await changed();
+                    }}
+                  />
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
 
-                    <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: 'wrap', gap: 1 }}>
-                      <Chip size="small" icon={<CalendarIcon />} label={`${sessions.length} sessions`} />
-                      <Chip size="small" icon={<GroupsIcon />} label={`${candidates} candidates`} />
-                      <Chip size="small" label={`${interviewers} interviewers`} />
-                      {unscheduled > 0 && <Chip size="small" color="warning" label={`${unscheduled} not scheduled`} />}
-                      {sessions.length === 0 && <Chip size="small" color="warning" label="No sessions yet" />}
-                    </Stack>
-                  </CardContent>
-                  <CardActions sx={{ px: 2, pb: 2, gap: 1, flexWrap: 'wrap' }}>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      startIcon={<PlayIcon />}
-                      disabled={sessions.length === 0}
-                      onClick={() => {
-                        setStartFor(interview);
-                        setChosenSessions([]);
-                      }}
-                    >
-                      Run a session
-                    </Button>
-                    <Button size="small" startIcon={<EditIcon />} onClick={() => setEditing(interview)}>
-                      Edit times &amp; seats
-                    </Button>
-                    <Button
-                      size="small"
-                      startIcon={<QuestionIcon />}
-                      disabled={sessions.length === 0}
-                      onClick={() => openQuestions(interview)}
-                    >
-                      Questions
-                    </Button>
-                  </CardActions>
-                </Card>
-              );
-            })}
-          </Stack>
-        </Box>
-      ))}
+      <Menu anchorEl={menu?.anchor} open={Boolean(menu)} onClose={() => setMenu(null)}>
+        <MenuItem
+          disabled={busy}
+          sx={{ color: 'error.main' }}
+          onClick={() => {
+            const { interview } = menu;
+            setMenu(null);
+            deleteInterview(interview);
+          }}
+        >
+          Delete interview
+        </MenuItem>
+      </Menu>
 
       <InterviewEditDialog
         open={Boolean(editing)}
         interview={editing}
         onClose={() => setEditing(null)}
-        onSaved={async () => {
-          await load();
-          onChanged?.();
-        }}
-      />
-
-      <InterviewCreateDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={async () => {
-          setCreateOpen(false);
-          await load();
-          onChanged?.();
-        }}
+        onSaved={changed}
       />
 
       {/* Run a session ------------------------------------------------ */}
@@ -326,9 +297,10 @@ export default function InterviewManageList({ cycle, onChanged }) {
             Pick up to three. You will see those candidates in the interview interface.
           </Typography>
           <Stack divider={<Divider />}>
-            {(rostersById[startFor?.id]?.slots ?? []).map((slot) => {
+            {(startFor ? sessionsOf(startFor.id) : []).map((slot) => {
               const checked = chosenSessions.includes(slot.id);
               const count = slot.signups.filter((s) => s.status === 'CONFIRMED').length;
+              const interviewers = slot.interviewers ?? [];
               return (
                 <Stack
                   key={slot.id}
@@ -349,13 +321,11 @@ export default function InterviewManageList({ cycle, onChanged }) {
                   <Checkbox checked={checked} size="small" />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography variant="body2" fontWeight={600}>
-                      {slot.label || formatTimeRange(slot.startTime, slot.endTime)}
+                      {sessionHeading(slot)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {count} candidate{count === 1 ? '' : 's'}
-                      {slot.interviewers.length > 0
-                        ? ` · ${slot.interviewers.map((i) => i.user.fullName).join(', ')}`
-                        : ''}
+                      {interviewers.length > 0 ? ` · ${interviewers.map((i) => i.user.fullName).join(', ')}` : ''}
                     </Typography>
                   </Box>
                 </Stack>
@@ -387,9 +357,9 @@ export default function InterviewManageList({ cycle, onChanged }) {
             fullWidth
             sx={{ mt: 1, mb: 2 }}
           >
-            {(rostersById[questionsFor?.id]?.slots ?? []).map((slot) => (
+            {(questionsFor ? sessionsOf(questionsFor.id) : []).map((slot) => (
               <MenuItem key={slot.id} value={slot.id}>
-                {slot.label || formatTimeRange(slot.startTime, slot.endTime)}
+                {sessionHeading(slot)}
               </MenuItem>
             ))}
           </TextField>

@@ -12,6 +12,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   List,
   ListItemButton,
   ListItemText,
@@ -23,12 +24,19 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Check as CheckIcon, ContentCopy as CopyIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Check as CheckIcon,
+  CheckCircle as CheckCircleIcon,
+  ContentCopy as CopyIcon,
+  ErrorOutline as ErrorIcon,
+} from '@mui/icons-material';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import InterviewRosterGallery from '../components/interviews/InterviewRosterGallery';
-import InterviewSlotSetup from '../components/interviews/InterviewSlotSetup';
+import InterviewCreateDialog from '../components/interviews/InterviewCreateDialog';
+import OtherInterviews from '../components/interviews/OtherInterviews';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
@@ -46,12 +54,61 @@ import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
  * Interview RSVP; this page no longer offers a second way in.
  */
 
-/** One number and what it means. Reads as a sentence, not a dashboard tile. */
-function Stat({ label, value, tone, hint }) {
-  const chip = (
-    <Chip size="small" color={tone} variant={tone ? 'filled' : 'outlined'} label={`${value} ${label}`} sx={{ fontWeight: 600 }} />
+/**
+ * Whether the round is ready, as one line: who is in it, what they can book,
+ * and whether that is enough. The booking counts appear only once there is
+ * something to count, so a round being set up is not a row of zeros.
+ */
+function RoundReadiness({ stats }) {
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const fits = stats.bookableSessions > 0 && stats.eligible > 0 && stats.seats >= stats.eligible;
+  const short = stats.bookableSessions > 0 && stats.seats < stats.eligible;
+
+  const booking = [
+    { value: stats.confirmed, label: 'scheduled', color: 'success' },
+    { value: stats.unassigned, label: 'not scheduled', color: 'warning', hint: 'In this round, but holding no session' },
+    { value: stats.waitlisted, label: 'waitlisted', hint: 'Queued for a preferred session, holding another' },
+    { value: stats.needsPlacement, label: 'need placing', color: 'error', hint: 'Signed up when everything was full' },
+  ].filter((item) => item.value > 0);
+
+  return (
+    <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+        <Typography variant="body2" data-testid="round-readiness">
+          <strong>{stats.eligible}</strong> in this round · <strong>{stats.seats}</strong> seats in{' '}
+          {plural(stats.bookableSessions, 'open session')} · {plural(stats.interviewers, 'interviewer')}
+        </Typography>
+        {fits && (
+          <Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon />} label="Everyone fits" />
+        )}
+        {short && (
+          <Chip
+            size="small"
+            color="error"
+            variant="outlined"
+            icon={<ErrorIcon />}
+            label={`${stats.eligible - stats.seats} short`}
+          />
+        )}
+      </Stack>
+      {booking.length > 0 && (
+        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {booking.map((item) => {
+            const chip = (
+              <Chip size="small" color={item.color} variant="outlined" label={`${item.value} ${item.label}`} />
+            );
+            return item.hint ? (
+              <Tooltip key={item.label} title={item.hint}>
+                {chip}
+              </Tooltip>
+            ) : (
+              <React.Fragment key={item.label}>{chip}</React.Fragment>
+            );
+          })}
+        </Stack>
+      )}
+    </Stack>
   );
-  return hint ? <Tooltip title={hint}>{chip}</Tooltip> : chip;
 }
 
 /**
@@ -78,7 +135,7 @@ export default function AdminInterviews() {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState(0);
   const [view, setView] = useState('sessions');
-  const [setupFor, setSetupFor] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const [assignFor, setAssignFor] = useState(null);
   const [staff, setStaff] = useState([]);
 
@@ -352,9 +409,12 @@ export default function AdminInterviews() {
                 <Typography variant="h6" gutterBottom>
                   No interviews in this cycle yet
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Create one below, then add the sessions candidates book into.
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Create one, then add the sessions candidates book into.
                 </Typography>
+                <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+                  New interview
+                </Button>
               </Paper>
             )}
 
@@ -376,49 +436,51 @@ export default function AdminInterviews() {
                   ))}
                 </Tabs>
 
-                {active && (
+                {/* A round with no interview yet is the normal state early
+                    in a cycle, not an error. One message and the thing to do
+                    next; the stats, tabs and gallery would all be empty too. */}
+                {active && active.interviews.length === 0 && (
+                  <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', mb: 2 }}>
+                    <Typography variant="h6" gutterBottom>
+                      No {active.label.toLowerCase()} yet
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                      {active.stats.eligible > 0
+                        ? `${active.stats.eligible} candidate${active.stats.eligible === 1 ? ' is' : 's are'} already in this round.`
+                        : 'Nobody is in this round yet, but you can set it up now.'}{' '}
+                      Create the interview and its sessions, and candidates will be able to book when
+                      they reach it.
+                    </Typography>
+                    <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+                      Create the interview
+                    </Button>
+                  </Paper>
+                )}
+
+                {active && active.interviews.length > 0 && (
                   <>
+                    {/* Setting up the round, in one place: whether everyone
+                        fits, and each interview with what you do to it. */}
                     <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-                      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, mb: 1 }}>
-                        <Stat label="in this round" value={active.stats.eligible} hint="Candidates whose current round is this one" />
-                        <Stat label="scheduled" value={active.stats.confirmed} tone="success" />
-                        <Stat
-                          label="not scheduled"
-                          value={active.stats.unassigned}
-                          tone={active.stats.unassigned > 0 ? 'warning' : undefined}
-                          hint="In this round, but holding no session"
-                        />
-                        <Stat label="waitlisted" value={active.stats.waitlisted} hint="Queued for a preferred session, holding another" />
-                        {active.stats.needsPlacement > 0 && (
-                          <Stat label="need placing" value={active.stats.needsPlacement} tone="error" hint="Signed up when everything was full" />
-                        )}
-                        <Stat label="seats" value={active.stats.seats} hint="Total capacity across bookable sessions" />
-                        <Stat label="sessions" value={active.stats.sessions} />
-                        <Stat label="interviewers" value={active.stats.interviewers} />
+                      <Stack
+                        direction={{ xs: 'column', md: 'row' }}
+                        justifyContent="space-between"
+                        alignItems={{ xs: 'flex-start', md: 'center' }}
+                        spacing={1}
+                      >
+                        <RoundReadiness stats={active.stats} />
+                        <Button startIcon={<AddIcon />} onClick={() => setCreateOpen(true)} sx={{ flexShrink: 0 }}>
+                          New interview
+                        </Button>
                       </Stack>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', gap: 1 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          {active.interviews.length === 1 ? 'Interview:' : 'Interviews in this round:'}
-                        </Typography>
-                        {active.interviews.map((interview) => (
-                          <Chip
-                            key={interview.id}
-                            size="small"
-                            variant="outlined"
-                            label={interview.title}
-                            onClick={() => setSetupFor(setupFor === interview.id ? null : interview.id)}
-                          />
-                        ))}
-                        <Typography variant="caption" color="text.secondary">
-                          (click one to add sessions)
-                        </Typography>
-                      </Stack>
+                      <Divider sx={{ mt: 1.5 }} />
+                      <InterviewManageList round={active} onChanged={load} />
                     </Paper>
 
                     {/* The invariant recruitment works to: every advancing
                         candidate gets a seat. Checked here rather than
                         discovered by the candidate who finds nothing left. */}
-                    {active.interviews.length > 0 && active.stats.bookableSessions > 0 && active.stats.seats < active.stats.eligible && (
+                    {active.stats.bookableSessions > 0 && active.stats.seats < active.stats.eligible && (
                       <Alert severity="error" sx={{ mb: 2 }}>
                         <AlertTitle>Not enough seats for this round</AlertTitle>
                         {active.stats.seats} seat{active.stats.seats === 1 ? '' : 's'} across{' '}
@@ -430,19 +492,8 @@ export default function AdminInterviews() {
                         sending the decision emails.
                       </Alert>
                     )}
-                    {active.interviews.length > 0 &&
-                      active.stats.bookableSessions > 0 &&
-                      active.stats.seats >= active.stats.eligible &&
-                      active.stats.eligible > 0 && (
-                        <Alert severity="success" sx={{ mb: 2 }} icon={false}>
-                          <strong>Everyone fits.</strong> {active.stats.seats} seats for{' '}
-                          {active.stats.eligible} candidates. Nobody will be left without a session —
-                          a full first choice just means a spot in another one plus a place on its
-                          waitlist.
-                        </Alert>
-                      )}
 
-                    {active.interviews.length > 0 && active.stats.bookableSessions === 0 && active.stats.sessions > 0 && (
+                    {active.stats.bookableSessions === 0 && active.stats.sessions > 0 && (
                       <Alert severity="warning" sx={{ mb: 2 }}>
                         This round has {active.stats.sessions} session{active.stats.sessions === 1 ? '' : 's'} but{' '}
                         <strong>none are open to candidates</strong> — they came from last cycle's groups and have no
@@ -450,27 +501,7 @@ export default function AdminInterviews() {
                       </Alert>
                     )}
 
-                    {/* A round with no interview yet is the normal state early
-                        in a cycle, not an error. Offer the thing to do next. */}
-                    {active.interviews.length === 0 && (
-                      <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', mb: 2 }}>
-                        <Typography variant="h6" gutterBottom>
-                          No {active.label.toLowerCase()} yet
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {active.stats.eligible > 0
-                            ? `${active.stats.eligible} candidate${active.stats.eligible === 1 ? ' is' : 's are'} already in this round.`
-                            : 'Nobody is in this round yet, but you can set it up now.'}{' '}
-                          Create the interview and its sessions, and candidates will be able to book when
-                          they reach it.
-                        </Typography>
-                        <Button variant="contained" onClick={() => setView('manage')}>
-                          Create the interview
-                        </Button>
-                      </Paper>
-                    )}
-
-                    {active.interviews.length > 0 && active.stats.sessions === 0 && (
+                    {active.stats.sessions === 0 && (
                       <Alert
                         severity="info"
                         sx={{ mb: 2 }}
@@ -490,28 +521,14 @@ export default function AdminInterviews() {
                           </Button>
                         }
                       >
-                        This round has no sessions. If it was scheduled with the old group editor, convert those
-                        groups into sessions to manage it here.
+                        This round has no sessions. Add some above, or, if it was scheduled with the old group
+                        editor, convert those groups into sessions to manage them here.
                       </Alert>
-                    )}
-
-                    {setupFor && (
-                      <Box sx={{ mb: 3 }}>
-                        <InterviewSlotSetup
-                          interviewId={setupFor}
-                          interviewType={active.interviewType}
-                          onCreated={() => {
-                            setSetupFor(null);
-                            load();
-                          }}
-                        />
-                      </Box>
                     )}
 
                     <Tabs value={view} onChange={(e, next) => setView(next)} sx={{ mb: 2 }}>
                       <Tab value="sessions" label="Sessions" />
                       <Tab value="interviewers" label="Interviewers" />
-                      <Tab value="manage" label="Manage interviews" />
                     </Tabs>
 
                     {view === 'sessions' && (
@@ -530,33 +547,41 @@ export default function AdminInterviews() {
                         onRegroup={regroup}
                       />
                     )}
-                    {view === 'interviewers' &&
-                      (active.interviews.length === 0 ? (
-                        <Alert severity="info">
-                          Create the interview first — availability is collected against it, and there is
-                          nothing to collect against yet.
-                        </Alert>
-                      ) : (
-                        <Stack spacing={3}>
-                          {active.interviews.map((interview) => (
-                            <Box key={interview.id}>
-                              {active.interviews.length > 1 && (
-                                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                                  {interview.title}
-                                </Typography>
-                              )}
-                              <InterviewerCoverage interviewId={interview.id} onChanged={load} />
-                            </Box>
-                          ))}
-                        </Stack>
-                      ))}
-                    {view === 'manage' && <InterviewManageList cycle={data?.cycle} onChanged={load} />}
+                    {view === 'interviewers' && (
+                      <Stack spacing={3}>
+                        {active.interviews.map((interview) => (
+                          <Box key={interview.id}>
+                            {active.interviews.length > 1 && (
+                              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                                {interview.title}
+                              </Typography>
+                            )}
+                            <InterviewerCoverage interviewId={interview.id} onChanged={load} />
+                          </Box>
+                        ))}
+                      </Stack>
+                    )}
                   </>
                 )}
               </>
             )}
 
-            {rounds.length === 0 && <InterviewManageList cycle={data?.cycle} onChanged={load} />}
+            <OtherInterviews
+              cycleId={data?.cycle?.id}
+              roundInterviewIds={rounds.flatMap((r) => r.interviews.map((i) => i.id)).join(',')}
+              refreshKey={data}
+              onChanged={load}
+            />
+
+            <InterviewCreateDialog
+              open={createOpen}
+              defaultType={active?.interviewType ?? undefined}
+              onClose={() => setCreateOpen(false)}
+              onCreated={() => {
+                setCreateOpen(false);
+                load();
+              }}
+            />
           </>
         )}
 
