@@ -24,9 +24,10 @@ import {
   TextField,
   Typography,
   Alert,
-  IconButton
+  IconButton,
+  Tooltip
 } from '@mui/material';
-import { ArrowPathIcon, TrophyIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ArrowTopRightOnSquareIcon, TrophyIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { Sms as SmsIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
@@ -37,7 +38,16 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
-const formatPoints = (value) => String(Number(value));
+// Renders "Fri, Oct 9 · 7:30 PM". A cycle's events share a year, so printing it only adds width.
+const formatEventDate = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  const day = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${day} · ${time}`;
+};
+
+const formatPoints =(value) => String(Number(value));
 
 export default function AccountabilityTracker() {
   const { user } = useAuth();
@@ -452,33 +462,38 @@ export default function AccountabilityTracker() {
           </Paper>
 
           <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Events
-            </Typography>
+            <Stack direction="row" alignItems="baseline" spacing={1} mb={1}>
+              <Typography variant="h6">Events</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {data.events.length}
+              </Typography>
+            </Stack>
             {data.events.length === 0 ? (
               <Typography color="text.secondary">No events found for this cycle.</Typography>
             ) : (
               <TableContainer>
                 <Table size="small">
+                  {/* Staging.css makes every MUI table `table-layout: fixed`, where only a header width sizes a column. */}
                   <TableHead>
                     <TableRow>
-                      <TableCell />
+                      <TableCell sx={{ width: 48 }} />
                       <TableCell>Event</TableCell>
-                      <TableCell>Date</TableCell>
-                      <TableCell align="right">RSVPs</TableCell>
-                      <TableCell align="right">Attendance</TableCell>
-                      {/* Staging.css makes every MUI table `table-layout: fixed`, where only a header width sizes a column. */}
-                      <TableCell sx={{ width: 212 }}>Counts as</TableCell>
-                      <TableCell>Form</TableCell>
-                      <TableCell align="right">Actions</TableCell>
+                      <TableCell align="right" sx={{ width: 80 }}>RSVPs</TableCell>
+                      <TableCell align="right" sx={{ width: 96 }}>Attended</TableCell>
+                      <TableCell sx={{ width: 200 }}>Counts as</TableCell>
+                      <TableCell sx={{ width: 200 }} />
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {data.events.map((event) => (
                       <React.Fragment key={event.id}>
-                        <TableRow>
+                        <TableRow hover>
                           <TableCell>
-                            <IconButton size="small" onClick={() => toggleEventExpand(event.id)}>
+                            <IconButton
+                              size="small"
+                              onClick={() => toggleEventExpand(event.id)}
+                              aria-label={`${expandedEvents[event.id] ? 'Hide' : 'Show'} quick check-in for ${event.eventName}`}
+                            >
                               {expandedEvents[event.id] ? (
                                 <ChevronUpIcon style={{ width: '1rem', height: '1rem' }} />
                               ) : (
@@ -486,21 +501,38 @@ export default function AccountabilityTracker() {
                               )}
                             </IconButton>
                           </TableCell>
-                          <TableCell>{event.eventName}</TableCell>
-                          <TableCell>{formatDate(event.eventStartDate)}</TableCell>
-                          <TableCell align="right">{event.memberRsvpCount ?? 0}</TableCell>
-                          <TableCell align="right">{event.memberAttendanceCount}</TableCell>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={600} noWrap title={event.eventName}>
+                              {event.eventName}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" noWrap component="div">
+                              {formatEventDate(event.eventStartDate)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="body2" color={event.memberRsvpCount ? 'text.primary' : 'text.disabled'}>
+                              {event.memberRsvpCount ?? 0}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="body2" color={event.memberAttendanceCount ? 'text.primary' : 'text.disabled'}>
+                              {event.memberAttendanceCount}
+                            </Typography>
+                          </TableCell>
                           <TableCell>
                             <Select
                               size="small"
-                              sx={{ width: 180 }}
+                              fullWidth
                               value={event.pointType || ''}
                               displayEmpty
                               onChange={(e) => setEventPointType(event.id, e.target.value)}
                               inputProps={{ 'aria-label': `Point type for ${event.eventName}` }}
+                              sx={{ fontSize: '0.875rem', '& .MuiSelect-select': { py: 0.75 } }}
                             >
                               <MenuItem value="">
-                                <em>No points</em>
+                                <Typography variant="body2" color="text.secondary">
+                                  No points
+                                </Typography>
                               </MenuItem>
                               {data.config.eventPointTypes.map((key) => (
                                 <MenuItem key={key} value={key}>
@@ -510,43 +542,61 @@ export default function AccountabilityTracker() {
                             </Select>
                           </TableCell>
                           <TableCell>
-                            {event.memberAttendanceForm ? (
-                              <Button size="small" variant="text" onClick={() => window.open(event.memberAttendanceForm, '_blank')}>
-                                View Form
-                              </Button>
-                            ) : (
-                              <Chip label="No form" size="small" variant="outlined" />
-                            )}
-                          </TableCell>
-                          <TableCell align="right">
-                            <Stack direction="row" spacing={1} justifyContent="flex-end">
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                disabled={syncLoading[event.id] || !event.memberAttendanceForm}
-                                onClick={() => syncEventAttendance(event.id)}
-                              >
-                                {syncLoading[event.id] ? <CircularProgress size={16} /> : 'Sync'}
-                              </Button>
-                              <Button size="small" variant="outlined" onClick={() => openEventDialog(event)}>
-                                Manage
-                              </Button>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                startIcon={textingLoading[event.id] ? null : <SmsIcon fontSize="small" />}
-                                disabled={textingLoading[event.id] || !event.memberRsvpCount}
-                                onClick={() => openEventImessage(event)}
-                                sx={{ whiteSpace: 'nowrap' }}
-                              >
-                                {textingLoading[event.id] ? <CircularProgress size={16} /> : 'iMessage RSVPs'}
+                            <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                              {/* Form actions only exist for events that still use a Google Form. */}
+                              {event.memberAttendanceForm && (
+                                <>
+                                  <Tooltip title="Open attendance form">
+                                    <IconButton
+                                      size="small"
+                                      component="a"
+                                      href={event.memberAttendanceForm}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      aria-label={`Open attendance form for ${event.eventName}`}
+                                    >
+                                      <ArrowTopRightOnSquareIcon style={{ width: '1rem', height: '1rem' }} />
+                                    </IconButton>
+                                  </Tooltip>
+                                  <Tooltip title="Sync attendance from form">
+                                    <span>
+                                      <IconButton
+                                        size="small"
+                                        disabled={syncLoading[event.id]}
+                                        onClick={() => syncEventAttendance(event.id)}
+                                        aria-label={`Sync attendance for ${event.eventName}`}
+                                      >
+                                        {syncLoading[event.id] ? (
+                                          <CircularProgress size={16} />
+                                        ) : (
+                                          <ArrowPathIcon style={{ width: '1rem', height: '1rem' }} />
+                                        )}
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                </>
+                              )}
+                              <Tooltip title={event.memberRsvpCount ? "iMessage RSVP'd members" : 'No RSVPs to message'}>
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    disabled={textingLoading[event.id] || !event.memberRsvpCount}
+                                    onClick={() => openEventImessage(event)}
+                                    aria-label={`iMessage RSVP'd members of ${event.eventName}`}
+                                  >
+                                    {textingLoading[event.id] ? <CircularProgress size={16} /> : <SmsIcon fontSize="small" />}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Button size="small" variant="outlined" onClick={() => openEventDialog(event)} sx={{ whiteSpace: 'nowrap' }}>
+                                Check in
                               </Button>
                             </Stack>
                           </TableCell>
                         </TableRow>
                         {expandedEvents[event.id] && (
                           <TableRow>
-                            <TableCell colSpan={8} sx={{ p: 0, borderBottom: 0 }}>
+                            <TableCell colSpan={6} sx={{ p: 0, borderBottom: 0 }}>
                               <Box p={2} bgcolor="action.hover">
                                 <Typography variant="subtitle2" gutterBottom>
                                   Quick check-in
