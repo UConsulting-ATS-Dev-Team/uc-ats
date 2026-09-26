@@ -88,6 +88,36 @@ describe('InterviewManageList', () => {
     expect(screen.queryByText('Session x')).not.toBeInTheDocument();
   });
 
+  it('holds Edit until the full record has loaded', async () => {
+    // Opened on overview data alone, the dialog would save location and dress
+    // code back as blank.
+    let resolveList;
+    apiClient.get = vi.fn(() => new Promise((resolve) => (resolveList = resolve)));
+    renderList(round([{ id: 'iv1', title: 'W27 First Round' }]));
+
+    expect(screen.getByRole('button', { name: /edit times & seats/i })).toBeDisabled();
+    resolveList([{ id: 'iv1', title: 'W27 First Round', location: 'Bunche 2156' }]);
+    expect(await screen.findByText(/Bunche 2156/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit times & seats/i })).toBeEnabled();
+  });
+
+  it('keeps Edit disabled when the full record fails to load', async () => {
+    apiClient.get = vi.fn().mockRejectedValue(new Error('nope'));
+    renderList(round([{ id: 'iv1', title: 'W27 First Round' }]));
+
+    expect(await screen.findByText('nope')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit times & seats/i })).toBeDisabled();
+  });
+
+  it('prefers the overview over the cached record for what both carry', async () => {
+    apiClient.get = vi.fn().mockResolvedValue([{ id: 'iv1', title: 'Old title', location: 'Bunche 2156' }]);
+    renderList(round([{ id: 'iv1', title: 'Renamed' }]));
+
+    expect(await screen.findByText(/Bunche 2156/)).toBeInTheDocument();
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(screen.queryByText('Old title')).not.toBeInTheDocument();
+  });
+
   it('deletes from the overflow menu', async () => {
     const onChanged = vi.fn();
     render(

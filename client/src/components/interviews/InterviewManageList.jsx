@@ -78,13 +78,15 @@ export default function InterviewManageList({ round, onChanged }) {
     }
   }, []);
 
-  const idsKey = (round?.interviews ?? []).map((i) => i.id).join(',');
+  // Refetched whenever the page reloads its overview, so a Refresh picks up an
+  // edit someone else made to location or dress code as well.
   useEffect(() => {
     load();
-  }, [load, idsKey]);
+  }, [load, round]);
 
+  // The overview is the fresher of the two for what it carries, so it wins.
   const interviews = useMemo(
-    () => (round?.interviews ?? []).map((i) => ({ ...i, ...details[i.id] })),
+    () => (round?.interviews ?? []).map((i) => ({ ...details[i.id], ...i, loaded: Boolean(details[i.id]) })),
     [round, details]
   );
 
@@ -208,7 +210,15 @@ export default function InterviewManageList({ round, onChanged }) {
                   >
                     Add sessions
                   </Button>
-                  <Button size="small" startIcon={<EditIcon />} onClick={() => setEditing(interview)}>
+                  {/* Waits for the full record: the dialog saves location and
+                      dress code back, and opened on overview data alone it
+                      would save them as blank. */}
+                  <Button
+                    size="small"
+                    startIcon={<EditIcon />}
+                    disabled={!interview.loaded}
+                    onClick={() => setEditing(interview)}
+                  >
                     Edit times &amp; seats
                   </Button>
                   <Button

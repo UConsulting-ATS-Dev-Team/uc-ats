@@ -36,6 +36,7 @@ import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import InterviewRosterGallery from '../components/interviews/InterviewRosterGallery';
 import InterviewCreateDialog from '../components/interviews/InterviewCreateDialog';
+import OtherInterviews from '../components/interviews/OtherInterviews';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
@@ -564,6 +565,13 @@ export default function AdminInterviews() {
                 )}
               </>
             )}
+
+            <OtherInterviews
+              cycleId={data?.cycle?.id}
+              roundInterviewIds={rounds.flatMap((r) => r.interviews.map((i) => i.id)).join(',')}
+              refreshKey={data}
+              onChanged={load}
+            />
 
             <InterviewCreateDialog
               open={createOpen}

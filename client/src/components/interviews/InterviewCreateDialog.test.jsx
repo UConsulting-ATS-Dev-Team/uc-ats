@@ -58,6 +58,18 @@ describe('InterviewCreateDialog', () => {
     expect(await screen.findByText(/No sessions are created yet/)).toBeInTheDocument();
   });
 
+  it('reopens as a fresh form, not a half-reset draft', async () => {
+    const props = { onClose: vi.fn(), onCreated: vi.fn() };
+    const { rerender } = render(<InterviewCreateDialog open defaultType="COFFEE_CHAT" {...props} />);
+    await userEvent.type(screen.getByLabelText(/^title/i), 'W27 Coffee Chats');
+
+    rerender(<InterviewCreateDialog open={false} defaultType="COFFEE_CHAT" {...props} />);
+    rerender(<InterviewCreateDialog open defaultType="ROUND_ONE" {...props} />);
+
+    expect(await screen.findByLabelText(/^title/i)).toHaveValue('');
+    expect(screen.getByLabelText(/^round/i)).toHaveTextContent('First Round');
+  });
+
   it('opens the legacy final round type as Final Round', () => {
     open({ defaultType: 'ROUND_TWO' });
     expect(screen.getByLabelText(/^round/i)).toHaveTextContent('Final Round');

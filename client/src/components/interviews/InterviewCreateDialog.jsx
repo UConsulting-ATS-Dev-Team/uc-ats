@@ -136,6 +136,13 @@ export default function InterviewCreateDialog({ open, onClose, onCreated, defaul
   // so a choice made inside the dialog is never overwritten while it is up.
   useEffect(() => {
     if (!open) return;
+    // A fresh form every time: a cancelled coffee chat draft reopened from
+    // First Round would otherwise carry its title and day into the new round.
+    setTitle('');
+    setDay('');
+    setLocation('');
+    setDresscode('');
+    setError('');
     // ROUND_TWO is the legacy name for the final round, and not on offer here.
     const type = defaultType === 'ROUND_TWO' ? 'FINAL_ROUND' : defaultType;
     chooseType(TYPE_LABEL[type] ? type : 'COFFEE_CHAT');
