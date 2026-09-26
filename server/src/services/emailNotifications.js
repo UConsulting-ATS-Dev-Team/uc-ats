@@ -1259,7 +1259,7 @@ const createReviewerReminderEmail = async (reviewerName, teamName, cycleName, pr
             <h4 style="color: #333; margin: 0 0 10px 0;">Your current progress</h4>
             <p style="color: #666; margin: 5px 0;"><strong>Overall:</strong> ${completedTotal}/${expectedTotal} (${completionPercent}% complete)</p>
             <p style="color: #666; margin: 5px 0;"><strong>Resume:</strong> ${completed.resume}/${eligible.resume}</p>
-            <p style="color: #666; margin: 5px 0;"><strong>Cover Letter:</strong> ${completed.coverLetter}/${eligible.coverLetter}</p>
+            <p style="color: #666; margin: 5px 0;"><strong>Short Answer:</strong> ${completed.coverLetter}/${eligible.coverLetter}</p>
             <p style="color: #666; margin: 5px 0;"><strong>Video:</strong> ${completed.video}/${eligible.video}</p>
           </div>
 

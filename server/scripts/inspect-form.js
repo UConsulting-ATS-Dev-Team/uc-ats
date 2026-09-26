@@ -153,6 +153,11 @@ function detectFieldMapping(title) {
     return { field: 'coverLetterUrl', type: 'file', file_type: 'pdf' };
   }
 
+  // Fall 2026 replaced the cover letter with a written "why UConsulting" answer.
+  if (lowerTitle.match(/why do you want to join|short answer/i)) {
+    return { field: 'shortAnswer', type: 'string' };
+  }
+
   if (lowerTitle.match(/headshot|photo|picture/i)) {
     return { field: 'headshotUrl', type: 'file', file_type: 'image' };
   }

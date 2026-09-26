@@ -100,9 +100,8 @@
             "file_type": "image"
         },
         "0cfd5850": {
-            "field": "coverLetterUrl",
-            "type": "file",
-            "file_type": "pdf"
+            "field": "shortAnswer",
+            "type": "string"
         },
         "56adb447": {
             "field": "videoUrl",

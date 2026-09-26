@@ -198,6 +198,22 @@ function ApplicationDetailModal({ application, isOpen, onClose }) {
                     </button>
                   </div>
                 )}
+                {application.shortAnswer?.trim() && (
+                  <div className="document-item">
+                    <label>Short Answer:</label>
+                    <button 
+                      className="document-link"
+                      onClick={() => setPreview({ 
+                        open: true, 
+                        text: application.shortAnswer.trim(), 
+                        kind: 'text', 
+                        title: `${application.firstName} ${application.lastName} – Short Answer` 
+                      })}
+                    >
+                      View Short Answer
+                    </button>
+                  </div>
+                )}
                 {application.videoUrl && (
                   <div className="document-item">
                     <label>Video:</label>
@@ -227,6 +243,7 @@ function ApplicationDetailModal({ application, isOpen, onClose }) {
         <DocumentPreviewModal
           src={preview.src}
           kind={preview.kind}
+          text={preview.text}
           title={preview.title}
           onClose={() => setPreview({ open: false, src: '', kind: 'pdf', title: '' })}
         />

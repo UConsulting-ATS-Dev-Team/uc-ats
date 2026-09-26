@@ -12,6 +12,7 @@ import {
   groupMemberUserInclude
 } from '../utils/groupMembers.js';
 import { resolveCycleForRequest } from '../services/activeCycle.js';
+import { hasCoverLetter } from '../utils/coverLetter.js';
 import {
   candidateParamGuard,
   guardCandidate,
@@ -60,7 +61,7 @@ router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
               where: { cycleId: activeCycle.id },
               orderBy: { submittedAt: 'desc' },
               take: 1,
-              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+              select: { resumeUrl: true, coverLetterUrl: true, shortAnswer: true, videoUrl: true }
             }
           }
         },
@@ -99,7 +100,7 @@ router.get('/contributions', requireAuth, requireAdmin, async (req, res) => {
         .filter(Boolean);
       const eligible = {
         resume: applications.filter(application => Boolean(application.resumeUrl)).length,
-        coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+        coverLetter: applications.filter(hasCoverLetter).length,
         video: applications.filter(application => Boolean(application.videoUrl)).length
       };
 
@@ -159,7 +160,7 @@ router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmi
               where: { cycleId: activeCycle.id },
               orderBy: { submittedAt: 'desc' },
               take: 1,
-              select: { resumeUrl: true, coverLetterUrl: true, videoUrl: true }
+              select: { resumeUrl: true, coverLetterUrl: true, shortAnswer: true, videoUrl: true }
             }
           }
         }
@@ -208,7 +209,7 @@ router.post('/:groupId/reviewers/:reviewerId/reminder', requireAuth, requireAdmi
 
     const eligible = {
       resume: applications.filter(application => Boolean(application.resumeUrl)).length,
-      coverLetter: applications.filter(application => Boolean(application.coverLetterUrl)).length,
+      coverLetter: applications.filter(hasCoverLetter).length,
       video: applications.filter(application => Boolean(application.videoUrl)).length
     };
 
@@ -458,7 +459,7 @@ router.get('/', requireAuth, async (req, res) => {
         const resumeProgress = !latestApplication.resumeUrl ? 100 : 
           (teamMemberIds.length > 0 ? 
             Math.round((candidateResumeScores.length / teamMemberIds.length) * 100) : 0);
-        const coverLetterProgress = !latestApplication.coverLetterUrl ? 100 : 
+        const coverLetterProgress = !hasCoverLetter(latestApplication) ? 100 : 
           (teamMemberIds.length > 0 ? 
             Math.round((candidateCoverLetterScores.length / teamMemberIds.length) * 100) : 0);
         const videoProgress = !latestApplication.videoUrl ? 100 : 
@@ -1056,6 +1057,7 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
             submittedAt: latestApplication.submittedAt,
             resumeUrl: latestApplication.resumeUrl,
             coverLetterUrl: latestApplication.coverLetterUrl,
+            shortAnswer: latestApplication.shortAnswer,
             videoUrl: latestApplication.videoUrl,
             groupId: group.id,
             groupName: `Team ${group.id.slice(-4)}`
@@ -1454,6 +1456,7 @@ router.get('/member-applications/:memberId', requireAuth, async (req, res) => {
           isTransferStudent: latestApplication.isTransferStudent,
           resumeUrl: latestApplication.resumeUrl,
           coverLetterUrl: latestApplication.coverLetterUrl,
+          shortAnswer: latestApplication.shortAnswer,
           videoUrl: latestApplication.videoUrl,
           groupId: group?.id,
           groupName: group ? `Team ${group.id.slice(-4)}` : 'Unknown Team',
