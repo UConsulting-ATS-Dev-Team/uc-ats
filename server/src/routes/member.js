@@ -12,12 +12,16 @@ import {
   getRosterForInterview
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
-import { sendMeetingCancellationEmail } from '../services/emailNotifications.js';
-import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate } from '../services/emailNotifications.js';
+import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
+import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
+import { resolveSignupContacts, logSignupContact } from '../services/meetingSignupContacts.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { hasCoverLetter } from '../utils/coverLetter.js';
 import { resolveCycleForRequest, resolveCandidateCycle } from '../services/activeCycle.js';
 import { createMemberReferral, referredDisplayName } from '../services/referrals.js';
+import { scoreMembers } from '../services/accountabilityPoints.js';
 import {
   getGroupMemberUsers,
   getGroupMemberIds,
@@ -68,6 +72,22 @@ router.get('/candidate/:id', requireAuth, requireAdminOrMember, guardCandidate((
 router.post('/evaluations', requireAuth, requireAdminOrMember, guardApplication((req) => req.body?.applicationId));
 
 // Get events for members with per-user RSVP status
+// The caller's own accountability points for the current cycle: what they have
+// done, what each type is worth, and what is left to reach the target.
+router.get('/accountability', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const cycle = await resolveCycleForRequest(prisma, req);
+    if (!cycle) return res.json({ cycle: null, standing: null });
+
+    const { members } = await scoreMembers({ cycle, members: [{ id: req.user.id }] });
+    const { id, ...standing } = members[0];
+    res.json({ cycle: { id: cycle.id, name: cycle.name }, standing });
+  } catch (error) {
+    console.error('[GET /api/member/accountability]', error);
+    res.status(500).json({ error: 'Failed to fetch your accountability points' });
+  }
+});
+
 router.get('/events', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -87,30 +107,129 @@ router.get('/events', requireAuth, async (req, res) => {
     });
 
 
-    // Build a Set of eventIds this member RSVP'd to
+    // Where each of this member's RSVPs came from, by event. The source is what
+    // lets the page offer Cancel only on an RSVP made here.
     const eventIds = events.map(e => e.id);
-    let rsvpsByEventId = new Set();
+    let rsvpSourceByEventId = new Map();
     if (eventIds.length > 0) {
       const memberRsvps = await prisma.memberEventRsvp.findMany({
         where: {
           memberId: userId,
           eventId: { in: eventIds }
         },
-        select: { eventId: true }
+        select: { eventId: true, source: true }
       });
-      rsvpsByEventId = new Set(memberRsvps.map(r => r.eventId));
+      rsvpSourceByEventId = new Map(memberRsvps.map(r => [r.eventId, r.source]));
     }
 
     const eventsWithStatus = events.map(event => ({
       ...event,
       memberRsvpUrl: event.memberRsvpUrl || null,
-      hasMemberRsvpd: rsvpsByEventId.has(event.id)
+      hasMemberRsvpd: rsvpSourceByEventId.has(event.id),
+      memberRsvpSource: rsvpSourceByEventId.get(event.id) ?? null
     }));
 
     res.json(eventsWithStatus);
   } catch (error) {
     console.error('[GET /api/member/events]', error);
     res.status(500).json({ error: 'Failed to fetch member events' });
+  }
+});
+
+/**
+ * A member's own RSVP, made from the Events page. Going is a row in
+ * member_event_rsvp, not going is no row, exactly as for Google Form and Luma
+ * RSVPs - so accountability and the dashboard read all three the same way.
+ *
+ * Only an IN_APP row is ever cancelled here. An RSVP that came from Luma or a
+ * form stands until it changes there: deleting it would be undone by the next
+ * sync (Luma) or leave the member registered somewhere we cannot see.
+ */
+async function loadOpenEvent(req, res) {
+  const event = await prisma.events.findUnique({ where: { id: req.params.eventId } });
+  if (!event) {
+    res.status(404).json({ error: 'Event not found' });
+    return null;
+  }
+  if (new Date(event.eventStartDate) <= new Date()) {
+    res.status(409).json({ error: 'This event has already started', code: 'EVENT_STARTED' });
+    return null;
+  }
+  return event;
+}
+
+router.put('/events/:eventId/rsvp', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const event = await loadOpenEvent(req, res);
+    if (!event) return;
+    // Only new RSVPs are refused. Cancelling one made before RSVPs were turned
+    // off still works, so nobody is left holding an RSVP they cannot undo.
+    if (event.memberRsvpEnabled === false) {
+      return res.status(409).json({ error: 'Member RSVPs are turned off for this event', code: 'RSVP_DISABLED' });
+    }
+
+    const key = { eventId_memberId: { eventId: event.id, memberId: req.user.id } };
+    let created = false;
+    try {
+      await prisma.memberEventRsvp.create({
+        data: { eventId: event.id, memberId: req.user.id, source: 'IN_APP' }
+      });
+      created = true;
+    } catch (error) {
+      // Already RSVP'd, from here or elsewhere: a second click is not an error.
+      if (error?.code !== 'P2002') throw error;
+    }
+    const row = await prisma.memberEventRsvp.findUnique({ where: key, select: { source: true } });
+
+    if (created) {
+      // Best-effort: the RSVP is recorded whether or not the mail goes out.
+      const member = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { email: true, fullName: true }
+      });
+      if (member?.email) {
+        sendRSVPConfirmation(
+          member.email,
+          member.fullName || member.email,
+          event.eventName,
+          formatEventDate(event.eventStartDate),
+          event.eventLocation,
+          event
+        ).catch((error) => console.error('[PUT /api/member/events/:eventId/rsvp] confirmation', error));
+      }
+    }
+
+    res.json({ hasMemberRsvpd: Boolean(row), memberRsvpSource: row?.source ?? null });
+  } catch (error) {
+    console.error('[PUT /api/member/events/:eventId/rsvp]', error);
+    res.status(500).json({ error: 'Failed to save RSVP' });
+  }
+});
+
+router.delete('/events/:eventId/rsvp', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const event = await loadOpenEvent(req, res);
+    if (!event) return;
+
+    await prisma.memberEventRsvp.deleteMany({
+      where: { eventId: event.id, memberId: req.user.id, source: 'IN_APP' }
+    });
+    const remaining = await prisma.memberEventRsvp.findUnique({
+      where: { eventId_memberId: { eventId: event.id, memberId: req.user.id } },
+      select: { source: true }
+    });
+    if (remaining) {
+      return res.status(409).json({
+        error: 'This RSVP was made outside the ATS and has to be changed there',
+        code: 'RSVP_EXTERNAL',
+        memberRsvpSource: remaining.source
+      });
+    }
+
+    res.json({ hasMemberRsvpd: false, memberRsvpSource: null });
+  } catch (error) {
+    console.error('[DELETE /api/member/events/:eventId/rsvp]', error);
+    res.status(500).json({ error: 'Failed to cancel RSVP' });
   }
 });
 
@@ -176,6 +295,7 @@ router.get('/all-applications', requireAuth, async (req, res) => {
       isTransferStudent: app.isTransferStudent,
       resumeUrl: app.resumeUrl,
       coverLetterUrl: app.coverLetterUrl,
+      shortAnswer: app.shortAnswer,
       videoUrl: app.videoUrl,
       groupId: app.candidate?.assignedGroupId,
       groupName: app.candidate?.assignedGroupId ? 
@@ -570,7 +690,7 @@ router.get('/my-team', requireAuth, async (req, res) => {
       const resumeProgress = !latestApplication.resumeUrl ? 100 : 
         (teamMemberIds.length > 0 ? 
           Math.round((candidateResumeScores.length / teamMemberIds.length) * 100) : 0);
-      const coverLetterProgress = !latestApplication.coverLetterUrl ? 100 : 
+      const coverLetterProgress = !hasCoverLetter(latestApplication) ? 100 : 
         (teamMemberIds.length > 0 ? 
           Math.round((candidateCoverLetterScores.length / teamMemberIds.length) * 100) : 0);
       const videoProgress = !latestApplication.videoUrl ? 100 : 
@@ -1029,8 +1149,14 @@ router.post('/meeting-slots', requireAuth, requireAdminOrMember, async (req, res
     
     console.log('Created slot startTime:', slot.startTime);
     console.log('Created slot endTime:', slot.endTime);
-    
+
     res.json(slot);
+
+    // After the response: the slot exists either way, and a slow mail server
+    // must not hold the request open long enough to invite a duplicate retry.
+    notifyHostSlotCreated(slot, req.user).catch((err) =>
+      console.error('[POST /api/member/meeting-slots] slot confirmation failed', err)
+    );
   } catch (error) {
     console.error('[POST /api/member/meeting-slots]', error);
     res.status(500).json({ error: 'Failed to create meeting slot' });
@@ -1092,6 +1218,60 @@ router.put('/meeting-slots/:id', requireAuth, async (req, res) => {
   }
 });
 
+// The slot's host, or any admin, may reach the people booked into it.
+async function loadContactableSlot(req, res) {
+  const slot = await prisma.meetingSlot.findUnique({
+    where: { id: req.params.id },
+    include: { signups: { orderBy: { createdAt: 'asc' } } },
+  });
+  if (!slot) {
+    res.status(404).json({ error: 'Meeting slot not found' });
+    return null;
+  }
+  if (slot.memberId !== req.user.id && req.user.role !== 'ADMIN') {
+    res.status(403).json({ error: 'Not authorized to contact this slot\'s signups' });
+    return null;
+  }
+  return slot;
+}
+
+// Everyone booked into a slot, with the phone number found for each, for the
+// group iMessage and email buttons. See services/meetingSignupContacts.js.
+router.get('/meeting-slots/:id/contacts', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const slot = await loadContactableSlot(req, res);
+    if (!slot) return;
+    res.json({ contacts: await resolveSignupContacts(slot.signups) });
+  } catch (error) {
+    console.error('[GET /api/member/meeting-slots/:id/contacts]', error);
+    res.status(500).json({ error: 'Failed to load signup contacts' });
+  }
+});
+
+// Called after the page has opened Messages or the mail app, so the contact is
+// in the communications log. `signupIds` is who the page put in the message,
+// which can differ from the slot now if someone booked or cancelled while the
+// dialog was open. Only ids still in this slot are logged, and their numbers
+// and addresses are re-resolved here rather than taken from the request.
+router.post('/meeting-slots/:id/contacts/log', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const slot = await loadContactableSlot(req, res);
+    if (!slot) return;
+    const { channel, body, signupIds } = req.body || {};
+    if (!Array.isArray(signupIds)) {
+      return res.status(400).json({ error: 'signupIds must be an array' });
+    }
+    const messaged = new Set(signupIds);
+    const contacts = await resolveSignupContacts(slot.signups.filter((s) => messaged.has(s.id)));
+    const logged = await logSignupContact({ channel, body, contacts, triggeredById: req.user.id });
+    res.status(201).json({ logged });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('[POST /api/member/meeting-slots/:id/contacts/log]', error);
+    res.status(500).json({ error: 'Failed to log the contact' });
+  }
+});
+
 // Member: delete a meeting slot
 router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
   try {
@@ -1129,7 +1309,17 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
             memberName,
             existingSlot.location,
             existingSlot.startTime,
-            existingSlot.endTime
+            existingSlot.endTime,
+            {
+              invite: candidateMeetingInvite({
+                slot: existingSlot,
+                signupId: signup.id,
+                candidateEmail: signup.email,
+                candidateName: signup.fullName,
+                hostName: memberName,
+                method: 'CANCEL',
+              }),
+            }
           ),
           {
             slotId: existingSlot.id,
@@ -1205,7 +1395,17 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            signupId: signup.id,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       ),
       {
         slotId: signup.slotId,
@@ -1374,6 +1574,7 @@ router.get('/interviews/:id/applications', requireAuth, async (req, res) => {
         graduationYear: true,
         resumeUrl: true,
         coverLetterUrl: true,
+        shortAnswer: true,
         videoUrl: true,
         headshotUrl: true,
         testFor: true,

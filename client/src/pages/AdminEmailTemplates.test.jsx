@@ -1,9 +1,10 @@
 // The admin preview of the ATS's automatic emails.
 //
 // The claim this page makes is narrow and worth pinning down: opening a
-// template shows the real email and sends nothing. So the tests check that the
-// rendered markup reaches the frame intact, that switching templates refetches,
-// and that a non-admin never gets there at all.
+// template shows the real email and sends nothing, and editing one changes what
+// that email will say. So the tests check that the rendered markup reaches the
+// frame intact, that switching templates refetches, that a save re-renders the
+// preview beside it, and that a non-admin never gets there at all.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -25,8 +26,9 @@ const CATALOG = [
     trigger: 'Sent from the application page in admin.js.',
     alsoAttaches: null,
     source: 'emailNotifications',
-    sourceLabel: 'Hardcoded in emailNotifications.js',
-    editable: false,
+    sourceLabel: 'Takes effect on the next send',
+    copyKey: 'application-acceptance',
+    editable: true,
   },
   {
     key: 'password-reset',
@@ -37,8 +39,9 @@ const CATALOG = [
     trigger: 'Sent from the forgot-password page.',
     alsoAttaches: null,
     source: 'emailNotifications',
-    sourceLabel: 'Hardcoded in emailNotifications.js',
-    editable: false,
+    sourceLabel: 'Takes effect on the next send',
+    copyKey: 'password-reset',
+    editable: true,
   },
   {
     key: 'slot-confirmation',
@@ -49,8 +52,9 @@ const CATALOG = [
     trigger: 'Sent when a candidate books an interview slot.',
     alsoAttaches: 'A calendar invite (.ics).',
     source: 'interviewSlot',
-    sourceLabel: 'Hardcoded in renderInterviewSlotEmail',
-    editable: false,
+    sourceLabel: 'Takes effect on notifications queued after the edit',
+    copyKey: 'slot-confirmation',
+    editable: true,
   },
   {
     key: 'decision-round-1-advanced',
@@ -61,7 +65,8 @@ const CATALOG = [
     trigger: 'Queued by decision processing.',
     alsoAttaches: null,
     source: 'decisionBatch',
-    sourceLabel: 'Editable per batch in Master Communications',
+    sourceLabel: 'Sets what a new batch starts from; also editable per batch in Master Communications',
+    copyKey: 'decision-round-1-advanced',
     editable: true,
   },
 ];
@@ -89,12 +94,24 @@ const PREVIEWS = {
   },
 };
 
+const COPY = {
+  key: 'application-acceptance',
+  mergeFields: ['candidateName', 'cycleName'],
+  customized: false,
+  updatedAt: null,
+  fields: [
+    { name: 'heading', label: 'Heading', type: 'line', help: null, default: 'Congratulations!', value: '' },
+  ],
+};
+
 function mockApi() {
   return vi.spyOn(apiClient, 'get').mockImplementation((path) => {
     if (path === '/admin/email-templates') return Promise.resolve(CATALOG);
 
     const match = path.match(/^\/admin\/email-templates\/(.+)\/preview$/);
     if (match && PREVIEWS[match[1]]) return Promise.resolve(PREVIEWS[match[1]]);
+
+    if (/^\/admin\/email-templates\/.+\/copy$/.test(path)) return Promise.resolve(COPY);
 
     const error = new Error('Unknown email template');
     error.serverMessage = 'Unknown email template';
@@ -120,18 +137,18 @@ describe('AdminEmailTemplates', () => {
     expect(screen.getByText('Round decisions')).toBeInTheDocument();
   });
 
-  it('says where each template can be edited', async () => {
+  it('says when an edit to each template takes effect', async () => {
     mockApi();
     render(<AdminEmailTemplates />);
 
     await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
-    expect(screen.getByText('Hardcoded in emailNotifications.js')).toBeInTheDocument();
+    expect(screen.getByText('Takes effect on the next send')).toBeInTheDocument();
 
     await userEvent.click(screen.getByText('Application advanced (decision)'));
 
     await waitFor(() => {
       expect(
-        screen.getByText('Editable per batch in Master Communications')
+        screen.getByText(/Sets what a new batch starts from/)
       ).toBeInTheDocument();
     });
   });
@@ -222,5 +239,77 @@ describe('AdminEmailTemplates', () => {
     expect(await screen.findByText('Access Denied')).toBeInTheDocument();
     expect(screen.queryByText('Application advanced')).not.toBeInTheDocument();
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it('offers to edit the wording of the template on screen', async () => {
+    mockApi();
+    render(<AdminEmailTemplates />);
+    await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
+
+    await userEvent.click(screen.getByRole('tab', { name: /edit wording/i }));
+
+    expect(await screen.findByLabelText('Heading')).toHaveValue('Congratulations!');
+    // The preview frame belongs to the other tab.
+    expect(document.querySelector('iframe')).toBeNull();
+  });
+
+  it('re-renders the preview once wording is saved', async () => {
+    const get = mockApi();
+    vi.spyOn(apiClient, 'put').mockResolvedValue({
+      ...COPY,
+      customized: true,
+      fields: [{ ...COPY.fields[0], value: 'You are through' }],
+    });
+
+    const { container } = render(<AdminEmailTemplates />);
+    await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
+
+    await userEvent.click(screen.getByRole('tab', { name: /edit wording/i }));
+    const heading = await screen.findByLabelText('Heading');
+    await userEvent.clear(heading);
+    await userEvent.type(heading, 'You are through');
+
+    // What the re-rendered preview will return once the save lands.
+    PREVIEWS['application-acceptance'].html = '<p>You are through.</p>';
+    await userEvent.click(screen.getByRole('button', { name: /save wording/i }));
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith('/admin/email-templates/application-acceptance/preview')
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: /^preview$/i }));
+    await waitFor(() =>
+      expect(container.querySelector('iframe').getAttribute('srcdoc')).toBe('<p>You are through.</p>')
+    );
+  });
+
+  it('goes back to the preview when another template is chosen', async () => {
+    mockApi();
+    render(<AdminEmailTemplates />);
+    await screen.findByText("Congratulations! You've Advanced to Coffee Chats");
+
+    await userEvent.click(screen.getByRole('tab', { name: /edit wording/i }));
+    await screen.findByLabelText('Heading');
+
+    await userEvent.click(screen.getByText('Password reset link'));
+
+    await waitFor(() => expect(screen.queryByLabelText('Heading')).toBeNull());
+    expect(document.querySelector('iframe')).toBeTruthy();
+  });
+
+  it('badges a template somebody has already edited', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation((path) => {
+      if (path === '/admin/email-templates') {
+        return Promise.resolve(CATALOG.map((entry, i) => ({ ...entry, customized: i === 1 })));
+      }
+      const match = path.match(/^\/admin\/email-templates\/(.+)\/preview$/);
+      if (match && PREVIEWS[match[1]]) return Promise.resolve(PREVIEWS[match[1]]);
+      return Promise.resolve(COPY);
+    });
+
+    render(<AdminEmailTemplates />);
+
+    await screen.findByText('Password reset link');
+    expect(screen.getAllByText('Edited')).toHaveLength(1);
   });
 });

@@ -20,6 +20,7 @@ import CandidateManagement from './pages/CandidateManagement';
 import CycleManagement from './pages/CycleManagement';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import Unsubscribe from './pages/Unsubscribe';
 import Dashboard from './pages/Dashboard';
 import MemberDashboard from './pages/MemberDashboard';
 import DocumentGrading from './pages/DocumentGrading';
@@ -585,6 +586,8 @@ const AppRoutes = () => {
 
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      {/* Public: the footer link of a Master Communications email */}
+      <Route path="/unsubscribe" element={<Unsubscribe />} />
       {/* Public meeting signup page */}
       <Route path="/meet" element={<CoffeeChatsPublic />} />
       {/* Member meeting slots management */}

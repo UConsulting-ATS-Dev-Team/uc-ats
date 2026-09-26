@@ -135,19 +135,40 @@ npm run import-mailing-list -- <csv>
 
 #### Mailing-list import
 
-The recruiting-interest mailing list is being retired, so
-`scripts/import-mailing-list-csv.js` runs once: it reads the export, drops every
-address the ATS already holds, and uploads what is left to the Marketing Drive
-folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`).
+The recruiting-interest mailing list is being retired. Its export is deduped
+against the ATS in two places, which share one service and differ only in where
+the survivors go:
+
+- **Master Communications → Mailing List** (admin-only). Upload the CSV, read the
+  counts, download the survivors. The preview stores nothing: the server holds the
+  file for the length of the request and returns the deduped CSV in the response.
+  `POST /api/master-communications/mailing-list/dedupe`, 5 MB cap, `.csv` only.
+  **Import** (`/mailing-list/import`) is a separate click that stores *every* valid
+  address as a `MailingListContact` - survivors and already-known people alike -
+  so the audience builder's "On the mailing list" means exactly that. Only rows
+  from an earlier import are skipped, which makes re-importing a no-op.
+- **`scripts/import-mailing-list-csv.js`**, which uploads to the Marketing Drive
+  folder (`MARKETING_DRIVE_FOLDER_ID`, or `--folder=<id>`) instead of downloading.
+  Dry run is the default; `--apply` is what uploads.
+
+[server/src/services/mailingListDedup.js](server/src/services/mailingListDedup.js)
+owns the operation and, with it, the answer to what counts as already known.
+The route and the script each keep only their own presentation. Put changes to
+the dedup there, not in either caller.
 
 "Already in the ATS" means `User`, `Candidate`, `Application` or `MeetingSignup`,
-compared case-insensitively. `DecisionMessage.email` is excluded on purpose - it is
+compared case-insensitively, with `x@g.ucla.edu` and `x@ucla.edu` counted as the
+same person (`emailIdentityKey` in `utils/mailingListImport.js`; both spellings stay
+valid and are stored as written). `DecisionMessage.email` is excluded on purpose - it is
 a copy of `Application.email` made when a decision is queued, so counting it would
 double-count the same person.
 
-The run is read-only against the database and writes only a new Drive file, so it
-is safe to re-run. Dry run is the default and prints every dropped row with its
-line number and reason; `--apply` is what uploads.
+The script and the preview are read-only against the database, so both are safe to re-run. Neither
+silently discards a row: every dropped row keeps its line number and its reason,
+in the console for the script and in the dropped-rows table for the UI, so a run
+can be reconciled against the source spreadsheet. A run where nothing survives is
+reported rather than treated as success - it is what a wrong email column looks
+like, and it is indistinguishable from a list where everyone was already known.
 
 ## Architecture
 
@@ -157,7 +178,8 @@ The system follows a **recruiting cycle-based workflow**:
 
 1. **Recruiting Cycle** → Contains applications, events, interviews, and review teams
 2. **Application Submission** → Google Forms responses are auto-synced every 5 minutes via cron job
-3. **Candidate Creation** → Applications automatically create or link to Candidate records by `studentId` or `email`
+3. **Candidate Creation** → Applications automatically create or link to Candidate records,
+   by `studentId` **first** and then `email` (see "Matching an application to a candidate")
 4. **Document Review** → Review teams (Groups) evaluate resumes, cover letters, and videos with scoring rubrics
 5. **Interview Rounds** → Coffee Chat → Round 1 → Round 2 → Final Round with evaluations
 6. **Event Management** → Track RSVPs and attendance for recruitment events
@@ -192,10 +214,21 @@ The system follows a **recruiting cycle-based workflow**:
   password rotation and the access log
 - `/api/master-communications/decision-batches` - Decision emails queued by Staging's
   Process All Decisions, reviewed and sent by an admin
+- `/api/master-communications/mailing-list/dedupe` - One-time import of the retiring
+  recruiting-interest list: upload the CSV, get back what the ATS has never seen
+- `/api/master-communications/audiences` - Saved audiences (named filter trees);
+  `/audience-options` feeds the builder; `/suppressions` is the unsubscribe list
+- `/api/unsubscribe` - Public, token-gated: the footer link's page actions and the
+  RFC 8058 one-click `POST /one-click`
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
   (ADMIN/MEMBER read, admin-only write)
+- `/api/integrations/luma` - The hourly Luma sync routine's three endpoints. No user
+  session ever reaches these; the caller is a scheduled Claude agent holding
+  `LUMA_SYNC_TOKEN` as a bearer token
+- `/api/admin/luma` - The admin side of that sync: the guests it could not settle, and
+  linking one to a candidate or member by hand
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -229,6 +262,47 @@ The system follows a **recruiting cycle-based workflow**:
   `node scripts/import-member-phones-from-csv.js <csv>` (dry run; add `--apply` to write),
   or edit one in User Management.
 
+**Master Communications audiences:**
+- Email's "Filtered audience" (`audience: 'custom'`) is an AND/OR tree of rules, any
+  node negatable, stored as `{ version: 2, root }`. Members and Admins stay as the flat
+  audiences they were (Slack uses only those). Old drafts with `applicants` /
+  `mailing-list` filters still resolve server-side and open in the builder as the
+  equivalent tree (`legacyToTree` in the client).
+- [audienceFilters.js](server/src/services/audiences/audienceFilters.js) validates a
+  tree and folds rule results; [audiencePeople.js](server/src/services/audiences/audiencePeople.js)
+  builds the people and answers each rule. **A new rule goes in `RULE_TYPES`, in
+  `MATCHERS`, and in the client's `RULES`** ([audienceRules.js](client/src/components/communications/audienceRules.js)).
+- A person is one lowercased address (`x@g.ucla.edu` and `x@ucla.edu` are one inbox
+  and merge; so does an unsubscribe from either), merged across accounts, applications,
+  candidates, mailing-list contacts, meeting signups and Luma guests. A candidate's
+  addresses merge into one person, represented by their active account's address if
+  any (so staff are recognised), else their latest application's.
+- Sealed records are identity only to an audience, even with an exec unlock: a sealed
+  application still counts as "applied" (cycle, status, date) but its decisions,
+  rounds, answers, onboarding and referrals are never read, or a decision filter would
+  list exactly who the seal hides. A new rule reading application content must respect
+  the `locked` marker `redactApplication` leaves.
+- NOT is taken against everyone known, so a tree with no positive rule is refused -
+  it would reach everybody. Deactivated accounts and `CLIENT` accounts are never in
+  the universe at all.
+- Saved audiences (`SavedAudience`) keep the tree, never the people, and are re-run
+  at send time. A draft or schedule with `savedAudienceId` follows later edits to it;
+  a schedule also keeps a copy of the filters in case the audience is deleted.
+  "Exactly who got send X" is the `receivedCampaign` rule, not a snapshot.
+
+**Unsubscribes:**
+- `EmailSuppression` holds addresses opted out of Master Communications *marketing*
+  mail: any bulk email send to someone who is not active staff. Staff mail carries no
+  link and ignores the list. Nothing outside Master Communications reads it - decision
+  letters, account and interview emails still go out.
+- Marketing mail gets a footer link to the public `/unsubscribe` page (a button; a GET
+  never acts, since scanners open every link) and `List-Unsubscribe` +
+  `List-Unsubscribe-Post` headers for Gmail/Yahoo one-click. Links carry an HMAC of the
+  address under `UNSUBSCRIBE_SECRET` (falls back to `JWT_SECRET`).
+- SES complaints and **permanent** bounces add a row automatically; soft bounces do not.
+- A row is never deleted: resubscribing sets `resubscribedAt`. Previews and sends
+  report held-back people as `skipped` rather than dropping them silently.
+
 **Communications log:**
 - `CommunicationLog` (`communication_logs`) records every outbound message, one row per
   recipient, read back in Master Communications → Logs → All messages.
@@ -247,6 +321,14 @@ The system follows a **recruiting cycle-based workflow**:
   is why `sendMasterCommunication` writes the campaign row *before* the first email.
 - An iMessage row is `OPENED`, not `SENT`: the server hands the conversation to the
   admin's Messages app and cannot observe what happens after.
+- An email row's `SENT` only means SES accepted it. What happened next arrives from SES
+  (configuration set `SES_CONFIGURATION_SET` → SNS topic `SES_SNS_TOPIC_ARN` →
+  `POST /api/webhooks/ses`) and moves the row to `DELIVERED`, `DELAYED`, `BOUNCED`,
+  `COMPLAINED` or `FAILED`, with the reason in `error`. Rows are matched by the SES id
+  inside `providerMessageId` plus recipient, and only ever move forward — SNS does not
+  guarantee order. The route has no auth; the SNS signature and topic ARN are its auth
+  ([server/src/services/sesEvents.js](server/src/services/sesEvents.js)). Unset topic ARN
+  means it refuses everything.
 
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
@@ -329,6 +411,73 @@ The system follows a **recruiting cycle-based workflow**:
   (plural) for the whole list, while the manual add and remove still own exactly one
   `MANUAL` referral per candidate per cycle and never touch a member's submission.
 
+**Member event RSVPs:**
+- Members RSVP in the app from the Events page: `PUT` / `DELETE
+  /api/member/events/:eventId/rsvp` (ADMIN/MEMBER, only before the event starts). There is
+  no member form to fill in; going is a `member_event_rsvp` row with `source = IN_APP`.
+  Admins RSVP for themselves from Event Management's Member RSVP column, through the same
+  endpoints.
+- Cancelling removes only an `IN_APP` row. An RSVP from Luma or the legacy Google Form is
+  shown as made but answers `409 RSVP_EXTERNAL` - it has to change where it was made.
+- Google Form, Luma and in-app rows coexist under the one-per-member-per-event index;
+  whichever wrote first stands, and neither sync ever removes another source's row.
+- A new in-app RSVP sends the RSVP confirmation (with calendar invite) best-effort.
+- `Events.memberRsvpEnabled` (default on) is the admin's switch in Edit Event for events
+  that need no member RSVP. Off means no RSVP button, no dashboard RSVP task, an "Off"
+  Member RSVP column, and `409 RSVP_DISABLED` on a new in-app RSVP. Existing rows are
+  kept and an in-app RSVP made before it was turned off can still be cancelled. Luma and
+  Google Form syncs ignore the switch. Copying an event to another cycle keeps its setting.
+- Admins mark who actually came in Accountability Tracker → an event's Manage dialog,
+  which opens on the RSVP'd members (any source). An RSVP never counts as attendance by
+  itself; attendance is still only a `member_event_attendance` row, and a walk-in without
+  an RSVP is one switch away.
+
+**Get to Know UC host reminders and contact:**
+- A cron every 15 minutes emails each host about 24 hours before a slot that has signups:
+  who is coming, and a nudge to tell them exactly where to meet and how to find the host
+  ([server/src/services/meetingHostReminders.js](server/src/services/meetingHostReminders.js)).
+  It is logged as a `REMINDER` `MeetingCommunication` with no signup, and that row is the
+  dedupe: one `SENT` since the slot entered its 24-hour window means done, so a slot moved
+  to a later day is reminded again. Failed sends retry, three attempts at most.
+- The member and admin slot pages have an "iMessage / email signups" button: one group
+  iMessage (`sms://open?addresses=…`) or one email (`mailto:`) to everyone in the slot,
+  opened in the host's own app, logged as `OPENED` in the communications log.
+- `MeetingSignup` has no phone, so a number is found by email
+  ([server/src/services/meetingSignupContacts.js](server/src/services/meetingSignupContacts.js)):
+  `User.phoneNumber`, then candidate onboarding, then the latest application. The last
+  two are read only when an account with that address has verified it: booking does not
+  require verification, so otherwise anyone could book under someone else's address and
+  hand their number to the host. A sealed candidate's onboarding and applications are
+  never read.
+
+**Accountability points:**
+- Every member needs a target number of points per cycle (3 by default), earned from nine
+  types of participation. **Each type counts once**, so the member's view reads as a
+  checklist of what is left. Admins edit the target and what each type is worth from the
+  Accountability page; members see their own standing on the dashboard
+  (`GET /api/member/accountability`).
+- [server/src/services/accountabilityPoints.js](server/src/services/accountabilityPoints.js)
+  owns the types, where each one's credit comes from, and the scoring. The types, labels
+  and credit sources are code; only the values live in the database
+  (`accountability_point_values`, `accountability_settings`), and a type with no row is
+  worth its default.
+- Credit is read from records the ATS already keeps, never entered twice: GTKUC is a
+  hosted slot somebody attended within the cycle's dates (from its `createdAt` when it
+  has no start date); Application Screen is any resume, cover letter or video score
+  this cycle, or a cycle-less legacy score written during it on a candidate who applied
+  in it; Coffee
+  Chats, First Round and Final
+  Round are sitting on a started session of that interview type (all three roster
+  sources, via `interviewersWhoHaveSat` in `interviewRoster.js`); Info Sesh, Women's Night,
+  Case Workshop and Case Buddies are check-ins to an event an admin tagged with that
+  `Events.pointType`.
+- Points add up in hundredths, so 0.5 six times is exactly 3.
+- Reminders (`POST /api/admin/accountability/reminders`) re-score at send time and skip
+  anyone who reached the target since the page loaded. They go through `sendEmail` as
+  `ACCOUNTABILITY_REMINDER`, with the admin's subject and message (merge fields
+  `REMINDER_MERGE_FIELDS`) above a generated checklist.
+- `eventCopy.js` does not carry `pointType`; a copied event has to be tagged again.
+
 **Case book time restriction:**
 - A member may open a case only once they are close to the interview they run it in.
   The window is one global number of hours, held in the `CaseVisibilitySetting`
@@ -343,10 +492,108 @@ The system follows a **recruiting cycle-based workflow**:
 - Larger numbers mean earlier access. 0 opens the case exactly at the interview start;
   720 (30 days) is effectively no restriction.
 
+**Luma event sync:**
+- Luma is replacing the per-event Google Forms for RSVP and attendance. There is no Luma
+  API on our plan, so an **hourly Claude routine** reads guests through the Luma MCP
+  connector and posts them to `/api/integrations/luma`. The routine only relays; every
+  decision about who a guest is happens in
+  [server/src/services/luma/ingestGuests.js](server/src/services/luma/ingestGuests.js).
+- The full design is [docs/luma-integration-plan.md](docs/luma-integration-plan.md), and the
+  routine's prompt and setup are [docs/luma-sync-routine.md](docs/luma-sync-routine.md).
+  **Read the plan before touching event sync code.**
+- Setting it up is **Event Management → Luma Sync Setup**: it generates the sync token
+  ([server/src/services/luma/syncToken.js](server/src/services/luma/syncToken.js)) and
+  renders the routine prompt with the token inlined
+  ([syncPrompt.js](server/src/services/luma/syncPrompt.js)). The token is stored in plain
+  text on purpose — it exists to be read back and pasted — so that prompt is a secret, and
+  `GET /api/admin/luma/sync-token` is the one endpoint here that returns a live one.
+- Rows carry `source` (`GOOGLE_FORM | LUMA`) and, for Luma, a unique `lumaGuestId`. The
+  sync **reconciles rather than appends**: declining in Luma removes that guest's Luma RSVP,
+  an undone check-in removes their attendance, and re-posting the same page changes nothing.
+  It never touches a `GOOGLE_FORM` row, and a person who answered both counts once.
+- A guest the ATS cannot resolve, one matched on a typed UID alone, and an `approval_status`
+  it cannot read as going or not going are all **held and reported**, never guessed at.
+  What counts as held is [server/src/services/luma/heldGuests.js](server/src/services/luma/heldGuests.js),
+  one definition read by both the panel and the per-event badge on the event list. A guest
+  can be held for more than one reason, so the counts exceed the number of guests.
+- **A guest's history follows them into the ATS through the UID.** Someone can attend an
+  event months before applying: the sync creates a Candidate keyed on the UID they typed,
+  and their RSVP and attendance rows point at it. When their application arrives, form
+  sync finds that same candidate by `studentId` and the history is already attached - the
+  address they used on Luma is usually not the one on their application, which is why the
+  UID question is required per event. `syncResponses.lumaHandoff.test.js` pins that seam.
+- **But only while the event is still on the routine's list.** An unmatched guest is
+  retried every sync, and an event drops off three days after it starts, so someone who
+  applies later than that is never retried - their old RSVPs stay unlinked until an admin
+  links them by hand. Work the guests panel after each event rather than after
+  applications open.
+- Admins settle a held guest in Event Management → an event's Luma column → the guests
+  panel. Linking runs
+  [server/src/services/luma/linkGuest.js](server/src/services/luma/linkGuest.js), which
+  re-runs the same reconcile a sync would, so the RSVP and attendance follow immediately -
+  an event leaves the routine's list three days after it starts, so a later link would
+  otherwise never be applied. Unlinking is the undo, and the only one: a match that exists
+  is never re-decided by a sync.
+- An event's `lumaUrl` is what an admin pastes; `lumaEventId` is what the routine resolves
+  it to. **Changing `lumaUrl` clears both `lumaEventId` and `lumaLastSyncedAt`** - a stale
+  id makes the routine's next resolve fail with a conflict, and a stale timestamp reports a
+  never-read link as freshly synced. Guests already ingested are kept.
+- A Luma link satisfies `formStatus` on its own (it covers RSVP and the door), so
+  `resolveFormStatus` reads `lumaUrl OR (rsvpForm AND attendanceForm)`.
+- `eventCopy.js` deliberately does **not** copy `lumaUrl`: `lumaEventId` is unique, so two
+  ATS events on one Luma event would make the second one's sync fail.
+
+**Event sign-up confirmation emails:**
+- The Google Form event sync's own RSVP and attendance confirmations are behind an admin
+  switch ([server/src/services/eventEmailSettings.js](server/src/services/eventEmailSettings.js),
+  toggled on the Events page) and are **off**. Luma emails its own confirmation and calendar
+  invite the moment somebody registers, so ours would be a second message about the same
+  sign-up. It is a switch rather than deleted code because the Forms path survives until
+  Phase 4; turn it on if events ever move back.
+- **Off is the default in all three places** - the column, the service fallback and the
+  migration. A missing settings row and an unapplied migration both read as off, because an
+  unexpected duplicate to everyone who signs up is worse than an expected missing one.
+- The setting is read once per sync run, not per response, so a run agrees with itself.
+- The **member in-app RSVP confirmation is not covered by this switch** and still sends: a
+  member who RSVPs in the app never touched Luma, so nothing else has written to them.
+
+**Matching an application to a candidate:**
+- [syncResponses.js](server/src/services/syncResponses.js) resolves the candidate a new
+  application belongs to by **`studentId` first, then `email`** - two lookups, in that
+  order, never one `OR`. Both columns are unique, so each answers at most one row, but an
+  `OR` across them can match two *different* people: the UID's owner and the address's
+  owner. That happens whenever somebody registered on Luma under a personal address, or a
+  UID was mistyped somewhere.
+- The UID wins because it is what the Luma sync keys a candidate on, so it is the row
+  carrying any `event_rsvp` / `event_attendance` history - **and nothing re-points those
+  rows afterwards.** Matching on the address instead would strand a person's RSVPs and
+  door scans on a record no application, and no candidate account, ever reaches.
+- **When the two point at different people the UID still wins, and the conflict is
+  logged.** Resolving to the address instead looks safer from one direction (a stolen UID
+  files your application onto its owner's record) and is worse from the other (your own
+  UID with someone else's address files it onto *theirs*) - mirror images, with no safe
+  choice at this layer. Only the UID keeps the event history attached, so that is what it
+  resolves to; the disagreement is logged for an admin.
+- The address is compared case-insensitively, exact row first. Luma emails are stored
+  lowercased and a Google Form answer is stored as typed, so an exact compare makes
+  `Maria@ucla.edu` a second person. `Candidate.email` is unique but case-sensitive, so two
+  rows differing only in case can both exist and both match: the **oldest wins**, and the
+  collision is logged for someone to merge.
+- A candidate found this way is **backfilled, never overwritten**: only fields that are
+  empty on the existing row are filled in from the application.
+- **Known hole, and the reason the conflict above is only bad data rather than a leak:**
+  `GET /api/applications/:id` treats `application.studentId` - the UID as typed on the
+  form - as proof of ownership, and then loads prior applications by the linked
+  `candidateId`. So someone who types another person's UID can open the application *and*
+  see that candidate's history. It is the ownership check that has to be fixed; no choice
+  of candidate resolution closes it, because both directions of the conflict leak through
+  the same door.
+
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
 - [server/src/services/syncEventResponses.js](server/src/services/syncEventResponses.js) - Syncs event RSVP/attendance forms
+- [server/src/services/luma/ingestGuests.js](server/src/services/luma/ingestGuests.js) - Turns Luma guests into event rows; owns all Luma matching
 - [server/src/services/emailNotifications.js](server/src/services/emailNotifications.js) - Nodemailer integration for notifications
 - [server/src/services/google/forms.js](server/src/services/google/forms.js) - Google Forms API wrapper
 - [server/src/services/google/drive.js](server/src/services/google/drive.js) - Google Drive file operations
@@ -482,6 +729,16 @@ Required in `server/.env`:
 - `CLIENT_URL` - Frontend URL (http://localhost:5173 in dev)
 - `EMAIL_USER`, `EMAIL_PASS` - Gmail credentials for nodemailer
 - `SLACK_WEBHOOK_URL` - (Optional) Slack webhook for admin notifications
+- `LUMA_SYNC_TOKEN` - (Optional, and no longer the usual way) A bearer token the hourly
+  Luma sync routine may authenticate with. The normal path is to generate one in
+  **Event Management → Luma Sync Setup**, which stores it in `luma_sync_settings` and
+  hands back the routine prompt with the token in it. Both are accepted, so a deployment
+  set up the old way keeps working and generating one does not switch this off. Must be
+  random and **at least 32 characters**: a shorter value, here or in the database, is
+  treated as a placeholder somebody meant to replace, and `/api/integrations/luma` answers
+  503 exactly as if it were unset. Read per request, so neither needs a redeploy.
+- `UNSUBSCRIBE_SECRET` - (Optional) Signs Master Communications unsubscribe links;
+  falls back to `JWT_SECRET`. Rotating it breaks every link already in an inbox.
 - `MARKETING_DRIVE_FOLDER_ID` - (Optional) Drive folder the one-time mailing-list
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder

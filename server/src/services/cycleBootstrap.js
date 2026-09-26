@@ -40,6 +40,15 @@ const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60000)
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
+// "Applications close" is a date-only milestone, which the timeline anchors at
+// 09:00 LA. As a deadline it means the whole day, so close at 23:59 LA that day.
+const applicationDeadlineFrom = (stages) => {
+  const close = stages.applications_close?.start;
+  if (!close) return null;
+  const day = utcToLocalInput(close)?.slice(0, 10);
+  return day ? localInputToUTC(`${day}T23:59`) : null;
+};
+
 // Normalize the submitted timeline into `{ stageKey: { start, end } }`, keeping
 // per-stage parse errors so the client can mark individual fields.
 const normalizeTimeline = (timeline = {}) => {
@@ -373,6 +382,7 @@ export async function commitCycleBootstrap({
         endDate: stages.offers_released
           ? stages.offers_released.start
           : stages.deliberations?.end || null,
+        applicationDeadline: applicationDeadlineFrom(stages),
         // Legacy free-text deadline columns stay populated so existing screens
         // keep working; the timeline snapshot is the structured source.
         resumeDeadline: stages.resume_deadline ? isoDate(stages.resume_deadline.start) : null,

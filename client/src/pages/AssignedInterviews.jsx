@@ -160,6 +160,20 @@ const CandidateCard = ({ application }) => {
                 Cover Letter
               </button>
             )}
+            {application.shortAnswer?.trim() && (
+              <button 
+                className="document-btn"
+                onClick={() => setPreview({ 
+                  open: true, 
+                  text: application.shortAnswer.trim(), 
+                  kind: 'text', 
+                  title: `${application.name} – Short Answer` 
+                })}
+              >
+                <DocumentTextIcon className="btn-icon" />
+                Short Answer
+              </button>
+            )}
             {application.videoUrl && (
               <button 
                 className="document-btn"
@@ -184,6 +198,7 @@ const CandidateCard = ({ application }) => {
           onClose={() => setPreview({ open: false, src: '', kind: '', title: '' })}
           src={preview.src}
           kind={preview.kind}
+          text={preview.text}
           title={preview.title}
         />
       )}

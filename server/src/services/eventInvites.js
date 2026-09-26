@@ -13,7 +13,7 @@
 // has no path to move or cancel it. The UID below is stable so that a future update
 // path can amend the entry rather than duplicate it, but that path does not exist yet.
 
-import { buildInvite, inviteUid } from './calendarInvite.js';
+import { buildInvite, inviteUid, inviteOrganizerEmail } from './calendarInvite.js';
 
 /** Events have no duration when eventEndDate is missing; treat them as an hour. */
 const DEFAULT_EVENT_MINUTES = 60;
@@ -41,7 +41,7 @@ export function eventInviteFor({ event, recipientEmail, recipientName, method = 
   try {
     if (!event?.id || !event.eventStartDate || !recipientEmail) return null;
 
-    const organizerEmail = (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
+    const organizerEmail = inviteOrganizerEmail();
     if (!organizerEmail) return null;
 
     const start = new Date(event.eventStartDate);

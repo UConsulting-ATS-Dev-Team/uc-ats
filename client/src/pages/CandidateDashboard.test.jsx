@@ -23,20 +23,10 @@ describe('CandidateDashboard application deadline card', () => {
     apiClient.get = vi.fn();
   });
 
-  it('shows loading state then the application deadline from the cycle endDate', async () => {
-    apiClient.get.mockResolvedValue([
-      {
-        id: 'app-1',
-        cycle: {
-          id: 'cycle-1',
-          name: 'Fall 2026',
-          endDate: '2026-10-05T00:00:00.000Z',
-        },
-      },
-    ]);
+  it('shows loading state then the application deadline from the cycle', async () => {
     // The card reads the open cycle now, not this candidate's applications.
     apiClient.get.mockResolvedValue({
-      cycle: { id: 'cycle-1', name: 'Fall 2026', endDate: '2026-10-05T00:00:00.000Z' },
+      cycle: { id: 'cycle-1', name: 'Fall 2026', applicationDeadline: '2099-10-02T06:59:00.000Z' },
     });
 
     renderWithRouter(<CandidateDashboard />);
@@ -65,25 +55,10 @@ describe('CandidateDashboard application deadline card', () => {
     expect(screen.getByRole('heading', { name: 'View Events' })).toBeInTheDocument();
   });
 
-  it('shows "No upcoming deadline posted" when the cycle endDate is malformed or past', async () => {
-    apiClient.get.mockResolvedValue([
-      {
-        id: 'app-1',
-        cycle: {
-          id: 'cycle-1',
-          name: 'Fall 2026',
-          endDate: 'Oct 4th, Morning',
-        },
-      },
-      {
-        id: 'app-2',
-        cycle: {
-          id: 'cycle-2',
-          name: 'Old Cycle',
-          endDate: '2020-01-01T00:00:00.000Z',
-        },
-      },
-    ]);
+  it('shows "No upcoming deadline posted" when the application deadline is malformed', async () => {
+    apiClient.get.mockResolvedValue({
+      cycle: { id: 'cycle-1', name: 'Fall 2026', applicationDeadline: 'Oct 4th, Morning' },
+    });
 
     renderWithRouter(<CandidateDashboard />);
 
@@ -112,13 +87,45 @@ describe('which deadline the card shows', () => {
     // deadline even after Fall 2026 was made the candidate-active cycle,
     // because the card scanned their own applications.
     apiClient.get.mockResolvedValue({
-      cycle: { id: 'fall', name: 'Fall 2026', endDate: '2026-10-10T00:00:00.000Z' },
+      cycle: { id: 'fall', name: 'Fall 2026', applicationDeadline: '2099-10-02T06:59:00.000Z' },
     });
 
     renderWithRouter(<CandidateDashboard />);
 
     await waitFor(() => expect(screen.getByText(/Fall 2026/i)).toBeInTheDocument());
     expect(screen.queryByText(/Winter 2026/i)).not.toBeInTheDocument();
+  });
+
+  it('shows when applications close, not when the cycle ends', async () => {
+    // Regression: Fall 2026 applications close Oct 1 at 11:59 PM, but the card
+    // showed Oct 11, the cycle's endDate.
+    apiClient.get.mockResolvedValue({
+      cycle: {
+        id: 'fall',
+        name: 'Fall 2099',
+        endDate: '2099-10-11T00:00:00.000Z',
+        applicationDeadline: '2099-10-02T06:59:00.000Z',
+      },
+    });
+
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/October 1, 2099 at 11:59 PM PDT/)).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/October 11/)).not.toBeInTheDocument();
+  });
+
+  it('never falls back to endDate when no application deadline is set', async () => {
+    apiClient.get.mockResolvedValue({
+      cycle: { id: 'fall', name: 'Fall 2099', endDate: '2099-10-11T00:00:00.000Z', applicationDeadline: null },
+    });
+
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/No upcoming deadline posted/i)).toBeInTheDocument()
+    );
   });
 
   it('asks for the open cycle rather than the applications list', async () => {
@@ -139,7 +146,7 @@ describe('which deadline the card shows', () => {
 
   it('shows nothing when the open cycle deadline has passed', async () => {
     apiClient.get.mockResolvedValue({
-      cycle: { id: 'old', name: 'Fall 2025', endDate: '2025-10-11T00:00:00.000Z' },
+      cycle: { id: 'old', name: 'Fall 2025', applicationDeadline: '2025-10-02T06:59:00.000Z' },
     });
     renderWithRouter(<CandidateDashboard />);
     await waitFor(() =>

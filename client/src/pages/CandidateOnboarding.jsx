@@ -209,29 +209,6 @@ const CandidateOnboarding = () => {
     );
   }
 
-  // The account cannot submit until the address is proved, so the form is not
-  // worth rendering - filling it in only to be refused is the worse experience.
-  if (status && !status.emailVerified) {
-    return (
-      <Container maxWidth="sm" sx={{ py: 6 }}>
-        <Paper sx={{ p: { xs: 3, sm: 4 } }}>
-          <Stack spacing={2} alignItems="center">
-            <UConsultingLogo />
-            <Alert severity="info" sx={{ width: '100%' }}>
-              Check your email for a verification link before finishing your profile.
-            </Alert>
-            <Typography variant="body2" color="text.secondary" align="center">
-              We sent it when you signed up. It expires after 24 hours.
-            </Typography>
-            <Button variant="outlined" onClick={() => navigate('/verify-email')}>
-              I need a new link
-            </Button>
-          </Stack>
-        </Paper>
-      </Container>
-    );
-  }
-
   return (
     <Container maxWidth="sm" sx={{ py: 6 }}>
       <Paper sx={{ p: { xs: 3, sm: 4 } }}>

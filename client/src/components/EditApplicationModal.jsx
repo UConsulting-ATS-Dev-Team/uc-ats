@@ -22,6 +22,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
     resumeUrl: '',
     headshotUrl: '',
     coverLetterUrl: '',
+    shortAnswer: '',
     videoUrl: '',
     blindResumeUrl: '',
     status: 'SUBMITTED'
@@ -49,6 +50,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
         resumeUrl: application.resumeUrl || '',
         headshotUrl: application.headshotUrl || '',
         coverLetterUrl: application.coverLetterUrl || '',
+        shortAnswer: application.shortAnswer || '',
         videoUrl: application.videoUrl || '',
         blindResumeUrl: application.blindResumeUrl || '',
         status: application.status || 'SUBMITTED'
@@ -109,6 +111,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
         resumeUrl: formData.resumeUrl,
         headshotUrl: formData.headshotUrl,
         coverLetterUrl: formData.coverLetterUrl || null,
+        shortAnswer: formData.shortAnswer.trim() || null,
         videoUrl: formData.videoUrl || null,
         blindResumeUrl: formData.blindResumeUrl || null,
         status: formData.status
@@ -398,6 +401,17 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
                 id="coverLetterUrl"
                 name="coverLetterUrl"
                 value={formData.coverLetterUrl}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="shortAnswer">Short Answer</label>
+              <textarea
+                id="shortAnswer"
+                name="shortAnswer"
+                rows={5}
+                value={formData.shortAnswer}
                 onChange={handleInputChange}
               />
             </div>

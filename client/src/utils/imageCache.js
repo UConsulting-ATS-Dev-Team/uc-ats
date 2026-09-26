@@ -70,14 +70,18 @@ class ImageCache {
     }
 
     const headers = {};
+    const internal = this.isInternalImageUrl(src);
     // Only send the auth token to our own API; never forward it to external hosts.
-    if (token && this.isInternalImageUrl(src)) {
+    if (token && internal) {
       headers.Authorization = `Bearer ${token}`;
     }
 
     const response = await fetch(src, {
       headers,
-      credentials: 'include', // Include cookies for session-based auth if needed
+      // Credentialed only for our own API. Public storage (Supabase profile
+      // images) answers `Access-Control-Allow-Origin: *`, which the browser
+      // rejects on a credentialed request, so the image would never load.
+      credentials: internal ? 'include' : 'omit',
     });
 
     if (!response.ok) {

@@ -12,6 +12,8 @@ import AccessControl from '../components/AccessControl';
 import { LockedChip } from '../components/LockedRecord';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
+import { coverLetterLabel } from '../utils/coverLetter';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import '../styles/ApplicationList.css';
 
 export default function Candidates() {
@@ -31,6 +33,7 @@ export default function Candidates() {
     eventAttendanceEventId: ''
   });
   const [expandedId, setExpandedId] = useState(null);
+  const [textPreview, setTextPreview] = useState(null); // { title, text } of an open short answer
   const [scoreCache, setScoreCache] = useState({}); // key: candidateId -> { resume, cover, video }
   const [attendanceByAppId, setAttendanceByAppId] = useState({}); // key: applicationId -> array of attended keys
   const [events, setEvents] = useState([]);
@@ -340,12 +343,19 @@ export default function Candidates() {
                               <div>Notes</div>
                               <div style={{ textAlign: 'right' }}>Score</div>
                             </div>
-                            {[{ key: 'resume', label: 'Resume', url: app.resumeUrl }, { key: 'cover', label: 'Cover Letter', url: app.coverLetterUrl }, { key: 'video', label: 'Video', url: app.videoUrl }].map(row => (
+                            {[{ key: 'resume', label: 'Resume', url: app.resumeUrl }, { key: 'cover', label: coverLetterLabel(app), url: app.coverLetterUrl, text: app.shortAnswer?.trim() }, { key: 'video', label: 'Video', url: app.videoUrl }].map(row => (
                               <div key={row.key} className="details-row">
                                 <div>
-                                  <a href={row.url || '#'} target="_blank" rel="noreferrer" onClick={(e) => { if (!row.url) e.preventDefault(); }} className={`doc-link ${row.url ? '' : 'disabled'}`}>
-                                    {row.label} {row.url ? <ArrowTopRightOnSquareIcon style={{ width: 16, height: 16 }} /> : null}
-                                  </a>
+                                  {!row.url && row.text ? (
+                                    // A short answer is text, not a file: it opens in the preview dialog.
+                                    <button type="button" className="doc-link" onClick={() => setTextPreview({ title: `${app.name} – ${row.label}`, text: row.text })}>
+                                      {row.label}
+                                    </button>
+                                  ) : (
+                                    <a href={row.url || '#'} target="_blank" rel="noreferrer" onClick={(e) => { if (!row.url) e.preventDefault(); }} className={`doc-link ${row.url ? '' : 'disabled'}`}>
+                                      {row.label} {row.url ? <ArrowTopRightOnSquareIcon style={{ width: 16, height: 16 }} /> : null}
+                                    </a>
+                                  )}
                                 </div>
                                 <div className="doc-notes">—</div>
                                 <div style={{ textAlign: 'right' }}>
@@ -363,6 +373,14 @@ export default function Candidates() {
             </tbody>
           </table>
         </div>
+      )}
+      {textPreview && (
+        <DocumentPreviewModal
+          kind="text"
+          title={textPreview.title}
+          text={textPreview.text}
+          onClose={() => setTextPreview(null)}
+        />
       )}
     </div>
     </AccessControl>

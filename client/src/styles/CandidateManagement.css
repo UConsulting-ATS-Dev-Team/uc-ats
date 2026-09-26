@@ -18,28 +18,10 @@
   color: var(--text-primary);
 }
 
-/* Ensure Material-UI components use proper fonts */
-.MuiButton-root {
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 400 !important;
-}
-
-.MuiTypography-h1,
-.MuiTypography-h2,
-.MuiTypography-h3,
-.MuiTypography-h4,
-.MuiTypography-h5,
-.MuiTypography-h6 {
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 700 !important;
-  color: var(--text-primary) !important;
-}
-
-.MuiTypography-body1,
-.MuiTypography-body2 {
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 300 !important;
-}
+/* MUI typography (font, weight, heading colour) comes from the theme in
+   styles/theme.js. It used to be restated here with !important, which this
+   file's global import applied to every page and which overrode any
+   fontWeight or color a component set on purpose. */
 
 .MuiTableCell-head {
   font-family: 'Montserrat', sans-serif !important;

@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
+import { fetchActiveCycle, slotsInCycleDates } from '../utils/activeCycle';
 import UConsultingLogo from '../components/UConsultingLogo';
 import {
   Box,
@@ -7,76 +9,108 @@ import {
   Paper,
   TextField,
   Button,
-  Card,
-  CardContent,
-  CardActions,
   Grid,
   Alert,
   CircularProgress,
   Stack,
-  Chip,
-  Divider,
   Container,
-  Avatar,
-  IconButton
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Tabs,
+  Tab,
+  Link
 } from '@mui/material';
 import {
   Schedule as ScheduleIcon,
-  LocationOn as LocationIcon,
   People as PeopleIcon,
   Person as PersonIcon,
   Email as EmailIcon,
   School as SchoolIcon,
   CheckCircle as CheckCircleIcon,
-  LinkedIn as LinkedInIcon
+  Lock as LockIcon
 } from '@mui/icons-material';
+import { GtkucBookedMeetingCard, GtkucSlotCard, GtkucSlotGrid, formatSlotDateTime } from '../components/GtkucSlotGallery';
+import {
+  MODIFY_CUTOFF_HOURS,
+  canModify,
+  currentCycleBooking,
+  errorText,
+} from '../utils/schedulingWindows';
 
 export default function CoffeeChatsPublic() {
+  const { user, login, register } = useAuth();
   const [slots, setSlots] = useState([]);
   const [allSlots, setAllSlots] = useState([]); // Store all slots for filtering
   const [activeCycle, setActiveCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedSlot, setSelectedSlot] = useState(null);
-  const [form, setForm] = useState({ fullName: '', email: '', studentId: '' });
+  // Name and email come from the signed-in account, server-side. The only thing
+  // the form can add is a student ID, for an account that lacks one.
+  const [form, setForm] = useState({ studentId: '' });
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
+
+  // Booking requires an account (POST /meeting-slots/:id/signup is requireAuth).
+  // A guest who picks a slot is asked to log in or register, and the booking
+  // completes on success.
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [authForm, setAuthForm] = useState({ email: '', password: '', fullName: '', graduationClass: '', studentId: '' });
+  const [authError, setAuthError] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [pendingSlotId, setPendingSlotId] = useState(null);
+
+  // One booking per cycle. A signed-in user who holds one sees it instead of
+  // the gallery, and gets the gallery back only to pick a new time for it.
+  const [mySignups, setMySignups] = useState([]);
+  const [changingTime, setChangingTime] = useState(false);
+  const [bookingBusy, setBookingBusy] = useState(false);
+
+  // Takes the account explicitly: right after a login from the dialog, the
+  // handlers still close over the render where `user` was null. Only the newest
+  // request may write, so a slow earlier answer cannot overwrite a fresh one.
+  const mineRequest = useRef(0);
+  const loadMine = useCallback(async (account) => {
+    const requestId = ++mineRequest.current;
+    if (!account) {
+      setMySignups([]);
+      return;
+    }
+    // Right after a login the context has not handed the API client its token yet.
+    const token = localStorage.getItem('token');
+    if (token) api.setToken(token);
+    try {
+      const data = await api.get('/meeting-signups/mine');
+      if (requestId !== mineRequest.current) return;
+      setMySignups(Array.isArray(data) ? data : []);
+    } catch (e) {
+      if (requestId !== mineRequest.current) return;
+      console.error('Failed to load your meeting signups:', e);
+      setMySignups([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMine(user);
+    // Keyed on the account, not the object: a profile update is not a new user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email, loadMine]);
+
+  const myBooking = user ? currentCycleBooking(mySignups, activeCycle, (s) => s.slot?.startTime) : null;
 
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members, admins, and unauthenticated)
-      const active = await api.get('/active-cycle');
-      setActiveCycle(active || null);
-      return active || null;
+      const active = await fetchActiveCycle(api);
+      setActiveCycle(active);
+      return active;
     } catch (e) {
       console.error('Failed to load active cycle:', e);
       return null;
     }
-  };
-
-  const filterSlotsByCycle = (slotsToFilter, cycle) => {
-    // If no active cycle, return empty array to only show spots from current cycle
-    if (!cycle) return [];
-    
-    // If cycle has date range, filter slots by date
-    if (cycle.startDate || cycle.endDate) {
-      return slotsToFilter.filter(slot => {
-        const slotDate = new Date(slot.startTime);
-        const startDate = cycle.startDate ? new Date(cycle.startDate) : null;
-        const endDate = cycle.endDate ? new Date(cycle.endDate) : null;
-        
-        // If cycle has start date, slot must be on or after start date
-        if (startDate && slotDate < startDate) return false;
-        
-        // If cycle has end date, slot must be on or before end date
-        if (endDate && slotDate > endDate) return false;
-        
-        return true;
-      });
-    }
-    
-    // If no date range, return empty array to hide old cycle slots
-    return [];
   };
 
   const load = async () => {
@@ -88,7 +122,7 @@ export default function CoffeeChatsPublic() {
       
       // Load active cycle and filter slots
       const cycle = await loadActiveCycle();
-      const filtered = filterSlotsByCycle(data, cycle);
+      const filtered = slotsInCycleDates(data, cycle);
       setSlots(filtered);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
@@ -120,48 +154,165 @@ export default function CoffeeChatsPublic() {
     };
   }, []);
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedSlot) return;
+  // Book a slot as the signed-in account. `account` is passed right after a
+  // login or register, before the context's user has updated.
+  const bookSlot = async (slotId, account = user) => {
+    setError('');
+    setSuccess('');
+    // The server only checks the ID is present; hold it to the rule registration uses.
+    if (!account?.studentId && !/^\d{9}$/.test(form.studentId.trim())) {
+      setError('Student ID must be exactly 9 digits.');
+      return;
+    }
+    setSubmitting(true);
     try {
-      setSubmitting(true);
-      setError('');
-      setSuccess('');
-      const response = await api.post(`/meeting-slots/${selectedSlot}/signup`, form);
+      const payload = account?.studentId ? {} : { studentId: form.studentId.trim() };
+      const response = await api.post(`/meeting-slots/${slotId}/signup`, payload);
       setSuccess(response.message || 'Successfully signed up! You will receive a confirmation email shortly.');
-      
-      // If user needs an account, ask if they want to create one
-      if (response.needsAccount) {
-        const wantsAccount = window.confirm(
-          'You successfully signed up for the meeting! Would you like to create an account to track your application status and access more features?'
-        );
-        if (wantsAccount) {
-          window.open('/signup', '_blank');
-        }
-      }
-      
-      setForm({ fullName: '', email: '', studentId: '' });
+      setForm({ studentId: '' });
       setSelectedSlot(null);
-      await load();
+      await Promise.all([load(), loadMine(account)]);
     } catch (e) {
-      setError(e.message || 'Failed to sign up for this meeting slot');
+      if (e.status === 409 && e.code === 'ALREADY_BOOKED') {
+        // They already hold this cycle's meeting. Show it instead of the gallery.
+        setSelectedSlot(null);
+        setChangingTime(false);
+        await loadMine(account);
+        setError(errorText(e, 'You already have a meeting booked this cycle.'));
+      } else {
+        setError(errorText(e, 'Failed to sign up for this meeting slot'));
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
-  const formatDateTime = (dateTime) => {
-    const date = new Date(dateTime);
-    return date.toLocaleString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'America/Los_Angeles'
-    });
+  // Move the booking to the selected slot. The server keeps the old seat if the
+  // new one is gone, so a failure leaves the current meeting as it was.
+  const moveBooking = async (slotId) => {
+    if (!myBooking) return;
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+    try {
+      const response = await api.put(`/meeting-signups/${myBooking.id}`, { slotId });
+      setSelectedSlot(null);
+      setChangingTime(false);
+      setSuccess(response?.message || 'Your meeting time has been changed.');
+      await Promise.all([load(), loadMine(user)]);
+    } catch (e) {
+      // A full slot: refresh the counts first, since load() clears the error.
+      if (e.status === 409) await load();
+      setError(errorText(e, 'Failed to change your meeting time'));
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  const cancelBooking = async () => {
+    if (!myBooking) return;
+    if (!window.confirm('Cancel your Get to Know UC meeting? Your spot will go to someone else.')) return;
+    setError('');
+    setSuccess('');
+    setBookingBusy(true);
+    try {
+      await api.delete(`/meeting-signups/${myBooking.id}`);
+      setChangingTime(false);
+      setSelectedSlot(null);
+      setSuccess('Your meeting has been cancelled. You can book a new time below.');
+      await Promise.all([load(), loadMine(user)]);
+    } catch (e) {
+      setError(errorText(e, 'Failed to cancel your meeting'));
+    } finally {
+      setBookingBusy(false);
+    }
+  };
+
+  const startChangingTime = () => {
+    setError('');
+    setSuccess('');
+    setSelectedSlot(null);
+    setChangingTime(true);
+  };
+
+  const keepCurrentTime = () => {
+    setSelectedSlot(null);
+    setChangingTime(false);
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedSlot) return;
+
+    if (!user) {
+      setPendingSlotId(selectedSlot);
+      setAuthMode('login');
+      setAuthError('');
+      setAuthForm({ email: '', password: '', fullName: '', graduationClass: '', studentId: '' });
+      setAuthOpen(true);
+      return;
+    }
+
+    if (myBooking && changingTime) {
+      await moveBooking(selectedSlot);
+      return;
+    }
+
+    await bookSlot(selectedSlot);
+  };
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+
+    if (authMode === 'register' && !/^\d{9}$/.test(authForm.studentId.trim())) {
+      setAuthError('Student ID must be exactly 9 digits.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const result = authMode === 'login'
+        ? await login(authForm.email.trim(), authForm.password)
+        : await register({
+            email: authForm.email.trim(),
+            password: authForm.password,
+            fullName: authForm.fullName.trim(),
+            graduationClass: authForm.graduationClass.trim(),
+            studentId: authForm.studentId.trim()
+          });
+
+      if (!result?.success) {
+        setAuthError(result?.error || 'Authentication failed. Please try again.');
+        return;
+      }
+
+      // The context hands the new token to the API client in an effect, which
+      // has not run yet. Book with it now rather than waiting a render.
+      const token = localStorage.getItem('token');
+      if (token) api.setToken(token);
+
+      setAuthOpen(false);
+      const slotId = pendingSlotId;
+      setPendingSlotId(null);
+      // register() does not return the user; its student ID is the one just typed.
+      const account = result.user || { studentId: authForm.studentId.trim() };
+      if (!slotId) return;
+      if (!account.studentId) {
+        // An older account with no student ID on file. Booking now would be
+        // refused; leave the slot open so its signed-in form asks for the ID.
+        setSelectedSlot(slotId);
+        setError('Add your UCLA student ID to finish booking.');
+        return;
+      }
+      await bookSlot(slotId, account);
+    } catch (err) {
+      setAuthError(err.message || 'Authentication failed. Please try again.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
 
   const getSelectedSlotData = () => {
     return slots.find(s => s.id === selectedSlot);
@@ -179,6 +330,10 @@ export default function CoffeeChatsPublic() {
   };
 
   const availableSlots = getAvailableSlots();
+  const showBooked = Boolean(myBooking) && !changingTime;
+  const picking = Boolean(myBooking) && changingTime;
+  const gallerySlots = picking ? availableSlots.filter((s) => s.id !== myBooking.slotId) : availableSlots;
+  const bookingLocked = myBooking ? !canModify(myBooking.slot.startTime) : false;
   
   // Calculate total available spots and total spots
   // Note: slots is already filtered by active cycle, so totalSpots only counts spots from current cycle
@@ -205,7 +360,7 @@ export default function CoffeeChatsPublic() {
               width: '100%',
               height: '100%',
               objectFit: 'cover',
-              objectPosition: 'center top',
+              objectPosition: 'center 33%',
               display: 'block'
             }}
           />
@@ -272,7 +427,7 @@ export default function CoffeeChatsPublic() {
           <Box sx={{ textAlign: 'center' }}>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
               <Typography variant="body2">
-                <strong>Important:</strong> You can only sign up for one meeting slot. If you've already signed up for a different time slot, you'll need to cancel that signup first by reaching out to uconsultingla@gmail.com.
+                <strong>Important:</strong> You can hold one meeting slot per cycle. Change or cancel it yourself from your ATS account (on this page, or Get to Know UC in the candidate portal) up to {MODIFY_CUTOFF_HOURS} hours before it starts.
               </Typography>
             </Alert>
           </Box>
@@ -341,7 +496,8 @@ export default function CoffeeChatsPublic() {
         )}
       </Box>
 
-      <Container maxWidth="lg" sx={{ py: { xs: 3, md: 4 }, px: { xs: 1.5, md: 3 } }}>
+      {/* Widens to xl on very wide screens so the slot grid can fit a fourth column. */}
+      <Container maxWidth="lg" sx={{ py: { xs: 3, md: 4 }, px: { xs: 1.5, md: 3 }, maxWidth: { xl: 1536 } }}>
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
@@ -356,18 +512,60 @@ export default function CoffeeChatsPublic() {
       )}
 
       <Grid container spacing={{ xs: 2, md: 4 }}>
+        {showBooked && (
+          <Grid size={12}>
+            <Box sx={{ maxWidth: 720, mx: 'auto' }}>
+              <GtkucBookedMeetingCard
+                memberName={myBooking.slot.member?.fullName || 'UC Consulting Member'}
+                profile={allSlots.find((s) => s.id === myBooking.slotId)?.memberProfile}
+                startTime={myBooking.slot.startTime}
+                location={myBooking.slot.location}
+                locked={bookingLocked}
+                cutoffHours={MODIFY_CUTOFF_HOURS}
+                busy={bookingBusy}
+                onChangeTime={startChangingTime}
+                onCancel={cancelBooking}
+              />
+            </Box>
+          </Grid>
+        )}
+
         {/* Available Slots */}
-        <Grid item xs={12}>
+        {!showBooked && (
+        <Grid size={12}>
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
-              Available Meeting Slots
-            </Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                alignItems: { xs: 'stretch', sm: 'center' },
+                justifyContent: 'space-between',
+                gap: 1.5,
+                mb: 3,
+              }}
+            >
+              <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
+                {picking ? 'Pick a new time' : 'Available Meeting Slots'}
+              </Typography>
+              {picking && (
+                <Button variant="outlined" onClick={keepCurrentTime} disabled={submitting} sx={{ minHeight: { xs: 44, md: 36 } }}>
+                  Keep my current time
+                </Button>
+              )}
+            </Box>
+
+            {picking && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                Your current meeting is {formatSlotDateTime(myBooking.slot.startTime)} with{' '}
+                {myBooking.slot.member?.fullName || 'a UC Consulting member'}. It stays booked until you confirm a new time.
+              </Alert>
+            )}
 
             {loading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
                 <CircularProgress />
               </Box>
-            ) : availableSlots.length === 0 ? (
+            ) : gallerySlots.length === 0 ? (
               <Box sx={{ textAlign: 'center', p: 4 }}>
                 <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
@@ -381,144 +579,15 @@ export default function CoffeeChatsPublic() {
                 </Typography>
               </Box>
             ) : (
-              <Stack spacing={{ xs: 1.5, md: 2 }}>
-                {availableSlots.map((slot) => (
-                    <Card 
-                    key={slot.id} 
-                    variant="outlined"
-                    sx={{ 
-                      cursor: slot.remaining > 0 ? 'pointer' : 'default',
-                      opacity: slot.remaining === 0 ? 0.6 : 1,
-                      border: selectedSlot === slot.id ? 2 : 1,
-                      borderColor: selectedSlot === slot.id ? 'primary.main' : 'divider',
-                      transition: 'all 0.2s ease-in-out',
-                      '&:hover': slot.remaining > 0 ? {
-                        borderColor: 'primary.main',
-                        boxShadow: 2,
-                        transform: 'translateY(-1px)'
-                      } : {},
-                      '&:active': slot.remaining > 0 ? {
-                        transform: 'translateY(0px)'
-                      } : {}
-                    }}
-                    onClick={() => slot.remaining > 0 && setSelectedSlot(slot.id)}
-                  >
-                    <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                      {/* Member-led layout: who you would be meeting comes first. */}
-                      <Box sx={{ display: 'flex', gap: { xs: 2, sm: 2.5 }, alignItems: 'flex-start' }}>
-                        <Avatar
-                          src={slot.memberProfile?.photo || undefined}
-                          alt={slot.memberName}
-                          sx={{
-                            width: { xs: 72, md: 92 },
-                            height: { xs: 72, md: 92 },
-                            border: '3px solid',
-                            borderColor: 'primary.light',
-                            flexShrink: 0
-                          }}
-                        >
-                          <PersonIcon sx={{ fontSize: { xs: 36, md: 46 } }} />
-                        </Avatar>
-
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Box sx={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'flex-start',
-                            gap: 1,
-                            mb: 0.5
-                          }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                              <Typography
-                                variant="h6"
-                                sx={{ fontWeight: 700, fontSize: { xs: '1.15rem', md: '1.35rem' }, lineHeight: 1.2 }}
-                              >
-                                {slot.memberName}
-                              </Typography>
-                              {slot.memberProfile?.linkedinUrl && (
-                                <IconButton
-                                  component="a"
-                                  href={slot.memberProfile.linkedinUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  aria-label={`${slot.memberName} on LinkedIn`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  sx={{ color: '#0A66C2', p: 0.5 }}
-                                >
-                                  <LinkedInIcon sx={{ fontSize: { xs: 26, md: 30 } }} />
-                                </IconButton>
-                              )}
-                            </Box>
-                            <Chip
-                              label={slot.remaining === 0 ? 'Full' : `${slot.remaining} ${slot.remaining === 1 ? 'spot' : 'spots'} left`}
-                              color={slot.remaining === 0 ? 'default' : 'primary'}
-                              variant={slot.remaining === 0 ? 'outlined' : 'filled'}
-                              size="small"
-                              sx={{ flexShrink: 0, fontWeight: 600 }}
-                            />
-                          </Box>
-
-                          {slot.memberProfile?.graduationClass && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                              Class of {slot.memberProfile.graduationClass}
-                            </Typography>
-                          )}
-
-                          <Stack spacing={0.75} sx={{ mb: slot.memberProfile ? 2 : 0 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <ScheduleIcon sx={{ fontSize: 20, color: 'primary.main' }} />
-                              <Typography variant="body1" sx={{ fontWeight: 600, fontSize: { xs: '0.95rem', md: '1rem' } }}>
-                                {formatDateTime(slot.startTime)}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <LocationIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                              <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.9rem', md: '0.925rem' } }}>
-                                {slot.location}
-                              </Typography>
-                            </Box>
-                          </Stack>
-
-                          {slot.memberProfile?.industries?.length > 0 && (
-                            <Box sx={{ mb: 1.5 }}>
-                              <Typography
-                                variant="overline"
-                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
-                              >
-                                Industry experience
-                              </Typography>
-                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
-                                {slot.memberProfile.industries.map((industry) => (
-                                  <Chip key={industry} label={industry} size="small" color="primary" variant="outlined" />
-                                ))}
-                              </Stack>
-                            </Box>
-                          )}
-
-                          {slot.memberProfile?.interests?.length > 0 && (
-                            <Box>
-                              <Typography
-                                variant="overline"
-                                sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, letterSpacing: '0.08em', lineHeight: 1.6 }}
-                              >
-                                Interests
-                              </Typography>
-                              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 0.5 }}>
-                                {slot.memberProfile.interests.map((interest) => (
-                                  <Chip key={interest} label={interest} size="small" variant="outlined" />
-                                ))}
-                              </Stack>
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </CardContent>
-                    {slot.remaining > 0 && (
-                      <CardActions sx={{ 
-                        justifyContent: 'center', 
-                        pb: 2,
-                        px: { xs: 2, md: 3 }
-                      }}>
+              <GtkucSlotGrid>
+                {gallerySlots.map((slot) => (
+                  <GtkucSlotCard
+                    key={slot.id}
+                    slot={slot}
+                    selected={selectedSlot === slot.id}
+                    onSelect={setSelectedSlot}
+                    actions={
+                      slot.remaining > 0 && (
                         <Button
                           variant={selectedSlot === slot.id ? 'contained' : 'outlined'}
                           size="medium"
@@ -535,9 +604,9 @@ export default function CoffeeChatsPublic() {
                         >
                           {selectedSlot === slot.id ? 'Selected' : 'Select This Slot'}
                         </Button>
-                      </CardActions>
-                    )}
-
+                      )
+                    }
+                  >
                     {/* Inline Signup Form - appears below selected slot */}
                     {selectedSlot === slot.id && (
                       <Box sx={{ 
@@ -552,77 +621,45 @@ export default function CoffeeChatsPublic() {
                           color: 'primary.dark',
                           fontSize: { xs: '1.1rem', md: '1.25rem' }
                         }}>
-                          Sign Up for This Meeting
+                          {picking ? 'Move My Meeting Here' : 'Sign Up for This Meeting'}
                         </Typography>
 
                         <Box component="form" onSubmit={onSubmit}>
                           <Stack spacing={{ xs: 2.5, md: 3 }}>
-                            <TextField
-                              fullWidth
-                              label="Full Name"
-                              placeholder="Enter your full name"
-                              value={form.fullName}
-                              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <PersonIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
+                            {user ? (
+                              <>
+                                <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>
+                                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Signing up as</Typography>
+                                  <Stack direction="row" spacing={1} alignItems="center">
+                                    <PersonIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                                    <Typography sx={{ fontWeight: 600 }}>{user.fullName}</Typography>
+                                  </Stack>
+                                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                                    <EmailIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                                    <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-all' }}>{user.email}</Typography>
+                                  </Stack>
+                                </Box>
 
-                            <TextField
-                              fullWidth
-                              label="Email Address"
-                              type="email"
-                              placeholder="your.email@ucla.edu"
-                              value={form.email}
-                              onChange={(e) => setForm({ ...form, email: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <EmailIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
-
-                            <TextField
-                              fullWidth
-                              label="UCLA Student ID"
-                              placeholder="e.g., 123456789"
-                              value={form.studentId}
-                              onChange={(e) => setForm({ ...form, studentId: e.target.value })}
-                              required
-                              InputProps={{
-                                startAdornment: <SchoolIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
-                              }}
-                              sx={{
-                                '& .MuiInputBase-input': {
-                                  fontSize: { xs: '1rem', md: '1rem' },
-                                  padding: { xs: '16px 14px 16px 0', md: '16px 14px 16px 0' },
-                                  minHeight: { xs: '24px', md: '24px' }
-                                },
-                                '& .MuiInputLabel-root': {
-                                  fontSize: { xs: '1rem', md: '1rem' }
-                                }
-                              }}
-                            />
+                                {!user.studentId && (
+                                  <TextField
+                                    fullWidth
+                                    label="UCLA Student ID"
+                                    placeholder="e.g., 123456789"
+                                    value={form.studentId}
+                                    onChange={(e) => setForm({ ...form, studentId: e.target.value })}
+                                    required
+                                    helperText="Your account doesn't have a student ID on file."
+                                    InputProps={{
+                                      startAdornment: <SchoolIcon sx={{ color: 'text.secondary', mr: 1, fontSize: { xs: 20, md: 18 } }} />
+                                    }}
+                                  />
+                                )}
+                              </>
+                            ) : (
+                              <Alert severity="info" icon={<LockIcon />}>
+                                You'll be asked to log in or create an account to confirm your signup.
+                              </Alert>
+                            )}
 
                             <Button
                               type="submit"
@@ -648,26 +685,31 @@ export default function CoffeeChatsPublic() {
                                 }
                               }}
                             >
-                              {submitting ? 'Signing Up...' : 'Confirm Signup'}
+                              {picking
+                                ? (submitting ? 'Changing...' : 'Confirm New Time')
+                                : submitting ? 'Signing Up...' : user ? 'Confirm Signup' : 'Log in & Confirm Signup'}
                             </Button>
                           </Stack>
                         </Box>
 
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block', textAlign: 'center' }}>
-                          You will receive a confirmation email with meeting details.
+                          {picking
+                            ? 'Your old time is released only once the new one is confirmed.'
+                            : 'You will receive a confirmation email with meeting details.'}
                         </Typography>
                       </Box>
                     )}
-                  </Card>
+                  </GtkucSlotCard>
                 ))}
-              </Stack>
+              </GtkucSlotGrid>
             )}
           </Paper>
         </Grid>
+        )}
 
         {/* Instructions when no slot is selected */}
-        {!selectedSlot && (
-          <Grid item xs={12}>
+        {!selectedSlot && !showBooked && (
+          <Grid size={12}>
             <Paper sx={{ p: { xs: 2, md: 3 }, textAlign: 'center' }}>
               <PeopleIcon sx={{ fontSize: { xs: 48, md: 60 }, color: 'grey.400', mb: 2 }} />
               <Typography variant="h6" color="text.secondary" sx={{ 
@@ -679,13 +721,104 @@ export default function CoffeeChatsPublic() {
               <Typography variant="body2" color="text.secondary" sx={{
                 fontSize: { xs: '0.9rem', md: '0.875rem' }
               }}>
-                Choose an available time slot from the list above to sign up for a meeting. The signup form will appear right below your selected slot.
+                {picking
+                  ? 'Choose a new time from the list above. The confirm button will appear right below the slot you pick.'
+                  : 'Choose an available time slot from the list above to sign up for a meeting. The signup form will appear right below your selected slot.'}
               </Typography>
             </Paper>
           </Grid>
         )}
       </Grid>
       </Container>
+
+      {/* Log in or create an account, then finish the booking that was waiting */}
+      <Dialog open={authOpen} onClose={() => { if (!authSubmitting) setAuthOpen(false); }} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 0 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <LockIcon color="primary" />
+            <span>{authMode === 'login' ? 'Log in to confirm' : 'Create an account'}</span>
+          </Stack>
+        </DialogTitle>
+        <Tabs
+          value={authMode}
+          onChange={(_, v) => { setAuthMode(v); setAuthError(''); }}
+          variant="fullWidth"
+          sx={{ px: 2, mt: 1 }}
+        >
+          <Tab value="login" label="Log in" />
+          <Tab value="register" label="Create account" />
+        </Tabs>
+        <Box component="form" onSubmit={handleAuthSubmit}>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              An account is required to book a Get to Know UC meeting slot.
+            </Typography>
+            {authError && <Alert severity="error" sx={{ mb: 2 }}>{authError}</Alert>}
+            <Stack spacing={2}>
+              {authMode === 'register' && (
+                <>
+                  <TextField
+                    label="Full Name"
+                    fullWidth
+                    required
+                    value={authForm.fullName}
+                    onChange={(e) => setAuthForm({ ...authForm, fullName: e.target.value })}
+                  />
+                  <TextField
+                    label="Graduation Class"
+                    placeholder="e.g., 2027"
+                    fullWidth
+                    required
+                    value={authForm.graduationClass}
+                    onChange={(e) => setAuthForm({ ...authForm, graduationClass: e.target.value })}
+                  />
+                  <TextField
+                    label="UCLA Student ID"
+                    placeholder="9 digits"
+                    fullWidth
+                    required
+                    value={authForm.studentId}
+                    onChange={(e) => setAuthForm({ ...authForm, studentId: e.target.value })}
+                  />
+                </>
+              )}
+              <TextField
+                label="Email Address"
+                type="email"
+                fullWidth
+                required
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+              />
+              <TextField
+                label="Password"
+                type="password"
+                fullWidth
+                required
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+              {authMode === 'login' ? (
+                <>Don't have an account?{' '}
+                  <Link component="button" type="button" onClick={() => { setAuthMode('register'); setAuthError(''); }}>Create one</Link>
+                </>
+              ) : (
+                <>Already have an account?{' '}
+                  <Link component="button" type="button" onClick={() => { setAuthMode('login'); setAuthError(''); }}>Log in</Link>
+                </>
+              )}
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={() => setAuthOpen(false)} disabled={authSubmitting}>Cancel</Button>
+            <Button type="submit" variant="contained" disabled={authSubmitting}>
+              {authSubmitting ? 'Please wait…' : authMode === 'login' ? 'Log in & book' : 'Create account & book'}
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
     </Box>
   );
 }

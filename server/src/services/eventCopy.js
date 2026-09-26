@@ -20,6 +20,12 @@ export const PORTABLE_EVENT_FIELDS = [
   { name: 'attendanceForm', label: 'Attendance Form URL', required: false, editable: true, type: 'url' },
   { name: 'memberRsvpUrl', label: 'Member RSVP Form URL', required: false, editable: true, type: 'url' },
   { name: 'memberAttendanceForm', label: 'Member Attendance Form URL', required: false, editable: true, type: 'url' },
+  // `lumaUrl` is deliberately absent and must stay that way. A Luma event is a
+  // single event with its own guest list, so a copy into next cycle needs a new
+  // one; carrying the link over would point two ATS events at one Luma event,
+  // and `Events.lumaEventId` is unique, so the second to sync would fail with a
+  // conflict nobody is watching for. The copy is created unlinked and an admin
+  // pastes the new Luma link.
 ];
 
 function toIsoString(value) {
@@ -269,6 +275,9 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
             rsvpForm: evt.rsvpForm ? evt.rsvpForm.trim() : null,
             attendanceForm: evt.attendanceForm ? evt.attendanceForm.trim() : null,
             memberRsvpUrl: evt.memberRsvpUrl ? evt.memberRsvpUrl.trim() : null,
+            // Read from the source, not the request: the preview does not offer
+            // it, so a copy of an event with member RSVP off stays off.
+            memberRsvpEnabled: source.memberRsvpEnabled !== false,
             memberAttendanceForm: evt.memberAttendanceForm ? evt.memberAttendanceForm.trim() : null,
             copiedFromCycleId: sourceCycleId,
             copiedFromEventId: evt.sourceEventId,
@@ -297,6 +306,7 @@ export async function commitCycleEventCopy({ prisma, sourceCycleId, targetCycleI
                     rsvpForm: true,
                     attendanceForm: true,
                     memberRsvpUrl: true,
+                    memberRsvpEnabled: true,
                     memberAttendanceForm: true,
                     createdAt: true,
                     copiedFromCycleId: true,

@@ -30,7 +30,8 @@ import { MODIFY_CUTOFF_HOURS } from '../utils/schedulingWindows.js';
 import { checkCanBookSlot, getBookingOptions, getOwnSignups } from '../services/candidateSchedulingView.js';
 import { cancelSignup, claimWithFallback, moveSignup } from '../services/interviewSignups.js';
 import {
-  SLOT_NOTIFICATION_SUBJECTS,
+  slotNotificationSubject,
+  slotSubjectFormatter,
   flushNotifications,
   queueNotifications,
 } from '../services/interviewSlotComms.js';
@@ -200,7 +201,7 @@ async function queueForClaim(result, application) {
       signupId: result.confirmed.id,
       type: 'CONFIRMATION',
       recipient,
-      subject: SLOT_NOTIFICATION_SUBJECTS.CONFIRMATION(interviewTitle),
+      subject: await slotNotificationSubject('CONFIRMATION', interviewTitle),
     });
   } else if (result.outcome === 'WAITLISTED') {
     // One email describing both halves, not two arriving together - two sends
@@ -210,7 +211,7 @@ async function queueForClaim(result, application) {
       signupId: result.waitlisted.id,
       type: 'WAITLIST_ADDED',
       recipient,
-      subject: SLOT_NOTIFICATION_SUBJECTS.WAITLIST_ADDED(interviewTitle),
+      subject: await slotNotificationSubject('WAITLIST_ADDED', interviewTitle),
     });
   } else if (result.outcome === 'NEEDS_PLACEMENT') {
     entries.push({
@@ -218,7 +219,7 @@ async function queueForClaim(result, application) {
       signupId: result.needsPlacement.id,
       type: 'ADMIN_OVERFLOW_ALERT',
       recipient: config.recruitmentEmail,
-      subject: SLOT_NOTIFICATION_SUBJECTS.ADMIN_OVERFLOW_ALERT(interviewTitle),
+      subject: await slotNotificationSubject('ADMIN_OVERFLOW_ALERT', interviewTitle),
     });
   }
 
@@ -238,12 +239,13 @@ async function queueForPromotions(promotions, movedSignupId) {
     },
   });
 
+  const subjectFor = await slotSubjectFormatter('PROMOTED');
   const entries = rows.map((row) => ({
     slotId: row.slotId,
     signupId: row.id,
     type: 'PROMOTED',
     recipient: row.application?.email,
-    subject: SLOT_NOTIFICATION_SUBJECTS.PROMOTED(row.slot.interview.title),
+    subject: subjectFor(row.slot.interview.title),
   }));
 
   if (entries.length === 0) return [];

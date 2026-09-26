@@ -28,6 +28,8 @@ import liveVoteRoutes from './routes/liveVotes.js';
 import decisionGuideRoutes from './routes/decisionGuides.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
+import { sendDueHostReminders } from './services/meetingHostReminders.js';
+import { sendDueAttendanceReminders } from './services/meetingAttendanceReminders.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import externalContainment from './middleware/externalContainment.js';
 import clientRoutes from './routes/client.js';
@@ -42,6 +44,10 @@ import releaseNotesRoutes from './routes/releaseNotes.js';
 import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
 import emailTemplateRoutes from './routes/emailTemplates.js';
+import sesWebhookRoutes from './routes/sesWebhooks.js';
+import unsubscribeRoutes from './routes/unsubscribe.js';
+import lumaIntegrationRoutes from './routes/lumaIntegration.js';
+import lumaAdminRoutes from './routes/lumaAdmin.js';
 
 const app = express();
 
@@ -95,6 +101,7 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
+app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);
@@ -114,6 +121,12 @@ app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/decision-guides', decisionGuideRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
+app.use('/api/webhooks/ses', sesWebhookRoutes);
+// Public, token-gated: the Master Communications footer link and one-click header.
+app.use('/api/unsubscribe', unsubscribeRoutes);
+// The hourly Luma sync routine. Carries its own bearer token rather than a JWT;
+// no user session ever reaches it.
+app.use('/api/integrations/luma', lumaIntegrationRoutes);
 app.use('/api/feature-requests', featureRequestRoutes);
 app.use('/api/cases', casesRoutes);
 app.use('/api/resume-uploads', resumeUploadsRoutes);
@@ -200,6 +213,37 @@ cron.schedule('* * * * *', async () => {
   const count = await processScheduledMessages();
   if (count > 0) {
     console.log(`Processed ${count} scheduled master communication(s)`);
+  }
+});
+
+// Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
+// skipped over rather than overlapped, so one slot cannot be reminded twice.
+let hostRemindersRunning = false;
+cron.schedule('*/15 * * * *', async () => {
+  if (hostRemindersRunning) return;
+  hostRemindersRunning = true;
+  try {
+    const sent = await sendDueHostReminders();
+    if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
+  } catch (error) {
+    console.error('[gtkuc host reminders] run failed:', error);
+  } finally {
+    hostRemindersRunning = false;
+  }
+});
+
+// An hour after a Get to Know UC slot ends, ask its host to mark attendance.
+let attendanceRemindersRunning = false;
+cron.schedule('*/15 * * * *', async () => {
+  if (attendanceRemindersRunning) return;
+  attendanceRemindersRunning = true;
+  try {
+    const sent = await sendDueAttendanceReminders();
+    if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
+  } catch (error) {
+    console.error('[gtkuc attendance reminders] run failed:', error);
+  } finally {
+    attendanceRemindersRunning = false;
   }
 });
 

@@ -1,12 +1,24 @@
 import { marked } from 'marked';
 import { nextRound } from '../utils/roundProgression.js';
+import {
+  DECISION_COPY_KEY,
+  DECISION_MERGE_FIELDS,
+  DECISION_ROUND_OUTCOMES,
+  resolveEmailCopyMany,
+} from './emailTemplateCopy.js';
+import { defuseUnsafeLinks } from './emailCopyRender.js';
 
-// Default wording for decision emails, and how one is rendered for a recipient.
+// How a decision email is rendered for one recipient.
 //
-// A DecisionBatch copies these defaults when it is created, so an admin editing
+// The wording itself lives in emailTemplateCopy.js, with the rest of the
+// automatic emails, so that an admin can edit it from the email templates page.
+// It used to be a constant here; what stayed is the part a person should not be
+// editing - which merge fields exist, and what each one resolves to.
+//
+// A DecisionBatch copies the defaults when it is created, so an admin editing
 // one batch's wording in Master Communications changes neither the defaults nor
-// any other batch. The wording carries over from the fixed HTML emails that
-// processing used to send on its own.
+// any other batch. Editing the defaults changes what the next batch starts from
+// and leaves existing batches alone.
 //
 // Merge fields: {{firstName}} {{lastName}} {{fullName}} {{cycleName}}
 // {{nextRoundName}} {{accountSetup}} {{schedulingLink}}. Values are HTML-escaped
@@ -15,115 +27,31 @@ import { nextRound } from '../utils/roundProgression.js';
 
 export const DECISION_OUTCOMES = ['ADVANCED', 'ACCEPTED', 'REJECTED'];
 
-export const DECISION_MERGE_FIELDS = [
-  'firstName',
-  'lastName',
-  'fullName',
-  'cycleName',
-  'nextRoundName',
-  'accountSetup',
-  'schedulingLink'
-];
+export { DECISION_MERGE_FIELDS };
 
-const SIGN_OFF = 'Best regards,\nUConsulting Recruitment Team';
+/**
+ * The { outcome: { subject, body } } a new batch for `round` starts from.
+ *
+ * Reads the admin-editable wording, falling back field by field to what the
+ * repo ships. Async where it used to be synchronous: the wording is in the
+ * database now, and a batch created before the edit must keep the words it was
+ * created with.
+ */
+export async function decisionTemplatesForRound(round, { client } = {}) {
+  const outcomes = DECISION_ROUND_OUTCOMES[String(round)];
+  if (!outcomes) throw new Error(`No decision email wording for round ${round}`);
 
-const REJECTED_SUBJECT = 'Update on your application - {{cycleName}}';
+  const copies = await resolveEmailCopyMany(
+    outcomes.map((outcome) => DECISION_COPY_KEY(round, outcome)),
+    client ? { client } : {}
+  );
 
-const COPY = {
-  '1': {
-    ADVANCED: {
-      subject: "Congratulations! You've advanced to Coffee Chats - {{cycleName}}",
-      body: [
-        'Hi {{firstName}},',
-        "We're excited to let you know that you've advanced to the **Coffee Chats** round of UConsulting's {{cycleName}} recruitment cycle!",
-        "- You've passed the Resume Review round\n- You'll be invited to a Coffee Chat\n- {{schedulingLink}}",
-        'This is a real achievement and reflects the quality of your application. We look forward to getting to know you better.',
-        SIGN_OFF
-      ].join('\n\n')
-    },
-    REJECTED: {
-      subject: REJECTED_SUBJECT,
-      body: [
-        'Hi {{firstName}},',
-        'Thank you for your interest in UConsulting and for taking the time to apply to our {{cycleName}} recruitment cycle.',
-        'After careful review of your application, we are unable to move forward with your candidacy at this time. We received many strong applications this cycle, and the decision was not easy.',
-        'We encourage you to keep developing your skills and to consider applying in a future recruitment cycle.',
-        SIGN_OFF
-      ].join('\n\n')
-    }
-  },
-  '2': {
-    ADVANCED: {
-      subject: "Congratulations! You've advanced to First Round Interviews - {{cycleName}}",
-      body: [
-        'Hi {{firstName}},',
-        "We're thrilled to let you know that you've advanced to **First Round Interviews** in UConsulting's {{cycleName}} recruitment cycle!",
-        "- You've passed the Coffee Chat round\n- You'll be invited to a First Round Interview\n- {{schedulingLink}}",
-        'First Round Interviews include behavioral questions and a market sizing case. We will send preparation materials along with your scheduling information.',
-        SIGN_OFF
-      ].join('\n\n')
-    },
-    REJECTED: {
-      subject: REJECTED_SUBJECT,
-      body: [
-        'Hi {{firstName}},',
-        'Thank you for your interest in UConsulting and for taking part in our {{cycleName}} recruitment cycle.',
-        'After careful consideration following the Coffee Chat round, we are unable to move forward with your candidacy at this time. We appreciate the time and energy you gave our process, and the decision was not easy.',
-        'We encourage you to keep developing your skills and to consider applying in a future recruitment cycle.',
-        SIGN_OFF
-      ].join('\n\n')
-    }
-  },
-  '3': {
-    ADVANCED: {
-      subject: "Congratulations! You've advanced to the Final Round - {{cycleName}}",
-      body: [
-        'Hi {{firstName}},',
-        "We're excited to let you know that you've advanced to the **Final Round** of UConsulting's {{cycleName}} recruitment cycle!",
-        'Your First Round interview was impressive, and we look forward to learning more about you in the final stage of our process. Scheduling details are on their way.',
-        SIGN_OFF
-      ].join('\n\n')
-    },
-    REJECTED: {
-      subject: REJECTED_SUBJECT,
-      body: [
-        'Hi {{firstName}},',
-        'Thank you for your interest in joining UConsulting and for taking part in our {{cycleName}} recruitment cycle.',
-        'After careful consideration of your First Round interview, we have decided not to advance your application to the Final Round. This decision was not made lightly, and we appreciate the time and effort you invested.',
-        'We encourage you to apply again in a future recruitment cycle, and we wish you the best of luck.',
-        SIGN_OFF
-      ].join('\n\n')
-    }
-  },
-  '4': {
-    ACCEPTED: {
-      subject: "Congratulations! You've been accepted to UConsulting - {{cycleName}}",
-      body: [
-        'Hi {{firstName}},',
-        "We are thrilled to let you know that you've been **accepted** to UConsulting in our {{cycleName}} recruitment cycle. Welcome to the team!",
-        '{{accountSetup}}',
-        "You've shown exceptional qualifications throughout a rigorous process. Onboarding details - next steps, orientation and important dates - are coming soon, so keep an eye on your inbox.",
-        SIGN_OFF
-      ].join('\n\n')
-    },
-    REJECTED: {
-      subject: REJECTED_SUBJECT,
-      body: [
-        'Hi {{firstName}},',
-        'Thank you for your continued interest in UConsulting and for your dedication throughout our {{cycleName}} recruitment process.',
-        'After careful consideration following the Final Round, we are unable to offer you a place at this time. We were impressed by your qualifications, and this decision was extremely difficult.',
-        'We encourage you to keep developing your skills and to consider applying in a future recruitment cycle.',
-        SIGN_OFF
-      ].join('\n\n')
-    }
-  }
-};
-
-/** A fresh copy of the default { outcome: { subject, body } } for a round. */
-export function defaultDecisionTemplates(round) {
-  const copy = COPY[String(round)];
-  if (!copy) throw new Error(`No decision email wording for round ${round}`);
-  return JSON.parse(JSON.stringify(copy));
+  return Object.fromEntries(
+    outcomes.map((outcome) => {
+      const copy = copies.get(DECISION_COPY_KEY(round, outcome));
+      return [outcome, { subject: copy.subject, body: copy.body }];
+    })
+  );
 }
 
 export function outcomeLabel(outcome, round) {
@@ -196,6 +124,14 @@ export function renderDecisionEmail(template, recipient, context = {}) {
 
   // A subject is a plain-text header: nothing to escape, and no line breaks.
   const subject = fillMergeFields(template.subject, values, { escape: false }).replace(/[\r\n]+/g, ' ').trim();
-  const html = marked.parse(fillMergeFields(template.body, values, { escape: true }), { breaks: true });
+  // Links defused for the reason the other renderer defuses them: a body is
+  // written by an admin, here or per batch in Master Communications, and
+  // `javascript:` is not a thing a decision email should be able to carry.
+  // Checked on the rendered HTML rather than on the Markdown, because Markdown
+  // has more than one way to write a link and a check that knows about one of
+  // them is a check with a hole in it.
+  const html = defuseUnsafeLinks(
+    marked.parse(fillMergeFields(template.body, values, { escape: true }), { breaks: true })
+  );
   return { subject, html };
 }

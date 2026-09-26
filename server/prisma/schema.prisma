@@ -84,6 +84,8 @@ model User {
   createdMessageTemplates    MessageTemplate[]               @relation("MessageTemplateCreator")
   createdMessageDrafts       MessageDraft[]                  @relation("MessageDraftCreator")
   editedMessageDrafts        MessageDraft[]                  @relation("MessageDraftEditor")
+  createdSavedAudiences      SavedAudience[]                 @relation("SavedAudienceCreator")
+  editedSavedAudiences       SavedAudience[]                 @relation("SavedAudienceEditor")
   sentMessageLogs            MessageLog[]                    @relation("MessageLogSender")
   scheduledMessages          MessageSchedule[]               @relation("ScheduleSender")
   triggeredCommunications    CommunicationLog[]              @relation("CommunicationLogTrigger")
@@ -99,6 +101,7 @@ model User {
   announcementReads          MemberAnnouncementRead[]
   createdLiveVoteSessions    LiveVoteSession[]               @relation("LiveVoteSessionCreator")
   liveVoteParticipations     LiveVoteParticipant[]           @relation("LiveVoteParticipantUser")
+  lumaGuests                 LumaGuest[]
 
   @@map("users")
 }
@@ -124,6 +127,7 @@ model Candidate {
   roundTwo          RoundTwo[]
   videoScores       VideoScore[]
   onboarding        CandidateOnboarding?
+  lumaGuests        LumaGuest[]
   /// When set, this person's scores, evaluations, comments and application are
   /// sealed: staff routes answer 423 or redact them unless the request carries
   /// an executive unlock (server/src/utils/lockedRecords.js). Set automatically
@@ -299,6 +303,9 @@ model Application {
   blindResumeUrl        String?
   headshotUrl           String
   coverLetterUrl        String?
+  // Fall 2026 onward: a written answer in place of the cover letter upload,
+  // graded through CoverLetterScore with the same rubric.
+  shortAnswer           String?
   videoUrl              String?
   rawResponses          Json
   approved              Boolean?
@@ -376,6 +383,9 @@ model RecruitingCycle {
   isAdminActive             Boolean                          @default(false)
   startDate                 DateTime?
   endDate                   DateTime?
+  // When applications close, as an absolute instant. Distinct from endDate, which
+  // is when the whole cycle ends (offers out), weeks after applications close.
+  applicationDeadline       DateTime?
   createdAt                 DateTime                         @default(now())
   formUrl                   String?
   resumeDeadline            String?
@@ -623,6 +633,9 @@ model Events {
   cycleId            String
   createdAt          DateTime          @default(now())
   memberRsvpUrl      String?
+  // Off hides member RSVP for this event: members get no RSVP button and the
+  // server refuses new in-app RSVPs. Rows already recorded are kept.
+  memberRsvpEnabled  Boolean           @default(true)
   showToCandidates   Boolean           @default(false)
   copiedFromCycleId  String?
   copiedFromEventId  String?
@@ -638,6 +651,16 @@ model Events {
   memberEventAttendance   MemberEventAttendance[]
   cycle                   RecruitingCycle   @relation(fields: [cycleId], references: [id])
   memberEventRsvp         MemberEventRsvp[]
+  // The Luma event that replaces this event's Google Forms. lumaUrl is what an
+  // admin pastes (luma.com/<slug>); lumaEventId is the evt-... id the sync
+  // routine resolves it to, and what each page of guests is checked against.
+  lumaUrl                 String?
+  lumaEventId             String?           @unique
+  lumaLastSyncedAt        DateTime?
+  lumaGuests              LumaGuest[]
+  // Which member accountability type attending this event earns. Only the
+  // event-credited types are legal here; see services/accountabilityPoints.js.
+  pointType               String?
 
   @@unique([cycleId, copiedFromCycleId, copiedFromEventId])
   @@unique([cycleId, generatedFromStage])
@@ -649,40 +672,99 @@ enum EventFormStatus {
   CONNECTED
 }
 
+/// Where an RSVP or attendance row came from. Google Form rows carry the form
+/// responseId; Luma rows carry the Luma guest id instead, and the Luma sync
+/// only ever removes rows it wrote itself. IN_APP is a member's own RSVP from
+/// the Events page, and cancelling there only ever removes an IN_APP row.
+enum EventResponseSource {
+  GOOGLE_FORM
+  LUMA
+  IN_APP
+}
+
 model EventRsvp {
-  id          String    @id @default(uuid())
-  responseId  String    @unique
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
   eventId     String
   candidateId String
-  createdAt   DateTime  @default(now())
-  candidate   Candidate @relation(fields: [candidateId], references: [id])
-  event       Events    @relation(fields: [eventId], references: [id])
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  candidate   Candidate           @relation(fields: [candidateId], references: [id])
+  event       Events              @relation(fields: [eventId], references: [id])
 
+  @@unique([eventId, candidateId])
   @@map("event_rsvp")
 }
 
 model EventAttendance {
-  id          String    @id @default(uuid())
-  responseId  String    @unique
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
   eventId     String
   candidateId String
-  createdAt   DateTime  @default(now())
-  candidate   Candidate @relation(fields: [candidateId], references: [id])
-  event       Events    @relation(fields: [eventId], references: [id])
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  candidate   Candidate           @relation(fields: [candidateId], references: [id])
+  event       Events              @relation(fields: [eventId], references: [id])
 
+  @@unique([eventId, candidateId])
   @@map("event_attendance")
 }
 
 model MemberEventRsvp {
-  id         String   @id @default(uuid())
-  responseId String   @unique
-  eventId    String
-  memberId   String
-  createdAt  DateTime @default(now())
-  event      Events   @relation(fields: [eventId], references: [id])
-  member     User     @relation(fields: [memberId], references: [id])
+  id          String              @id @default(uuid())
+  responseId  String?             @unique
+  eventId     String
+  memberId    String
+  createdAt   DateTime            @default(now())
+  source      EventResponseSource @default(GOOGLE_FORM)
+  lumaGuestId String?             @unique
+  event       Events              @relation(fields: [eventId], references: [id])
+  member      User                @relation(fields: [memberId], references: [id])
 
+  @@unique([eventId, memberId])
   @@map("member_event_rsvp")
+}
+
+enum LumaMatchStatus {
+  MATCHED_CANDIDATE
+  CREATED_CANDIDATE
+  MATCHED_MEMBER
+  UNMATCHED
+}
+
+/// One Luma guest as the sync routine last saw it, plus who the ATS decided
+/// they are. The raw copy is what an admin links an UNMATCHED guest from, and a
+/// match sticks once made: later syncs reuse candidateId / userId rather than
+/// matching again, so a hand-made link survives. See services/luma/ingestGuests.js.
+model LumaGuest {
+  id             String          @id @default(uuid())
+  lumaGuestId    String          @unique
+  eventId        String
+  email          String
+  name           String
+  firstName      String
+  lastName       String
+  approvalStatus String
+  registeredAt   DateTime?
+  checkedInAt    DateTime?
+  joinedAt       DateTime?
+  uid            String?
+  rawAnswers     Json
+  raw            Json
+  candidateId    String?
+  userId         String?
+  matchStatus    LumaMatchStatus
+  matchNote      String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  event          Events          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  candidate      Candidate?      @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, matchStatus])
+  @@map("luma_guests")
 }
 
 model MemberEventAttendance {
@@ -1410,6 +1492,53 @@ model CaseAssignment {
 /// EARLIER access: 0 unlocks exactly at the start time, 720 (30 days) is
 /// effectively no restriction. Read through
 /// server/src/services/caseVisibility.js, never directly.
+/// Whether the event form sync sends its own RSVP and attendance confirmation
+/// emails. Off while sign-ups run through Luma, which sends its own the moment
+/// somebody registers; on again if the club ever moves back to Google Forms,
+/// which is the whole reason the sending code was kept rather than deleted.
+/// See services/eventEmailSettings.js.
+model EventEmailSetting {
+  id                      String   @id @default("singleton")
+  sendSignupConfirmations Boolean  @default(false)
+  updatedById             String?
+  updatedAt               DateTime @updatedAt
+
+  @@map("event_email_settings")
+}
+
+/// What each member accountability type is worth, once an admin has changed it
+/// from the default. The types themselves, their labels and where their credit
+/// comes from are code (services/accountabilityPoints.js); a type with no row
+/// here is worth its default.
+model AccountabilityPointValue {
+  type        String   @id
+  points      Decimal  @db.Decimal(4, 2)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("accountability_point_values")
+}
+
+/// How many accountability points a member needs in a cycle.
+model AccountabilitySetting {
+  id           String   @id @default("singleton")
+  targetPoints Decimal  @default(3) @db.Decimal(4, 2)
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
+
+  @@map("accountability_settings")
+}
+
+model LumaSyncSetting {
+  id          String    @id @default("singleton")
+  token       String?
+  tokenSetAt  DateTime?
+  updatedById String?
+  updatedAt   DateTime  @updatedAt
+
+  @@map("luma_sync_settings")
+}
+
 model CaseVisibilitySetting {
   id            String   @id @default("singleton")
   leadTimeHours Int      @default(2)
@@ -1538,6 +1667,7 @@ enum MeetingCommunicationType {
   CANCELLATION
   RESCHEDULED
   REMINDER
+  ATTENDANCE_REMINDER
 }
 
 /// Where a candidate stands in a slot.
@@ -1602,6 +1732,9 @@ model MessageDraft {
   subject     String           @default("")
   body        String
   cycleId     String?
+  /// When set, the audience is this saved one, read fresh at send time;
+  /// `filters` is only the copy the composer last showed.
+  savedAudienceId String?
   createdById String
   updatedById String?
   createdAt   DateTime         @default(now())
@@ -1609,6 +1742,7 @@ model MessageDraft {
   cycle       RecruitingCycle? @relation("CycleDrafts", fields: [cycleId], references: [id], onDelete: SetNull)
   creator     User             @relation("MessageDraftCreator", fields: [createdById], references: [id])
   editor      User?            @relation("MessageDraftEditor", fields: [updatedById], references: [id])
+  savedAudience SavedAudience? @relation(fields: [savedAudienceId], references: [id], onDelete: SetNull)
 
   @@index([cycleId])
   @@index([updatedAt])
@@ -1720,6 +1854,10 @@ model MessageSchedule {
   body         String
   cycleId      String?
   templateId   String?
+  /// A saved audience is resolved when the schedule fires, not when it was
+  /// queued. If it has been deleted by then, `filters` - the copy taken at
+  /// scheduling time - is used instead.
+  savedAudienceId String?
   sentBy       String
   scheduledAt  DateTime
   status       String           @default("PENDING")
@@ -1730,6 +1868,7 @@ model MessageSchedule {
   cycle        RecruitingCycle? @relation("ScheduleCycle", fields: [cycleId], references: [id], onDelete: SetNull)
   sender       User             @relation("ScheduleSender", fields: [sentBy], references: [id])
   messageLog   MessageLog?      @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  savedAudience SavedAudience? @relation(fields: [savedAudienceId], references: [id], onDelete: SetNull)
 
   @@index([scheduledAt])
   @@index([status])
@@ -2003,6 +2142,96 @@ model DecisionGuide {
   updatedAt   DateTime @updatedAt
 
   @@map("decision_guides")
+}
+
+/// Admin-editable wording for one automatic email, keyed by the template key in
+/// services/emailTemplateCopy.js. A row holds only the fields an admin changed;
+/// every field it leaves blank falls back to the wording shipped in the code,
+/// which is also what deleting the row restores.
+model EmailTemplateCopy {
+  id          String   @id @default(uuid())
+  /// A key from EMAIL_COPY_SCHEMA, e.g. 'rsvp-confirmation'.
+  templateKey String   @unique
+  /// { fieldName: string }. Fields the template does not declare are dropped on save.
+  copy        Json     @default("{}")
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("email_template_copy")
+}
+
+/// A person from the retired recruiting-interest mailing list whom the ATS had
+/// no other record of when they were imported. They exist so Master
+/// Communications can email them, through the "Mailing list" audience.
+model MailingListContact {
+  id           String   @id @default(uuid())
+  /// Stored lowercased, like every other address in this schema.
+  email        String   @unique
+  firstName    String?
+  lastName     String?
+  /// Name of the CSV this contact came from.
+  sourceFile   String?
+  importedById String?
+  createdAt    DateTime @default(now())
+
+  @@map("mailing_list_contacts")
+}
+/// An address that must not receive Master Communications marketing mail.
+///
+/// One row per address, ever. Resubscribing sets `resubscribedAt` rather than
+/// deleting the row, so the history of who opted out and why survives; a later
+/// opt-out clears it again. The row is active while `resubscribedAt` is null.
+///
+/// Only bulk sends to non-staff are held back by this (see
+/// services/emailSuppression.js). Decision letters, password resets, interview
+/// scheduling and every other automated email are not marketing and ignore it.
+model EmailSuppression {
+  id             String    @id @default(uuid())
+  /// Stored lowercased, like every other address in this schema.
+  email          String    @unique
+  /// UNSUBSCRIBED | BOUNCED | COMPLAINED | ADMIN
+  reason         String
+  /// LINK (footer page) | ONE_CLICK (List-Unsubscribe-Post) | SES | ADMIN
+  source         String
+  /// Free text: the SES diagnostic, or an admin's note.
+  detail         String?
+  /// The campaign whose footer or header was used, when there was one.
+  messageLogId   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  resubscribedAt DateTime?
+
+  @@index([resubscribedAt])
+  @@map("email_suppressions")
+}
+
+/// A named Master Communications audience: a filter tree (see
+/// services/audiences/audienceFilters.js) re-run every time it is used, so it
+/// always reaches whoever matches today rather than whoever matched when it
+/// was saved.
+model SavedAudience {
+  id            String            @id @default(uuid())
+  name          String
+  description   String?
+  /// { version: 2, root: <group> } - validated by normalizeAudienceTree.
+  filters       Json
+  createdById   String
+  updatedById   String?
+  lastUsedAt    DateTime?
+  /// How many people it reached at lastUsedAt, so the picker can say how much
+  /// the audience has grown or shrunk since.
+  lastUsedCount Int?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  creator       User              @relation("SavedAudienceCreator", fields: [createdById], references: [id])
+  editor        User?             @relation("SavedAudienceEditor", fields: [updatedById], references: [id])
+  drafts        MessageDraft[]
+  schedules     MessageSchedule[]
+
+  @@index([updatedAt])
+  @@map("saved_audiences")
 }
 
 /// At most one LOBBY/ACTIVE session exists across the whole app, enforced by the

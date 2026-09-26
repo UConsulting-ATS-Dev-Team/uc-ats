@@ -7,6 +7,8 @@ import {
   indexExistingEmails,
   dedupeMailingList,
   summarize,
+  emailIdentityKey,
+  emailVariants,
   OUTCOMES,
 } from './mailingListImport.js';
 
@@ -165,5 +167,53 @@ describe('toCsv', () => {
 
   it('writes an empty cell for a column a row does not have', () => {
     expect(toCsv(['A', 'B'], [{ A: 'x' }])).toBe('A,B\r\nx,\r\n');
+  });
+});
+
+describe('g.ucla.edu and ucla.edu', () => {
+  it('gives both spellings of a UCLA inbox one identity, and leaves other domains alone', () => {
+    expect(emailIdentityKey('Joe@G.UCLA.edu')).toBe('joe@ucla.edu');
+    expect(emailIdentityKey('joe@ucla.edu')).toBe('joe@ucla.edu');
+    expect(emailIdentityKey('joe@anderson.ucla.edu')).toBe('joe@anderson.ucla.edu');
+    expect(emailIdentityKey('joe@gmail.com')).toBe('joe@gmail.com');
+  });
+
+  it('lists both stored spellings for a lookup', () => {
+    expect(emailVariants('joe@g.ucla.edu')).toEqual(['joe@g.ucla.edu', 'joe@ucla.edu']);
+    expect(emailVariants('joe@ucla.edu')).toEqual(['joe@ucla.edu', 'joe@g.ucla.edu']);
+    expect(emailVariants('joe@gmail.com')).toEqual(['joe@gmail.com']);
+    expect(emailVariants('')).toEqual([]);
+  });
+
+  it('accepts both as valid addresses', () => {
+    expect(isPlausibleEmail('joe@g.ucla.edu')).toBe(true);
+    expect(isPlausibleEmail('joe@ucla.edu')).toBe(true);
+  });
+
+  it('drops the other spelling as a duplicate in the file, keeping the row as written', () => {
+    const records = [
+      { __line: 2, Email: 'joe@g.ucla.edu' },
+      { __line: 3, Email: 'joe@ucla.edu' },
+    ];
+    const { results, kept } = dedupeMailingList({ records, emailColumn: 'Email', existingIndex: new Map() });
+    expect(kept).toEqual([records[0]]);
+    expect(results[0]).toMatchObject({ outcome: OUTCOMES.KEPT, email: 'joe@g.ucla.edu' });
+    expect(results[1]).toMatchObject({ outcome: OUTCOMES.DUPLICATE_IN_FILE, firstSeenAt: 2 });
+  });
+
+  it('matches someone the ATS knows under the other spelling', () => {
+    const existingIndex = index([
+      { email: 'joe@ucla.edu', source: 'user' },
+      { email: 'ann@g.ucla.edu', source: 'application' },
+    ]);
+    const records = [
+      { __line: 2, Email: 'joe@g.ucla.edu' },
+      { __line: 3, Email: 'ann@ucla.edu' },
+    ];
+    const { results, kept } = dedupeMailingList({ records, emailColumn: 'Email', existingIndex });
+    expect(kept).toEqual([]);
+    expect(results.map((r) => r.outcome)).toEqual([OUTCOMES.ALREADY_IN_SYSTEM, OUTCOMES.ALREADY_IN_SYSTEM]);
+    expect(results[0].sources).toEqual(['user']);
+    expect(results[1].sources).toEqual(['application']);
   });
 });

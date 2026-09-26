@@ -27,6 +27,7 @@ describe('eventCopy service', () => {
     rsvpForm: '',
     attendanceForm: '',
     memberRsvpUrl: '',
+    memberRsvpEnabled: false,
     showToCandidates: true,
     cycleId: sourceCycle.id,
   };
@@ -181,6 +182,31 @@ describe('eventCopy service', () => {
         select: expect.any(Object),
       })
     );
+  });
+
+  it('keeps the source event member RSVP setting, whatever the request says', async () => {
+    const mockPrisma = createMockPrisma();
+    mockPrisma.events.create.mockImplementation(({ data }) => ({ id: `new-${data.copiedFromEventId}`, ...data }));
+
+    const copyOf = (source) => ({
+      sourceEventId: source.id,
+      eventName: source.eventName,
+      eventStartDate: '2026-09-01T18:00:00.000Z',
+      eventEndDate: '2026-09-01T20:00:00.000Z',
+      memberRsvpEnabled: true,
+    });
+
+    await commitCycleEventCopy({
+      prisma: mockPrisma,
+      sourceCycleId: sourceCycle.id,
+      targetCycleId: targetCycle.id,
+      events: [copyOf(sourceEvent), copyOf(secondSourceEvent)],
+    });
+
+    const created = Object.fromEntries(
+      mockPrisma.events.create.mock.calls.map(([{ data }]) => [data.copiedFromEventId, data.memberRsvpEnabled])
+    );
+    expect(created).toEqual({ [sourceEvent.id]: true, [secondSourceEvent.id]: false });
   });
 
   it('does not copy rsvp/attendance/member-rsvp source records', async () => {

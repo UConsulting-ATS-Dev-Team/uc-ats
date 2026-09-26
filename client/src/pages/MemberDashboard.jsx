@@ -22,6 +22,8 @@ import {
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
+import AccountabilityPointsCard from '../components/AccountabilityPointsCard';
+import { hasCoverLetter } from '../utils/coverLetter';
 
 export default function MemberDashboard() {
   const { user } = useAuth();
@@ -84,7 +86,7 @@ export default function MemberDashboard() {
       // Add document grading tasks
       if (applications && applications.length > 0) {
         const applicationsWithResumes = applications.filter(app => app.resumeUrl && !app.hasResumeScore);
-        const applicationsWithCoverLetters = applications.filter(app => app.coverLetterUrl && !app.hasCoverLetterScore);
+        const applicationsWithCoverLetters = applications.filter(app => hasCoverLetter(app) && !app.hasCoverLetterScore);
         const applicationsWithVideos = applications.filter(app => app.videoUrl && !app.hasVideoScore);
         
         if (applicationsWithResumes.length > 0) {
@@ -103,7 +105,7 @@ export default function MemberDashboard() {
         if (applicationsWithCoverLetters.length > 0) {
           tasksList.push({
             id: 'grade-cover-letters',
-            title: 'Grade Cover Letters',
+            title: 'Grade Short Answers',
             type: 'document',
             documentType: 'coverLetter',
             dueDate: 'Oct 4th, Morning',
@@ -127,10 +129,12 @@ export default function MemberDashboard() {
         }
       }
       
-      // Add RSVP tasks for events that have member RSVP URLs and the member hasn't RSVP'd yet
-      const eventsNeedingRsvp = events.filter(event => 
-        event.memberRsvpUrl && 
-        event.eventStartDate && 
+      // Add RSVP tasks for upcoming events the member hasn't RSVP'd to. Every
+      // event with member RSVP on can be RSVP'd to from the Events page, form
+      // link or not.
+      const eventsNeedingRsvp = events.filter(event =>
+        event.memberRsvpEnabled !== false &&
+        event.eventStartDate &&
         new Date(event.eventStartDate) > new Date() && // Only future events
         !event.hasMemberRsvpd
       );
@@ -152,8 +156,7 @@ export default function MemberDashboard() {
             day: 'numeric'
           }),
           items: 'Pending Response',
-          status: 'pending',
-          rsvpUrl: event.memberRsvpUrl
+          status: 'pending'
         });
       });
       
@@ -176,8 +179,8 @@ export default function MemberDashboard() {
       // Navigate to document grading page
       window.location.href = '/document-grading';
     } else if (task.type === 'rsvp') {
-      // Open RSVP form in new tab
-      window.open(task.rsvpUrl, '_blank');
+      // RSVP happens on the Events page
+      window.location.href = '/events';
     }
   };
 
@@ -217,6 +220,10 @@ export default function MemberDashboard() {
         <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
           Welcome, {user?.fullName}.
         </Typography>
+      </Box>
+
+      <Box sx={{ mb: 3 }}>
+        <AccountabilityPointsCard />
       </Box>
 
       {/* Tasks and Resources Container */}
@@ -511,7 +518,7 @@ export default function MemberDashboard() {
                         <Box>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                             <Typography variant="body2" color="text.secondary">
-                              Cover Letter Reviews
+                              Short Answer Reviews
                             </Typography>
                             <Typography variant="body2" sx={{ fontWeight: 600 }}>
                               {calculateTeamProgress(userTeam).coverLetter}%

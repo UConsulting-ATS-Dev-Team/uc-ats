@@ -30,7 +30,8 @@ import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
 import { sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
 import {
-  SLOT_NOTIFICATION_SUBJECTS,
+  slotNotificationSubject,
+  slotSubjectFormatter,
   flushNotifications,
   queueNotifications,
   queueNotificationsBulk,
@@ -1030,11 +1031,12 @@ router.post('/interviews/:id/request-availability', async (req, res) => {
       });
     }
 
+    const subject = await slotNotificationSubject('AVAILABILITY_REQUEST', interview.title);
     const entries = recipients.map((user) => ({
       interviewId: id,
       type: 'AVAILABILITY_REQUEST',
       recipient: user.email,
-      subject: SLOT_NOTIFICATION_SUBJECTS.AVAILABILITY_REQUEST(interview.title),
+      subject,
     }));
     const ids = await queueNotificationsBulk(entries);
     flushNotifications(ids, (n) =>
@@ -1455,7 +1457,7 @@ async function notifyMoved(result) {
       signupId: moved.id,
       type: 'MOVED_BY_ADMIN',
       recipient: moved.application.email,
-      subject: SLOT_NOTIFICATION_SUBJECTS.MOVED_BY_ADMIN(moved.slot.interview.title),
+      subject: await slotNotificationSubject('MOVED_BY_ADMIN', moved.slot.interview.title),
     });
   }
   const ids = entries.length ? await prisma.$transaction((tx) => queueNotifications(tx, entries)) : [];
@@ -1474,6 +1476,7 @@ async function notifyPromotions(promotions, { flush = true } = {}) {
       slot: { include: { interview: { select: { title: true } } } },
     },
   });
+  const subjectFor = await slotSubjectFormatter('PROMOTED');
   const entries = rows
     .filter((row) => row.application?.email)
     .map((row) => ({
@@ -1481,7 +1484,7 @@ async function notifyPromotions(promotions, { flush = true } = {}) {
       signupId: row.id,
       type: 'PROMOTED',
       recipient: row.application.email,
-      subject: SLOT_NOTIFICATION_SUBJECTS.PROMOTED(row.slot.interview.title),
+      subject: subjectFor(row.slot.interview.title),
     }));
   if (entries.length === 0) return [];
 

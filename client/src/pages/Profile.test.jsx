@@ -96,7 +96,8 @@ describe('Profile image replacement', () => {
     );
 
     const fileInput = screen.getByTestId('profile-image-input');
-    const oversizedFile = new File(['x'.repeat(6 * 1024 * 1024)], 'huge.png', { type: 'image/png' });
+    const oversizedFile = new File(['x'], 'huge.png', { type: 'image/png' });
+    Object.defineProperty(oversizedFile, 'size', { value: 10 * 1024 * 1024 + 1 });
     Object.defineProperty(fileInput, 'files', {
       value: [oversizedFile],
       configurable: true,
@@ -110,7 +111,7 @@ describe('Profile image replacement', () => {
     fireEvent.submit(fileInput.closest('form'));
 
     await waitFor(() => {
-      expect(screen.getByText('File size must be less than 5MB.')).toBeInTheDocument();
+      expect(screen.getByText('File size must be less than 10MB.')).toBeInTheDocument();
     });
 
     expect(apiClient.post).not.toHaveBeenCalled();

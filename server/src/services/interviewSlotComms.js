@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
-import { buildInvite, inviteUid, sequenceFrom, describeWhen } from './calendarInvite.js';
+import { buildInvite, inviteUid, sequenceFrom, describeWhen, inviteOrganizerEmail } from './calendarInvite.js';
 import { describeRoster } from '../utils/candidateRoster.js';
 
 const SEND_ATTEMPTS = 3;
@@ -99,7 +99,7 @@ export function inviteFor(notification) {
     if (!uid) return null;
 
     const interview = slot.interview ?? notification.interview;
-    const organizerEmail = (process.env.EMAIL_FROM ?? '').replace(/['"]/g, '').trim();
+    const organizerEmail = inviteOrganizerEmail();
     if (!organizerEmail) return null;
 
     const where = slot.location || interview?.location || null;
@@ -150,7 +150,16 @@ export function inviteFor(notification) {
 // emailNotifications.js. Splitting them across two files is what let
 // INTERVIEWER_MOVED ship a body with no subject. Re-exported here because every
 // caller already imports it from this module.
-export { SLOT_NOTIFICATION_SUBJECTS } from './emailNotifications.js';
+//
+// `SLOT_NOTIFICATION_SUBJECTS` is the wording this repo ships. The two
+// functions read what an admin has written over it, which is what a queueing
+// caller wants: `slotNotificationSubject` for one notification,
+// `slotSubjectFormatter` for a roster's worth of one type at once.
+export {
+  SLOT_NOTIFICATION_SUBJECTS,
+  slotNotificationSubject,
+  slotSubjectFormatter,
+} from './emailNotifications.js';
 
 /**
  * Record notifications as QUEUED. Call inside the transaction that caused them,

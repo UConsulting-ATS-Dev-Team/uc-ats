@@ -50,6 +50,7 @@ import {
 } from '@mui/material';
 import { Tooltip } from '@mui/material';
 import { Switch, FormControlLabel } from '@mui/material';
+import { hasCoverLetter } from '../utils/coverLetter';
 
 // Tab Panel component
 function TabPanel({ children, value, index, ...other }) {
@@ -105,7 +106,7 @@ export default function AdminDocumentGrading() {
     
     // Filter applications that have the required documents
     const applicationsWithResume = apps.filter(app => app.resumeUrl);
-    const applicationsWithCoverLetter = apps.filter(app => app.coverLetterUrl);
+    const applicationsWithCoverLetter = apps.filter(hasCoverLetter);
     const applicationsWithVideo = apps.filter(app => app.videoUrl);
     
     if (gradeOnlyAssigned) {
@@ -133,7 +134,7 @@ export default function AdminDocumentGrading() {
           color: 'success'
         },
         {
-          title: 'My Cover Letter Grading',
+          title: 'My Short Answer Grading',
           icon: <EditIcon />,
           completed: coverLetterGradedByMe,
           total: myCoverLetterAssignments,
@@ -206,7 +207,7 @@ export default function AdminDocumentGrading() {
           color: 'success'
         },
         {
-          title: 'Cover Letter Completion',
+          title: 'Short Answer Completion',
           icon: <EditIcon />,
           completed: applicationsWithCoverLetter.length, // Total applications with cover letters
           total: applicationsWithCoverLetter.length,
@@ -378,8 +379,8 @@ export default function AdminDocumentGrading() {
           isGraded = app.hasResumeScore;
           break;
         case 'coverLetter':
-          document = 'Cover Letter';
-          hasDocument = !!app.coverLetterUrl;
+          document = 'Short Answer';
+          hasDocument = hasCoverLetter(app);
           isGraded = app.hasCoverLetterScore;
           break;
         case 'video':
@@ -986,7 +987,7 @@ export default function AdminDocumentGrading() {
             />
             <Tab
               icon={<EditIcon />}
-              label="Cover Letters"
+              label="Short Answers"
               iconPosition="start"
               sx={{ textTransform: 'none', fontWeight: 600 }}
             />
@@ -1078,7 +1079,7 @@ export default function AdminDocumentGrading() {
                             onClick={() => handleGradeDocument(flaggedDoc.application, flaggedDoc.documentType)}
                           >
                             {flaggedDoc.documentType === 'resume' ? 'Resume' :
-                             flaggedDoc.documentType === 'coverLetter' ? 'Cover Letter' : 'Video'}
+                             flaggedDoc.documentType === 'coverLetter' ? 'Short Answer' : 'Video'}
                           </Button>
                         </TableCell>
                         <TableCell data-label="Flag Details">
@@ -1175,7 +1176,7 @@ export default function AdminDocumentGrading() {
                             onClick={() => handleGradeDocument(resolvedDoc.application, resolvedDoc.documentType)}
                           >
                             {resolvedDoc.documentType === 'resume' ? 'Resume' :
-                             resolvedDoc.documentType === 'coverLetter' ? 'Cover Letter' : 'Video'}
+                             resolvedDoc.documentType === 'coverLetter' ? 'Short Answer' : 'Video'}
                           </Button>
                         </TableCell>
                         <TableCell data-label="Flag Details">
@@ -1336,7 +1337,7 @@ export default function AdminDocumentGrading() {
       {/* Edit Deadline Dialog */}
       <Dialog open={!!editingDeadline} onClose={handleCloseDeadlineDialog} maxWidth="sm" fullWidth>
         <DialogTitle>
-          Edit {editingDeadline === 'resume' ? 'Resume' : editingDeadline === 'coverLetter' ? 'Cover Letter' : 'Video'} Deadline
+          Edit {editingDeadline === 'resume' ? 'Resume' : editingDeadline === 'coverLetter' ? 'Short Answer' : 'Video'} Deadline
         </DialogTitle>
         <DialogContent>
           <TextField

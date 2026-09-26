@@ -35,9 +35,9 @@ const testApplication = {
   headshotUrl: '',
 };
 
-function setupApiMocks() {
+function setupApiMocks(application = testApplication) {
   apiClient.get.mockImplementation((url) => {
-    if (url === '/member/all-applications') return Promise.resolve([testApplication]);
+    if (url === '/member/all-applications') return Promise.resolve([application]);
     if (url === '/member/events') return Promise.resolve([{ id: 'e1', eventName: 'Info Session' }]);
     if (url === `/applications/${testApplication.id}/events`) {
       return Promise.resolve({ events: [{ attendanceStatus: 'Attended', eventName: 'Info Session' }] });
@@ -47,9 +47,9 @@ function setupApiMocks() {
   });
 }
 
-async function renderCandidates(user) {
+async function renderCandidates(user, application) {
   useAuth.mockReturnValue({ user });
-  setupApiMocks();
+  setupApiMocks(application);
   const result = render(<Candidates />);
   await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/member/all-applications'));
   return result;
@@ -116,7 +116,7 @@ describe('Candidates admin applications view', () => {
     await user.click(button);
 
     expect(screen.getByText('Resume')).toBeInTheDocument();
-    expect(screen.getByText('Cover Letter')).toBeInTheDocument();
+    expect(screen.getByText('Short Answer')).toBeInTheDocument();
     expect(screen.getByText('Video')).toBeInTheDocument();
 
     await waitFor(() => {
@@ -128,6 +128,21 @@ describe('Candidates admin applications view', () => {
     const detailsRow = container.querySelector('tr.applications-details-row');
     expect(detailsRow).toBeInTheDocument();
     expect(detailsRow.querySelector('td').getAttribute('colspan')).toBe('6');
+  });
+
+  it('opens a short answer as text from the detail row', async () => {
+    const user = userEvent.setup();
+    await renderCandidates(adminUser, {
+      ...testApplication,
+      coverLetterUrl: null,
+      shortAnswer: '  I want to join UConsulting because of the pro bono projects.  ',
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'View Details' }));
+    await user.click(screen.getByRole('button', { name: 'Short Answer' }));
+
+    expect(screen.getByText('I want to join UConsulting because of the pro bono projects.')).toBeInTheDocument();
+    expect(screen.getByText('Candidate One – Short Answer')).toBeInTheDocument();
   });
 
   it('keeps the actions column in the table header for admins', async () => {

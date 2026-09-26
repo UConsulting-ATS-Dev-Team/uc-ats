@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
+import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
+import {
+  ATTENDANCE_SORT_KEYS,
+  SLOT_SORT_KEYS,
+  nextSort,
+  slotStatus as getSlotStatus,
+  sortRows
+} from '../utils/gtkucSort';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
 import {
@@ -15,6 +23,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Checkbox,
   Chip,
   Stack,
@@ -42,6 +51,7 @@ import {
   Link
 } from '@mui/material';
 import GtkucProfileModal from '../components/GtkucProfileModal';
+import SlotContactDialog from '../components/meetings/SlotContactDialog';
 import {
   Add as AddIcon,
   Badge as BadgeIcon,
@@ -57,7 +67,8 @@ import {
   EventAvailable as EventAvailableIcon,
   PercentOutlined as PercentIcon,
   OpenInNew as OpenInNewIcon,
-  LinkedIn as LinkedInIcon
+  LinkedIn as LinkedInIcon,
+  Sms as SmsIcon
 } from '@mui/icons-material';
 
 // ---- helpers -------------------------------------------------------------
@@ -85,15 +96,6 @@ const formatDateTime = (dateTime) => {
   });
 };
 
-const getSlotStatus = (slot) => {
-  const now = new Date();
-  const startTime = new Date(slot.startTime);
-  const endTime = slot.endTime ? new Date(slot.endTime) : new Date(startTime.getTime() + 60 * 60 * 1000);
-  if (now < startTime) return 'upcoming';
-  if (now > endTime) return 'past';
-  return 'active';
-};
-
 const STATUS_META = {
   upcoming: { label: 'Upcoming', color: 'primary' },
   active: { label: 'Now', color: 'success' },
@@ -104,8 +106,22 @@ const COMM_TYPE_META = {
   CONFIRMATION: { label: 'Signup confirmation', color: 'info' },
   HOST_NOTIFICATION: { label: 'Host notified', color: 'default' },
   CANCELLATION: { label: 'Cancellation', color: 'warning' },
-  REMINDER: { label: 'Reminder', color: 'secondary' }
+  REMINDER: { label: 'Host reminder', color: 'secondary' },
+  ATTENDANCE_REMINDER: { label: 'Attendance reminder', color: 'secondary' }
 };
+
+// A table header cell that sorts its column when clicked.
+const SortableHeader = ({ field, sort, onSort, children, ...cellProps }) => (
+  <TableCell {...cellProps} sortDirection={sort.field === field ? sort.dir : false}>
+    <TableSortLabel
+      active={sort.field === field}
+      direction={sort.field === field ? sort.dir : 'asc'}
+      onClick={() => onSort(field)}
+    >
+      {children}
+    </TableSortLabel>
+  </TableCell>
+);
 
 const emptyForm = { memberId: '', location: '', startTime: '', endTime: '', capacity: 2 };
 
@@ -132,12 +148,24 @@ export default function AdminMeetingSlots() {
   const [hostFilter, setHostFilter] = useState('all'); // 'all' | 'mine' | memberId
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'upcoming' | 'active' | 'past'
   const [slotSearch, setSlotSearch] = useState('');
+  const [slotSort, setSlotSort] = useState({ field: 'start', dir: 'asc' });
 
   // Attendance tab filters
   const [attSearch, setAttSearch] = useState('');
   const [attFilter, setAttFilter] = useState('all'); // 'all' | 'attended' | 'not'
+  const [attSort, setAttSort] = useState({ field: 'slot', dir: 'asc' });
+
+  // One clock for every status on the page. The sort, the status filter and the
+  // badges all read it, so a slot that starts while the page is open moves to
+  // its new place in the order at the same moment its badge changes.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const [detailSlot, setDetailSlot] = useState(null);
+  const [contactSlot, setContactSlot] = useState(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -168,13 +196,13 @@ export default function AdminMeetingSlots() {
       setError('');
       const [data, cycle, users, profiles] = await Promise.all([
         api.get('/admin/meeting-slots'),
-        api.get('/active-cycle').catch(() => null),
+        fetchActiveCycle(api).catch(() => null),
         api.get('/admin/users').catch(() => []),
         api.get('/admin/gtkuc-profiles').catch(() => []),
         loadProfileState()
       ]);
       setSlots(data?.slots || []);
-      setActiveCycle(cycle || null);
+      setActiveCycle(cycle);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
       setGtkucProfiles(profiles || []);
     } catch (e) {
@@ -212,11 +240,7 @@ export default function AdminMeetingSlots() {
   // Cycle-scoped set — drives the summary cards and both tabs.
   const cycleSlots = useMemo(() => {
     if (cycleScope === 'all') return slots;
-    if (!activeCycle || !activeCycle.startDate) return slots;
-    const cutoff = new Date(activeCycle.startDate);
-    cutoff.setHours(0, 0, 0, 0);
-    cutoff.setMonth(cutoff.getMonth() - 1);
-    return slots.filter((s) => new Date(s.createdAt) >= cutoff);
+    return slotsCreatedForCycle(slots, activeCycle);
   }, [slots, cycleScope, activeCycle]);
 
   const stats = useMemo(() => {
@@ -225,33 +249,34 @@ export default function AdminMeetingSlots() {
     const totalSignups = allSignups.length;
     const attended = allSignups.filter((s) => s.attended).length;
     const totalCapacity = cycleSlots.reduce((sum, s) => sum + (s.capacity || 0), 0);
-    const upcoming = cycleSlots.filter((s) => getSlotStatus(s) === 'upcoming').length;
+    const upcoming = cycleSlots.filter((s) => getSlotStatus(s, now) === 'upcoming').length;
     return {
       totalSlots, totalSignups, attended, totalCapacity, upcoming,
       attendanceRate: totalSignups > 0 ? Math.round((attended / totalSignups) * 100) : 0
     };
-  }, [cycleSlots]);
+  }, [cycleSlots, now]);
 
-  // Time Slots tab — apply host / status / search filters.
+  // Time Slots tab — apply host / status / search filters, then the column sort.
   const visibleSlots = useMemo(() => {
     const q = slotSearch.trim().toLowerCase();
-    return cycleSlots.filter((slot) => {
+    const filtered = cycleSlots.filter((slot) => {
       if (hostFilter === 'mine' && slot.memberId !== user?.id) return false;
       if (hostFilter !== 'all' && hostFilter !== 'mine' && slot.memberId !== hostFilter) return false;
-      if (statusFilter !== 'all' && getSlotStatus(slot) !== statusFilter) return false;
+      if (statusFilter !== 'all' && getSlotStatus(slot, now) !== statusFilter) return false;
       if (!q) return true;
       return (
         slot.location?.toLowerCase().includes(q) ||
         slot.member?.fullName?.toLowerCase().includes(q)
       );
     });
-  }, [cycleSlots, hostFilter, statusFilter, slotSearch, user]);
+    return sortRows(filtered, SLOT_SORT_KEYS, slotSort, { tiebreak: 'start', now });
+  }, [cycleSlots, hostFilter, statusFilter, slotSearch, slotSort, user, now]);
 
-  // Attendance tab — flattened signup rows.
+  // Attendance tab — flattened signup rows, filtered then column-sorted.
   const attendanceRows = useMemo(() => {
     const rows = cycleSlots.flatMap((slot) => (slot.signups || []).map((su) => ({ ...su, slot })));
     const q = attSearch.trim().toLowerCase();
-    return rows.filter((r) => {
+    const filtered = rows.filter((r) => {
       if (attFilter === 'attended' && !r.attended) return false;
       if (attFilter === 'not' && r.attended) return false;
       if (!q) return true;
@@ -262,7 +287,8 @@ export default function AdminMeetingSlots() {
         r.slot?.member?.fullName?.toLowerCase().includes(q)
       );
     });
-  }, [cycleSlots, attSearch, attFilter]);
+    return sortRows(filtered, ATTENDANCE_SORT_KEYS, attSort, { tiebreak: 'slot' });
+  }, [cycleSlots, attSearch, attFilter, attSort]);
 
   // Keep the detail dialog in sync with freshly loaded data.
   useEffect(() => {
@@ -571,6 +597,7 @@ export default function AdminMeetingSlots() {
           ) : tab === 0 ? (
             <TimeSlotsTab
               slots={visibleSlots}
+              now={now}
               totalInScope={cycleSlots.length}
               hostOptions={hostOptions}
               hostLabel={hostLabel}
@@ -580,6 +607,8 @@ export default function AdminMeetingSlots() {
               setStatusFilter={setStatusFilter}
               search={slotSearch}
               setSearch={setSlotSearch}
+              sort={slotSort}
+              onSort={(field) => setSlotSort((prev) => nextSort(prev, field))}
               onView={setDetailSlot}
               onEdit={openEdit}
               onDelete={deleteSlot}
@@ -591,6 +620,8 @@ export default function AdminMeetingSlots() {
               setSearch={setAttSearch}
               filter={attFilter}
               setFilter={setAttFilter}
+              sort={attSort}
+              onSort={(field) => setAttSort((prev) => nextSort(prev, field))}
               onToggle={setAttendance}
               onView={setDetailSlot}
             />
@@ -608,6 +639,14 @@ export default function AdminMeetingSlots() {
         onToggleAttendance={setAttendance}
         onDeleteSignup={deleteSignup}
         onEdit={(s) => { setDetailSlot(null); openEdit(s); }}
+        onContact={setContactSlot}
+      />
+
+      <SlotContactDialog
+        open={!!contactSlot}
+        onClose={() => setContactSlot(null)}
+        slot={contactSlot}
+        hostName={contactSlot?.member?.fullName}
       />
 
       {/* Create/Edit dialog */}
@@ -700,10 +739,13 @@ export default function AdminMeetingSlots() {
 // ---- Time Slots tab ------------------------------------------------------
 
 function TimeSlotsTab({
-  slots, totalInScope, hostOptions, hostLabel,
+  slots, now, totalInScope, hostOptions, hostLabel,
   hostFilter, setHostFilter, statusFilter, setStatusFilter,
-  search, setSearch, onView, onEdit, onDelete
+  search, setSearch, sort, onSort, onView, onEdit, onDelete
 }) {
+  const header = (field, label, props = {}) => (
+    <SortableHeader field={field} sort={sort} onSort={onSort} {...props}>{label}</SortableHeader>
+  );
   return (
     <Box>
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ p: 2 }} alignItems={{ md: 'center' }} flexWrap="wrap" useFlexGap>
@@ -747,12 +789,13 @@ function TimeSlotsTab({
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Host</TableCell>
-                <TableCell>Location</TableCell>
-                <TableCell>Start</TableCell>
-                <TableCell align="center">Status</TableCell>
-                <TableCell align="center">Signups</TableCell>
-                <TableCell align="center">Attended</TableCell>
+                {header('host', 'Host')}
+                {header('location', 'Location')}
+                {header('start', 'Start')}
+                {header('status', 'Status', { align: 'center' })}
+                {header('signups', 'Signups', { align: 'center' })}
+                {header('openSpots', 'Open spots', { align: 'center' })}
+                {header('attended', 'Attended', { align: 'center' })}
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -760,7 +803,7 @@ function TimeSlotsTab({
               {slots.map((slot) => {
                 const signups = slot.signups || [];
                 const attended = signups.filter((s) => s.attended).length;
-                const status = getSlotStatus(slot);
+                const status = getSlotStatus(slot, now);
                 return (
                   <TableRow key={slot.id} hover sx={{ cursor: 'pointer' }} onClick={() => onView(slot)}>
                     <TableCell>
@@ -777,6 +820,7 @@ function TimeSlotsTab({
                     <TableCell align="center">
                       <Chip size="small" variant="outlined" label={`${signups.length}/${slot.capacity}`} />
                     </TableCell>
+                    <TableCell align="center">{Math.max((slot.capacity || 0) - signups.length, 0)}</TableCell>
                     <TableCell align="center">{attended}</TableCell>
                     <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                       <Tooltip title="View details"><IconButton size="small" onClick={() => onView(slot)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
@@ -881,7 +925,10 @@ function MemberProfilesTab({ profiles, onToggleHidden }) {
 
 // ---- Attendance tab ------------------------------------------------------
 
-function AttendanceTab({ rows, search, setSearch, filter, setFilter, onToggle, onView }) {
+function AttendanceTab({ rows, search, setSearch, filter, setFilter, sort, onSort, onToggle, onView }) {
+  const header = (field, label, props = {}) => (
+    <SortableHeader field={field} sort={sort} onSort={onSort} {...props}>{label}</SortableHeader>
+  );
   return (
     <Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ p: 2 }} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
@@ -911,12 +958,13 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, onToggle, o
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell padding="checkbox">Present</TableCell>
-                <TableCell>Candidate</TableCell>
-                <TableCell>Email</TableCell>
-                <TableCell>Student ID</TableCell>
-                <TableCell>Host</TableCell>
-                <TableCell>Slot</TableCell>
+                {header('present', 'Present', { padding: 'checkbox' })}
+                {header('candidate', 'Candidate')}
+                {header('email', 'Email')}
+                {header('studentId', 'Student ID')}
+                {header('host', 'Host')}
+                {header('slot', 'Slot')}
+                {header('signedUp', 'Signed up')}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -934,6 +982,7 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, onToggle, o
                       {formatDateTime(r.slot?.startTime)}
                     </Button>
                   </TableCell>
+                  <TableCell>{formatDateTime(r.createdAt)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -946,7 +995,7 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, onToggle, o
 
 // ---- Slot detail dialog --------------------------------------------------
 
-function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, onDeleteSignup, onEdit }) {
+function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, onDeleteSignup, onEdit, onContact }) {
   if (!slot) return null;
   const signups = slot.signups || [];
   const comms = slot.communications || [];
@@ -1006,7 +1055,14 @@ function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, on
         </Grid>
 
         {/* Signups */}
-        <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 3 }} gutterBottom>Signups ({signups.length})</Typography>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 3, mb: 1 }}>
+          <Typography variant="subtitle1" fontWeight={600}>Signups ({signups.length})</Typography>
+          {signups.length > 0 && (
+            <Button size="small" variant="outlined" startIcon={<SmsIcon />} onClick={() => onContact(slot)}>
+              iMessage / email signups
+            </Button>
+          )}
+        </Stack>
         {signups.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No one has signed up yet.</Typography>
         ) : (

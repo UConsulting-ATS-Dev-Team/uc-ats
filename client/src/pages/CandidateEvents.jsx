@@ -63,11 +63,15 @@ export default function CandidateEvents() {
         return;
       }
       
-      if (event.rsvpForm) {
-        // Open the Google Form in a new tab
-        window.open(event.rsvpForm, '_blank');
+      // Luma first, where it is set: registration and the door check-in both
+      // happen there now, and it sends its own confirmation and calendar invite.
+      // The Google Form is the fallback for events that predate the move, and
+      // for the rest of this cycle both can exist side by side.
+      const destination = event.lumaUrl || event.rsvpForm;
+      if (destination) {
+        window.open(destination, '_blank', 'noopener,noreferrer');
       } else {
-        alert('RSVP form not available for this event.');
+        alert('RSVP is not open for this event.');
       }
     } catch (error) {
       console.error('Error handling RSVP:', error);
@@ -177,7 +181,7 @@ export default function CandidateEvents() {
               
               <div className="event-action">
                 <div className="event-buttons">
-                  {event.rsvpForm && (
+                  {(event.lumaUrl || event.rsvpForm) && (
                     <button 
                       className={`rsvp-button ${event.hasAttended ? 'attended' : event.hasRsvpd ? 'rsvpd' : ''}`}
                       onClick={() => handleRSVP(event)}

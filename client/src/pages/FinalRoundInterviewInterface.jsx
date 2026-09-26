@@ -657,6 +657,20 @@ export default function FinalRoundInterviewInterface() {
                         Cover Letter
                       </button>
                     )}
+                    {application.shortAnswer?.trim() && (
+                      <button 
+                        className="document-btn"
+                        onClick={() => setPreview({ 
+                          open: true, 
+                          text: application.shortAnswer.trim(), 
+                          kind: 'text', 
+                          title: `${application.name} – Short Answer` 
+                        })}
+                      >
+                        <DocumentDuplicateIcon className="btn-icon" />
+                        Short Answer
+                      </button>
+                    )}
                     {application.videoUrl && (
                       <button 
                         className="document-btn"
@@ -916,6 +930,7 @@ export default function FinalRoundInterviewInterface() {
             onClose={() => setPreview({ open: false, src: '', kind: '', title: '' })}
             src={preview.src}
             kind={preview.kind}
+            text={preview.text}
             title={preview.title}
           />
         )}

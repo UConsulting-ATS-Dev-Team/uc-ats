@@ -3,6 +3,25 @@ import { getResponses } from './google/forms.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { transformEventFormResponse, createDynamicEventMapping } from '../utils/eventDataMapper.js'
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate } from './emailNotifications.js'
+import { sendSignupConfirmations } from './eventEmailSettings.js'
+
+// Whether this sync sends confirmation emails is a switch, not a constant:
+// `sendSignupConfirmations()` (services/eventEmailSettings.js), which an admin
+// flips on the Events page and which is **off by default**.
+//
+// It is off because sign-ups happen on Luma now, and Luma sends its own
+// confirmation and calendar invite the moment somebody registers - an ATS email
+// on top of that is a second message about the same sign-up, arriving up to five
+// minutes later. It is a switch rather than a deletion because this Google Forms
+// path is still here (plan Phase 4 retires it), and a move back should be one
+// toggle rather than a revert.
+//
+// The setting is read once per sync run rather than per response, so a whole
+// run agrees with itself about whether it is sending.
+//
+// The member in-app RSVP confirmation (PUT /api/member/events/:eventId/rsvp) is
+// not covered by this switch and still sends: a member who RSVPs in the app
+// never touched Luma, so nobody else has written to them.
 
 // Transform event form responses using configuration-based mapping
 function transformEventResponse(response, eventId, formType) {
@@ -36,6 +55,10 @@ export async function syncEventAttendance(eventId) {
       return { processed: 0, errors: 0 };
     }
 
+    // Once per run, not once per response, so a whole run agrees with itself
+    // about whether it is sending.
+    const sendConfirmations = await sendSignupConfirmations();
+
     const formId = extractFormIdFromUrl(event.attendanceForm);
     if (!formId) {
       console.warn(`Invalid attendance form URL for event ${eventId}: ${event.attendanceForm}`);
@@ -60,6 +83,7 @@ export async function syncEventAttendance(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -105,6 +129,21 @@ export async function syncEventAttendance(eventId) {
           });
         }
 
+        // One attendance row per candidate per event. A second form response,
+        // or a Luma check-in that got there first, already counts.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
+        const existingAttendance = await prisma.eventAttendance.findUnique({
+          where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
+        });
+        if (existingAttendance) {
+          skippedCount++;
+          continue;
+        }
+
         // Create attendance record
         await prisma.eventAttendance.create({
           data: {
@@ -114,21 +153,20 @@ export async function syncEventAttendance(eventId) {
           }
         });
 
-        // Send attendance confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendAttendanceConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation
-          );
-        } catch (emailError) {
-          console.error('Error sending attendance confirmation email:', emailError);
-          // Don't fail the sync if email fails
+        if (sendConfirmations) {
+          try {
+            const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
+            await sendAttendanceConfirmation(
+              candidate.email,
+              candidateName,
+              event.eventName,
+              formatEventDate(event.eventStartDate),
+              event.eventLocation
+            );
+          } catch (emailError) {
+            console.error('Error sending attendance confirmation email:', emailError);
+            // Don't fail the sync if email fails
+          }
         }
 
         successCount++;
@@ -138,8 +176,8 @@ export async function syncEventAttendance(eventId) {
       }
     }
 
-    console.log(`Attendance sync complete for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`Attendance sync complete for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
     
   } catch (error) {
     console.error(`Error syncing attendance for event ${eventId}:`, error);
@@ -166,6 +204,10 @@ export async function syncEventRSVP(eventId) {
       return { processed: 0, errors: 0 };
     }
 
+    // Once per run, not once per response, so a whole run agrees with itself
+    // about whether it is sending.
+    const sendConfirmations = await sendSignupConfirmations();
+
     const formId = extractFormIdFromUrl(event.rsvpForm);
     if (!formId) {
       console.warn(`Invalid RSVP form URL for event ${eventId}: ${event.rsvpForm}`);
@@ -190,6 +232,7 @@ export async function syncEventRSVP(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -237,6 +280,20 @@ export async function syncEventRSVP(eventId) {
           });
         }
 
+        // One RSVP per candidate per event; see the attendance sync above.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
+        const existingRsvp = await prisma.eventRsvp.findUnique({
+          where: { eventId_candidateId: { eventId, candidateId: candidate.id } }
+        });
+        if (existingRsvp) {
+          skippedCount++;
+          continue;
+        }
+
         // Create RSVP record
         await prisma.eventRsvp.create({
           data: {
@@ -246,25 +303,25 @@ export async function syncEventRSVP(eventId) {
           }
         });
 
-        // Send RSVP confirmation email
-        try {
-          const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
-          const eventDate = formatEventDate(event.eventStartDate);
-          
-          await sendRSVPConfirmation(
-            candidate.email,
-            candidateName,
-            event.eventName,
-            eventDate,
-            event.eventLocation,
-            // Carries the calendar invite. The RSVP arrives through a Google Form
-            // rather than a request, so this is the one message that reaches the
-            // candidate about it - the date has to leave with something they can add.
-            event
-          );
-        } catch (emailError) {
-          console.error('Error sending RSVP confirmation email:', emailError);
-          // Don't fail the sync if email fails
+        if (sendConfirmations) {
+          try {
+            const candidateName = `${candidate.firstName}${candidate.lastName ? ` ${candidate.lastName}` : ''}`;
+            await sendRSVPConfirmation(
+              candidate.email,
+              candidateName,
+              event.eventName,
+              formatEventDate(event.eventStartDate),
+              event.eventLocation,
+              // Carries the calendar invite. The RSVP arrives through a Google
+              // Form rather than a request, so when this is switched on it is
+              // the one message that reaches the candidate about it - the date
+              // has to leave with something they can add.
+              event
+            );
+          } catch (emailError) {
+            console.error('Error sending RSVP confirmation email:', emailError);
+            // Don't fail the sync if email fails
+          }
         }
 
         successCount++;
@@ -274,8 +331,8 @@ export async function syncEventRSVP(eventId) {
       }
     }
 
-    console.log(`RSVP sync complete for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`RSVP sync complete for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
     
   } catch (error) {
     console.error(`Error syncing RSVP for event ${eventId}:`, error);
@@ -326,6 +383,7 @@ export async function syncMemberEventRSVP(eventId) {
     let successCount = 0;
     let errorCount = 0;
     let totalProcessed = 0;
+    let skippedCount = 0;
 
     for (const response of newResponses) {
       totalProcessed++; // Count every response we attempt to process
@@ -355,6 +413,20 @@ export async function syncMemberEventRSVP(eventId) {
           continue; // Still count as processed, but as an error
         }
 
+        // One RSVP per member per event; see the attendance sync above.
+        //
+        // A skipped response keeps no row of its own, and a response counts as
+        // processed only by the id stored on a row, so this one comes back on
+        // every sync. Counting it apart from the work done keeps that visible
+        // instead of inflating the processed count forever.
+        const existingMemberRsvp = await prisma.memberEventRsvp.findUnique({
+          where: { eventId_memberId: { eventId, memberId: member.id } }
+        });
+        if (existingMemberRsvp) {
+          skippedCount++;
+          continue;
+        }
+
         // Create member RSVP record
         await prisma.memberEventRsvp.create({
           data: {
@@ -364,19 +436,11 @@ export async function syncMemberEventRSVP(eventId) {
           }
         });
 
-        // No confirmation email goes to members yet, so no calendar invite either -
-        // a member who RSVPs hears nothing back from here today.
-        //
-        // This is the hook point for when the integrated member RSVP form lands.
-        // eventInviteFor is already audience-neutral, so a member confirmation is the
-        // same shape as the candidate one further up this file:
-        //
-        //   sendRSVPConfirmation(member.email, memberName, event.eventName,
-        //                        formatEventDate(event.eventStartDate),
-        //                        event.eventLocation, event)
-        //
-        // Passing `event` as the last argument is what attaches the invite. The UID
-        // keys on the address, so members and candidates on one event never collide.
+        // No confirmation email goes out from this form path, for the reason at
+        // the top of this file: whoever ran the sign-up already sent one. A
+        // member who RSVPs in the app (PUT /api/member/events/:eventId/rsvp)
+        // still gets one, with the calendar invite - nothing else sends them
+        // anything, so that one is not a duplicate of Luma's.
 
         successCount++;
         console.log(`Successfully processed member RSVP response ${transformedData.responseId} for member ${member.id}`);
@@ -387,8 +451,8 @@ export async function syncMemberEventRSVP(eventId) {
       }
     }
 
-    console.log(`Member RSVP sync completed for event ${eventId}: ${totalProcessed} processed, ${errorCount} errors`);
-    return { processed: totalProcessed, errors: errorCount };
+    console.log(`Member RSVP sync completed for event ${eventId}: ${totalProcessed} processed, ${skippedCount} already recorded, ${errorCount} errors`);
+    return { processed: totalProcessed, skipped: skippedCount, errors: errorCount };
 
   } catch (error) {
     console.error(`Error syncing member RSVP for event ${eventId}:`, error);

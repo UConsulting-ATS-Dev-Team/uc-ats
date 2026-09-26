@@ -7,8 +7,10 @@ import { syncEventAttendance, syncEventRSVP, syncMemberEventRSVP, syncMemberEven
 import syncFormResponses from '../services/syncResponses.js';
 import { sendRSVPConfirmation, sendAttendanceConfirmation, formatEventDate, sendMeetingCancellationEmail, sendMeetingCancellationToMember, sendOfferLetter } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../services/meetingComms.js';
+import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
+import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
-import { localInputToUTC } from '../utils/timezoneUtils.js';
+import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
   parseGraduationYear,
@@ -49,6 +51,9 @@ import {
 } from '../services/cycleBootstrap.js';
 import { CYCLE_TIMELINE_STAGES } from '../services/cycleTimelineTemplate.js';
 import { resolveFormStatus } from '../services/eventFormStatus.js';
+import { parseLumaUrl, lumaUrlChanged } from '../services/luma/lumaUrl.js';
+import { LUMA_HELD } from '../services/luma/heldGuests.js';
+import { getEventEmailSetting, setSendSignupConfirmations } from '../services/eventEmailSettings.js';
 import {
   activateCycleExclusively,
   isActiveCycleConflict,
@@ -81,6 +86,17 @@ import {
 } from '../services/interviewRoster.js';
 import { ROUNDS } from '../utils/roundProgression.js';
 import { roundForPhase, saveRoundDecision } from '../services/stagingDecisions.js';
+import {
+  DEFAULT_REMINDER_MESSAGE,
+  DEFAULT_REMINDER_SUBJECT,
+  EVENT_POINT_TYPES,
+  REMINDER_MERGE_FIELDS,
+  isEventPointType,
+  scoreMembers,
+  sendReminders,
+  updatePointConfig
+} from '../services/accountabilityPoints.js';
+import { mergeFieldsUsed } from '../services/emailCopyRender.js';
 
 const router = express.Router();
 
@@ -1097,10 +1113,28 @@ router.get('/cycles/active', async (req, res) => {
   }
 });
 
+// The admin form sends the application deadline as an LA-local
+// `YYYY-MM-DDTHH:mm` string. Blank clears it; anything else unparseable is refused
+// rather than stored as null, so a typo can't silently remove the deadline.
+// A time skipped by the spring-forward change (e.g. 02:30 that night) converts to
+// a different instant, so the result must convert back to exactly what was typed.
+const parseApplicationDeadline = (value) => {
+  if (value === null || value === undefined || String(value).trim() === '') return { value: null };
+  const input = String(value).trim().replace(' ', 'T');
+  const parsed = localInputToUTC(input);
+  if (!parsed) return { error: 'Application deadline must be a date and time' };
+  if (utcToLocalInput(parsed) !== input) {
+    return { error: 'Application deadline is not a real Pacific time (clocks skip that hour)' };
+  }
+  return { value: parsed };
+};
+
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
     const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+    const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
+    if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
     const activate = Boolean(isActive);
     // Create then activate in one transaction, so the single-active invariant is
     // never briefly broken and a losing concurrent activation leaves no cycle.
@@ -1111,6 +1145,7 @@ router.post('/cycles', async (req, res) => {
           formUrl: formUrl || null,
           startDate: startDate ? new Date(startDate) : null,
           endDate: endDate ? new Date(endDate) : null,
+          applicationDeadline: applicationDeadline.value,
           isActive: false,
           resumeDeadline: resumeDeadline || null,
           coverLetterDeadline: coverLetterDeadline || null,
@@ -1247,6 +1282,11 @@ router.patch('/cycles/:id', async (req, res) => {
     if (videoDeadline !== undefined) {
       updateData.videoDeadline = videoDeadline || null;
     }
+    if (req.body.applicationDeadline !== undefined) {
+      const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
+      if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
+      updateData.applicationDeadline = applicationDeadline.value;
+    }
     
     console.log('[PATCH /api/admin/cycles/:id] Update data:', updateData);
     
@@ -1377,6 +1417,37 @@ router.get('/profile', async (req, res) => {
 // Event Management Routes
 
 // Get all events
+// Whether the Google Form event sync sends its own RSVP and attendance
+// confirmations. Off while sign-ups run through Luma, which sends its own; the
+// switch is what makes a move back to Forms a toggle rather than a revert.
+// Registered before the '/events/:id' routes so 'event-email-settings' is not
+// read as an event id.
+router.get('/event-email-settings', async (req, res) => {
+  try {
+    res.json(await getEventEmailSetting());
+  } catch (error) {
+    console.error('[GET /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to load event email settings' });
+  }
+});
+
+router.patch('/event-email-settings', async (req, res) => {
+  try {
+    const saved = await setSendSignupConfirmations(req.body?.sendSignupConfirmations, req.user?.id);
+    console.log(
+      `[events] signup confirmation emails turned ${saved.sendSignupConfirmations ? 'ON' : 'OFF'} `
+      + `by ${req.user?.id || 'an admin'}`
+    );
+    res.json(saved);
+  } catch (error) {
+    if (error?.code === 'INVALID_EVENT_EMAIL_SETTING') {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('[PATCH /api/admin/event-email-settings]', error);
+    res.status(500).json({ error: 'Failed to save event email settings' });
+  }
+});
+
 router.get('/events', async (req, res) => {
   try {
     res.json(await loadEvents(prisma));
@@ -1400,6 +1471,7 @@ router.post('/events', async (req, res) => {
       showToCandidates,
       memberRsvpUrl,
       memberAttendanceForm,
+      lumaUrl,
       cycleId
     } = req.body;
 
@@ -1407,6 +1479,9 @@ router.post('/events', async (req, res) => {
     if (!eventName || !eventStartDate || !eventEndDate || !cycleId) {
       return res.status(400).json({ error: 'Event name, start date, end date, and cycle ID are required' });
     }
+
+    const luma = parseLumaUrl(lumaUrl);
+    if (luma.error) return res.status(400).json({ error: luma.error });
 
     // Validate that the cycle exists
     const cycle = await prisma.recruitingCycle.findUnique({
@@ -1428,6 +1503,9 @@ router.post('/events', async (req, res) => {
         showToCandidates: showToCandidates || false,
         memberRsvpUrl: memberRsvpUrl || null,
         memberAttendanceForm: memberAttendanceForm || null,
+        // No lumaEventId: an event is linked to a Luma event only by the sync
+        // routine resolving this URL, never by hand.
+        lumaUrl: luma.url,
         cycleId
       }
     });
@@ -1478,7 +1556,9 @@ router.patch('/events/:id', async (req, res) => {
       attendanceForm,
       showToCandidates,
       memberRsvpUrl,
+      memberRsvpEnabled,
       memberAttendanceForm,
+      lumaUrl,
       cycleId
     } = req.body;
 
@@ -1502,11 +1582,26 @@ router.patch('/events/:id', async (req, res) => {
       }
     }
 
+    const luma = parseLumaUrl(lumaUrl);
+    if (lumaUrl !== undefined && luma.error) {
+      return res.status(400).json({ error: luma.error });
+    }
+
+    // Repointing an event at a different Luma event has to drop what the last
+    // one left behind. lumaEventId is what every page of guests is checked
+    // against and is unique across events, so a stale one makes the routine's
+    // next resolve fail with a conflict it cannot get past; a stale
+    // lumaLastSyncedAt would meanwhile report the new link as freshly synced
+    // when nothing has ever been read from it. The guests already ingested
+    // stay: they did attend, whatever the event is now linked to.
+    const relinked = lumaUrl !== undefined && lumaUrlChanged(existingEvent.lumaUrl, luma.url);
+
     // Keep the generated-event form shim state in step with the links.
     const nextFormStatus = resolveFormStatus({
       currentStatus: existingEvent.formStatus,
       rsvpForm: rsvpForm !== undefined ? rsvpForm : existingEvent.rsvpForm,
-      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm
+      attendanceForm: attendanceForm !== undefined ? attendanceForm : existingEvent.attendanceForm,
+      lumaUrl: lumaUrl !== undefined ? luma.url : existingEvent.lumaUrl
     });
 
     // Update the event
@@ -1522,7 +1617,10 @@ router.patch('/events/:id', async (req, res) => {
         ...(attendanceForm !== undefined && { attendanceForm: attendanceForm || null }),
         ...(showToCandidates !== undefined && { showToCandidates }),
         ...(memberRsvpUrl !== undefined && { memberRsvpUrl: memberRsvpUrl || null }),
+        ...(typeof memberRsvpEnabled === 'boolean' && { memberRsvpEnabled }),
         ...(memberAttendanceForm !== undefined && { memberAttendanceForm: memberAttendanceForm || null }),
+        ...(lumaUrl !== undefined && { lumaUrl: luma.url }),
+        ...(relinked && { lumaEventId: null, lumaLastSyncedAt: null }),
         ...(cycleId !== undefined && { cycleId })
       }
     });
@@ -1640,7 +1738,7 @@ router.get('/events/:id/stats', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount] = await Promise.all([
+    const [event, rsvpCount, attendanceCount, memberRsvpCount, memberAttendanceCount, lumaGuestCount, lumaHeldCount] = await Promise.all([
       prisma.events.findUnique({
         where: { id },
         select: { 
@@ -1650,13 +1748,21 @@ router.get('/events/:id/stats', async (req, res) => {
           rsvpForm: true,
           attendanceForm: true,
           memberRsvpUrl: true,
-          memberAttendanceForm: true
+          memberAttendanceForm: true,
+          lumaUrl: true,
+          lumaEventId: true,
+          lumaLastSyncedAt: true
         }
       }),
       prisma.eventRsvp.count({ where: { eventId: id } }),
       prisma.eventAttendance.count({ where: { eventId: id } }),
       prisma.memberEventRsvp.count({ where: { eventId: id } }),
-      prisma.memberEventAttendance.count({ where: { eventId: id } })
+      prisma.memberEventAttendance.count({ where: { eventId: id } }),
+      prisma.lumaGuest.count({ where: { eventId: id } }),
+      // Guests the sync could not settle. Counted here rather than in the panel
+      // so the event list can show a number without opening one panel per row;
+      // the predicate is the same one lumaAdmin.js lists by.
+      prisma.lumaGuest.count({ where: { eventId: id, ...LUMA_HELD } })
     ]);
 
     if (!event) {
@@ -1673,7 +1779,9 @@ router.get('/events/:id/stats', async (req, res) => {
         hasRsvpForm: !!event.rsvpForm,
         hasAttendanceForm: !!event.attendanceForm,
         hasMemberRsvpForm: !!event.memberRsvpUrl,
-        hasMemberAttendanceForm: !!event.memberAttendanceForm
+        hasMemberAttendanceForm: !!event.memberAttendanceForm,
+        lumaGuestCount,
+        lumaHeldCount
       }
     });
   } catch (error) {
@@ -1743,23 +1851,26 @@ async function getAccountabilityCycle(req) {
   if (cycleId) {
     return prisma.recruitingCycle.findUnique({
       where: { id: cycleId },
-      select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+      select: { id: true, name: true, startDate: true, endDate: true, createdAt: true, isActive: true }
     });
   }
   return prisma.recruitingCycle.findFirst({
     where: { isActive: true },
-    select: { id: true, name: true, startDate: true, endDate: true, isActive: true }
+    select: { id: true, name: true, startDate: true, endDate: true, createdAt: true, isActive: true }
   });
 }
 
-function makeTimeFilter(cycle) {
-  const filter = {};
-  if (cycle?.startDate) filter.gte = cycle.startDate;
-  if (cycle?.endDate) filter.lte = cycle.endDate;
-  return Object.keys(filter).length > 0 ? filter : null;
+const ACCOUNTABILITY_MEMBER_SELECT = { id: true, fullName: true, email: true, studentId: true, role: true };
+
+function activeStaff() {
+  return prisma.user.findMany({
+    where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
+    select: ACCOUNTABILITY_MEMBER_SELECT,
+    orderBy: { fullName: 'asc' }
+  });
 }
 
-// Get accountability summary for a cycle: leaderboard and events
+// Get accountability summary for a cycle: every member's points, and the events
 router.get('/accountability', async (req, res) => {
   try {
     const cycle = await getAccountabilityCycle(req);
@@ -1767,27 +1878,8 @@ router.get('/accountability', async (req, res) => {
       return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
     }
 
-    const members = await prisma.user.findMany({
-      where: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
-      select: { id: true, fullName: true, email: true, studentId: true, role: true },
-      orderBy: { fullName: 'asc' }
-    });
-
-    const memberIds = members.map(m => m.id);
-
-    const [eventAttendances, gtkucSlots, events] = await Promise.all([
-      prisma.memberEventAttendance.findMany({
-        where: { event: { cycleId: cycle.id }, memberId: { in: memberIds } },
-        select: { memberId: true }
-      }),
-      prisma.meetingSlot.findMany({
-        where: {
-          memberId: { in: memberIds },
-          signups: { some: { attended: true } },
-          ...(makeTimeFilter(cycle) ? { startTime: makeTimeFilter(cycle) } : {})
-        },
-        select: { memberId: true }
-      }),
+    const [scored, events] = await Promise.all([
+      activeStaff().then((members) => scoreMembers({ cycle, members })),
       prisma.events.findMany({
         where: { cycleId: cycle.id },
         select: {
@@ -1796,44 +1888,132 @@ router.get('/accountability', async (req, res) => {
           eventStartDate: true,
           eventEndDate: true,
           memberAttendanceForm: true,
-          _count: { select: { memberEventAttendance: true } }
+          pointType: true,
+          _count: {
+            select: {
+              memberEventAttendance: true,
+              // Counted over the same people the check-in dialog lists, so the
+              // two totals agree even after someone is deactivated or demoted.
+              memberEventRsvp: {
+                where: { member: { role: { in: ['MEMBER', 'ADMIN'] }, isActive: true } }
+              }
+            }
+          }
         },
         orderBy: { eventStartDate: 'desc' }
       })
     ]);
 
-    const eventCounts = eventAttendances.reduce((acc, curr) => {
-      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
-      return acc;
-    }, {});
-
-    const gtkucCounts = gtkucSlots.reduce((acc, curr) => {
-      acc[curr.memberId] = (acc[curr.memberId] || 0) + 1;
-      return acc;
-    }, {});
-
-    const leaderboard = members.map(member => {
-      const eventCount = eventCounts[member.id] || 0;
-      const gtkucCount = gtkucCounts[member.id] || 0;
-      return {
-        ...member,
-        eventCount,
-        gtkucCount,
-        total: eventCount + gtkucCount
-      };
-    }).sort((a, b) => b.total - a.total);
+    // Most points first; ties by name so the order is stable between refreshes.
+    const leaderboard = [...scored.members].sort(
+      (a, b) => b.points - a.points || (a.fullName || '').localeCompare(b.fullName || '')
+    );
 
     res.json({
       cycle,
+      config: { ...scored.config, eventPointTypes: EVENT_POINT_TYPES },
+      reminderDefaults: {
+        subject: DEFAULT_REMINDER_SUBJECT,
+        message: DEFAULT_REMINDER_MESSAGE,
+        mergeFields: REMINDER_MERGE_FIELDS
+      },
       leaderboard,
       events: events.map(e => ({
         ...e,
-        memberAttendanceCount: e._count.memberEventAttendance
+        memberAttendanceCount: e._count.memberEventAttendance,
+        memberRsvpCount: e._count.memberEventRsvp
       }))
     });
   } catch (error) {
     console.error('[GET /api/admin/accountability]', error);
     res.status(500).json({ error: 'Failed to fetch accountability summary' });
+  }
+});
+
+// Change what each type is worth and/or the target
+router.put('/accountability/config', async (req, res) => {
+  try {
+    const { points, targetPoints } = req.body || {};
+    const config = await updatePointConfig({ points, targetPoints }, req.user.id);
+    res.json({ ...config, eventPointTypes: EVENT_POINT_TYPES });
+  } catch (error) {
+    if (error.code === 'INVALID_ACCOUNTABILITY_CONFIG') {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('[PUT /api/admin/accountability/config]', error);
+    res.status(500).json({ error: 'Failed to save accountability points' });
+  }
+});
+
+// Tag an event with the accountability type attending it earns (null for none)
+router.put('/accountability/events/:id/point-type', async (req, res) => {
+  try {
+    const pointType = req.body?.pointType ?? null;
+    if (pointType !== null && !isEventPointType(pointType)) {
+      return res.status(400).json({ error: `pointType must be one of ${EVENT_POINT_TYPES.join(', ')}, or null` });
+    }
+    const event = await prisma.events.update({
+      where: { id: req.params.id },
+      data: { pointType },
+      select: { id: true, pointType: true }
+    });
+    res.json(event);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    console.error(`[PUT /api/admin/accountability/events/${req.params.id}/point-type]`, error);
+    res.status(500).json({ error: 'Failed to update event point type' });
+  }
+});
+
+// Email members who are under the target. Standing is recomputed here rather
+// than trusted from the page, so a member who got there since it loaded is
+// skipped. `memberIds` narrows the send; omitted, everyone under target gets one.
+router.post('/accountability/reminders', async (req, res) => {
+  try {
+    const { memberIds, subject, message } = req.body || {};
+    if (memberIds !== undefined && (!Array.isArray(memberIds) || memberIds.some((id) => typeof id !== 'string'))) {
+      return res.status(400).json({ error: 'memberIds must be an array of ids' });
+    }
+    for (const [name, text] of [['subject', subject], ['message', message]]) {
+      if (text === undefined) continue;
+      if (typeof text !== 'string' || !text.trim()) {
+        return res.status(400).json({ error: `${name} cannot be empty` });
+      }
+      const unknown = mergeFieldsUsed(text).filter((field) => !REMINDER_MERGE_FIELDS.includes(field));
+      if (unknown.length) {
+        return res.status(400).json({ error: `Unknown merge field in ${name}: {{${unknown.join('}}, {{')}}}` });
+      }
+    }
+
+    const cycle = await getAccountabilityCycle(req);
+    if (!cycle) {
+      return res.status(404).json({ error: 'No cycle found. Activate a cycle or pass cycleId.' });
+    }
+
+    const { members } = await scoreMembers({ cycle, members: await activeStaff() });
+    const wanted = memberIds ? new Set(memberIds) : null;
+    const asked = wanted ? members.filter((m) => wanted.has(m.id)) : members;
+    const recipients = asked.filter((m) => !m.met && m.email);
+
+    const { sent, failed } = await sendReminders(recipients, {
+      subject,
+      message,
+      cycle,
+      triggeredById: req.user.id,
+      dashboardUrl: process.env.CLIENT_URL ? `${process.env.CLIENT_URL}/dashboard` : null
+    });
+
+    res.json({
+      sent: sent.length,
+      failed,
+      // Asked for, but already at target (or without an address) when it came to sending.
+      skipped: asked.length - recipients.length
+    });
+  } catch (error) {
+    console.error('[POST /api/admin/accountability/reminders]', error);
+    res.status(500).json({ error: 'Failed to send accountability reminders' });
   }
 });
 
@@ -1858,20 +2038,31 @@ router.get('/accountability/events/:id/members', async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
+    // RSVPs come alongside attendance so the check-in list can be worked from
+    // who said they were coming, which is how an admin takes it at the door.
     const memberIds = members.map(m => m.id);
-    const attendances = await prisma.memberEventAttendance.findMany({
-      where: { eventId: id, memberId: { in: memberIds } },
-      select: { memberId: true, source: true }
-    });
+    const [attendances, rsvps] = await Promise.all([
+      prisma.memberEventAttendance.findMany({
+        where: { eventId: id, memberId: { in: memberIds } },
+        select: { memberId: true, source: true }
+      }),
+      prisma.memberEventRsvp.findMany({
+        where: { eventId: id, memberId: { in: memberIds } },
+        select: { memberId: true, source: true }
+      })
+    ]);
 
     const attendanceByMember = Object.fromEntries(attendances.map(a => [a.memberId, a]));
+    const rsvpByMember = Object.fromEntries(rsvps.map(r => [r.memberId, r]));
 
     res.json({
       event,
       members: members.map(member => ({
         ...member,
         attended: Boolean(attendanceByMember[member.id]),
-        source: attendanceByMember[member.id]?.source || null
+        source: attendanceByMember[member.id]?.source || null,
+        rsvpd: Boolean(rsvpByMember[member.id]),
+        rsvpSource: rsvpByMember[member.id]?.source || null
       }))
     });
   } catch (error) {
@@ -3086,6 +3277,7 @@ router.get('/interviews/:id/applications', async (req, res) => {
         graduationYear: true,
         resumeUrl: true,
         coverLetterUrl: true,
+        shortAnswer: true,
         videoUrl: true,
         headshotUrl: true,
         testFor: true,
@@ -4136,6 +4328,7 @@ router.get('/flagged-documents', async (req, res) => {
             graduationYear: true,
             resumeUrl: true,
             coverLetterUrl: true,
+            shortAnswer: true,
             videoUrl: true,
             candidateId: true,
             cycleId: true
@@ -4157,7 +4350,14 @@ router.get('/flagged-documents', async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json(flaggedDocuments);
+    // A flag carries its application's documents and short answer, so a sealed
+    // candidate's flag is cut down to identity like any other list row.
+    const isLocked = await lockedRowPredicate(req, flaggedDocuments, {
+      refOf: (flag) => ({ candidateId: flag.application?.candidateId, email: flag.application?.email })
+    });
+    res.json(flaggedDocuments.map((flag) => (
+      isLocked(flag) ? { ...flag, application: redactApplication(flag.application) } : flag
+    )));
   } catch (error) {
     console.error('[GET /api/admin/flagged-documents]', error);
     res.status(500).json({ error: 'Failed to fetch flagged documents' });
@@ -4687,6 +4887,12 @@ router.post('/meeting-slots', async (req, res) => {
     });
 
     res.json(slot);
+
+    // After the response, as in the member route: a slow mail server must not
+    // hold open a request whose slot already exists.
+    notifyHostSlotCreated(slot, host).catch((err) =>
+      console.error('[POST /api/admin/meeting-slots] slot confirmation failed', err)
+    );
   } catch (error) {
     console.error('[POST /api/admin/meeting-slots]', error);
     res.status(500).json({ error: 'Failed to create meeting slot' });
@@ -4750,7 +4956,17 @@ router.delete('/meeting-slots/:id', async (req, res) => {
               memberName,
               existingSlot.location,
               existingSlot.startTime,
-              existingSlot.endTime
+              existingSlot.endTime,
+              {
+                invite: candidateMeetingInvite({
+                  slot: existingSlot,
+                  signupId: signup.id,
+                  candidateEmail: signup.email,
+                  candidateName: signup.fullName,
+                  hostName: memberName,
+                  method: 'CANCEL',
+                }),
+              }
             ),
             {
               slotId: existingSlot.id,
@@ -4774,7 +4990,15 @@ router.delete('/meeting-slots/:id', async (req, res) => {
             existingSlot.location,
             existingSlot.startTime,
             existingSlot.endTime,
-            { signupCount: existingSlot.signups.length }
+            {
+              signupCount: existingSlot.signups.length,
+              invite: hostMeetingInvite({
+                slot: existingSlot,
+                hostEmail: existingSlot.member.email,
+                hostName: memberName,
+                method: 'CANCEL',
+              }),
+            }
           ),
           {
             slotId: existingSlot.id,
@@ -4923,7 +5147,17 @@ router.delete('/meeting-signups/:id', async (req, res) => {
         memberName,
         signup.slot.location,
         signup.slot.startTime,
-        signup.slot.endTime
+        signup.slot.endTime,
+        {
+          invite: candidateMeetingInvite({
+            slot: signup.slot,
+            signupId: signup.id,
+            candidateEmail: signup.email,
+            candidateName: signup.fullName,
+            hostName: memberName,
+            method: 'CANCEL',
+          }),
+        }
       ),
       {
         slotId: signup.slotId,
@@ -4936,6 +5170,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
 
     // ...and notify the host member the spot reopened.
     if (signup.slot.member?.email) {
+      const hostAttendees = await bookedNames(signup.slotId, { excludingSignupId: signup.id });
       await sendAndLogMeetingCommunication(
         () => sendMeetingCancellationToMember(
           signup.slot.member.email,
@@ -4943,7 +5178,15 @@ router.delete('/meeting-signups/:id', async (req, res) => {
           signup.slot.location,
           signup.slot.startTime,
           signup.slot.endTime,
-          { candidateName: signup.fullName }
+          {
+            candidateName: signup.fullName,
+            invite: hostMeetingInvite({
+              slot: signup.slot,
+              hostEmail: signup.slot.member.email,
+              hostName: memberName,
+              attendeeNames: hostAttendees,
+            }),
+          }
         ),
         {
           slotId: signup.slotId,

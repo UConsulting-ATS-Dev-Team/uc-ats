@@ -239,3 +239,69 @@ describe('POST /api/admin/cycles', () => {
     expect(activeIds()).toEqual(['current']);
   });
 });
+
+describe('application deadline', () => {
+  const row = (id) => rows.find((r) => r.id === id);
+
+  it('stores the Pacific wall time the admin entered as that instant', async () => {
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '2026-10-01T23:59' });
+
+    expect(res.status).toBe(200);
+    // 11:59 PM PDT is 06:59 UTC the next day.
+    expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
+  });
+
+  it('sets it on create', async () => {
+    const res = await request('/cycles', 'POST', { name: 'Fall 2027', applicationDeadline: '2027-10-01T23:59' });
+
+    expect(res.status).toBe(201);
+    expect(row('created').applicationDeadline.toISOString()).toBe('2027-10-02T06:59:00.000Z');
+  });
+
+  it('clears it when sent blank', async () => {
+    rows[1].applicationDeadline = new Date('2026-10-02T06:59:00Z');
+
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '' });
+
+    expect(res.status).toBe(200);
+    expect(row('next').applicationDeadline).toBeNull();
+  });
+
+  it('leaves it alone when the edit does not mention it', async () => {
+    rows[1].applicationDeadline = new Date('2026-10-02T06:59:00Z');
+
+    await request('/cycles/next', 'PATCH', { name: 'Fall 2026' });
+
+    expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
+  });
+
+  it('refuses an unparseable deadline instead of storing null', async () => {
+    rows[1].applicationDeadline = new Date('2026-10-02T06:59:00Z');
+
+    const patch = await request('/cycles/next', 'PATCH', { applicationDeadline: 'Oct 1st, night' });
+    const post = await request('/cycles', 'POST', { name: 'Fall 2027', applicationDeadline: 'soon' });
+
+    expect(patch.status).toBe(400);
+    expect(post.status).toBe(400);
+    expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
+    expect(row('created')).toBeUndefined();
+  });
+
+  it('refuses a Pacific time that the spring-forward change skips', async () => {
+    rows[1].applicationDeadline = new Date('2026-10-02T06:59:00Z');
+
+    // 2027-03-14 02:00-02:59 does not exist in Los Angeles.
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '2027-03-14T02:30' });
+
+    expect(res.status).toBe(400);
+    expect(row('next').applicationDeadline.toISOString()).toBe('2026-10-02T06:59:00.000Z');
+  });
+
+  it('accepts the hour just after the spring-forward gap', async () => {
+    const res = await request('/cycles/next', 'PATCH', { applicationDeadline: '2027-03-14T03:30' });
+
+    expect(res.status).toBe(200);
+    // 03:30 PDT is 10:30 UTC.
+    expect(row('next').applicationDeadline.toISOString()).toBe('2027-03-14T10:30:00.000Z');
+  });
+});

@@ -16,7 +16,9 @@ import { referralNameKey } from './referrals.js';
 vi.mock('../prismaClient.js', () => {
   const client = {
     application: { findMany: vi.fn(), create: vi.fn() },
-    candidate: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    candidate: {
+      findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn()
+    },
     referral: { findMany: vi.fn(), updateMany: vi.fn() },
     $executeRaw: vi.fn(),
     $transaction: vi.fn((fn) => fn(client))
@@ -52,6 +54,9 @@ beforeEach(() => {
 
   prisma.application.findMany.mockResolvedValue([]);
   prisma.application.create.mockResolvedValue({ id: 'app-1' });
+  // The candidate lookup asks by studentId and by exact email, both through
+  // findUnique; findFirst is no longer used for it.
+  prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.create.mockResolvedValue(newCandidate);
   // Only this applicant carries that name in the cycle, so claiming is safe.
@@ -134,6 +139,9 @@ describe('form sync claims pre-application referrals', () => {
   });
 
   it('still records the application when claiming blows up', async () => {
+    // Resolved outright, so the candidate lookup never reaches findMany and the
+    // rejection below is only the referral ambiguity check.
+    prisma.candidate.findUnique.mockResolvedValue({ id: 'cand-1', ...applicant });
     prisma.candidate.findMany.mockRejectedValue(new Error('referrals lookup is on fire'));
 
     await syncFormResponses();

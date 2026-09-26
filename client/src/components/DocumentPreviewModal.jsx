@@ -36,7 +36,9 @@ const contentStyle = {
   backgroundColor: '#f9fafb',
 };
 
-export default function DocumentPreviewModal({ src, kind, title, onClose }) {
+// kind 'text' shows `text` as written (an application's short answer) and
+// fetches nothing; every other kind loads `src` as an authenticated file.
+export default function DocumentPreviewModal({ src, kind, title, text, onClose }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [error, setError] = useState(null);
   const videoRef = useRef(null);
@@ -52,6 +54,7 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
   }, [onClose]);
 
   useEffect(() => {
+    if (kind === 'text') return undefined;
     let localUrl;
     const load = async () => {
       try {
@@ -89,13 +92,20 @@ export default function DocumentPreviewModal({ src, kind, title, onClose }) {
           <button onClick={onClose} style={{ padding: '6px 10px' }}>Close</button>
         </div>
         <div style={contentStyle}>
-          {error && (
+          {kind === 'text' && (
+            <div style={{ height: '100%', overflow: 'auto', background: '#fff' }}>
+              <p style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 32, whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 16 }}>
+                {text}
+              </p>
+            </div>
+          )}
+          {kind !== 'text' && error && (
             <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>
           )}
-          {!error && !blobUrl && (
+          {kind !== 'text' && !error && !blobUrl && (
             <div style={{ padding: 16 }}>Loading preview…</div>
           )}
-          {!error && blobUrl && (
+          {kind !== 'text' && !error && blobUrl && (
             kind === 'pdf' ? (
               <iframe
                 title={title || 'Document preview'}

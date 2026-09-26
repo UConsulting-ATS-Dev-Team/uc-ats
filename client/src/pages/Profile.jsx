@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import MemberAvatar from '../components/MemberAvatar';
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 const Profile = () => {
   const { user, updateUser } = useAuth();
@@ -55,7 +55,7 @@ const Profile = () => {
     }
 
     if (imageFile.size > MAX_FILE_SIZE) {
-      setError('File size must be less than 5MB.');
+      setError('File size must be less than 10MB.');
       return;
     }
 
@@ -121,9 +121,14 @@ const Profile = () => {
             inputRef={fileInputRef}
             fullWidth
             type="file"
-            accept="image/*"
-            inputProps={{ 'data-testid': 'profile-image-input' }}
-            helperText="Max file size: 5MB. Supported formats: JPG, PNG, GIF"
+            // On the <input>, not the TextField wrapper, or the picker ignores
+            // it. Listing formats instead of image/* also makes iOS convert HEIC
+            // photos to JPEG before upload.
+            inputProps={{
+              'data-testid': 'profile-image-input',
+              accept: 'image/jpeg,image/png,image/webp',
+            }}
+            helperText="Max file size: 10MB. Supported formats: JPG, PNG, WebP"
             onChange={handleFileChange}
             sx={{ mb: 2 }}
           />

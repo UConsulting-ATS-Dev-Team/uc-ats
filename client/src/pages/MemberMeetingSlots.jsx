@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
+import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
 import AccessControl from '../components/AccessControl';
 import GtkucProfileModal from '../components/GtkucProfileModal';
+import SlotContactDialog from '../components/meetings/SlotContactDialog';
 import {
   Box,
   Typography,
@@ -39,11 +42,12 @@ import {
   Visibility as VisibilityIcon,
   Event as EventIcon,
   Delete as DeleteIcon,
-  Badge as BadgeIcon
+  Badge as BadgeIcon,
+  Sms as SmsIcon
 } from '@mui/icons-material';
 
 export default function MemberMeetingSlots() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [slots, setSlots] = useState([]);
   const [allSlots, setAllSlots] = useState([]); // Store all slots for filtering
   const [activeCycle, setActiveCycle] = useState(null);
@@ -56,9 +60,15 @@ export default function MemberMeetingSlots() {
   const [editForm, setEditForm] = useState({ location: '', startTime: '', endTime: '', capacity: 2 });
   const [editDateError, setEditDateError] = useState('');
   const [notice, setNotice] = useState('');
+  const [contactSlot, setContactSlot] = useState(null);
   const [editInitial, setEditInitial] = useState(null);
   const [profileState, setProfileState] = useState(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  // ?slot=<id> comes from the attendance reminder email's button: open the
+  // page on that slot, once per link, so the host lands on the boxes to tick.
+  const [searchParams] = useSearchParams();
+  const focusSlotId = searchParams.get('slot');
+  const focusedSlotId = useRef(null);
 
   useEffect(() => {
     api.setToken(token);
@@ -80,35 +90,18 @@ export default function MemberMeetingSlots() {
   const loadActiveCycle = async () => {
     try {
       // Use public endpoint so it works for all users (members and admins)
-      const active = await api.get('/active-cycle');
-      setActiveCycle(active || null);
-      return active || null;
+      const active = await fetchActiveCycle(api);
+      setActiveCycle(active);
+      return active;
     } catch (e) {
       console.error('Failed to load active cycle:', e);
       return null;
     }
   };
 
-  const filterSlotsByCycle = (slotsToFilter, cycle) => {
-    // If no active cycle, return empty array to only show slots from current cycle
-    if (!cycle) return [];
-
-    // Filter slots by creation date - include slots created up to 1 month before cycle starts
-    if (cycle.startDate) {
-      const cycleStartDate = new Date(cycle.startDate);
-      cycleStartDate.setHours(0, 0, 0, 0);
-      // Allow slots created up to 1 month before the cycle starts
-      cycleStartDate.setMonth(cycleStartDate.getMonth() - 1);
-
-      return slotsToFilter.filter(slot => {
-        const slotCreatedAt = new Date(slot.createdAt);
-        return slotCreatedAt >= cycleStartDate;
-      });
-    }
-
-    // If no start date on cycle, return all slots (fallback)
-    return slotsToFilter;
-  };
+  // No active cycle shows nothing, so a member never edits last cycle's slots.
+  const filterSlotsByCycle = (slotsToFilter, cycle) =>
+    cycle ? slotsCreatedForCycle(slotsToFilter, cycle) : [];
 
   const load = async () => {
     try {
@@ -121,13 +114,26 @@ export default function MemberMeetingSlots() {
       // Load active cycle and filter slots
       const cycle = await loadActiveCycle();
       const filtered = filterSlotsByCycle(data, cycle);
-      setSlots(filtered);
+      // A linked slot stays visible even when the cycle filter would hide it
+      // (it ended just before a new cycle started, or none is active), or the
+      // email's button would open a page without the slot it asks about.
+      const linked = focusSlotId && !filtered.some((s) => s.id === focusSlotId)
+        ? data.find((s) => s.id === focusSlotId)
+        : null;
+      setSlots(linked ? [linked, ...filtered] : filtered);
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!focusSlotId || focusedSlotId.current === focusSlotId || loading) return;
+    if (!slots.some((s) => s.id === focusSlotId)) return;
+    focusedSlotId.current = focusSlotId;
+    document.getElementById(`slot-${focusSlotId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusSlotId, loading, slots]);
 
   useEffect(() => {
     load();
@@ -894,7 +900,12 @@ export default function MemberMeetingSlots() {
               const attendedCount = slot.signups.filter(s => s.attended).length;
               
               return (
-                <Card key={slot.id} variant="outlined">
+                <Card
+                  key={slot.id}
+                  id={`slot-${slot.id}`}
+                  variant="outlined"
+                  sx={slot.id === focusSlotId ? { borderColor: 'primary.main', borderWidth: 2 } : undefined}
+                >
                   <CardContent>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
                       <Box>
@@ -957,9 +968,19 @@ export default function MemberMeetingSlots() {
                     {slot.signups.length > 0 && (
                       <>
                         <Divider sx={{ my: 2 }} />
-                        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2 }}>
-                          Signups ({slot.signups.length})
-                        </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                            Signups ({slot.signups.length})
+                          </Typography>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<SmsIcon />}
+                            onClick={() => setContactSlot(slot)}
+                          >
+                            iMessage / email signups
+                          </Button>
+                        </Box>
                         <TableContainer className="responsive-table">
                           <Table size="small">
                             <TableHead>
@@ -1022,6 +1043,13 @@ export default function MemberMeetingSlots() {
           </Stack>
         )}
       </Paper>
+
+      <SlotContactDialog
+        open={!!contactSlot}
+        onClose={() => setContactSlot(null)}
+        slot={contactSlot}
+        hostName={user?.fullName}
+      />
     </Box>
     </AccessControl>
   );

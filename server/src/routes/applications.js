@@ -164,6 +164,7 @@ router.post('/manual', requireAdmin, async (req, res) => {
       resumeUrl,
       headshotUrl,
       coverLetterUrl,
+      shortAnswer,
       videoUrl,
       responseID,
       rawResponses
@@ -234,6 +235,7 @@ router.post('/manual', requireAdmin, async (req, res) => {
       resumeUrl,
       headshotUrl,
       coverLetterUrl,
+      shortAnswer: shortAnswer?.trim() || null,
       videoUrl,
       rawResponses: rawResponses || {},
       cycleId: activeCycle.id,

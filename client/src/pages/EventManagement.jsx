@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -29,6 +29,8 @@ import {
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import LumaGuestsPanel, { relativeAge, staleSync } from '../components/LumaGuestsPanel';
+import LumaSyncSetupDialog from '../components/LumaSyncSetupDialog';
 import { useAuth } from '../context/AuthContext';
 import { formatInLA, localInputToUTC } from '../../../server/src/utils/timezoneUtils';
 
@@ -54,6 +56,7 @@ export default function EventManagement() {
     showToCandidates: false,
     memberRsvpUrl: '',
     memberAttendanceForm: '',
+    lumaUrl: '',
     cycleId: ''
   });
   const [editForm, setEditForm] = useState({
@@ -65,7 +68,9 @@ export default function EventManagement() {
     attendanceForm: '',
     showToCandidates: false,
     memberRsvpUrl: '',
+    memberRsvpEnabled: true,
     memberAttendanceForm: '',
+    lumaUrl: '',
     cycleId: ''
   });
 
@@ -81,7 +86,81 @@ export default function EventManagement() {
   const [copyError, setCopyError] = useState('');
   const [copySuccess, setCopySuccess] = useState('');
 
+  // Which event's Luma guest panel is open. Null when none is.
+  const [lumaPanelEvent, setLumaPanelEvent] = useState(null);
+
+  // The token-and-prompt dialog that sets the hourly sync up.
+  const [syncSetupOpen, setSyncSetupOpen] = useState(false);
+
+  // Whether the Google Form sync sends its own RSVP/attendance confirmations.
+  // Null until it has been read, so the switch does not flicker through "off".
+  const [signupEmails, setSignupEmails] = useState(null);
+  const [signupEmailsSaving, setSignupEmailsSaving] = useState(false);
+
   const { user } = useAuth();
+
+  // The signed-in admin's own RSVP per event (eventId -> source), read from the
+  // same endpoint members use, so an admin RSVPs exactly as a member does.
+  const [myRsvps, setMyRsvps] = useState({});
+  const [myRsvpSaving, setMyRsvpSaving] = useState(null);
+  // Latest count refresh per event. Toggling twice quickly starts two refreshes,
+  // and only the newer one may write, or a stale count can land last.
+  const statsRequestSeq = useRef({});
+
+  const fetchMyRsvps = async () => {
+    try {
+      const mine = await apiClient.get('/member/events');
+      setMyRsvps(Object.fromEntries(
+        mine.filter((e) => e.hasMemberRsvpd).map((e) => [e.id, e.memberRsvpSource])
+      ));
+    } catch (e) {
+      console.warn('Failed to load your RSVPs:', e);
+    }
+  };
+
+  // Only an RSVP made here can be cancelled here; one from Luma or a form has
+  // to change where it was made (the server answers 409 RSVP_EXTERNAL).
+  const toggleMyRsvp = async (event) => {
+    const going = myRsvps[event.id] === 'IN_APP';
+    setMyRsvpSaving(event.id);
+    setError('');
+    try {
+      const path = `/member/events/${event.id}/rsvp`;
+      const status = going ? await apiClient.delete(path) : await apiClient.put(path, {});
+      setMyRsvps((prev) => {
+        const next = { ...prev };
+        if (status.hasMemberRsvpd) next[event.id] = status.memberRsvpSource;
+        else delete next[event.id];
+        return next;
+      });
+      // The RSVP is saved by now. A failed count refresh must not read as a
+      // failed save, or a retry would undo what just worked.
+      const seq = (statsRequestSeq.current[event.id] || 0) + 1;
+      statsRequestSeq.current[event.id] = seq;
+      apiClient.get(`/admin/events/${event.id}/stats`)
+        .then((stats) => {
+          if (statsRequestSeq.current[event.id] !== seq) return;
+          setEventStats((prev) => ({ ...prev, [event.id]: stats.stats }));
+        })
+        .catch((statsError) => console.warn('Failed to refresh RSVP count:', statsError));
+    } catch (e) {
+      setError(e.code === 'EVENT_STARTED'
+        ? 'That event has already started, so RSVPs are closed.'
+        : (e.serverMessage || 'Failed to save your RSVP'));
+    } finally {
+      setMyRsvpSaving(null);
+    }
+  };
+
+  const myRsvpLabel = (event) => {
+    if (myRsvpSaving === event.id) return 'Saving…';
+    switch (myRsvps[event.id]) {
+      case 'IN_APP': return 'Going ✓ · Cancel';
+      case 'LUMA': return "RSVP'd via Luma";
+      case 'GOOGLE_FORM': return "RSVP'd via form";
+      default: return 'RSVP';
+    }
+  };
 
   function formatForDateTimeLocal(date, timeZone) {
     const d = new Date(date);
@@ -105,12 +184,44 @@ export default function EventManagement() {
   }
 
 
+  const fetchSignupEmailSetting = async () => {
+    try {
+      const setting = await apiClient.get('/admin/event-email-settings');
+      setSignupEmails(setting.sendSignupConfirmations);
+    } catch (e) {
+      // A setting that cannot be read is not worth blocking the page for; the
+      // switch stays hidden rather than showing a state it does not know.
+      console.error('Failed to load event email settings', e);
+    }
+  };
+
+  const toggleSignupEmails = async (enabled) => {
+    try {
+      setSignupEmailsSaving(true);
+      setError('');
+      const saved = await apiClient.patch('/admin/event-email-settings', {
+        sendSignupConfirmations: enabled,
+      });
+      setSignupEmails(saved.sendSignupConfirmations);
+      setSuccessMessage(
+        saved.sendSignupConfirmations
+          ? 'Form sign-ups will now get an ATS confirmation email again.'
+          : 'ATS confirmation emails for form sign-ups are off. Luma sends its own.'
+      );
+    } catch (e) {
+      setError(e.message || 'Failed to save the email setting');
+    } finally {
+      setSignupEmailsSaving(false);
+    }
+  };
+
   const fetchEvents = async () => {
     try {
       setLoading(true);
       const data = await apiClient.get('/admin/events');
       setEvents(data);
-      
+      fetchMyRsvps();
+
       // Fetch stats for each event
       const stats = {};
       for (const event of data) {
@@ -329,6 +440,7 @@ export default function EventManagement() {
         showToCandidates: false,
         memberRsvpUrl: '',
         memberAttendanceForm: '',
+        lumaUrl: '',
         cycleId: ''
       });
       
@@ -363,7 +475,9 @@ export default function EventManagement() {
       attendanceForm: event.attendanceForm || '',
       showToCandidates: event.showToCandidates,
       memberRsvpUrl: event.memberRsvpUrl || '',
+      memberRsvpEnabled: event.memberRsvpEnabled !== false,
       memberAttendanceForm: event.memberAttendanceForm || '',
+      lumaUrl: event.lumaUrl || '',
       cycleId: event.cycleId
     });
     setEditOpen(true);
@@ -513,6 +627,7 @@ export default function EventManagement() {
   useEffect(() => {
     fetchEvents();
     fetchCycles();
+    fetchSignupEmailSetting();
     
     // Listen for cycle activation events and refresh when a new cycle is activated
     const handleCycleActivated = () => {
@@ -631,6 +746,12 @@ export default function EventManagement() {
               Copy from Cycle
             </Button>
           )}
+          {/* The one setup step that used to need the Render dashboard. */}
+          {user?.role === 'ADMIN' && (
+            <Button variant="outlined" onClick={() => setSyncSetupOpen(true)}>
+              Luma Sync Setup
+            </Button>
+          )}
           <Button 
             variant="outlined" 
             onClick={syncAllEvents}
@@ -643,6 +764,33 @@ export default function EventManagement() {
           </Button>
         </Stack>
       </Stack>
+
+      {/* Sign-ups run through Luma, which sends its own confirmation and
+          calendar invite, so the ATS one is off. It is a switch rather than
+          deleted code because the Google Forms path is still here and a move
+          back should not need a release. Admins only: it changes what lands in
+          candidates' inboxes. */}
+      {user?.role === 'ADMIN' && signupEmails !== null && (
+        <Alert severity={signupEmails ? 'warning' : 'info'} sx={{ mb: 2 }}>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={signupEmails}
+                  disabled={signupEmailsSaving}
+                  onChange={(e) => toggleSignupEmails(e.target.checked)}
+                />
+              }
+              label="Send an ATS confirmation email for Google Form sign-ups"
+            />
+            <Typography variant="body2" color="text.secondary">
+              {signupEmails
+                ? 'On. Anyone who RSVPs on a Luma event AND a Google Form will get two emails — leave this off while Luma is in use.'
+                : 'Off, because Luma emails its own confirmation and calendar invite. Turn this on if events move back to Google Forms.'}
+            </Typography>
+          </Stack>
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
@@ -693,13 +841,14 @@ export default function EventManagement() {
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Attendance</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member RSVP</TableCell>
               <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Member Attendance</TableCell>
+              <TableCell sx={{ minWidth: { xs: 'auto', md: 200 } }}>Luma</TableCell>
               <TableCell align="right" sx={{ minWidth: { xs: 'auto', md: 120 } }}>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {filteredEvents.length === 0 && !loading ? (
               <TableRow>
-                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={12} align="center" sx={{ py: 4 }}>
                   <Typography variant="body1" color="text.secondary">
                     {activeCycle 
                       ? `No events found for ${activeCycle.name} cycle. Create a new event to get started.`
@@ -709,7 +858,7 @@ export default function EventManagement() {
               </TableRow>
             ) : (
               filteredEvents.map((event) => {
-                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false };
+                const stats = eventStats[event.id] || { rsvpCount: 0, attendanceCount: 0, memberRsvpCount: 0, memberAttendanceCount: 0, hasRsvpForm: false, hasAttendanceForm: false, hasMemberRsvpForm: false, hasMemberAttendanceForm: false, lumaGuestCount: 0, lumaHeldCount: 0 };
               
                 return (
                   <TableRow key={event.id}>
@@ -738,35 +887,54 @@ export default function EventManagement() {
                     />
                   </TableCell>
                   <TableCell data-label="RSVP">
+                    {/* Where a candidate actually signs up. That is the Luma
+                        page wherever there is one, so it is the link this cell
+                        offers; the Google Form stays reachable underneath it,
+                        because an event that has both still has old responses
+                        worth opening. */}
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.rsvpForm ? (
+                      {event.lumaUrl || event.rsvpForm ? (
                         <>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Chip 
-                              label={`${stats.rsvpCount} RSVPs`} 
-                              size="small" 
-                              color="primary" 
+                            <Chip
+                              label={`${stats.rsvpCount} RSVPs`}
+                              size="small"
+                              color="primary"
                               variant="outlined"
                             />
                             <Button
                               size="small"
                               variant="text"
-                              onClick={() => window.open(event.rsvpForm, '_blank')}
+                              onClick={() => window.open(event.lumaUrl || event.rsvpForm, '_blank', 'noopener,noreferrer')}
                             >
-                              View Form
+                              {event.lumaUrl ? 'View Luma' : 'View Form'}
                             </Button>
+                            {event.lumaUrl && event.rsvpForm && (
+                              <Tooltip title="The Google Form this event used before Luma. Its responses still sync.">
+                                <Button
+                                  size="small"
+                                  variant="text"
+                                  color="inherit"
+                                  onClick={() => window.open(event.rsvpForm, '_blank', 'noopener,noreferrer')}
+                                >
+                                  Form
+                                </Button>
+                              </Tooltip>
+                            )}
                           </Stack>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            disabled={syncLoading[`${event.id}-rsvp`]}
-                            onClick={() => syncEventRSVP(event.id)}
-                          >
-                            {syncLoading[`${event.id}-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
-                          </Button>
+                          {event.rsvpForm && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={syncLoading[`${event.id}-rsvp`]}
+                              onClick={() => syncEventRSVP(event.id)}
+                            >
+                              {syncLoading[`${event.id}-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                            </Button>
+                          )}
                         </>
                       ) : (
-                        <Typography variant="body2" color="text.secondary">No Form</Typography>
+                        <Typography variant="body2" color="text.secondary">No sign-up link</Typography>
                       )}
                     </Stack>
                   </TableCell>
@@ -804,37 +972,63 @@ export default function EventManagement() {
                     </Stack>
                   </TableCell>
                   <TableCell data-label="Member RSVP">
+                    {event.memberRsvpEnabled === false ? (
+                      <Typography variant="body2" color="text.secondary">Off</Typography>
+                    ) : (
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.memberRsvpUrl ? (
-                        <>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Chip 
-                              label={`${stats.memberRsvpCount} RSVPs`} 
-                              size="small" 
-                              color="secondary" 
-                              variant="outlined"
-                            />
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() => window.open(event.memberRsvpUrl, '_blank')}
-                            >
-                              View Form
-                            </Button>
-                          </Stack>
+                      {/* Members RSVP in the app, so the count stands with or without a form. */}
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Chip
+                          label={`${stats.memberRsvpCount} RSVPs`}
+                          size="small"
+                          color="secondary"
+                          variant="outlined"
+                        />
+                        {event.memberRsvpUrl && (
                           <Button
                             size="small"
-                            variant="outlined"
-                            disabled={syncLoading[`${event.id}-member-rsvp`]}
-                            onClick={() => syncMemberRSVP(event.id)}
+                            variant="text"
+                            onClick={() => window.open(event.memberRsvpUrl, '_blank')}
                           >
-                            {syncLoading[`${event.id}-member-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                            View Form
                           </Button>
-                        </>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">No Form</Typography>
+                        )}
+                      </Stack>
+                      {(() => {
+                        const started = new Date(event.eventStartDate) <= new Date();
+                        const external = myRsvps[event.id] && myRsvps[event.id] !== 'IN_APP';
+                        return (
+                          <Tooltip
+                            title={external
+                              ? 'Change this RSVP where you made it'
+                              : started ? 'This event has started' : 'Your own RSVP'}
+                          >
+                            <span>
+                              <Button
+                                size="small"
+                                variant={myRsvps[event.id] ? 'contained' : 'outlined'}
+                                color={myRsvps[event.id] ? 'success' : 'primary'}
+                                disabled={myRsvpSaving === event.id || external || started}
+                                onClick={() => toggleMyRsvp(event)}
+                              >
+                                {myRsvpLabel(event)}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        );
+                      })()}
+                      {event.memberRsvpUrl && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={syncLoading[`${event.id}-member-rsvp`]}
+                          onClick={() => syncMemberRSVP(event.id)}
+                        >
+                          {syncLoading[`${event.id}-member-rsvp`] ? <CircularProgress size={16} /> : 'Sync'}
+                        </Button>
                       )}
                     </Stack>
+                    )}
                   </TableCell>
                   <TableCell data-label="Member Attendance">
                     <Stack spacing={1} alignItems="flex-start">
@@ -866,6 +1060,49 @@ export default function EventManagement() {
                         </>
                       ) : (
                         <Typography variant="body2" color="text.secondary">No Form</Typography>
+                      )}
+                    </Stack>
+                  </TableCell>
+                  <TableCell data-label="Luma">
+                    {/* Whether this event is on Luma, whether the routine has
+                        resolved the link yet, and whether it is still running.
+                        A link that never resolves and a sync that stopped look
+                        identical from the guest list alone, so they are told
+                        apart here rather than in the panel. */}
+                    <Stack spacing={1} alignItems="flex-start">
+                      {!event.lumaUrl ? (
+                        <Typography variant="body2" color="text.secondary">Not on Luma</Typography>
+                      ) : (
+                        <>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            {!event.lumaEventId ? (
+                              <Tooltip title="The link is saved. The sync routine resolves it to a Luma event id on its next hourly run.">
+                                <Chip label="Awaiting first sync" size="small" color="warning" variant="outlined" />
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title={staleSync(event.lumaLastSyncedAt)
+                                ? 'The routine runs hourly and has not finished a pass in over three hours. Check that it is still running.'
+                                : `Last finished sync: ${formatDateTime(event.lumaLastSyncedAt)}`}>
+                                <Chip
+                                  label={relativeAge(event.lumaLastSyncedAt) || 'Never synced'}
+                                  size="small"
+                                  color={staleSync(event.lumaLastSyncedAt) ? 'warning' : 'success'}
+                                  variant="outlined"
+                                />
+                              </Tooltip>
+                            )}
+                          </Stack>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color={stats.lumaHeldCount > 0 ? 'warning' : 'primary'}
+                            onClick={() => setLumaPanelEvent(event)}
+                          >
+                            {stats.lumaHeldCount > 0
+                              ? `${stats.lumaHeldCount} to review`
+                              : `Guests (${stats.lumaGuestCount || 0})`}
+                          </Button>
+                        </>
                       )}
                     </Stack>
                   </TableCell>
@@ -1005,6 +1242,15 @@ export default function EventManagement() {
             />
 
             <TextField
+              label="Luma Event Link"
+              value={form.lumaUrl}
+              onChange={(e) => setForm({ ...form, lumaUrl: e.target.value })}
+              fullWidth
+              placeholder="https://lu.ma/your-event"
+              helperText="Paste the event's Luma page (lu.ma/...). Luma then takes RSVPs and the door check-in for this event, and the hourly sync brings both back. Changing it makes the sync re-resolve the event from scratch."
+            />
+
+            <TextField
               label="Show to Candidates"
               select
               value={form.showToCandidates ? 'true' : 'false'}
@@ -1099,6 +1345,18 @@ export default function EventManagement() {
               helperText="Paste the Google Form URL for event attendance tracking"
             />
 
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editForm.memberRsvpEnabled}
+                  onChange={(e) => setEditForm({ ...editForm, memberRsvpEnabled: e.target.checked })}
+                />
+              }
+              label={editForm.memberRsvpEnabled
+                ? 'Member RSVP on'
+                : 'Member RSVP off. Members are not asked to RSVP to this event'}
+            />
+
             <TextField
               label="Member RSVP Google Form URL"
               value={editForm.memberRsvpUrl}
@@ -1115,6 +1373,15 @@ export default function EventManagement() {
               fullWidth
               placeholder="https://forms.gle/..."
               helperText="Paste the Google Form URL for UC member attendance tracking"
+            />
+
+            <TextField
+              label="Luma Event Link"
+              value={editForm.lumaUrl}
+              onChange={(e) => setEditForm({ ...editForm, lumaUrl: e.target.value })}
+              fullWidth
+              placeholder="https://lu.ma/your-event"
+              helperText="Paste the event's Luma page (lu.ma/...). Luma then takes RSVPs and the door check-in for this event, and the hourly sync brings both back. Changing it makes the sync re-resolve the event from scratch."
             />
 
             <TextField
@@ -1372,6 +1639,18 @@ export default function EventManagement() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Linking a guest changes real RSVP and attendance rows, so the row's
+          counts are refetched when the panel reports a change. */}
+      <LumaGuestsPanel
+        open={Boolean(lumaPanelEvent)}
+        eventId={lumaPanelEvent?.id}
+        eventName={lumaPanelEvent?.eventName}
+        onClose={() => setLumaPanelEvent(null)}
+        onChanged={fetchEvents}
+      />
+
+      <LumaSyncSetupDialog open={syncSetupOpen} onClose={() => setSyncSetupOpen(false)} />
 
     </Box>
     </AccessControl>

@@ -16,6 +16,30 @@ export function normalizeEmail(raw) {
   return (angled ? angled[1] : str).trim().toLowerCase();
 }
 
+// UCLA gives every student two spellings of one inbox: joe@g.ucla.edu (the
+// Google Workspace account) and joe@ucla.edu, which delivers to it. Both are
+// valid and both stay stored exactly as typed, but they are one person, so
+// anything asking "have we seen this person" compares this key, not the
+// address. Other subdomains (anderson.ucla.edu, ...) are separate mailboxes
+// and are left alone.
+const UCLA_GOOGLE_DOMAIN = /@g\.ucla\.edu$/;
+
+export function emailIdentityKey(raw) {
+  return normalizeEmail(raw).replace(UCLA_GOOGLE_DOMAIN, '@ucla.edu');
+}
+
+// Every stored spelling that emailIdentityKey treats as this address: the
+// address itself plus its g.ucla.edu / ucla.edu twin. For database lookups,
+// which match on the stored address.
+export function emailVariants(raw) {
+  const email = normalizeEmail(raw);
+  if (!email) return [];
+  const key = emailIdentityKey(email);
+  if (!key.endsWith('@ucla.edu')) return [email];
+  const google = key.replace(/@ucla\.edu$/, '@g.ucla.edu');
+  return email === key ? [email, google] : [email, key];
+}
+
 // Deliberately loose. This rejects what is obviously not an address so the
 // count of dropped rows means something; it is not an RFC 5322 validator, and a
 // one-time import is not the place to invent one.
@@ -44,7 +68,7 @@ export function detectEmailColumn(headers, override) {
 export function indexExistingEmails(existing) {
   const index = new Map();
   for (const { email, source } of existing) {
-    const key = normalizeEmail(email);
+    const key = emailIdentityKey(email);
     if (!key) continue;
     const sources = index.get(key);
     if (sources) sources.add(source);
@@ -87,19 +111,22 @@ export function dedupeMailingList({ records, emailColumn, existingIndex }) {
       continue;
     }
 
-    const firstSeenAt = seenInFile.get(email);
+    // joe@g.ucla.edu and joe@ucla.edu are one person, in the file and against
+    // the ATS alike. The row keeps the spelling it arrived with.
+    const identity = emailIdentityKey(email);
+    const firstSeenAt = seenInFile.get(identity);
     if (firstSeenAt !== undefined) {
       results.push({ ...base, outcome: OUTCOMES.DUPLICATE_IN_FILE, firstSeenAt });
       continue;
     }
 
-    const sources = existingIndex.get(email);
+    const sources = existingIndex.get(identity);
     if (sources) {
       results.push({ ...base, outcome: OUTCOMES.ALREADY_IN_SYSTEM, sources: [...sources].sort() });
       continue;
     }
 
-    seenInFile.set(email, record.__line);
+    seenInFile.set(identity, record.__line);
     results.push({ ...base, outcome: OUTCOMES.KEPT });
     kept.push(record);
   }
@@ -118,4 +145,40 @@ export function summarize(results) {
     for (const source of r.sources || []) bySource[source] = (bySource[source] || 0) + 1;
   }
   return { total: results.length, counts, bySource };
+}
+
+// Which columns hold a name, so an imported contact can be greeted by one.
+// Exports vary: some split first and last, some carry one "Name" column, some
+// have none at all. A contact with no name is still worth importing.
+export function detectNameColumns(headers) {
+  const lower = headers.map((h) => h.toLowerCase().trim());
+  const find = (...names) => {
+    const i = lower.findIndex((h) => names.includes(h));
+    return i === -1 ? null : headers[i];
+  };
+  return {
+    first: find('first name', 'firstname', 'first', 'given name'),
+    last: find('last name', 'lastname', 'last', 'surname', 'family name'),
+    full: find('name', 'full name', 'fullname'),
+  };
+}
+
+// Turns the rows that survived dedup into contacts ready to store. A single
+// name column is split on its first space, which is wrong for some names but
+// only ever feeds a {{firstName}} greeting.
+export function toContacts({ kept, emailColumn, nameColumns }) {
+  return kept.map((record) => {
+    let firstName = nameColumns.first ? record[nameColumns.first] : '';
+    let lastName = nameColumns.last ? record[nameColumns.last] : '';
+    if (!firstName && !lastName && nameColumns.full) {
+      const [first, ...rest] = String(record[nameColumns.full] || '').trim().split(/\s+/);
+      firstName = first || '';
+      lastName = rest.join(' ');
+    }
+    return {
+      email: normalizeEmail(record[emailColumn]),
+      firstName: firstName || null,
+      lastName: lastName || null,
+    };
+  });
 }

@@ -670,6 +670,7 @@ export async function loadAdminApplications(client, { page, limit, cycle } = {})
       isTransferStudent: app.isTransferStudent,
       resumeUrl: app.resumeUrl,
       coverLetterUrl: app.coverLetterUrl,
+      shortAnswer: app.shortAnswer,
       videoUrl: app.videoUrl,
       headshotUrl: app.headshotUrl,
       groupId: assignedGroup?.id || null,

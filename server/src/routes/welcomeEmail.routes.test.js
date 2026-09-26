@@ -183,7 +183,7 @@ describe('welcome email on verification', () => {
 
     // Which is what the preview page says, and the reason it does not say
     // "on signup": /register sent only the verification link above.
-    const applicant = renderEmailTemplatePreview('welcome-candidate');
+    const applicant = await renderEmailTemplatePreview('welcome-candidate');
     expect(applicant.trigger).toMatch(/verifies their address/);
     expect(applicant.trigger).toMatch(/only the verification link/);
   }, SIGNUP_TIMEOUT_MS);
@@ -269,7 +269,7 @@ describe('welcome email on the paths that skip verification', () => {
     // No verification was sent, and the preview page has to say so: this is the
     // one signup path where the welcome does not wait for anything.
     expect(sendEmailVerification).not.toHaveBeenCalled();
-    expect(renderEmailTemplatePreview('welcome-talent').trigger).toMatch(
+    expect((await renderEmailTemplatePreview('welcome-talent')).trigger).toMatch(
       /immediately when a Google account is created/
     );
   });
@@ -307,8 +307,8 @@ describe('welcome email on the paths that skip verification', () => {
     expect(sendEmailVerification).not.toHaveBeenCalled();
     // So the preview page says the member welcome skips verification, and keeps
     // members out of the verification email's audience entirely.
-    expect(renderEmailTemplatePreview('welcome-member').trigger).toMatch(/no verification step/);
-    expect(renderEmailTemplatePreview('email-verification').audience).toBe('Password signups');
+    expect((await renderEmailTemplatePreview('welcome-member')).trigger).toMatch(/no verification step/);
+    expect((await renderEmailTemplatePreview('email-verification')).audience).toBe('Password signups');
     expect(welcomeCall()).toMatchObject({
       email: 'member@ucla.edu',
       fullName: 'Pam Beesly',

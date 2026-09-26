@@ -15,6 +15,10 @@
 //
 // The mailing list is being retired, so this is expected to run once. It is
 // still safe to re-run: it only ever reads the ATS and writes a new Drive file.
+//
+// The dedup itself lives in src/services/mailingListDedup.js, shared with the
+// Mailing List tab in Master Communications. This file is the command line
+// around it: arguments, printing, and the Drive upload.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,14 +30,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: join(__dirname, '..', '.env') });
 
 const { default: prisma } = await import('../src/prismaClient.js');
-const { parseCsv, toCsv } = await import('../src/utils/csv.js');
-const {
-  detectEmailColumn,
-  indexExistingEmails,
-  dedupeMailingList,
-  summarize,
-  OUTCOMES,
-} = await import('../src/utils/mailingListImport.js');
+const { dedupeMailingListCsv } = await import('../src/services/mailingListDedup.js');
+const { OUTCOMES } = await import('../src/utils/mailingListImport.js');
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
@@ -55,49 +53,38 @@ const apply = flag('apply');
 const folderId = option('folder') || process.env.MARKETING_DRIVE_FOLDER_ID;
 const outPath = option('out');
 
-const { headers, records } = parseCsv(fs.readFileSync(resolved, 'utf-8'));
-const emailColumn = detectEmailColumn(headers, option('email-col'));
-
-console.log(`CSV:    ${resolved}`);
-console.log(`Rows:   ${records.length}`);
-console.log(`Email column: ${emailColumn || '(none found)'}`);
-console.log('');
-
-if (!emailColumn) {
-  const override = option('email-col');
-  if (override) {
-    console.error(`--email-col="${override}" matches no column in this file.`);
-  } else {
-    console.error('Could not find an email column.');
-  }
-  console.error('Headers:', headers);
-  console.error('Pass one explicitly, e.g. --email-col="Email Address"');
-  process.exit(1);
-}
-
 try {
-  // Every table holding a real person's address. DecisionMessage.email is left
-  // out on purpose: it is a copy of Application.email made when a decision is
-  // queued, so counting it would double-count the same person.
-  const [users, candidates, applications, meetingSignups] = await Promise.all([
-    prisma.user.findMany({ select: { email: true } }),
-    prisma.candidate.findMany({ select: { email: true } }),
-    prisma.application.findMany({ select: { email: true } }),
-    prisma.meetingSignup.findMany({ select: { email: true } }),
-  ]);
+  const {
+    headers, records, emailColumn, knownAddresses, results, kept, summary, csv,
+  } = await dedupeMailingListCsv({
+    content: fs.readFileSync(resolved, 'utf-8'),
+    emailColumnOverride: option('email-col'),
+  });
 
-  const existingIndex = indexExistingEmails([
-    ...users.map((u) => ({ email: u.email, source: 'user' })),
-    ...candidates.map((c) => ({ email: c.email, source: 'candidate' })),
-    ...applications.map((a) => ({ email: a.email, source: 'application' })),
-    ...meetingSignups.map((m) => ({ email: m.email, source: 'meeting-signup' })),
-  ]);
-
-  console.log(`Known addresses in the ATS: ${existingIndex.size}`);
+  console.log(`CSV:    ${resolved}`);
+  console.log(`Rows:   ${records.length}`);
+  console.log(`Email column: ${emailColumn || '(none found)'}`);
   console.log('');
 
-  const { results, kept } = dedupeMailingList({ records, emailColumn, existingIndex });
-  const { counts, bySource } = summarize(results);
+  if (!emailColumn) {
+    const override = option('email-col');
+    if (override) {
+      console.error(`--email-col="${override}" matches no column in this file.`);
+    } else {
+      console.error('Could not find an email column.');
+    }
+    console.error('Headers:', headers);
+    console.error('Pass one explicitly, e.g. --email-col="Email Address"');
+    // Exits past the finally below, so the disconnect is skipped. That is fine
+    // for a command line tool the OS is about to reap, and the alternative -
+    // threading a "stop here" flag through the rest of the run - buys nothing.
+    process.exit(1);
+  }
+
+  console.log(`Known addresses in the ATS: ${knownAddresses}`);
+  console.log('');
+
+  const { counts, bySource } = summary;
 
   const LABELS = [
     [OUTCOMES.KEPT, 'Kept (not in the ATS)'],
@@ -142,10 +129,6 @@ try {
     console.log('');
   }
 
-  // Write the survivors with the source file's columns untouched: whoever picks
-  // this file up later should see the list they recognise, minus the dropped rows.
-  const outputHeaders = headers.filter((h) => h !== '__line');
-  const csv = toCsv(outputHeaders, kept);
   const fileName = option('name')
     || `${path.basename(resolved, path.extname(resolved))}-deduped-${new Date().toISOString().slice(0, 10)}.csv`;
 

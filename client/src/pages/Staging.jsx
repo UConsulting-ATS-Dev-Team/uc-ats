@@ -92,6 +92,7 @@ import StagingLiveVoteSetupDialog from '../components/staging/StagingLiveVoteSet
 import RubricEditorDialog from '../components/staging/RubricEditorDialog';
 import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditorDialog';
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
+import { hasCoverLetter as hasCoverLetterSubmission } from '../utils/coverLetter';
 
 const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
 const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
@@ -200,7 +201,7 @@ const buildGradingMap = (adminApplications) => {
 
   (adminApplications || []).forEach(app => {
     const hasResume = Boolean(app.resumeUrl);
-    const hasCoverLetter = Boolean(app.coverLetterUrl);
+    const hasCoverLetter = hasCoverLetterSubmission(app);
     const hasVideo = Boolean(app.videoUrl);
 
     const hasResumeScore = Boolean(app.hasResumeScore);
@@ -451,7 +452,7 @@ const GradingStatusDisplay = ({ candidate, gradingData }) => {
   if (complete) {
     const tooltipText = `All available documents have been scored:
 ${hasResume ? '✓ Resume' : '✗ No Resume'}
-${hasCoverLetter ? '✓ Cover Letter' : '✗ No Cover Letter'}
+${hasCoverLetter ? '✓ Short Answer' : '✗ No Short Answer'}
 ${hasVideo ? '✓ Video' : '✗ No Video'}`;
     
     return (
@@ -463,12 +464,12 @@ ${hasVideo ? '✓ Video' : '✗ No Video'}`;
   
   const missingItems = [];
   if (hasResume && !hasResumeScore) missingItems.push('Resume Score');
-  if (hasCoverLetter && !hasCoverLetterScore) missingItems.push('Cover Letter Score');
+  if (hasCoverLetter && !hasCoverLetterScore) missingItems.push('Short Answer Score');
   if (hasVideo && !hasVideoScore) missingItems.push('Video Score');
   
   const tooltipText = `Grading Progress:
 ${hasResume ? (hasResumeScore ? '✓ Resume Scored' : '⏳ Resume Pending') : '✗ No Resume'}
-${hasCoverLetter ? (hasCoverLetterScore ? '✓ Cover Letter Scored' : '⏳ Cover Letter Pending') : '✗ No Cover Letter'}
+${hasCoverLetter ? (hasCoverLetterScore ? '✓ Short Answer Scored' : '⏳ Short Answer Pending') : '✗ No Short Answer'}
 ${hasVideo ? (hasVideoScore ? '✓ Video Scored' : '⏳ Video Pending') : '✗ No Video'}`;
   
   return (

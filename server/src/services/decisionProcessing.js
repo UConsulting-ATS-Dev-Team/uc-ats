@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../prismaClient.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 import { EXEC_ACCESS_ACTIONS, lockCandidateRecords } from './execAccess.js';
-import { defaultDecisionTemplates } from './decisionTemplates.js';
+import { decisionTemplatesForRound } from './decisionTemplates.js';
 import { ACCEPTED_ROUND, getRound, isFinalRound, nextRound } from '../utils/roundProgression.js';
 
 // "Process All Decisions" on Staging, for one round.
@@ -190,12 +190,18 @@ export async function processRoundDecisions({ cycle, round, processedBy }, clien
 
   const promotedUserIds = [];
 
+  // Read before the transaction opens. The wording is admin-editable now, so
+  // this is a query rather than a constant, and a write transaction should not
+  // be held open across it. A batch keeps whatever it was created with, so an
+  // edit landing a moment later belongs to the next batch, not this one.
+  const templates = await decisionTemplatesForRound(roundInfo.round, { client });
+
   const written = await client.$transaction(async (tx) => {
     const batch = await tx.decisionBatch.create({
       data: {
         cycleId: cycle.id,
         round: roundInfo.round,
-        templates: defaultDecisionTemplates(roundInfo.round),
+        templates,
         processedById: processedBy.id
       },
       select: { id: true }

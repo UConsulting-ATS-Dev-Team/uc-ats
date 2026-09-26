@@ -80,7 +80,9 @@ describe('ImageCache', () => {
     );
   });
 
-  it('does not send the Authorization header to external hosts', async () => {
+  it('sends neither the token nor credentials to external hosts', async () => {
+    // Supabase public storage answers `Access-Control-Allow-Origin: *`, which
+    // the browser refuses on a credentialed request.
     vi.stubGlobal('window', { location: { href: 'http://localhost:3001/', origin: 'http://localhost:3001' } });
 
     await ImageCache.loadImage('https://example.com/headshot.png', 'test-token');
@@ -89,7 +91,7 @@ describe('ImageCache', () => {
       'https://example.com/headshot.png',
       expect.objectContaining({
         headers: {},
-        credentials: 'include',
+        credentials: 'omit',
       })
     );
   });

@@ -11,6 +11,7 @@ export const COMMUNICATION_CATEGORIES = [
   'MEETING',              // coffee chat signup, cancellation, reschedule
   'INTERVIEW_SLOT',       // slot invitations, reminders, changes
   'REVIEWER_REMINDER',
+  'ACCOUNTABILITY_REMINDER', // members under their points target, sent by an admin
   'MASTER_COMMUNICATION', // composed by hand in Master Communications
   'DECISION_BATCH',       // queued by Process All Decisions, sent by an admin
   'TEST',                 // "send this to me first"
@@ -19,10 +20,14 @@ export const COMMUNICATION_CATEGORIES = [
 
 export const COMMUNICATION_CHANNELS = ['email', 'slack', 'imessage'];
 
-// SENT and FAILED mean what they say. OPENED is only ever an iMessage: the
-// server hands the conversation to the admin's Messages app and cannot observe
-// what happens next, so claiming it was sent would be a lie.
-export const COMMUNICATION_STATUSES = ['SENT', 'FAILED', 'OPENED'];
+// SENT means the provider accepted it; FAILED means it never left, or SES
+// refused it. OPENED means the server handed the message to the sender's own
+// app - an iMessage, or a GTKUC host's mailto: email to their signups - and
+// cannot observe what happens next, so claiming it was sent would be a lie.
+//
+// DELIVERED, DELAYED, BOUNCED and COMPLAINED arrive later, from SES through
+// /api/webhooks/ses (services/sesEvents.js), and only for email.
+export const COMMUNICATION_STATUSES = ['SENT', 'DELIVERED', 'DELAYED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED'];
 
 const BODY_PREVIEW_LIMIT = 2000;
 

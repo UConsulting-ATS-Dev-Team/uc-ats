@@ -941,6 +941,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             </div>
           </div>
 
+          {application.shortAnswer?.trim() && (
+            <div className="info-section">
+              <h2 className="section-title">Short Answer</h2>
+              <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, margin: 0 }}>
+                {application.shortAnswer.trim()}
+              </p>
+            </div>
+          )}
+
           {/* Event Attendance */}
           <div className="info-section">
             <h2 className="section-title">Event Attendance</h2>

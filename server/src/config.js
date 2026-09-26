@@ -56,6 +56,11 @@ const config = {
   // already voted, so change it between sessions.
   liveVoteSecret: process.env.LIVE_VOTE_SECRET || process.env.JWT_SECRET,
 
+  // Signs the unsubscribe links in Master Communications footers. Falls back to
+  // jwtSecret. Rotating it breaks every unsubscribe link already in an inbox,
+  // so set it once and leave it.
+  unsubscribeSecret: process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET,
+
   memberRegistrationToken: process.env.MEMBER_REGISTRATION_TOKEN,
 
   dbUrl: process.env.DATABASE_URL,
