@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -102,7 +102,7 @@ const formatHour = (value) => {
   return `${hour}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 };
 
-export default function InterviewCreateDialog({ open, onClose, onCreated }) {
+export default function InterviewCreateDialog({ open, onClose, onCreated, defaultType = 'COFFEE_CHAT' }) {
   const [interviewType, setInterviewType] = useState('COFFEE_CHAT');
   const [title, setTitle] = useState('');
   const [day, setDay] = useState('');
@@ -131,6 +131,16 @@ export default function InterviewCreateDialog({ open, onClose, onCreated }) {
       setCadence(defaultCadence(next));
     }
   };
+
+  // Opened from a round's tab, the dialog starts on that round. Only on open,
+  // so a choice made inside the dialog is never overwritten while it is up.
+  useEffect(() => {
+    if (!open) return;
+    // ROUND_TWO is the legacy name for the final round, and not on offer here.
+    const type = defaultType === 'ROUND_TWO' ? 'FINAL_ROUND' : defaultType;
+    chooseType(TYPE_LABEL[type] ? type : 'COFFEE_CHAT');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultType]);
 
   const cadencePreview = useMemo(() => (mode === 'cadence' ? previewCadence(cadence) : []), [mode, cadence]);
   const parallel = Math.max(1, Math.min(12, Number(cadence.parallel) || 1));

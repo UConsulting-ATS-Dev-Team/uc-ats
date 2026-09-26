@@ -50,6 +50,19 @@ describe('InterviewCreateDialog', () => {
     expect(screen.getByText('2 sessions')).toBeInTheDocument();
   });
 
+  it('starts on the round it was opened from', async () => {
+    // Opened from the First Round tab, a dialog that says Coffee Chat makes a
+    // coffee chat unless somebody notices.
+    open({ defaultType: 'ROUND_ONE' });
+    expect(screen.getByLabelText(/^round/i)).toHaveTextContent('First Round');
+    expect(await screen.findByText(/No sessions are created yet/)).toBeInTheDocument();
+  });
+
+  it('opens the legacy final round type as Final Round', () => {
+    open({ defaultType: 'ROUND_TWO' });
+    expect(screen.getByLabelText(/^round/i)).toHaveTextContent('Final Round');
+  });
+
   it('opens first round as a time frame with no sessions', async () => {
     // Groups come after availability: how many run at once depends on how many
     // interviewers are free, so creating thirteen unnamed hourly sessions up
