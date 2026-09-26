@@ -9,6 +9,8 @@ vi.mock('../prismaClient.js', () => ({
     emailTemplateCopy: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     emailTheme: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     emailTemplateStyle: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
+    emailSignature: { findMany: vi.fn(), findUnique: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+    $transaction: vi.fn(),
     $disconnect: vi.fn(),
   },
 }));
@@ -82,6 +84,10 @@ describe('/api/admin/email-templates', () => {
     prisma.emailTemplateStyle.findMany.mockResolvedValue([]);
     prisma.emailTemplateStyle.upsert.mockResolvedValue({});
     prisma.emailTemplateStyle.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.emailSignature.findMany.mockResolvedValue([]);
+    prisma.emailSignature.create.mockImplementation(({ data }) => ({ id: '11111111-1111-1111-1111-111111111111', ...data }));
+    prisma.$transaction.mockImplementation((fn) => fn(prisma));
+    sendMail.mockResolvedValue({ messageId: 'ses-test' });
   });
 
   function request(path, token, init = {}) {
@@ -423,6 +429,103 @@ describe('/api/admin/email-templates', () => {
     it('refuses a draft that could never be saved', async () => {
       const res = await post('/password-reset/preview', tokenFor(adminUser), { theme: { logoUrl: 'http://x.test/a.png' } });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('signatures', () => {
+    const SIGNATURE = { id: '22222222-2222-2222-2222-222222222222', name: 'External VP', body: 'Best,\n**Ryan**', imageUrl: null, isDefault: true };
+
+    it('creates one', async () => {
+      const res = await post('/signatures', tokenFor(adminUser), { signature: { name: 'External VP', body: 'Best,\nRyan' } });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).name).toBe('External VP');
+    });
+
+    it('refuses HTML in the body and saves nothing', async () => {
+      const res = await post('/signatures', tokenFor(adminUser), { signature: { name: 'X', body: '<img src=x onerror=1>' } });
+
+      expect(res.status).toBe(400);
+      expect(prisma.emailSignature.create).not.toHaveBeenCalled();
+    });
+
+    it('is admin-only', async () => {
+      expect((await get('/signatures', tokenFor(memberUser))).status).toBe(403);
+      expect((await post('/signatures', tokenFor(memberUser), { signature: { name: 'X', body: 'y' } })).status).toBe(403);
+    });
+
+    it('ends every email with the default signature in place of its own sign-off', async () => {
+      prisma.emailSignature.findMany.mockResolvedValue([SIGNATURE]);
+
+      const reset = await (await get('/password-reset/preview', tokenFor(adminUser))).json();
+      const slot = await (await get('/slot-confirmation/preview', tokenFor(adminUser))).json();
+
+      expect(reset.html).toContain('<strong>Ryan</strong>');
+      expect(reset.html).not.toContain('UConsulting ATS Team');
+      expect(slot.html).toContain('<strong>Ryan</strong>');
+    });
+
+    it('leaves the decision letters, whose closing is part of the letter, alone', async () => {
+      prisma.emailSignature.findMany.mockResolvedValue([SIGNATURE]);
+      const body = await (await get('/decision-round-1-rejected/preview', tokenFor(adminUser))).json();
+      expect(body.html).not.toContain('<strong>Ryan</strong>');
+    });
+
+    it('lets one email keep its own sign-off', async () => {
+      prisma.emailSignature.findMany.mockResolvedValue([SIGNATURE]);
+      prisma.emailTemplateStyle.findMany.mockResolvedValue([{ templateKey: 'password-reset', signatureId: 'OWN' }]);
+
+      const body = await (await get('/password-reset/preview', tokenFor(adminUser))).json();
+      expect(body.html).toContain('UConsulting ATS Team');
+    });
+
+    it('will not point an email at a signature that does not exist', async () => {
+      prisma.emailSignature.findUnique.mockResolvedValue(null);
+      const res = await put('/password-reset/style', tokenFor(adminUser), {
+        style: { signatureId: '33333333-3333-3333-3333-333333333333' },
+      });
+      expect(res.status).toBe(400);
+      expect(prisma.emailTemplateStyle.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('previewing unsaved wording', () => {
+    it('renders the words in the editor, and stores nothing', async () => {
+      const res = await post('/rsvp-confirmation/preview', tokenFor(adminUser), { copy: { heading: 'Draft heading' } });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).html).toContain('Draft heading');
+      expect(prisma.emailTemplateCopy.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses wording a save would refuse', async () => {
+      const res = await post('/rsvp-confirmation/preview', tokenFor(adminUser), { copy: { heading: 'Hi {{nope}}' } });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('sending a test', () => {
+    it('sends to the admin asking and nobody else, marked as a test', async () => {
+      const res = await post('/password-reset/test', tokenFor(adminUser), {});
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sentTo: adminUser.email });
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      const mail = sendMail.mock.calls[0][0];
+      expect(mail.to).toBe(adminUser.email);
+      expect(mail.subject).toMatch(/^\[TEST\] /);
+      expect(mail.html).toContain('Test email');
+      expect(mail.attachments).toBeUndefined();
+    });
+
+    it('can send unsaved changes', async () => {
+      await post('/password-reset/test', tokenFor(adminUser), { copy: { heading: 'Unsaved heading' } });
+      expect(sendMail.mock.calls[0][0].html).toContain('Unsaved heading');
+    });
+
+    it('is admin-only', async () => {
+      expect((await post('/password-reset/test', tokenFor(memberUser), {})).status).toBe(403);
+      expect(sendMail).not.toHaveBeenCalled();
     });
   });
 });

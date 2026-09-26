@@ -36,6 +36,22 @@ const TONE_LABELS = {
 };
 
 const CUSTOM = 'custom';
+const DEFAULT_SIGNATURE = '__default__';
+
+const defaultSignature = (signatures) => signatures?.find((s) => s.isDefault) ?? null;
+
+// A stored id whose signature was deleted behaves as unset on the server, so
+// it is shown and saved as unset here too - saving it back would be refused.
+const liveSignatureId = (id, signatures) =>
+  id && id !== 'OWN' && signatures && !signatures.some((s) => s.id === id) ? null : id ?? null;
+
+function signatureHelp(signatureId, signatures) {
+  if (signatureId === 'OWN') return 'Ends with the sign-off in its wording (Edit wording tab).';
+  if (signatureId && signatures && !signatures.some((s) => s.id === signatureId)) {
+    return 'That signature was deleted, so this email uses the default.';
+  }
+  return 'Manage signatures in the Signatures tab at the top of the page.';
+}
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
@@ -46,6 +62,23 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saved, setSaved] = useState(false);
+  // null until loaded, so "not loaded" and "none exist" stay different.
+  const [signatures, setSignatures] = useState(null);
+
+  // The picker's options. A failure only costs the list; the email's own
+  // sign-off and the default stay choosable.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get('/admin/email-templates/signatures')
+      .then((data) => {
+        if (!cancelled) setSignatures(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +103,11 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
   }, [templateKey]);
 
   const dirty = useMemo(
-    () => Boolean(style && draft) && (draft.format !== style.values.format || draft.banner !== style.values.banner),
+    () =>
+      Boolean(style && draft) &&
+      (draft.format !== style.values.format ||
+        draft.banner !== style.values.banner ||
+        (draft.signatureId ?? null) !== (style.values.signatureId ?? null)),
     [style, draft]
   );
 
@@ -103,7 +140,10 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
 
   const save = () =>
     run(
-      () => apiClient.put(`/admin/email-templates/${encodeURIComponent(templateKey)}/style`, { style: draft }),
+      () =>
+        apiClient.put(`/admin/email-templates/${encodeURIComponent(templateKey)}/style`, {
+          style: { ...draft, signatureId: liveSignatureId(draft.signatureId, signatures) },
+        }),
       'Failed to save this style'
     );
 
@@ -129,14 +169,13 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
     <Box
       sx={{
         display: 'grid',
-        // This sits inside the detail panel, beside the template list, so it
-        // only has room for the email next to the controls on a wide screen.
-        gridTemplateColumns: { xs: '1fr', xl: 'minmax(260px, 300px) 1fr' },
+        // Beside the controls from a laptop width up, at near phone width.
+        gridTemplateColumns: { xs: '1fr', lg: 'minmax(260px, 300px) 1fr' },
         gap: 3,
         alignItems: 'start',
       }}
     >
-      <Stack spacing={2.5} sx={{ maxWidth: 440 }}>
+      <Stack spacing={2.5} sx={{ maxWidth: { xs: 440, lg: 'none' } }}>
         <FormControl>
           <FormLabel id="email-format-label">Format</FormLabel>
           <RadioGroup
@@ -216,6 +255,33 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
             </Stack>
           )}
         </Box>
+
+        {style.takesSignature ? (
+          <TextField
+            select
+            fullWidth
+            label="Signature"
+            value={liveSignatureId(draft.signatureId, signatures) ?? DEFAULT_SIGNATURE}
+            onChange={(event) =>
+              update({ signatureId: event.target.value === DEFAULT_SIGNATURE ? null : event.target.value })
+            }
+            helperText={signatureHelp(draft.signatureId, signatures)}
+          >
+            <MenuItem value={DEFAULT_SIGNATURE}>
+              {defaultSignature(signatures) ? `Default (${defaultSignature(signatures).name})` : 'Default (none set yet: its own sign-off)'}
+            </MenuItem>
+            <MenuItem value="OWN">This email&apos;s own sign-off</MenuItem>
+            {(signatures ?? []).map((signature) => (
+              <MenuItem key={signature.id} value={signature.id}>
+                {signature.name}
+              </MenuItem>
+            ))}
+          </TextField>
+        ) : (
+          <Typography variant="caption" color="text.secondary">
+            This email&apos;s closing is part of its wording, so signatures do not apply to it.
+          </Typography>
+        )}
 
         <Typography variant="caption" color="text.secondary">
           Brand, logo, fonts and footer are shared by every email. Change them in the Theme tab

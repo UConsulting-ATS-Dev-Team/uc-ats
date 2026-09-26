@@ -1,6 +1,7 @@
 import {
   TEMPLATE_BUILDERS,
   SLOT_EMAIL_TYPES,
+  sendEmail,
   renderInterviewSlotEmail,
   slotNotificationSubject,
 } from './emailNotifications.js';
@@ -9,10 +10,13 @@ import {
   DECISION_COPY_KEY,
   DECISION_ROUND_OUTCOMES,
   customizedTemplateKeys,
+  normalizeCopy,
   isEditableTemplate,
   slotCopyKey,
 } from './emailTemplateCopy.js';
-import { htmlToPlainText, withDraftPresentation } from './emailLayout.js';
+import { htmlToPlainText, withTestBanner } from './emailLayout.js';
+import { withEmailDraft } from './emailDrafts.js';
+import { normalizeSignature } from './emailSignatures.js';
 import { THEME_DEFAULTS, normalizeTheme } from './emailTheme.js';
 import { defaultStyle, normalizeStyle, resolveEmailStyle, styledTemplateKeys } from './emailTemplateStyle.js';
 import config from '../config.js';
@@ -672,10 +676,10 @@ export async function listEmailTemplates({ client } = {}) {
  * the one thing a preview cannot show, so a template that carries one says so
  * in `alsoAttaches`.
  *
- * `draft` renders with a theme or style that is not saved yet, so the Theme
- * and Style editors can show a change before anyone commits to it. Both are
- * validated exactly as a save would be, and an invalid draft is refused rather
- * than previewed as something that could never be sent.
+ * `draft` renders with edits that are not saved yet - `{ theme, style, copy,
+ * signature }`, any of them - so every editor can show a change before anyone
+ * commits to it. Each is validated exactly as a save would be, and an invalid
+ * draft is refused rather than previewed as something that could never be sent.
  */
 export async function renderEmailTemplatePreview(key, { draft = null } = {}) {
   const entry = CATALOG_BY_KEY.get(key);
@@ -685,13 +689,51 @@ export async function renderEmailTemplatePreview(key, { draft = null } = {}) {
   const style = draft?.style
     ? { ...defaultStyle(entry.copyKey), ...normalizeStyle(entry.copyKey, draft.style) }
     : await resolveEmailStyle(entry.copyKey);
+  const copy = draft?.copy ? normalizeCopy(entry.copyKey, draft.copy) : null;
+  const signature = draft?.signature ? normalizeSignature({ name: 'Draft', ...draft.signature }) : null;
 
-  const { subject, html } = await withDraftPresentation(
-    { theme, styles: draft?.style ? { [entry.copyKey]: style } : null },
+  const { subject, html } = await withEmailDraft(
+    {
+      theme,
+      styles: draft?.style ? { [entry.copyKey]: style } : null,
+      copy: copy ? { [entry.copyKey]: copy } : null,
+      signature: signature ? { body: signature.body, imageUrl: signature.imageUrl } : null,
+    },
     () => entry.render()
   );
 
   return { ...describe(entry), subject, html, text: htmlToPlainText(html), format: style.format };
+}
+
+/**
+ * Sends one template, as it would go out now, to the admin asking - with the
+ * sample names and links, and a banner saying so. Unsaved edits can ride along
+ * the same way a preview takes them, so "does this look right in Gmail" can be
+ * answered before saving.
+ *
+ * Logged as a TEST send, triggered by that admin. Attachments are left off:
+ * a sample calendar invite for a meeting that does not exist would land in
+ * the admin's real calendar.
+ */
+export async function sendEmailTemplateTest(key, { user, draft = null }) {
+  if (!user?.email) {
+    throw Object.assign(new Error('No email address on your account'), { status: 400 });
+  }
+  const preview = await renderEmailTemplatePreview(key, { draft });
+  const html = withTestBanner(
+    preview.html,
+    'only you received this. Names, dates and links are samples.'
+  );
+  const result = await sendEmail(user.email, `[TEST] ${preview.subject}`, html, [], {
+    category: 'TEST',
+    trigger: 'MANUAL',
+    recipientName: user.fullName ?? null,
+    triggeredById: user.id,
+  });
+  if (!result.success) {
+    throw Object.assign(new Error(result.error || 'The test email could not be sent'), { status: 502 });
+  }
+  return { sentTo: user.email };
 }
 
 export { TEMPLATE_CATALOG };

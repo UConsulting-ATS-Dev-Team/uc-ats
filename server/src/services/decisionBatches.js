@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendEmail } from './emailNotifications.js';
 import { DECISION_OUTCOMES, outcomeLabel, renderDecisionLetter } from './decisionTemplates.js';
+import { withTestBanner } from './emailLayout.js';
 import { getRound } from '../utils/roundProgression.js';
 import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
 
@@ -233,14 +234,10 @@ export async function sendDecisionTest({ batchId, outcome, user }, client = pris
   const { subject, html } = await renderDecisionLetter(template, recipient, await renderContext(batch, client, { preview: true }), outcome);
 
   const name = [recipient.firstName, recipient.lastName].filter(Boolean).join(' ');
-  const banner =
-    '<div style="background:#fff4e5;border:1px solid #ffb74d;border-radius:6px;padding:12px;margin-bottom:16px;font-family:sans-serif;font-size:13px;color:#663c00;">' +
-    `<strong>Test email</strong> - nobody else received this. Merge fields were filled in for ${name || 'a sample recipient'}.` +
-    '</div>';
-
-  // Inside <body>, not in front of the document: before a doctype it is
-  // invalid markup that some clients drop entirely.
-  const withBanner = /<body[^>]*>/i.test(html) ? html.replace(/(<body[^>]*>)/i, `$1${banner}`) : banner + html;
+  const withBanner = withTestBanner(
+    html,
+    `nobody else received this. Merge fields were filled in for ${name || 'a sample recipient'}.`
+  );
 
   const result = await sendEmail(user.email, `[TEST] ${subject}`, withBanner, [], {
     category: 'TEST',

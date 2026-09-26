@@ -14,8 +14,8 @@ import {
   htmlToPlainText,
   part,
   renderEmailLayout,
-  withDraftPresentation,
 } from './emailLayout.js';
+import { withEmailDraft } from './emailDrafts.js';
 
 const theme = { ...THEME_DEFAULTS };
 const designed = { format: 'DESIGNED', banner: 'brand' };
@@ -176,7 +176,7 @@ describe('composeEmail', () => {
   });
 
   it('renders an unsaved draft without reading the database', async () => {
-    const email = await withDraftPresentation(
+    const email = await withEmailDraft(
       { theme: { ...theme, accentColor: '#abcdef' }, styles: { 'password-reset': plain } },
       () => composeEmail('password-reset', { subject: 'S', parts: [part.button('https://x.test', 'Go')] })
     );

@@ -11,6 +11,8 @@ import {
 } from '@mui/material';
 import { RestartAlt as RestartAltIcon, Save as SaveIcon } from '@mui/icons-material';
 import apiClient from '../utils/api';
+import useDraftPreview from '../hooks/useDraftPreview';
+import EmailPreviewFrame from './EmailPreviewFrame';
 
 /**
  * The wording of one automatic email, in boxes an admin can type into.
@@ -28,7 +30,7 @@ import apiClient from '../utils/api';
 
 const FIELD_ROWS = { signoff: 2, block: 4 };
 
-export default function EmailTemplateEditor({ templateKey, onSaved }) {
+export default function EmailTemplateEditor({ templateKey, previewKey = null, onSaved }) {
   const [copy, setCopy] = useState(null);
   const [draft, setDraft] = useState({});
   const [loading, setLoading] = useState(true);
@@ -82,6 +84,10 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
     return copy.fields.some((field) => (draft[field.name] ?? '') !== effective(field));
   }, [copy, draft]);
 
+  // What the boxes say right now, rendered by the server as it would be sent.
+  // Starts as soon as the wording loads, so the frame is never empty.
+  const preview = useDraftPreview(previewKey, copy ? { copy: draft } : null);
+
   const setField = (name, value) => {
     setDraft((current) => ({ ...current, [name]: value }));
     setSaved(false);
@@ -127,94 +133,111 @@ export default function EmailTemplateEditor({ templateKey, onSaved }) {
   if (!copy) return null;
 
   return (
-    <Stack spacing={2.5}>
-      <Box>
-        <Typography variant="body2" color="text.secondary">
-          Change what this email says. The layout, the boxes built from a candidate&apos;s own
-          details, the buttons and any attachment are drawn by the ATS and are not editable
-          here — so an edit can change the words and cannot stop the email working.
-        </Typography>
-        {copy.mergeFields.length > 0 && (
-          <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5, mt: 0.4 }}>
-              Fill-ins you can use:
-            </Typography>
-            {copy.mergeFields.map((name) => (
-              <Chip
-                key={name}
-                size="small"
-                variant="outlined"
-                label={`{{${name}}}`}
-                sx={{ fontFamily: 'monospace' }}
-              />
-            ))}
-          </Stack>
-        )}
-      </Box>
-
-      {copy.fields.map((field) => {
-        const value = draft[field.name] ?? '';
-        const changed = value.trim() !== field.default.trim();
-
-        return (
-          <Box key={field.name}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-              <Typography variant="subtitle2">{field.label}</Typography>
-              {changed && <Chip size="small" color="warning" variant="outlined" label="Changed" />}
-              {changed && (
-                <Button
-                  size="small"
-                  onClick={() => setField(field.name, field.default)}
-                  sx={{ minWidth: 0 }}
-                >
-                  Undo
-                </Button>
-              )}
-            </Stack>
-            <TextField
-              fullWidth
-              multiline={field.type !== 'line'}
-              minRows={FIELD_ROWS[field.type] ?? 1}
-              value={value}
-              onChange={(event) => setField(field.name, event.target.value)}
-              helperText={field.help || undefined}
-              slotProps={{ htmlInput: { 'aria-label': field.label } }}
-            />
-          </Box>
-        );
-      })}
-
-      {saveError && <Alert severity="error">{saveError}</Alert>}
-      {saved && !dirty && (
-        <Alert severity="success">
-          Saved. The preview above now shows what this email will say.
-        </Alert>
-      )}
-
-      <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-        <Button
-          variant="contained"
-          startIcon={<SaveIcon />}
-          disabled={saving || !dirty}
-          onClick={save}
-        >
-          Save wording
-        </Button>
-        <Button
-          startIcon={<RestartAltIcon />}
-          color="inherit"
-          disabled={saving || !copy.customized}
-          onClick={resetAll}
-        >
-          Restore the original
-        </Button>
-        {saving && <CircularProgress size={20} />}
-        {copy.customized && !saving && (
-          <Typography variant="caption" color="text.secondary">
-            Edited{copy.updatedAt ? ` on ${new Date(copy.updatedAt).toLocaleDateString()}` : ''}
+    <Box
+      sx={{
+        display: 'grid',
+        // Beside the boxes from a laptop width up, so a change shows while the
+        // box is still in view. The email then renders near phone width, which
+        // is how most people read it anyway.
+        gridTemplateColumns: { xs: '1fr', lg: previewKey ? 'minmax(300px, 1fr) minmax(340px, 1fr)' : '1fr' },
+        gap: 3,
+        alignItems: 'start',
+      }}
+    >
+      <Stack spacing={2.5}>
+        <Box>
+          <Typography variant="body2" color="text.secondary">
+            Change what this email says. The layout, the boxes built from a candidate&apos;s own
+            details, the buttons and any attachment are drawn by the ATS and are not editable
+            here — so an edit can change the words and cannot stop the email working.
           </Typography>
+          {copy.mergeFields.length > 0 && (
+            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5, mt: 0.4 }}>
+                Fill-ins you can use:
+              </Typography>
+              {copy.mergeFields.map((name) => (
+                <Chip
+                  key={name}
+                  size="small"
+                  variant="outlined"
+                  label={`{{${name}}}`}
+                  sx={{ fontFamily: 'monospace' }}
+                />
+              ))}
+            </Stack>
+          )}
+        </Box>
+
+        {copy.fields.map((field) => {
+          const value = draft[field.name] ?? '';
+          const changed = value.trim() !== field.default.trim();
+
+          return (
+            <Box key={field.name}>
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+                <Typography variant="subtitle2">{field.label}</Typography>
+                {changed && <Chip size="small" color="warning" variant="outlined" label="Changed" />}
+                {changed && (
+                  <Button
+                    size="small"
+                    onClick={() => setField(field.name, field.default)}
+                    sx={{ minWidth: 0 }}
+                  >
+                    Undo
+                  </Button>
+                )}
+              </Stack>
+              <TextField
+                fullWidth
+                multiline={field.type !== 'line'}
+                minRows={FIELD_ROWS[field.type] ?? 1}
+                value={value}
+                onChange={(event) => setField(field.name, event.target.value)}
+                helperText={field.help || undefined}
+                slotProps={{ htmlInput: { 'aria-label': field.label } }}
+              />
+            </Box>
+          );
+        })}
+
+        {saveError && <Alert severity="error">{saveError}</Alert>}
+        {saved && !dirty && (
+          <Alert severity="success">
+            Saved. The next one of these emails says this.
+          </Alert>
         )}
+
+        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Button
+            variant="contained"
+            startIcon={<SaveIcon />}
+            disabled={saving || !dirty}
+            onClick={save}
+          >
+            Save wording
+          </Button>
+          <Button
+            startIcon={<RestartAltIcon />}
+            color="inherit"
+            disabled={saving || !copy.customized}
+            onClick={resetAll}
+          >
+            Restore the original
+          </Button>
+          {saving && <CircularProgress size={20} />}
+          {copy.customized && !saving && (
+            <Typography variant="caption" color="text.secondary">
+              Edited{copy.updatedAt ? ` on ${new Date(copy.updatedAt).toLocaleDateString()}` : ''}
+            </Typography>
+          )}
+        </Stack>
       </Stack>
-    </Stack>
+      {previewKey && (
+        <Box sx={{ position: { lg: 'sticky' }, top: { lg: 16 } }}>
+          <EmailPreviewFrame preview={preview} height={{ xs: 420, lg: '70vh' }} />
+        </Box>
+      )}
+    </Box>
   );
 }

@@ -355,9 +355,20 @@ The system follows a **recruiting cycle-based workflow**:
   migration: a send never fails on presentation.
 - `sendEmail` adds a `text/plain` part to every message, derived from the HTML with
   `htmlToPlainText`, so the two can never disagree. That includes Master Communications.
-- Previews can render an unsaved theme or style (`POST /:key/preview` with
-  `{ theme, style }`), validated as a save would be. The draft reaches the builders
-  through `withDraftPresentation` (AsyncLocalStorage), never on a send path.
+- **Signatures** (`EmailSignature`, [emailSignatures.js](server/src/services/emailSignatures.js))
+  are named Markdown sign-offs. An email's `EmailTemplateStyle.signatureId` picks one:
+  null follows the default signature (or the email's own sign-off if none is default),
+  `'OWN'` always keeps its own, an id picks that one and falls back like null once it is
+  deleted. A signature **replaces** the `signOff` part and is never added beside it, so an
+  email with no `signOff` part - the decision letters - is untouched. At most one default,
+  enforced by a partial unique index; setting one clears the old in the same transaction.
+- Previews render unsaved edits (`POST /:key/preview` with any of `{ theme, style, copy,
+  signature }`), each validated as a save would be. Drafts reach the resolvers through
+  [emailDrafts.js](server/src/services/emailDrafts.js) (AsyncLocalStorage), which only the
+  preview service enters, so a draft can never reach a real send.
+- `POST /:key/test` sends one template with sample data, and optionally a draft, to the
+  requesting admin only, logged as a `TEST` send, with no attachments (a sample calendar
+  invite would land in the admin's real calendar).
 
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an

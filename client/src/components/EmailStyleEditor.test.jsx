@@ -11,8 +11,9 @@ import apiClient from '../utils/api';
 
 const STYLE = {
   key: 'application-rejection',
-  defaults: { format: 'DESIGNED', banner: 'danger' },
-  values: { format: 'DESIGNED', banner: 'danger' },
+  takesSignature: true,
+  defaults: { format: 'DESIGNED', banner: 'danger', signatureId: null },
+  values: { format: 'DESIGNED', banner: 'danger', signatureId: null },
   formats: ['DESIGNED', 'PLAIN'],
   tones: ['brand', 'success', 'danger', 'warning', 'info'],
   customized: false,
@@ -21,9 +22,16 @@ const STYLE = {
 
 const PREVIEW = { key: 'application-rejection', label: 'Application rejected', subject: 'Update', html: '<p>x</p>' };
 
+const SIGNATURES = [
+  { id: 'sig-team', name: 'Recruitment Team', body: 'The team', imageUrl: null, isDefault: true },
+  { id: 'sig-vp', name: 'External VP', body: 'Ryan', imageUrl: null, isDefault: false },
+];
+
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(apiClient, 'get').mockResolvedValue(STYLE);
+  vi.spyOn(apiClient, 'get').mockImplementation((url) =>
+    Promise.resolve(url.endsWith('/signatures') ? SIGNATURES : STYLE)
+  );
   vi.spyOn(apiClient, 'post').mockResolvedValue(PREVIEW);
   vi.spyOn(apiClient, 'put').mockResolvedValue({ ...STYLE, values: { format: 'PLAIN', banner: 'danger' }, customized: true });
   vi.spyOn(apiClient, 'delete').mockResolvedValue(STYLE);
@@ -47,8 +55,10 @@ describe('EmailStyleEditor', () => {
 
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith('/admin/email-templates/application-rejection/preview', {
-        style: { format: 'PLAIN', banner: 'danger' },
-      })
+        style: { format: 'PLAIN', banner: 'danger', signatureId: null },
+      }),
+      // The preview is debounced (350ms); leave room for a busy test run.
+      { timeout: 3000 }
     );
     expect(apiClient.put).not.toHaveBeenCalled();
   });
@@ -59,7 +69,7 @@ describe('EmailStyleEditor', () => {
     await userEvent.click(screen.getByRole('button', { name: /save style/i }));
 
     expect(apiClient.put).toHaveBeenCalledWith('/admin/email-templates/application-rejection/style', {
-      style: { format: 'PLAIN', banner: 'danger' },
+      style: { format: 'PLAIN', banner: 'danger', signatureId: null },
     });
     expect(await screen.findByText(/next one of these emails goes out like this/i)).toBeInTheDocument();
   });
@@ -75,6 +85,43 @@ describe('EmailStyleEditor', () => {
 
     expect(screen.getByRole('button', { name: /save style/i })).toBeDisabled();
     expect(screen.getByText('Like #0C74C1')).toBeInTheDocument();
+  });
+
+  it('picks a signature by name, naming the default', async () => {
+    renderEditor();
+    await userEvent.click(await screen.findByLabelText('Signature'));
+    const options = within(screen.getByRole('listbox'));
+
+    expect(options.getByText('Default (Recruitment Team)')).toBeInTheDocument();
+    await userEvent.click(options.getByText('External VP'));
+    await userEvent.click(screen.getByRole('button', { name: /save style/i }));
+
+    expect(apiClient.put.mock.calls[0][1].style.signatureId).toBe('sig-vp');
+  });
+
+  it('saves a signature that was since deleted as "use the default", which the server accepts', async () => {
+    apiClient.get.mockImplementation((url) =>
+      Promise.resolve(
+        url.endsWith('/signatures')
+          ? SIGNATURES
+          : { ...STYLE, values: { ...STYLE.values, signatureId: 'deleted-id' } }
+      )
+    );
+    renderEditor();
+    await userEvent.click(await screen.findByRole('radio', { name: /plain/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save style/i }));
+
+    expect(apiClient.put.mock.calls[0][1].style.signatureId).toBeNull();
+  });
+
+  it('says why a decision letter has no signature choice', async () => {
+    apiClient.get.mockImplementation((url) =>
+      Promise.resolve(url.endsWith('/signatures') ? SIGNATURES : { ...STYLE, takesSignature: false })
+    );
+    renderEditor();
+
+    expect(await screen.findByText(/closing is part of its wording/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Signature')).not.toBeInTheDocument();
   });
 
   it('turns the header colour off for a Plain email, which has no header', async () => {

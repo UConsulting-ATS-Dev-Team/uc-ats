@@ -1,5 +1,6 @@
 import prisma from '../prismaClient.js';
 import { mergeFieldsUsed } from './emailCopyRender.js';
+import { currentEmailDraft } from './emailDrafts.js';
 
 /**
  * The wording of every automatic email, in one place, with an admin able to
@@ -849,6 +850,8 @@ async function readRows(client, where) {
  */
 export async function resolveEmailCopy(key, { client = prisma } = {}) {
   templateOrThrow(key);
+  const draft = currentEmailDraft()?.copy?.[key];
+  if (draft) return { ...defaultCopy(key), ...draft };
   const rows = await readRows(client, { templateKey: key });
   return { ...defaultCopy(key), ...storedCopy(key, rows?.[0]) };
 }
@@ -863,7 +866,10 @@ export async function resolveEmailCopyMany(keys, { client = prisma } = {}) {
   const wanted = [...new Set(keys)].filter(isEditableTemplate);
   const rows = await readRows(client, { templateKey: { in: wanted } });
   const byKey = new Map((rows ?? []).map((row) => [row.templateKey, row]));
-  return new Map(wanted.map((key) => [key, { ...defaultCopy(key), ...storedCopy(key, byKey.get(key)) }]));
+  const drafts = currentEmailDraft()?.copy ?? {};
+  return new Map(
+    wanted.map((key) => [key, { ...defaultCopy(key), ...(drafts[key] ?? storedCopy(key, byKey.get(key))) }])
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -929,30 +935,39 @@ export function normalizeCopy(key, input) {
       );
     }
 
-    // The editor promises that an edit changes the words and not the layout.
-    // HTML in a field would make that false, so it is refused here rather than
-    // quietly escaped - somebody who typed a <div> meant it, and should be told
-    // it is not going to work.
-    if (HTML_TAG.test(text)) {
-      throw fail(
-        400,
-        `${field.label} contains HTML. Write plain text, or Markdown for bold and links.`,
-        'HTML_NOT_ALLOWED'
-      );
-    }
-
-    for (const pattern of MARKDOWN_LINKS) {
-      for (const [, href] of text.matchAll(pattern)) {
-        if (!SAFE_LINK.test(href)) {
-          throw fail(400, `${field.label} links to "${href}", which is not a web address`, 'UNSAFE_LINK');
-        }
-      }
-    }
+    assertSafeMarkdown(field.label, text);
 
     copy[field.name] = text;
   }
 
   return copy;
+}
+
+/**
+ * The two rules every piece of admin-written email Markdown follows, wording
+ * or signature alike.
+ *
+ * The editor promises that an edit changes the words and not the layout. HTML
+ * would make that false, so it is refused rather than quietly escaped -
+ * somebody who typed a <div> meant it, and should be told it is not going to
+ * work. And a link has to be a web address, mail or phone link.
+ */
+export function assertSafeMarkdown(label, text) {
+  if (HTML_TAG.test(text)) {
+    throw fail(
+      400,
+      `${label} contains HTML. Write plain text, or Markdown for bold and links.`,
+      'HTML_NOT_ALLOWED'
+    );
+  }
+
+  for (const pattern of MARKDOWN_LINKS) {
+    for (const [, href] of text.matchAll(pattern)) {
+      if (!SAFE_LINK.test(href)) {
+        throw fail(400, `${label} links to "${href}", which is not a web address`, 'UNSAFE_LINK');
+      }
+    }
+  }
 }
 
 /**
