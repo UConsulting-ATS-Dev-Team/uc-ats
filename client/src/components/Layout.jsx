@@ -28,6 +28,7 @@ import {
   UserPlusIcon,
   QuestionMarkCircleIcon,
   ClockIcon,
+  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -89,6 +90,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'User Management', href: '/user-management', icon: UserIcon },
       { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
       { name: 'Automatic Emails', href: '/admin/email-templates', icon: EnvelopeOpenIcon },
+      { name: 'Email Deliverability', href: '/admin/email-health', icon: ShieldCheckIcon },
     ],
   },
 ];

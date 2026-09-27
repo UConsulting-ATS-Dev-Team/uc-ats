@@ -61,6 +61,7 @@ import ReleaseNotes from './pages/ReleaseNotes';
 import MemberHelp from './pages/MemberHelp';
 import AdminHelpManagement from './pages/AdminHelpManagement';
 import AdminEmailTemplates from './pages/AdminEmailTemplates';
+import AdminEmailHealth from './pages/AdminEmailHealth';
 import AdminQuestionBank from './pages/AdminQuestionBank';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
@@ -643,6 +644,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <AdminEmailTemplates />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin mailbox / deliverability health check */}
+      <Route
+        path="/admin/email-health"
+        element={
+          <ProtectedRoute>
+            <AdminEmailHealth />
           </ProtectedRoute>
         }
       />
