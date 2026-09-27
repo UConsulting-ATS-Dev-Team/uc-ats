@@ -4,14 +4,13 @@
 //
 // Run from a cron in index.js. Each run picks up every slot that ended at least
 // ATTENDANCE_DELAY_HOURS ago, but no more than LOOKBACK_HOURS before that, has
-// a signup not yet marked attended, and has not been reminded since it ended.
-// The lookback is what stops the first run after a deploy from mailing every
-// host about every slot they have ever held.
+// attendance still outstanding (see meetingAttendance.js), and has not been
+// reminded since it ended. The lookback is what stops the first run after a
+// deploy from mailing every host about every slot they have ever held.
 //
-// `attended` defaults to false, so "not marked yet" and "marked as a no-show"
-// look the same. A slot where every signup is marked attended is skipped; any
-// other slot is reminded once, which a host who already marked the no-shows
-// can ignore.
+// Older slots are reminded by hand: an admin picks overdue slots on the GTKUC
+// page and sendAttendanceRemindersNow sends them, with no lookback and no
+// once-per-slot limit. Both paths log the same ATTENDANCE_REMINDER row.
 //
 // "Since it ended" rather than "ever" keys the dedupe: a slot moved to a later
 // time after its reminder gets a fresh one once the new time is over.
@@ -23,18 +22,21 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { sendMeetingAttendanceReminder } from './emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from './meetingComms.js';
+import {
+  ATTENDANCE_OUTSTANDING_WHERE,
+  DEFAULT_SLOT_HOURS,
+  isAttendanceOutstanding,
+  slotEndTime,
+} from './meetingAttendance.js';
+
+export { slotEndTime };
 
 export const ATTENDANCE_DELAY_HOURS = 1;
 const LOOKBACK_HOURS = 24;
-// A slot with no end time is treated as an hour long, as the slot page does.
-const DEFAULT_SLOT_HOURS = 1;
 const MAX_ATTEMPTS = 3;
 const HOUR_MS = 60 * 60 * 1000;
 // Under the 15-minute cron interval: see sendUnderSlotLock.
 const SLOT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
-
-export const slotEndTime = (slot) =>
-  slot.endTime ? new Date(slot.endTime) : new Date(new Date(slot.startTime).getTime() + DEFAULT_SLOT_HOURS * HOUR_MS);
 
 /** Where the email's button lands: the host's slot page, scrolled to this slot. */
 export const attendanceUrlFor = (slotId) =>
@@ -75,7 +77,7 @@ export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId
           },
         },
       ],
-      signups: { some: { attended: false } },
+      ...ATTENDANCE_OUTSTANDING_WHERE,
     },
     include: {
       member: { select: { id: true, fullName: true, email: true, isActive: true } },
@@ -125,7 +127,8 @@ export async function sendAttendanceReminder(slot) {
 }
 
 /**
- * Send one slot's reminder under a lock on that slot. Returns { ok }.
+ * Send one slot's reminder under a lock on that slot. Returns { ok }, plus a
+ * `reason` when `recheck` turned the slot down.
  *
  * The in-process flag in index.js only stops a run overlapping itself. During
  * a deploy the old and new instances both run the cron for a moment, and both
@@ -136,18 +139,21 @@ export async function sendAttendanceReminder(slot) {
  * was fully marked or moved since the batch was read, and sends the slot as
  * it is now. The lock covers one email, so a long batch never holds a
  * transaction open.
+ *
+ * `recheck(tx)` is that second question, asked under the lock. It answers
+ * `{ slot }` to send or `{ reason }` to refuse.
  */
-async function sendUnderSlotLock(slot, now) {
+async function sendUnderSlotLock(slotId, recheck) {
   return prisma.$transaction(
     async (tx) => {
       const [{ locked }] =
-        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-attendance-reminder:${slot.id}`})) AS locked`;
-      if (!locked) return { ok: false };
+        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-attendance-reminder:${slotId}`})) AS locked`;
+      if (!locked) return { ok: false, reason: 'busy' };
 
-      const [current] = await findSlotsDueForAttendanceReminder(now, slot.id, tx);
-      if (!current) return { ok: false };
+      const { slot, reason } = await recheck(tx);
+      if (!slot) return { ok: false, reason };
 
-      return sendAttendanceReminder(current);
+      return sendAttendanceReminder(slot);
     },
     // Held until the SENT row is written, so a slow send cannot release the
     // lock early and let another server send too. The cron runs every 15
@@ -162,7 +168,10 @@ export async function sendDueAttendanceReminders(now = new Date()) {
   let sent = 0;
   for (const slot of due) {
     try {
-      const { ok } = await sendUnderSlotLock(slot, now);
+      const { ok } = await sendUnderSlotLock(slot.id, async (tx) => {
+        const [current] = await findSlotsDueForAttendanceReminder(now, slot.id, tx);
+        return { slot: current };
+      });
       if (ok) sent += 1;
     } catch (error) {
       // A lock or log read failing for one slot must not end the run for the rest.
@@ -170,4 +179,49 @@ export async function sendDueAttendanceReminders(now = new Date()) {
     }
   }
   return sent;
+}
+
+/**
+ * Why an admin's reminder for this slot would be refused, or null if it can go.
+ * No lookback and no once-only rule: the admin can see when it was last sent.
+ */
+function manualReminderRefusal(slot, now) {
+  if (!slot) return 'not_found';
+  if (!slot.member?.email || slot.member.isActive === false) return 'host_inactive';
+  if (!isAttendanceOutstanding(slot, now)) return 'not_outstanding';
+  return null;
+}
+
+/**
+ * Send the attendance reminders an admin asked for, one per slot.
+ *
+ * Each slot is re-read under the lock the cron takes, so a manual send and a
+ * cron send for one slot cannot both go out, and a slot finished since the
+ * page loaded is skipped. Returns one result per slot: `sent`, `failed` (the
+ * email was refused), or `skipped` with a reason.
+ */
+export async function sendAttendanceRemindersNow(slotIds, now = new Date()) {
+  const results = [];
+  for (const slotId of [...new Set(slotIds)]) {
+    try {
+      const outcome = await sendUnderSlotLock(slotId, async (tx) => {
+        const slot = await tx.meetingSlot.findUnique({
+          where: { id: slotId },
+          include: {
+            member: { select: { id: true, fullName: true, email: true, isActive: true } },
+            signups: { orderBy: { createdAt: 'asc' } },
+          },
+        });
+        const reason = manualReminderRefusal(slot, now);
+        return reason ? { reason } : { slot };
+      });
+      if (outcome.ok) results.push({ slotId, status: 'sent' });
+      else if (outcome.reason) results.push({ slotId, status: 'skipped', reason: outcome.reason });
+      else results.push({ slotId, status: 'failed' });
+    } catch (error) {
+      console.error(`[gtkuc attendance reminders] manual send for slot ${slotId} failed:`, error);
+      results.push({ slotId, status: 'failed' });
+    }
+  }
+  return results;
 }

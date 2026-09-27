@@ -1275,6 +1275,12 @@ model MeetingSlot {
   capacity       Int                    @default(2)
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
+  /// When a host or admin said attendance for this slot is finished. `attended`
+  /// defaults to false, so without this a no-show and an unmarked signup look
+  /// the same. Cleared when the slot is moved to a new time. The marker's id is
+  /// kept for the record only, with no foreign key.
+  attendanceMarkedAt   DateTime?
+  attendanceMarkedById String?
   signups        MeetingSignup[]
   member         User                   @relation(fields: [memberId], references: [id])
   communications MeetingCommunication[]

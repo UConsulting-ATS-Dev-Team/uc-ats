@@ -10,6 +10,8 @@ import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS } from '../servic
 import { candidateMeetingInvite, hostMeetingInvite, bookedNames } from '../services/meetingInvites.js';
 import { notifyHostSlotCreated } from '../services/meetingComms.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
+import { setSlotAttendanceComplete, SlotAttendanceError } from '../services/meetingAttendance.js';
+import { sendAttendanceRemindersNow } from '../services/meetingAttendanceReminders.js';
 import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
 import {
   getDeactivationCandidates,
@@ -4924,6 +4926,46 @@ router.put('/meeting-slots/:id', async (req, res) => {
     }
     console.error('[PUT /api/admin/meeting-slots/:id]', error);
     res.status(500).json({ error: 'Failed to update meeting slot' });
+  }
+});
+
+// Admin: say a slot's attendance is finished (complete: true), or undo that.
+// Finished means unchecked signups are no-shows, so reminders stop.
+router.put('/meeting-slots/:id/attendance-complete', async (req, res) => {
+  try {
+    const slot = await setSlotAttendanceComplete({
+      slotId: req.params.id,
+      complete: Boolean(req.body?.complete),
+      actorId: req.user.id
+    });
+    res.json(slot);
+  } catch (error) {
+    if (error instanceof SlotAttendanceError) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[PUT /api/admin/meeting-slots/:id/attendance-complete]', error);
+    res.status(500).json({ error: 'Failed to update attendance' });
+  }
+});
+
+// Admin: email the hosts of the given slots to take attendance, now. Slots
+// whose attendance is no longer outstanding are skipped, not sent.
+const MAX_MANUAL_REMINDERS = 200;
+router.post('/meeting-slots/attendance-reminders', async (req, res) => {
+  const slotIds = req.body?.slotIds;
+  if (!Array.isArray(slotIds) || slotIds.length === 0 || !slotIds.every((id) => typeof id === 'string')) {
+    return res.status(400).json({ error: 'slotIds must be a non-empty list of slot ids' });
+  }
+  if (slotIds.length > MAX_MANUAL_REMINDERS) {
+    return res.status(400).json({ error: `At most ${MAX_MANUAL_REMINDERS} slots at a time` });
+  }
+  try {
+    const results = await sendAttendanceRemindersNow(slotIds);
+    const count = (status) => results.filter((r) => r.status === status).length;
+    res.json({ results, sent: count('sent'), failed: count('failed'), skipped: count('skipped') });
+  } catch (error) {
+    console.error('[POST /api/admin/meeting-slots/attendance-reminders]', error);
+    res.status(500).json({ error: 'Failed to send attendance reminders' });
   }
 });
 

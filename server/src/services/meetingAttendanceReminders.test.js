@@ -3,12 +3,13 @@ import prisma from '../prismaClient.js';
 import { sendMeetingAttendanceReminder } from './emailNotifications.js';
 import {
   findSlotsDueForAttendanceReminder,
+  sendAttendanceRemindersNow,
   sendDueAttendanceReminders,
 } from './meetingAttendanceReminders.js';
 
 vi.mock('../prismaClient.js', () => {
   const prisma = {
-    meetingSlot: { findMany: vi.fn() },
+    meetingSlot: { findMany: vi.fn(), findUnique: vi.fn() },
     meetingCommunication: { create: vi.fn().mockResolvedValue({ id: 'comm-1' }) },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(),
@@ -62,7 +63,7 @@ beforeEach(() => {
 });
 
 describe('findSlotsDueForAttendanceReminder', () => {
-  it('asks for slots that ended one to 25 hours ago with someone still unmarked', async () => {
+  it('asks for slots that ended one to 25 hours ago with attendance not yet finished', async () => {
     prisma.meetingSlot.findMany.mockResolvedValue([]);
     await findSlotsDueForAttendanceReminder(NOW);
 
@@ -72,6 +73,9 @@ describe('findSlotsDueForAttendanceReminder', () => {
       // No end time: an hour-long slot, so it ended an hour after it started.
       { endTime: null, startTime: { gt: at(-26), lte: at(-2) } },
     ]);
+    // Not marked done, and someone still unchecked: a host who pressed
+    // "Attendance done" with no-shows left unticked is not reminded.
+    expect(where.attendanceMarkedAt).toBeNull();
     expect(where.signups).toEqual({ some: { attended: false } });
   });
 
@@ -162,7 +166,7 @@ describe('sendDueAttendanceReminders', () => {
   });
 
   it('skips a slot the host finished marking after the batch was read', async () => {
-    // The re-read's `signups: { some: { attended: false } }` no longer matches.
+    // The re-read's outstanding-attendance filter no longer matches.
     slotsInDb([slotEnded(1.1)], []);
 
     expect(await sendDueAttendanceReminders(NOW)).toBe(0);
@@ -195,5 +199,84 @@ describe('sendDueAttendanceReminders', () => {
     expect(prisma.meetingCommunication.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ type: 'ATTENDANCE_REMINDER', status: 'FAILED', error: 'SES throttled' }),
     });
+  });
+});
+
+describe('sendAttendanceRemindersNow', () => {
+  // A slot that ended long before the cron's lookback, which only a manual
+  // send ever reaches.
+  const oldSlot = (overrides = {}) => ({ ...slotEnded(24 * 5), ...overrides });
+
+  it('reminds the host of a week-old slot the cron has given up on', async () => {
+    prisma.meetingSlot.findUnique.mockResolvedValue(oldSlot());
+
+    expect(await sendAttendanceRemindersNow(['slot-1'], NOW)).toEqual([{ slotId: 'slot-1', status: 'sent' }]);
+    expect(sendMeetingAttendanceReminder).toHaveBeenCalledTimes(1);
+    expect(prisma.meetingCommunication.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ type: 'ATTENDANCE_REMINDER', status: 'SENT', recipient: 'avery@ucla.edu' }),
+    });
+  });
+
+  it('sends again even when the host was already reminded', async () => {
+    // The admin sees "last reminded" and decides; there is no once-only rule.
+    prisma.meetingSlot.findUnique.mockResolvedValue(oldSlot({ communications: [reminder(-2)] }));
+    expect((await sendAttendanceRemindersNow(['slot-1'], NOW))[0].status).toBe('sent');
+  });
+
+  it('skips a slot whose attendance was marked done', async () => {
+    prisma.meetingSlot.findUnique.mockResolvedValue(oldSlot({ attendanceMarkedAt: at(-3) }));
+
+    expect(await sendAttendanceRemindersNow(['slot-1'], NOW)).toEqual([
+      { slotId: 'slot-1', status: 'skipped', reason: 'not_outstanding' },
+    ]);
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+  });
+
+  it('skips a slot where everyone is checked, or that has not ended', async () => {
+    const allIn = oldSlot();
+    allIn.signups = allIn.signups.map((s) => ({ ...s, attended: true }));
+    const upcoming = { ...oldSlot(), id: 'slot-2', startTime: at(1), endTime: at(2) };
+    prisma.meetingSlot.findUnique.mockImplementation(({ where }) =>
+      Promise.resolve(where.id === 'slot-2' ? upcoming : allIn)
+    );
+
+    const results = await sendAttendanceRemindersNow(['slot-1', 'slot-2'], NOW);
+    expect(results.map((r) => r.reason)).toEqual(['not_outstanding', 'not_outstanding']);
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+  });
+
+  it('skips a deactivated host and an unknown slot', async () => {
+    const inactive = oldSlot();
+    inactive.member = { ...inactive.member, isActive: false };
+    prisma.meetingSlot.findUnique.mockImplementation(({ where }) =>
+      Promise.resolve(where.id === 'slot-1' ? inactive : null)
+    );
+
+    const results = await sendAttendanceRemindersNow(['slot-1', 'gone'], NOW);
+    expect(results.map((r) => r.reason)).toEqual(['host_inactive', 'not_found']);
+  });
+
+  it('does not send while the cron holds the slot', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
+    prisma.meetingSlot.findUnique.mockResolvedValue(oldSlot());
+
+    expect(await sendAttendanceRemindersNow(['slot-1'], NOW)).toEqual([
+      { slotId: 'slot-1', status: 'skipped', reason: 'busy' },
+    ]);
+    expect(sendMeetingAttendanceReminder).not.toHaveBeenCalled();
+  });
+
+  it('reports a refused email as failed and keeps going', async () => {
+    prisma.meetingSlot.findUnique.mockImplementation(({ where }) => Promise.resolve({ ...oldSlot(), id: where.id }));
+    sendMeetingAttendanceReminder
+      .mockResolvedValueOnce({ success: false, error: 'SES throttled' })
+      .mockResolvedValueOnce({ success: true });
+
+    const results = await sendAttendanceRemindersNow(['slot-1', 'slot-2', 'slot-1'], NOW);
+    // Duplicate ids are sent once.
+    expect(results).toEqual([
+      { slotId: 'slot-1', status: 'failed' },
+      { slotId: 'slot-2', status: 'sent' },
+    ]);
   });
 });

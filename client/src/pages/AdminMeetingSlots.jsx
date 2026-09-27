@@ -9,6 +9,13 @@ import {
   slotStatus as getSlotStatus,
   sortRows
 } from '../utils/gtkucSort';
+import {
+  attendanceReminders,
+  attendanceState,
+  canFinishAttendance,
+  isOutstanding,
+  timeAgo
+} from '../utils/gtkucAttendance';
 import AccessControl from '../components/AccessControl';
 import MemberAvatar from '../components/MemberAvatar';
 import {
@@ -31,6 +38,7 @@ import {
   CircularProgress,
   Grid,
   Card,
+  CardActionArea,
   CardContent,
   Divider,
   IconButton,
@@ -68,7 +76,9 @@ import {
   PercentOutlined as PercentIcon,
   OpenInNew as OpenInNewIcon,
   LinkedIn as LinkedInIcon,
-  Sms as SmsIcon
+  Sms as SmsIcon,
+  NotificationsActive as RemindIcon,
+  AssignmentLate as OverdueIcon
 } from '@mui/icons-material';
 
 // ---- helpers -------------------------------------------------------------
@@ -106,6 +116,7 @@ const COMM_TYPE_META = {
   CONFIRMATION: { label: 'Signup confirmation', color: 'info' },
   HOST_NOTIFICATION: { label: 'Host notified', color: 'default' },
   CANCELLATION: { label: 'Cancellation', color: 'warning' },
+  RESCHEDULED: { label: 'Rescheduled', color: 'info' },
   REMINDER: { label: 'Host reminder', color: 'secondary' },
   ATTENDANCE_REMINDER: { label: 'Attendance reminder', color: 'secondary' }
 };
@@ -146,13 +157,13 @@ export default function AdminMeetingSlots() {
 
   // Time Slots tab filters
   const [hostFilter, setHostFilter] = useState('all'); // 'all' | 'mine' | memberId
-  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'upcoming' | 'active' | 'past'
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'upcoming' | 'active' | 'past' | 'overdue'
   const [slotSearch, setSlotSearch] = useState('');
   const [slotSort, setSlotSort] = useState({ field: 'start', dir: 'asc' });
 
   // Attendance tab filters
   const [attSearch, setAttSearch] = useState('');
-  const [attFilter, setAttFilter] = useState('all'); // 'all' | 'attended' | 'not'
+  const [attFilter, setAttFilter] = useState('all'); // 'all' | 'attended' | 'not' | 'unmarked'
   const [attSort, setAttSort] = useState({ field: 'slot', dir: 'asc' });
 
   // One clock for every status on the page. The sort, the status filter and the
@@ -163,6 +174,10 @@ export default function AdminMeetingSlots() {
     const id = setInterval(() => setNow(new Date()), 60 * 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Overdue slots ticked for a bulk reminder.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [reminding, setReminding] = useState(false);
 
   const [detailSlot, setDetailSlot] = useState(null);
   const [contactSlot, setContactSlot] = useState(null);
@@ -245,14 +260,22 @@ export default function AdminMeetingSlots() {
 
   const stats = useMemo(() => {
     const totalSlots = cycleSlots.length;
-    const allSignups = cycleSlots.flatMap((s) => s.signups || []);
-    const totalSignups = allSignups.length;
-    const attended = allSignups.filter((s) => s.attended).length;
+    const totalSignups = cycleSlots.reduce((sum, s) => sum + (s.signups || []).length, 0);
     const totalCapacity = cycleSlots.reduce((sum, s) => sum + (s.capacity || 0), 0);
     const upcoming = cycleSlots.filter((s) => getSlotStatus(s, now) === 'upcoming').length;
+    // The rate is over slots whose attendance is finished: an upcoming signup
+    // has not had the chance to attend, and an unmarked one is not a no-show yet.
+    const doneSignups = cycleSlots
+      .filter((s) => attendanceState(s, now) === 'done')
+      .flatMap((s) => s.signups || []);
+    const attended = doneSignups.filter((s) => s.attended).length;
+    const overdue = cycleSlots.filter((s) => isOutstanding(s, now));
     return {
-      totalSlots, totalSignups, attended, totalCapacity, upcoming,
-      attendanceRate: totalSignups > 0 ? Math.round((attended / totalSignups) * 100) : 0
+      totalSlots, totalSignups, totalCapacity, upcoming, attended,
+      finishedSignups: doneSignups.length,
+      attendanceRate: doneSignups.length > 0 ? Math.round((attended / doneSignups.length) * 100) : null,
+      overdueSlots: overdue.length,
+      overdueSignups: overdue.reduce((sum, s) => sum + s.signups.filter((su) => !su.attended).length, 0)
     };
   }, [cycleSlots, now]);
 
@@ -262,7 +285,9 @@ export default function AdminMeetingSlots() {
     const filtered = cycleSlots.filter((slot) => {
       if (hostFilter === 'mine' && slot.memberId !== user?.id) return false;
       if (hostFilter !== 'all' && hostFilter !== 'mine' && slot.memberId !== hostFilter) return false;
-      if (statusFilter !== 'all' && getSlotStatus(slot, now) !== statusFilter) return false;
+      if (statusFilter === 'overdue') {
+        if (!isOutstanding(slot, now)) return false;
+      } else if (statusFilter !== 'all' && getSlotStatus(slot, now) !== statusFilter) return false;
       if (!q) return true;
       return (
         slot.location?.toLowerCase().includes(q) ||
@@ -279,6 +304,7 @@ export default function AdminMeetingSlots() {
     const filtered = rows.filter((r) => {
       if (attFilter === 'attended' && !r.attended) return false;
       if (attFilter === 'not' && r.attended) return false;
+      if (attFilter === 'unmarked' && (r.attended || !isOutstanding(r.slot, now))) return false;
       if (!q) return true;
       return (
         r.fullName?.toLowerCase().includes(q) ||
@@ -288,7 +314,15 @@ export default function AdminMeetingSlots() {
       );
     });
     return sortRows(filtered, ATTENDANCE_SORT_KEYS, attSort, { tiebreak: 'slot' });
-  }, [cycleSlots, attSearch, attFilter, attSort]);
+  }, [cycleSlots, attSearch, attFilter, attSort, now]);
+
+  // A ticked slot that leaves the overdue list (marked done, reminded and
+  // then finished, or filtered out) drops out of the selection with it.
+  const visibleOverdueIds = useMemo(
+    () => (statusFilter === 'overdue' ? visibleSlots.map((s) => s.id) : []),
+    [statusFilter, visibleSlots]
+  );
+  const selectedOverdue = visibleOverdueIds.filter((id) => selectedIds.has(id));
 
   // Keep the detail dialog in sync with freshly loaded data.
   useEffect(() => {
@@ -307,6 +341,48 @@ export default function AdminMeetingSlots() {
     } catch (e) {
       setError(e.message || 'Failed to update attendance');
     }
+  };
+
+  // Email each slot's host to take attendance. One email per slot, so a host
+  // with two overdue slots gets two, each with a button to that slot.
+  const sendReminders = async (slotIds) => {
+    if (slotIds.length === 0) return;
+    if (slotIds.length > 1 && !window.confirm(`Email the hosts of ${slotIds.length} slots to take attendance?`)) return;
+    try {
+      setReminding(true);
+      const { sent = 0, failed = 0, skipped = 0 } = await api.post('/admin/meeting-slots/attendance-reminders', { slotIds });
+      const parts = [`${sent} reminder${sent === 1 ? '' : 's'} sent.`];
+      if (skipped > 0) parts.push(`${skipped} skipped: already finished, host deactivated, or being sent right now.`);
+      if (failed > 0) {
+        setError(`${parts.join(' ')} ${failed} could not be emailed; see the slot's communications log.`);
+      } else {
+        flash(parts.join(' '));
+      }
+      setSelectedIds(new Set());
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to send reminders');
+    } finally {
+      setReminding(false);
+    }
+  };
+
+  const setAttendanceDone = async (slot, complete) => {
+    try {
+      await api.put(`/admin/meeting-slots/${slot.id}/attendance-complete`, { complete });
+      flash(complete ? 'Attendance finished. Anyone unchecked counts as a no-show.' : 'Attendance reopened.');
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to update attendance');
+    }
+  };
+
+  const toggleSelected = (id, on) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
   };
 
   const deleteSignup = async (signup) => {
@@ -469,11 +545,11 @@ export default function AdminMeetingSlots() {
 
   // ---- render ------------------------------------------------------------
 
-  const StatCard = ({ icon, label, value, sub }) => (
-    <Card variant="outlined" sx={{ height: '100%' }}>
+  const StatCard = ({ icon, label, value, sub, onClick, warn }) => {
+    const body = (
       <CardContent>
         <Stack direction="row" spacing={1.5} alignItems="center">
-          <Avatar sx={{ bgcolor: 'action.hover', color: 'primary.main' }}>{icon}</Avatar>
+          <Avatar sx={{ bgcolor: warn ? 'warning.light' : 'action.hover', color: warn ? 'warning.dark' : 'primary.main' }}>{icon}</Avatar>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="h5" fontWeight={700}>{value}</Typography>
             <Typography variant="body2" color="text.secondary" noWrap>{label}</Typography>
@@ -481,8 +557,18 @@ export default function AdminMeetingSlots() {
           </Box>
         </Stack>
       </CardContent>
-    </Card>
-  );
+    );
+    return (
+      <Card variant="outlined" sx={{ height: '100%', ...(warn && { borderColor: 'warning.main' }) }}>
+        {onClick ? <CardActionArea onClick={onClick} sx={{ height: '100%' }}>{body}</CardActionArea> : body}
+      </Card>
+    );
+  };
+
+  const showOverdue = () => {
+    setTab(0);
+    setStatusFilter('overdue');
+  };
 
   return (
     <AccessControl allowedRoles={['ADMIN']}>
@@ -507,11 +593,6 @@ export default function AdminMeetingSlots() {
               startIcon={<VisibilityIcon />}
               endIcon={<OpenInNewIcon />}
               onClick={() => window.open('/meet', '_blank')}
-              sx={{
-                borderColor: 'primary.main',
-                color: 'primary.main',
-                '&:hover': { borderColor: 'primary.dark', backgroundColor: 'primary.50' }
-              }}
             >
               View Public Page
             </Button>
@@ -578,10 +659,26 @@ export default function AdminMeetingSlots() {
             <StatCard icon={<PeopleIcon />} label="Signups" value={stats.totalSignups} sub={`of ${stats.totalCapacity} capacity`} />
           </Grid>
           <Grid item xs={6} md={3}>
-            <StatCard icon={<PercentIcon />} label="Attendance rate" value={`${stats.attendanceRate}%`} sub={`${stats.attended} attended`} />
+            <StatCard
+              icon={<PercentIcon />}
+              label="Attendance rate"
+              value={stats.attendanceRate === null ? '—' : `${stats.attendanceRate}%`}
+              sub={`${stats.attended} of ${stats.finishedSignups} in finished slots`}
+            />
           </Grid>
           <Grid item xs={6} md={3}>
-            <StatCard icon={<EventAvailableIcon />} label="Attended" value={stats.attended} sub={`${stats.totalSignups - stats.attended} not marked`} />
+            {stats.overdueSlots > 0 ? (
+              <StatCard
+                warn
+                icon={<OverdueIcon />}
+                label="Attendance overdue"
+                value={stats.overdueSlots}
+                sub={`slot${stats.overdueSlots === 1 ? '' : 's'} · ${stats.overdueSignups} ${stats.overdueSignups === 1 ? 'person' : 'people'} unmarked`}
+                onClick={showOverdue}
+              />
+            ) : (
+              <StatCard icon={<EventAvailableIcon />} label="Attendance overdue" value={0} sub="Every past slot is marked" />
+            )}
           </Grid>
         </Grid>
 
@@ -612,6 +709,13 @@ export default function AdminMeetingSlots() {
               onView={setDetailSlot}
               onEdit={openEdit}
               onDelete={deleteSlot}
+              selectedIds={selectedIds}
+              selectedCount={selectedOverdue.length}
+              onToggleSelected={toggleSelected}
+              onSelectAll={(on) => setSelectedIds(new Set(on ? visibleOverdueIds : []))}
+              onRemind={sendReminders}
+              onRemindSelected={() => sendReminders(selectedOverdue)}
+              reminding={reminding}
             />
           ) : tab === 1 ? (
             <AttendanceTab
@@ -634,7 +738,11 @@ export default function AdminMeetingSlots() {
       {/* Detail dialog */}
       <SlotDetailDialog
         slot={detailSlot}
+        now={now}
         currentUserId={user?.id}
+        reminding={reminding}
+        onRemind={(s) => sendReminders([s.id])}
+        onAttendanceDone={setAttendanceDone}
         onClose={() => setDetailSlot(null)}
         onToggleAttendance={setAttendance}
         onDeleteSignup={deleteSignup}
@@ -741,11 +849,16 @@ export default function AdminMeetingSlots() {
 function TimeSlotsTab({
   slots, now, totalInScope, hostOptions, hostLabel,
   hostFilter, setHostFilter, statusFilter, setStatusFilter,
-  search, setSearch, sort, onSort, onView, onEdit, onDelete
+  search, setSearch, sort, onSort, onView, onEdit, onDelete,
+  selectedIds, selectedCount, onToggleSelected, onSelectAll, onRemind, onRemindSelected, reminding
 }) {
   const header = (field, label, props = {}) => (
     <SortableHeader field={field} sort={sort} onSort={onSort} {...props}>{label}</SortableHeader>
   );
+  // The overdue view is where reminders are sent from, so it gains a
+  // selection column and when each host was last reminded.
+  const overdueView = statusFilter === 'overdue';
+  const allSelected = overdueView && slots.length > 0 && selectedCount === slots.length;
   return (
     <Box>
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ p: 2 }} alignItems={{ md: 'center' }} flexWrap="wrap" useFlexGap>
@@ -760,13 +873,15 @@ function TimeSlotsTab({
             ))}
           </Select>
         </FormControl>
-        <FormControl size="small" sx={{ minWidth: 150 }}>
+        <FormControl size="small" sx={{ minWidth: 190 }}>
           <InputLabel>Status</InputLabel>
           <Select value={statusFilter} label="Status" onChange={(e) => setStatusFilter(e.target.value)}>
             <MenuItem value="all">All statuses</MenuItem>
             <MenuItem value="upcoming">Upcoming</MenuItem>
             <MenuItem value="active">Happening now</MenuItem>
             <MenuItem value="past">Past</MenuItem>
+            <Divider />
+            <MenuItem value="overdue">Attendance overdue</MenuItem>
           </Select>
         </FormControl>
         <TextField
@@ -780,32 +895,63 @@ function TimeSlotsTab({
         <Typography variant="body2" color="text.secondary" sx={{ ml: { md: 'auto' } }}>
           {slots.length} of {totalInScope}
         </Typography>
+        {overdueView && (
+          <Button
+            variant="contained"
+            startIcon={<RemindIcon />}
+            disabled={selectedCount === 0 || reminding}
+            onClick={onRemindSelected}
+          >
+            {reminding ? 'Sending…' : `Remind hosts (${selectedCount})`}
+          </Button>
+        )}
       </Stack>
       <Divider />
       {slots.length === 0 ? (
-        <Box sx={{ p: 6, textAlign: 'center', color: 'text.secondary' }}>No meeting slots match these filters.</Box>
+        <Box sx={{ p: 6, textAlign: 'center', color: 'text.secondary' }}>
+          {overdueView ? 'Every past slot in this view has its attendance marked.' : 'No meeting slots match these filters.'}
+        </Box>
       ) : (
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow>
+                {overdueView && (
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      checked={allSelected}
+                      indeterminate={selectedCount > 0 && !allSelected}
+                      onChange={(e) => onSelectAll(e.target.checked)}
+                      inputProps={{ 'aria-label': 'Select all overdue slots' }}
+                    />
+                  </TableCell>
+                )}
                 {header('host', 'Host')}
                 {header('location', 'Location')}
                 {header('start', 'Start')}
                 {header('status', 'Status', { align: 'center' })}
                 {header('signups', 'Signups', { align: 'center' })}
-                {header('openSpots', 'Open spots', { align: 'center' })}
-                {header('attended', 'Attended', { align: 'center' })}
+                {header('attendance', 'Attendance', { align: 'center' })}
+                {overdueView && <TableCell>Last reminded</TableCell>}
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {slots.map((slot) => {
                 const signups = slot.signups || [];
-                const attended = signups.filter((s) => s.attended).length;
                 const status = getSlotStatus(slot, now);
+                const outstanding = isOutstanding(slot, now);
                 return (
                   <TableRow key={slot.id} hover sx={{ cursor: 'pointer' }} onClick={() => onView(slot)}>
+                    {overdueView && (
+                      <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedIds.has(slot.id)}
+                          onChange={(e) => onToggleSelected(slot.id, e.target.checked)}
+                          inputProps={{ 'aria-label': `Select ${slot.member?.fullName || 'host'}'s slot` }}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <Stack direction="row" spacing={1} alignItems="center">
                         <MemberAvatar member={slot.member} size={28} />
@@ -820,9 +966,24 @@ function TimeSlotsTab({
                     <TableCell align="center">
                       <Chip size="small" variant="outlined" label={`${signups.length}/${slot.capacity}`} />
                     </TableCell>
-                    <TableCell align="center">{Math.max((slot.capacity || 0) - signups.length, 0)}</TableCell>
-                    <TableCell align="center">{attended}</TableCell>
-                    <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell align="center">
+                      <AttendanceCell slot={slot} now={now} />
+                    </TableCell>
+                    {overdueView && (
+                      <TableCell>
+                        <LastReminded slot={slot} now={now} />
+                      </TableCell>
+                    )}
+                    <TableCell align="right" onClick={(e) => e.stopPropagation()} sx={{ whiteSpace: 'nowrap' }}>
+                      {outstanding && (
+                        <Tooltip title="Email the host to take attendance">
+                          <span>
+                            <IconButton size="small" aria-label="Remind host" disabled={reminding} onClick={() => onRemind([slot.id])}>
+                              <RemindIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                       <Tooltip title="View details"><IconButton size="small" onClick={() => onView(slot)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
                       <Tooltip title="Edit"><IconButton size="small" onClick={() => onEdit(slot)}><EditIcon fontSize="small" /></IconButton></Tooltip>
                       <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => onDelete(slot)}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
@@ -835,6 +996,35 @@ function TimeSlotsTab({
         </TableContainer>
       )}
     </Box>
+  );
+}
+
+// "2/3 attended" once finished, "Not marked" while outstanding, a dash before.
+function AttendanceCell({ slot, now }) {
+  const state = attendanceState(slot, now);
+  const signups = slot.signups || [];
+  if (state === 'none') return <Typography variant="body2" color="text.disabled">—</Typography>;
+  if (state === 'outstanding') {
+    const unmarked = signups.filter((s) => !s.attended).length;
+    return (
+      <Tooltip title={`${unmarked} of ${signups.length} not checked, and the host has not pressed Attendance done`}>
+        <Chip size="small" color="warning" label="Not marked" />
+      </Tooltip>
+    );
+  }
+  const attended = signups.filter((s) => s.attended).length;
+  return <Typography variant="body2">{attended}/{signups.length} attended</Typography>;
+}
+
+function LastReminded({ slot, now }) {
+  const sent = attendanceReminders(slot);
+  if (sent.length === 0) return <Typography variant="body2" color="text.secondary">Never</Typography>;
+  return (
+    <Tooltip title={formatDateTime(sent[0].sentAt)}>
+      <Typography variant="body2">
+        {timeAgo(sent[0].sentAt, now)}{sent.length > 1 ? ` · ${sent.length}×` : ''}
+      </Typography>
+    </Tooltip>
   );
 }
 
@@ -913,6 +1103,7 @@ function MemberProfilesTab({ profiles, onToggleHidden }) {
                 <Switch
                   checked={profile.hiddenFromGtkuc}
                   onChange={(e) => onToggleHidden(profile.id, e.target.checked)}
+                  inputProps={{ 'aria-label': `Hide ${profile.fullName} from Get to Know UC` }}
                 />
               </TableCell>
             </TableRow>
@@ -946,6 +1137,7 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, sort, onSor
             <MenuItem value="all">All signups</MenuItem>
             <MenuItem value="attended">Attended</MenuItem>
             <MenuItem value="not">Not attended</MenuItem>
+            <MenuItem value="unmarked">Not marked yet</MenuItem>
           </Select>
         </FormControl>
         <Typography variant="body2" color="text.secondary" sx={{ ml: { sm: 'auto' } }}>{rows.length} shown</Typography>
@@ -971,7 +1163,11 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, sort, onSor
               {rows.map((r) => (
                 <TableRow key={r.id} hover>
                   <TableCell padding="checkbox">
-                    <Checkbox checked={!!r.attended} onChange={(e) => onToggle(r.id, e.target.checked)} />
+                    <Checkbox
+                      checked={!!r.attended}
+                      onChange={(e) => onToggle(r.id, e.target.checked)}
+                      inputProps={{ 'aria-label': `${r.fullName} attended` }}
+                    />
                   </TableCell>
                   <TableCell>{r.fullName}</TableCell>
                   <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: 240 }}>{r.email}</TableCell>
@@ -995,12 +1191,17 @@ function AttendanceTab({ rows, search, setSearch, filter, setFilter, sort, onSor
 
 // ---- Slot detail dialog --------------------------------------------------
 
-function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, onDeleteSignup, onEdit, onContact }) {
+function SlotDetailDialog({
+  slot, now, currentUserId, reminding, onRemind, onAttendanceDone,
+  onClose, onToggleAttendance, onDeleteSignup, onEdit, onContact
+}) {
   if (!slot) return null;
   const signups = slot.signups || [];
   const comms = slot.communications || [];
   const attended = signups.filter((s) => s.attended).length;
   const isYou = slot.member?.id === currentUserId;
+  const outstanding = isOutstanding(slot, now);
+  const reminders = attendanceReminders(slot);
 
   return (
     <Dialog open={!!slot} onClose={onClose} maxWidth="md" fullWidth>
@@ -1063,6 +1264,34 @@ function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, on
             </Button>
           )}
         </Stack>
+        {canFinishAttendance(slot, now) && (
+          <Alert
+            severity={outstanding ? 'warning' : slot.attendanceMarkedAt ? 'success' : 'info'}
+            sx={{ mb: 1.5 }}
+            action={
+              <Stack direction="row" spacing={1}>
+                {outstanding && (
+                  <Button color="inherit" size="small" startIcon={<RemindIcon />} disabled={reminding} onClick={() => onRemind(slot)}>
+                    Remind host
+                  </Button>
+                )}
+                {slot.attendanceMarkedAt ? (
+                  <Button color="inherit" size="small" onClick={() => onAttendanceDone(slot, false)}>Reopen</Button>
+                ) : (
+                  <Button color="inherit" size="small" onClick={() => onAttendanceDone(slot, true)}>Attendance done</Button>
+                )}
+              </Stack>
+            }
+          >
+            {slot.attendanceMarkedAt
+              ? `Attendance finished ${formatDateTime(slot.attendanceMarkedAt)}. Anyone unchecked is a no-show.`
+              : outstanding
+                ? `Attendance not marked. ${reminders.length > 0 ? `Host last reminded ${timeAgo(reminders[0].sentAt, now)}.` : 'Host not reminded yet.'}`
+                : attended === signups.length
+                  ? 'Everyone is checked, so attendance is done.'
+                  : 'Check who came, then press Attendance done.'}
+          </Alert>
+        )}
         {signups.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No one has signed up yet.</Typography>
         ) : (
@@ -1082,14 +1311,22 @@ function SlotDetailDialog({ slot, currentUserId, onClose, onToggleAttendance, on
                 {signups.map((s) => (
                   <TableRow key={s.id} hover>
                     <TableCell padding="checkbox">
-                      <Checkbox checked={!!s.attended} onChange={(e) => onToggleAttendance(s.id, e.target.checked)} />
+                      <Checkbox
+                        checked={!!s.attended}
+                        onChange={(e) => onToggleAttendance(s.id, e.target.checked)}
+                        inputProps={{ 'aria-label': `${s.fullName} attended` }}
+                      />
                     </TableCell>
                     <TableCell>{s.fullName}</TableCell>
                     <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: 220 }}>{s.email}</TableCell>
                     <TableCell>{s.studentId || '—'}</TableCell>
                     <TableCell>{formatDateTime(s.createdAt)}</TableCell>
                     <TableCell align="right">
-                      <IconButton size="small" color="error" onClick={() => onDeleteSignup(s)}><DeleteIcon fontSize="small" /></IconButton>
+                      <Tooltip title="Remove signup">
+                        <IconButton size="small" color="error" aria-label={`Remove ${s.fullName}`} onClick={() => onDeleteSignup(s)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))}

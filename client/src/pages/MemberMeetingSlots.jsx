@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import { fetchActiveCycle, slotsCreatedForCycle } from '../utils/activeCycle';
+import { canFinishAttendance, isOutstanding } from '../utils/gtkucAttendance';
 import AccessControl from '../components/AccessControl';
 import GtkucProfileModal from '../components/GtkucProfileModal';
 import SlotContactDialog from '../components/meetings/SlotContactDialog';
@@ -262,6 +263,16 @@ export default function MemberMeetingSlots() {
   const setAttendance = async (signupId, attended) => {
     try {
       await api.patch(`/member/meeting-signups/${signupId}/attendance`, { attended });
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to update attendance');
+    }
+  };
+
+  // Unchecked signups become no-shows, and the attendance reminders stop.
+  const setAttendanceDone = async (slot, complete) => {
+    try {
+      await api.put(`/member/meeting-slots/${slot.id}/attendance-complete`, { complete });
       await load();
     } catch (e) {
       setError(e.message || 'Failed to update attendance');
@@ -1015,6 +1026,7 @@ export default function MemberMeetingSlots() {
                                       checked={signup.attended}
                                       onChange={(e) => setAttendance(signup.id, e.target.checked)}
                                       color="success"
+                                      inputProps={{ 'aria-label': `${signup.fullName} attended` }}
                                     />
                                   </TableCell>
                                   <TableCell data-label="Actions" align="center">
@@ -1034,6 +1046,29 @@ export default function MemberMeetingSlots() {
                             </TableBody>
                           </Table>
                         </TableContainer>
+                        {canFinishAttendance(slot) && (
+                          <Alert
+                            severity={isOutstanding(slot) ? 'warning' : slot.attendanceMarkedAt ? 'success' : 'info'}
+                            sx={{ mt: 2 }}
+                            action={
+                              slot.attendanceMarkedAt ? (
+                                <Button color="inherit" size="small" onClick={() => setAttendanceDone(slot, false)}>
+                                  Reopen
+                                </Button>
+                              ) : (
+                                <Button color="inherit" size="small" onClick={() => setAttendanceDone(slot, true)}>
+                                  Attendance done
+                                </Button>
+                              )
+                            }
+                          >
+                            {slot.attendanceMarkedAt
+                              ? 'Attendance finished. Anyone unchecked counts as a no-show.'
+                              : attendedCount === slot.signups.length
+                                ? 'Everyone is checked, so attendance is done.'
+                                : 'Check everyone who came, then press Attendance done. Until then you will be reminded.'}
+                          </Alert>
+                        )}
                       </>
                     )}
                   </CardContent>
