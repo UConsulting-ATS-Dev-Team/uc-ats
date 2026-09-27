@@ -206,6 +206,18 @@ describe('AdminMeetingSlots overdue attendance', () => {
     expect(await screen.findByText('1 reminder sent.')).toBeTruthy();
   });
 
+  it('keeps unsent slots selected when a request fails', async () => {
+    api.post.mockRejectedValue(new Error('Network error'));
+    const user = await renderAfterBothSlots();
+
+    await user.click(screen.getByText('Attendance overdue'));
+    await user.click(screen.getByRole('checkbox', { name: 'Select all overdue slots' }));
+    await user.click(screen.getByRole('button', { name: 'Remind hosts (1)' }));
+
+    expect(await screen.findByText(/0 reminders sent\. Stopped before 1 slot \(Network error\)/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remind hosts (1)' })).toBeTruthy();
+  });
+
   it('reminds one host from the row', async () => {
     api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
     const user = await renderAfterBothSlots();

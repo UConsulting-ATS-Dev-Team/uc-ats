@@ -351,35 +351,48 @@ export default function AdminMeetingSlots() {
   const sendReminders = async (slotIds) => {
     if (slotIds.length === 0) return;
     if (slotIds.length > 1 && !window.confirm(`Email the hosts of ${slotIds.length} slots to take attendance?`)) return;
-    try {
-      setReminding(true);
-      // The endpoint takes REMINDER_BATCH slots per request, and the first
-      // run after the migration can easily select more.
-      let sent = 0;
-      let failed = 0;
-      let skipped = 0;
-      for (let i = 0; i < slotIds.length; i += REMINDER_BATCH) {
+    setReminding(true);
+    // The endpoint takes REMINDER_BATCH slots per request, and the first run
+    // after the migration can easily select more.
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+    let unsent = [];
+    let requestError = null;
+    for (let i = 0; i < slotIds.length; i += REMINDER_BATCH) {
+      try {
         const res = await api.post('/admin/meeting-slots/attendance-reminders', {
           slotIds: slotIds.slice(i, i + REMINDER_BATCH)
         });
         sent += res?.sent || 0;
         failed += res?.failed || 0;
         skipped += res?.skipped || 0;
+      } catch (e) {
+        // Earlier batches have already gone out, and a manual send has no
+        // once-only rule, so retrying everything would email those hosts
+        // twice. Stop here and leave only the unsent slots ticked.
+        requestError = e;
+        unsent = slotIds.slice(i);
+        break;
       }
-      const parts = [`${sent} reminder${sent === 1 ? '' : 's'} sent.`];
-      if (skipped > 0) parts.push(`${skipped} skipped: already finished, host deactivated, or being sent right now.`);
-      if (failed > 0) {
-        setError(`${parts.join(' ')} ${failed} could not be emailed; see the slot's communications log.`);
-      } else {
-        flash(parts.join(' '));
-      }
-      setSelectedIds(new Set());
-      await load();
-    } catch (e) {
-      setError(e.message || 'Failed to send reminders');
-    } finally {
-      setReminding(false);
     }
+
+    // Reload first: load() clears the error banner as it starts.
+    setSelectedIds(new Set(unsent));
+    setReminding(false);
+    await load();
+
+    const parts = [`${sent} reminder${sent === 1 ? '' : 's'} sent.`];
+    if (skipped > 0) parts.push(`${skipped} skipped: already finished, host deactivated, or being sent right now.`);
+    if (failed > 0) parts.push(`${failed} could not be emailed; see the slot's communications log.`);
+    if (requestError) {
+      parts.push(
+        `Stopped before ${unsent.length} slot${unsent.length === 1 ? '' : 's'} (${requestError.message || 'request failed'}). ` +
+        'They are still selected; press Remind hosts to send them.'
+      );
+    }
+    if (requestError || failed > 0) setError(parts.join(' '));
+    else flash(parts.join(' '));
   };
 
   const setAttendanceDone = async (slot, complete) => {
