@@ -3,6 +3,7 @@ import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import prisma from '../../prismaClient.js';
 import { computeDayAggregates, ts } from './aggregate.js';
 import { ANALYTICS_TZ, RETENTION_DAYS, ROLLUP_CRON } from './constants.js';
+import { linkOrphanEngagement } from './emailEngagement.js';
 import { recordServerError } from './errorCapture.js';
 import { logError } from './log.js';
 
@@ -110,6 +111,7 @@ export async function runRollup({ now = new Date(), client = prisma } = {}) {
     const days = daysToRollUp(laDay(now), latest ? latest.day.toISOString().slice(0, 10) : null);
     const results = [];
     for (const day of days) results.push(await rollupDay(day, client));
+    await linkOrphanEngagement(client, now);
     const pruned = await pruneRaw(now, client);
     return {
       days,

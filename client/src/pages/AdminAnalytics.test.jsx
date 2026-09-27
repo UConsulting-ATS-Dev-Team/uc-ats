@@ -139,6 +139,20 @@ describe('AdminAnalytics', () => {
     await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/admin/analytics/security?days=30'));
   });
 
+  it('never lets an older response overwrite a newer one', async () => {
+    let answerFirst;
+    apiClient.get
+      .mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)))
+      .mockImplementationOnce(() => Promise.resolve(ERRORS));
+    renderAt('/admin/analytics?tab=errors');
+    await userEvent.click(await screen.findByRole('button', { name: '7 days' }));
+    expect((await screen.findAllByText('[GET /api/x] connection refused')).length).toBeGreaterThan(0);
+    // The first, slower request finally answers with something else.
+    answerFirst({ ...ERRORS, server: [{ ...ERRORS.server[0], fingerprint: 'old', sample: { ...ERRORS.server[0].sample, message: 'STALE' } }] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('STALE')).not.toBeInTheDocument();
+  });
+
   it('describes a catch-up rollup by its span', () => {
     expect(describeRollup(['2026-09-26', '2026-09-25'])).toBe('Sep 26 and Sep 25');
     expect(describeRollup(['2026-09-26', '2026-09-25', '2026-09-24'])).toBe('3 days (Sep 24 to Sep 26)');

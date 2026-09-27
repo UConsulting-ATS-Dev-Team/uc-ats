@@ -1,5 +1,8 @@
+import { Prisma } from '@prisma/client';
+
 import config from '../../config.js';
 import prisma from '../../prismaClient.js';
+import { linkOrphanEngagement } from './emailEngagement.js';
 import { ts } from './aggregate.js';
 import { ANALYTICS_TZ, RETENTION_DAYS } from './constants.js';
 import { KNOWN_PAGES } from './knownPages.js';
@@ -101,6 +104,29 @@ export function landingPath(link, clientUrl = config.clientUrl) {
   }
 }
 
+// Statuses that mean the recipient's server accepted the message. A spam
+// complaint can only follow a delivery, so it counts.
+const DELIVERED_STATUSES = ['DELIVERED', 'CLICKED', 'COMPLAINED'];
+
+/**
+ * Emails sent since `from`, one row each: whether a person (not a scanner)
+ * opened or clicked it, and whether it was delivered - by status, or because
+ * someone clicked it, which proves it arrived.
+ */
+function sentEmails(from) {
+  return Prisma.sql`
+    SELECT s.*, (s.status = ANY(${DELIVERED_STATUSES}) OR s.clicked) AS delivered
+    FROM (
+      SELECT l.id, coalesce(l.category, 'OTHER') AS category, l.status, l."sentAt",
+             EXISTS (SELECT 1 FROM email_engagement_events e
+                     WHERE e."communicationLogId" = l.id AND e.kind = 'CLICK' AND NOT e."suspectedBot") AS clicked,
+             EXISTS (SELECT 1 FROM email_engagement_events e
+                     WHERE e."communicationLogId" = l.id AND e.kind = 'OPEN' AND NOT e."suspectedBot") AS opened
+      FROM communication_logs l
+      WHERE l.channel = 'email' AND l."sentAt" >= ${ts(from)}::timestamp
+    ) s`;
+}
+
 export async function email(days, options = {}) {
   const client = options.client || prisma;
   const now = options.now || new Date();
@@ -108,7 +134,17 @@ export async function email(days, options = {}) {
   const from = dayBounds(ctx.startDay).from;
   const clientFrom = later(from, new Date(now.getTime() - RETENTION_DAYS.clientEvents * DAY_MS));
 
-  const [anyEngagement, categories, clicks, topLinks, bots, perDay, landing] = await Promise.all([
+  // A click or open stored before its log row was written has no log id yet;
+  // attach it now so it counts under its email like every other.
+  await linkOrphanEngagement(client, now);
+
+  // Every rate below is over one set: emails sent in the range, each with
+  // whether a person (not a scanner) opened or clicked it. An old email
+  // clicked today belongs to the range it was sent in, and a clicked email
+  // counts as delivered whatever its status says now - a click proves it
+  // arrived, and a later spam complaint does not undo that. So clicked can
+  // never exceed delivered.
+  const [anyEngagement, categories, topLinks, bots, perDay, landing] = await Promise.all([
     // Clicks specifically, and recently: opens reporting, or clicks that
     // stopped arriving months ago, must not hide the setup notice.
     client.emailEngagementEvent.findFirst({
@@ -116,28 +152,19 @@ export async function email(days, options = {}) {
       select: { id: true },
     }),
     client.$queryRaw`
-      SELECT coalesce(category, 'OTHER') AS category,
+      WITH sent AS (${sentEmails(from)})
+      SELECT category,
              count(*)::int AS sent,
-             count(*) FILTER (WHERE status IN ('DELIVERED', 'CLICKED'))::int AS delivered,
+             count(*) FILTER (WHERE delivered)::int AS delivered,
              count(*) FILTER (WHERE status = 'BOUNCED')::int AS bounced,
              count(*) FILTER (WHERE status = 'COMPLAINED')::int AS complained,
              count(*) FILTER (WHERE status = 'FAILED')::int AS failed,
              count(*) FILTER (WHERE status = 'DELAYED')::int AS delayed,
-             count(*) FILTER (WHERE status = 'SENT')::int AS unconfirmed
-      FROM communication_logs
-      WHERE channel = 'email' AND "sentAt" >= ${ts(from)}::timestamp
-      GROUP BY 1`,
-    // Emails opened / clicked, bots excluded, out of the same emails the
-    // sent and delivered counts cover: those sent in the range. An old email
-    // clicked today belongs to the range it was sent in, not this one.
-    client.$queryRaw`
-      SELECT coalesce(l.category, 'OTHER') AS category,
-             count(DISTINCT l.id) FILTER (WHERE e.kind = 'CLICK')::int AS clicked,
-             count(DISTINCT l.id) FILTER (WHERE e.kind = 'OPEN')::int AS opened
-      FROM email_engagement_events e
-      JOIN communication_logs l ON l.id = e."communicationLogId"
-      WHERE l.channel = 'email' AND l."sentAt" >= ${ts(from)}::timestamp AND NOT e."suspectedBot"
-      GROUP BY 1`,
+             count(*) FILTER (WHERE status = 'SENT')::int AS unconfirmed,
+             count(*) FILTER (WHERE clicked)::int AS clicked,
+             count(*) FILTER (WHERE opened)::int AS opened
+      FROM sent
+      GROUP BY category`,
     client.$queryRaw`
       SELECT link, coalesce(category, 'OTHER') AS category,
              count(*)::int AS clicks,
@@ -158,13 +185,13 @@ export async function email(days, options = {}) {
       ORDER BY count DESC
       LIMIT 10`,
     client.$queryRaw`
+      WITH sent AS (${sentEmails(from)})
       SELECT to_char(("sentAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ANALYTICS_TZ}, 'YYYY-MM-DD') AS day,
              count(*)::int AS sent,
-             count(*) FILTER (WHERE status IN ('DELIVERED', 'CLICKED'))::int AS delivered,
+             count(*) FILTER (WHERE delivered)::int AS delivered,
              count(*) FILTER (WHERE status IN ('BOUNCED', 'COMPLAINED', 'FAILED'))::int AS problems,
-             count(*) FILTER (WHERE status = 'CLICKED')::int AS clicked
-      FROM communication_logs
-      WHERE channel = 'email' AND "sentAt" >= ${ts(from)}::timestamp
+             count(*) FILTER (WHERE clicked)::int AS clicked
+      FROM sent
       GROUP BY 1`,
     // For "did the link land somewhere broken": browser errors and views per page.
     client.$queryRaw`
@@ -176,7 +203,6 @@ export async function email(days, options = {}) {
       GROUP BY path`,
   ]);
 
-  const clicksBy = Object.fromEntries(clicks.map((c) => [c.category, c]));
   const landingBy = Object.fromEntries(landing.map((l) => [l.path, l]));
   const perDayBy = Object.fromEntries(perDay.map((d) => [d.day, d]));
 
@@ -191,18 +217,13 @@ export async function email(days, options = {}) {
     // Every row still SENT means SES delivery events are not reaching the webhook.
     deliveryReporting: totalSent === 0 || totalUnconfirmed < totalSent,
     categories: categories
-      .map((c) => {
-        const engaged = clicksBy[c.category] || { clicked: 0, opened: 0 };
-        return {
-          ...c,
-          clicked: engaged.clicked,
-          opened: engaged.opened,
-          deliveryRate: ratio(c.delivered, c.sent),
-          bounceRate: ratio(c.bounced, c.sent),
-          complaintRate: ratio(c.complained, c.sent),
-          clickRate: ratio(engaged.clicked, c.delivered),
-        };
-      })
+      .map((c) => ({
+        ...c,
+        deliveryRate: ratio(c.delivered, c.sent),
+        bounceRate: ratio(c.bounced, c.sent),
+        complaintRate: ratio(c.complained, c.sent),
+        clickRate: ratio(c.clicked, c.delivered),
+      }))
       .sort((a, b) => b.sent - a.sent),
     topLinks: topLinks.map((l) => {
       const path = landingPath(l.link);

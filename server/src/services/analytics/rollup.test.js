@@ -19,6 +19,7 @@ const fakeClient = () => {
     analyticsDailyFact: { deleteMany: vi.fn((a) => ({ op: 'delF', a })), createMany: vi.fn((a) => ({ op: 'addF', a })) },
     $transaction: vi.fn(async (ops) => ops),
     $executeRawUnsafe: vi.fn(async () => 0),
+    $executeRaw: vi.fn(async () => 0),
   };
   return client;
 };

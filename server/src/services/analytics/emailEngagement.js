@@ -43,6 +43,36 @@ const eventId = (parts) => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 };
 
+// How far back an engagement row without a log id is worth re-matching. SES
+// reports within minutes; anything older is from mail sent outside the app
+// and will never match.
+const ORPHAN_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Attach clicks and opens that arrived before their communications log row
+ * was written (or while that write was failing) to the row, now that it
+ * exists. Idempotent and bounded to recent unlinked rows. Called before the
+ * Email tab reads and by the nightly rollup. Never throws.
+ */
+export async function linkOrphanEngagement(client = prisma, now = new Date()) {
+  try {
+    const since = new Date(now.getTime() - ORPHAN_LOOKBACK_MS).toISOString();
+    return await client.$executeRaw`
+      UPDATE email_engagement_events e
+      SET "communicationLogId" = l.id,
+          category = coalesce(e.category, l.category)
+      FROM communication_logs l
+      WHERE e."communicationLogId" IS NULL
+        AND e.at >= ${since}::timestamp
+        AND l.channel = 'email'
+        AND l."providerMessageId" LIKE '<' || e."sesMessageId" || '@%'
+        AND lower(l.recipient) = e.recipient`;
+  } catch (error) {
+    logError('[analytics] could not link email engagement to log rows:', error?.message || error);
+    return 0;
+  }
+}
+
 /** Never throws: SNS retries a failed post, and this must not make it replay an event the log already applied. */
 export async function recordEmailEngagement({ event, outcome, sesId }, client = prisma) {
   try {

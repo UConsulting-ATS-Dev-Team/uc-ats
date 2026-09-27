@@ -125,6 +125,12 @@ describe('SecurityTab', () => {
     expect(onFilter).toHaveBeenCalledWith({ page: 0 });
   });
 
+  it('keeps the paged access log in server order, with no sort controls', () => {
+    render(<SecurityTab data={SECURITY} onFilter={vi.fn()} />);
+    const header = screen.getAllByRole('columnheader', { name: 'When' }).at(-1);
+    expect(header.querySelector('.MuiTableSortLabel-root')).toBeNull();
+  });
+
   it('says so when nothing critical happened', () => {
     render(<SecurityTab data={{ ...SECURITY, anomalies: [] }} onFilter={vi.fn()} />);
     expect(screen.getByText(/No critical events in this range/)).toBeInTheDocument();

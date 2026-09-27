@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -102,6 +102,7 @@ function AnalyticsDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [rollup, setRollup] = useState({ running: false, message: '', severity: 'info' });
+  const requestSeq = useRef(0);
 
   const setParam = (key, value, fallback) => {
     const next = new URLSearchParams(params);
@@ -125,6 +126,11 @@ function AnalyticsDashboard() {
       setData(null);
       return;
     }
+    // Only the latest request may touch the screen. Filters and pages change
+    // faster than the server answers, and an older response arriving last
+    // would otherwise show rows that do not match the filters in the URL.
+    const request = ++requestSeq.current;
+    const isLatest = () => request === requestSeq.current;
     setLoading(true);
     setError('');
     try {
@@ -135,12 +141,14 @@ function AnalyticsDashboard() {
           if (params.get(param)) query.set(name, params.get(param));
         }
       }
-      setData({ tab: tab.key, payload: await apiClient.get(`/admin/analytics/${tab.endpoint}?${query}`) });
+      const payload = await apiClient.get(`/admin/analytics/${tab.endpoint}?${query}`);
+      if (isLatest()) setData({ tab: tab.key, payload });
     } catch (e) {
+      if (!isLatest()) return;
       setError(e.serverMessage || e.message || 'Could not load analytics');
       setData(null);
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
     // securityKey stands in for the security params, so other URL changes do not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps

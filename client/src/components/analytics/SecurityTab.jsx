@@ -151,6 +151,7 @@ export default function SecurityTab({ data, onFilter }) {
       </SectionTitle>
       <SortableTable
         rows={data.execAccess.rows}
+        sortable={false}
         rowKey={(r) => r.id}
         initialSort="createdAt"
         maxRows={data.execAccess.pageSize}
@@ -244,6 +245,7 @@ export default function SecurityTab({ data, onFilter }) {
         <Paper variant="outlined">
           <SortableTable
             rows={data.denied.rows}
+            sortable={false}
             rowKey={(r) => r.id}
             initialSort="at"
             maxRows={data.denied.pageSize}

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { isSuspectedBot, recordEmailEngagement, stripQuery } from './emailEngagement.js';
+import { isSuspectedBot, linkOrphanEngagement, recordEmailEngagement, stripQuery } from './emailEngagement.js';
 
 vi.mock('../../prismaClient.js', () => ({ default: {} }));
 vi.mock('./log.js', () => ({ logError: vi.fn() }));
@@ -27,6 +27,19 @@ describe('stripQuery', () => {
   it('keeps origin and path only', () => {
     expect(stripQuery('https://ats.test/interview-signup?token=abc#x')).toBe('https://ats.test/interview-signup');
     expect(stripQuery(null)).toBeNull();
+  });
+});
+
+describe('linkOrphanEngagement', () => {
+  it('reports how many clicks it attached, and never throws', async () => {
+    await expect(linkOrphanEngagement({ $executeRaw: vi.fn(async () => 3) })).resolves.toBe(3);
+    await expect(
+      linkOrphanEngagement({
+        $executeRaw: vi.fn(async () => {
+          throw new Error('no table');
+        }),
+      })
+    ).resolves.toBe(0);
   });
 });
 
