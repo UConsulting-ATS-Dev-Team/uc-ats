@@ -43,7 +43,7 @@ export const TABS = [
 
 // The Security tab's access-log filters, as URL parameters (sec_ prefixed so
 // they never collide with the page's own `role`).
-const SECURITY_PARAMS = { kind: 'sec_kind', role: 'sec_role', ip: 'sec_ip', page: 'sec_page' };
+const SECURITY_PARAMS = { kind: 'sec_kind', role: 'sec_role', ip: 'sec_ip', page: 'sec_page', execPage: 'sec_exec_page' };
 
 export function describeRollup(days) {
   if (days.length <= 2) return days.map(fmtDay).join(' and ');
@@ -118,7 +118,8 @@ function AnalyticsDashboard() {
     const next = new URLSearchParams(params);
     for (const [name, value] of Object.entries(changes)) {
       const param = SECURITY_PARAMS[name];
-      if (value === null || value === undefined || value === '' || (name === 'page' && Number(value) === 0)) next.delete(param);
+      const isFirstPage = (name === 'page' || name === 'execPage') && Number(value) === 0;
+      if (value === null || value === undefined || value === '' || isFirstPage) next.delete(param);
       else next.set(param, String(value));
     }
     setParams(next, { replace: true });

@@ -43,7 +43,8 @@ export default function EmailTab({ data }) {
     <Box>
       {!data.trackingActive && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          <AlertTitle>Click tracking is not reporting yet</AlertTitle>
+          <AlertTitle>Click tracking is not reporting</AlertTitle>
+          No click has arrived from Amazon SES in the last 30 days.{' '}
           Clicks and opens arrive from Amazon SES once the configuration set&apos;s SNS event destination has the
           <strong> Click</strong> and <strong>Open</strong> event types turned on (see CLAUDE.md, Site analytics). Sending
           and delivery below work without it. Password reset, verification, invite and unsubscribe links are never
@@ -71,7 +72,7 @@ export default function EmailTab({ data }) {
           value={fmtPct(rate(total.complained, total.sent), 2)}
           caption={`${fmtNum(total.complained)} · SES reviews at 0.1%`}
         />
-        <StatTile label="Clicked" value={fmtPct(rate(total.clicked, total.delivered))} caption={`${fmtNum(total.clicked)} people, bots excluded`} />
+        <StatTile label="Clicked" value={fmtPct(rate(total.clicked, total.delivered))} caption={`${fmtNum(total.clicked)} emails, scanners excluded`} />
       </Stack>
 
       <SectionTitle>Per day</SectionTitle>
@@ -85,7 +86,7 @@ export default function EmailTab({ data }) {
         ]}
       />
 
-      <SectionTitle subtitle="Which automatic emails reach people and get acted on. Click rate is people who clicked out of those delivered.">
+      <SectionTitle subtitle="Which automatic emails reach people and get acted on, for emails sent in the range. Opened and clicked count emails, not clicks: an email clicked three times counts once.">
         By kind of email
       </SectionTitle>
       <SortableTable

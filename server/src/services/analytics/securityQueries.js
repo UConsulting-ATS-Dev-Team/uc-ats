@@ -22,9 +22,11 @@ export function readSecurityFilters(query = {}) {
   const kind = DENIED_KINDS.includes(query.kind) ? query.kind : null;
   const role = ROLES.includes(query.role) ? query.role : null;
   const ip = typeof query.ip === 'string' && /^[0-9a-fA-F:.]{1,45}$/.test(query.ip) ? query.ip : null;
-  const page = Math.max(0, Math.min(1000, Number.parseInt(query.page, 10) || 0));
-  return { kind, role, ip, page };
+  const pageOf = (v) => Math.max(0, Math.min(1000, Number.parseInt(v, 10) || 0));
+  return { kind, role, ip, page: pageOf(query.page), execPage: pageOf(query.execPage) };
 }
+
+const EXEC_ACTIONS = ['UNLOCK_OK', 'UNLOCK_FAILED', 'UNLOCK_RATE_LIMITED', 'UNLOCK_RECORD', 'PASSWORD_SET'];
 
 async function emailsFor(userIds, client) {
   const ids = [...new Set(userIds.filter(Boolean))];
@@ -37,7 +39,8 @@ export async function security(days, filters = {}, options = {}) {
   const client = options.client || prisma;
   const ctx = await rangeContext(days, options);
   const from = ts(dayBounds(ctx.startDay).from);
-  const { kind, role, ip, page } = filters;
+  const { kind, role, ip, page = 0, execPage = 0 } = filters;
+  const execWhere = { createdAt: { gte: dayBounds(ctx.startDay).from }, action: { in: EXEC_ACTIONS } };
 
   const deniedWhere = {
     at: { gte: dayBounds(ctx.startDay).from },
@@ -46,7 +49,7 @@ export async function security(days, filters = {}, options = {}) {
     ...(ip ? { ip } : {}),
   };
 
-  const [posture, anomalies, deniedRows, deniedTotal, byKind, execLog, logins, topIps] = await Promise.all([
+  const [posture, anomalies, deniedRows, deniedTotal, byKind, execLog, execTotal, logins, topIps] = await Promise.all([
     runPostureChecks({ client }),
     client.$queryRaw`
       SELECT kind, ip, path, role,
@@ -74,13 +77,15 @@ export async function security(days, filters = {}, options = {}) {
       FROM security_events
       WHERE at >= ${from}::timestamp
       GROUP BY kind`,
-    client.$queryRaw`
-      SELECT action, "userId", "ipAddress", "candidateId", "createdAt"
-      FROM exec_access_logs
-      WHERE "createdAt" >= ${from}::timestamp
-        AND action IN ('UNLOCK_OK', 'UNLOCK_FAILED', 'UNLOCK_RATE_LIMITED', 'UNLOCK_RECORD', 'PASSWORD_SET')
-      ORDER BY "createdAt" DESC
-      LIMIT 200`,
+    // Paged, never capped: this list promises every use of the unlock.
+    client.execAccessLog.findMany({
+      where: execWhere,
+      orderBy: { createdAt: 'desc' },
+      skip: execPage * PAGE_SIZE,
+      take: PAGE_SIZE,
+      select: { id: true, action: true, userId: true, ipAddress: true, candidateId: true, createdAt: true },
+    }),
+    client.execAccessLog.count({ where: execWhere }),
     client.$queryRawUnsafe(
       `SELECT ${dayOf('at')} AS day, role,
               count(*) FILTER (WHERE kind = 'LOGIN_OK')::int AS ok,
@@ -122,7 +127,7 @@ export async function security(days, filters = {}, options = {}) {
     days,
     today: ctx.today,
     dataThrough: ctx.dataThrough,
-    filters: { kind, role, ip, page },
+    filters: { kind, role, ip, page, execPage },
     kinds: SECURITY_KINDS,
     posture,
     summary: Object.fromEntries(byKind.map((k) => [k.kind, { count: k.count, warn: k.warn, critical: k.critical }])),
@@ -130,11 +135,7 @@ export async function security(days, filters = {}, options = {}) {
     denied: { rows: deniedRows.map((r) => ({ ...r, user: who(r.userId) })), total: deniedTotal, page, pageSize: PAGE_SIZE },
     // Who opened sealed records, and who failed to. The executive unlock is the
     // one sanctioned way past a seal, so every use of it is on this list.
-    execAccess: {
-      unlocks: execRows.filter((r) => r.action === 'UNLOCK_OK' || r.action === 'UNLOCK_RECORD'),
-      failures: execRows.filter((r) => r.action === 'UNLOCK_FAILED' || r.action === 'UNLOCK_RATE_LIMITED'),
-      passwordChanges: execRows.filter((r) => r.action === 'PASSWORD_SET'),
-    },
+    execAccess: { rows: execRows, total: execTotal, page: execPage, pageSize: PAGE_SIZE },
     loginsPerDay,
     topIps,
   };

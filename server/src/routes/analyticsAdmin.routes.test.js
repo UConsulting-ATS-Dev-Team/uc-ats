@@ -83,11 +83,11 @@ describe('analytics admin routes', () => {
 
   it('passes only known security filters through', async () => {
     security.mockResolvedValue({});
-    await get('/security?kind=LOGIN_FAILED&role=ANON&ip=10.0.0.1&page=2');
-    await get("/security?kind=DROP TABLE&role=root&ip=1.1.1.1';--&page=-4");
+    await get('/security?kind=LOGIN_FAILED&role=ANON&ip=10.0.0.1&page=2&execPage=1');
+    await get("/security?kind=DROP TABLE&role=root&ip=1.1.1.1';--&page=-4&execPage=x");
     expect(security.mock.calls).toEqual([
-      [30, { kind: 'LOGIN_FAILED', role: 'ANON', ip: '10.0.0.1', page: 2 }],
-      [30, { kind: null, role: null, ip: null, page: 0 }],
+      [30, { kind: 'LOGIN_FAILED', role: 'ANON', ip: '10.0.0.1', page: 2, execPage: 1 }],
+      [30, { kind: null, role: null, ip: null, page: 0, execPage: 0 }],
     ]);
   });
 

@@ -42,13 +42,13 @@ const EMAIL = {
 describe('EmailTab', () => {
   it('explains how to turn click tracking on until SES reports any', () => {
     render(<EmailTab data={EMAIL} />);
-    expect(screen.getByText('Click tracking is not reporting yet')).toBeInTheDocument();
+    expect(screen.getByText('Click tracking is not reporting')).toBeInTheDocument();
     expect(screen.getByText('Interview scheduling')).toBeInTheDocument();
   });
 
   it('drops the notice once clicks arrive, and flags a bounce rate SES would review', () => {
     render(<EmailTab data={{ ...EMAIL, trackingActive: true }} />);
-    expect(screen.queryByText('Click tracking is not reporting yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('Click tracking is not reporting')).not.toBeInTheDocument();
     const chip = screen.getAllByText('8.0%').map((el) => el.closest('.MuiChip-root')).find(Boolean);
     expect(chip).toHaveClass('MuiChip-colorError');
   });
@@ -75,7 +75,12 @@ const SECURITY = {
     page: 0,
     pageSize: 50,
   },
-  execAccess: { unlocks: [], failures: [], passwordChanges: [] },
+  execAccess: {
+    rows: [{ id: 'x1', action: 'UNLOCK_FAILED', userId: 'u1', user: { email: 'member@ucla.edu' }, ipAddress: '7.7.7.7', createdAt: '2026-09-27T09:30:00Z' }],
+    total: 1,
+    page: 0,
+    pageSize: 50,
+  },
   loginsPerDay: [],
   topIps: [],
 };
@@ -100,6 +105,24 @@ describe('SecurityTab', () => {
     expect(screen.getByText('target@ucla.edu')).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole('button', { name: '5.5.5.5' })[0]);
     expect(onFilter).toHaveBeenCalledWith({ ip: '5.5.5.5', page: 0 });
+  });
+
+  it('lists failed executive unlocks with who tried', () => {
+    render(<SecurityTab data={SECURITY} onFilter={vi.fn()} />);
+    expect(screen.getByText('Wrong executive password')).toBeInTheDocument();
+    expect(screen.getByText('member@ucla.edu')).toBeInTheDocument();
+  });
+
+  it('offers a way back from a shared link past the last page', async () => {
+    const onFilter = vi.fn();
+    render(
+      <SecurityTab
+        data={{ ...SECURITY, filters: { ...SECURITY.filters, page: 9 }, denied: { rows: [], total: 1, page: 9, pageSize: 50 } }}
+        onFilter={onFilter}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the first page' }));
+    expect(onFilter).toHaveBeenCalledWith({ page: 0 });
   });
 
   it('says so when nothing critical happened', () => {

@@ -11,6 +11,8 @@ import { normalizeRoute } from './routeNormalizer.js';
 // The Engagement and Email tabs.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Click tracking counts as reporting when SES sent a click this recently.
+const TRACKING_RECENT_DAYS = 30;
 const ratio = (part, whole) => (whole > 0 ? part / whole : null);
 const later = (a, b) => new Date(Math.max(a.getTime(), b.getTime()));
 
@@ -68,7 +70,7 @@ export async function engagement(days, role = 'ALL', options = {}) {
     .slice(0, 100);
 
   // Pages nobody at all opened, whatever the user-type filter says.
-  const seen = role === 'ALL' ? new Set(topPages.map((p) => p.path)) : new Set((await factsInRange(['page'], 'ALL', days, options)).page.map((p) => p.key));
+  const seen = new Set((role === 'ALL' ? facts : await factsInRange(['page'], 'ALL', days, options)).page.map((p) => p.key));
   const unusedPages = KNOWN_PAGES.filter((p) => !seen.has(p));
 
   return {
@@ -107,7 +109,12 @@ export async function email(days, options = {}) {
   const clientFrom = later(from, new Date(now.getTime() - RETENTION_DAYS.clientEvents * DAY_MS));
 
   const [anyEngagement, categories, clicks, topLinks, bots, perDay, landing] = await Promise.all([
-    client.emailEngagementEvent.findFirst({ select: { id: true } }),
+    // Clicks specifically, and recently: opens reporting, or clicks that
+    // stopped arriving months ago, must not hide the setup notice.
+    client.emailEngagementEvent.findFirst({
+      where: { kind: 'CLICK', at: { gte: new Date(now.getTime() - TRACKING_RECENT_DAYS * DAY_MS) } },
+      select: { id: true },
+    }),
     client.$queryRaw`
       SELECT coalesce(category, 'OTHER') AS category,
              count(*)::int AS sent,
@@ -120,13 +127,16 @@ export async function email(days, options = {}) {
       FROM communication_logs
       WHERE channel = 'email' AND "sentAt" >= ${ts(from)}::timestamp
       GROUP BY 1`,
-    // Unique people who opened / clicked each kind of email, bots excluded.
+    // Emails opened / clicked, bots excluded, out of the same emails the
+    // sent and delivered counts cover: those sent in the range. An old email
+    // clicked today belongs to the range it was sent in, not this one.
     client.$queryRaw`
-      SELECT coalesce(category, 'OTHER') AS category,
-             count(DISTINCT coalesce("communicationLogId", "sesMessageId" || recipient)) FILTER (WHERE kind = 'CLICK')::int AS clicked,
-             count(DISTINCT coalesce("communicationLogId", "sesMessageId" || recipient)) FILTER (WHERE kind = 'OPEN')::int AS opened
-      FROM email_engagement_events
-      WHERE at >= ${ts(from)}::timestamp AND NOT "suspectedBot"
+      SELECT coalesce(l.category, 'OTHER') AS category,
+             count(DISTINCT l.id) FILTER (WHERE e.kind = 'CLICK')::int AS clicked,
+             count(DISTINCT l.id) FILTER (WHERE e.kind = 'OPEN')::int AS opened
+      FROM email_engagement_events e
+      JOIN communication_logs l ON l.id = e."communicationLogId"
+      WHERE l.channel = 'email' AND l."sentAt" >= ${ts(from)}::timestamp AND NOT e."suspectedBot"
       GROUP BY 1`,
     client.$queryRaw`
       SELECT link, coalesce(category, 'OTHER') AS category,

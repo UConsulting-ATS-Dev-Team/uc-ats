@@ -82,6 +82,18 @@ export function PostureChecklist({ checks }) {
   );
 }
 
+/** A shared link can point past the last page; say so and offer the way back. */
+function PastTheEnd({ onBack }) {
+  return (
+    <Box>
+      This page is past the end of the results.{' '}
+      <Button size="small" onClick={onBack}>
+        Back to the first page
+      </Button>
+    </Box>
+  );
+}
+
 const who = (row) => row.user?.email || (row.role ? ROLE_LABELS[row.role] : '—');
 
 export default function SecurityTab({ data, onFilter }) {
@@ -138,10 +150,17 @@ export default function SecurityTab({ data, onFilter }) {
         Sealed records
       </SectionTitle>
       <SortableTable
-        rows={[...data.execAccess.failures, ...data.execAccess.unlocks, ...data.execAccess.passwordChanges]}
-        rowKey={(r) => `${r.action}|${r.createdAt}|${r.userId}`}
+        rows={data.execAccess.rows}
+        rowKey={(r) => r.id}
         initialSort="createdAt"
-        empty="No executive unlocks or attempts in this range."
+        maxRows={data.execAccess.pageSize}
+        empty={
+          data.execAccess.page > 0 ? (
+            <PastTheEnd onBack={() => onFilter({ execPage: 0 })} />
+          ) : (
+            'No executive unlocks or attempts in this range.'
+          )
+        }
         columns={[
           {
             key: 'action',
@@ -160,6 +179,16 @@ export default function SecurityTab({ data, onFilter }) {
           { key: 'createdAt', label: 'When', render: (r) => fmtWhen(r.createdAt) },
         ]}
       />
+      {data.execAccess.total > data.execAccess.pageSize && (
+        <TablePagination
+          component="div"
+          count={data.execAccess.total}
+          page={Math.min(data.execAccess.page, Math.max(0, Math.ceil(data.execAccess.total / data.execAccess.pageSize) - 1))}
+          rowsPerPage={data.execAccess.pageSize}
+          rowsPerPageOptions={[data.execAccess.pageSize]}
+          onPageChange={(e, execPage) => onFilter({ execPage })}
+        />
+      )}
 
       <SectionTitle>Sign-ins per day</SectionTitle>
       <TrendChart
@@ -252,7 +281,9 @@ export default function SecurityTab({ data, onFilter }) {
           />
         </Paper>
       ) : (
-        <EmptyState>Nothing matches.</EmptyState>
+        <EmptyState>
+          {data.denied.page > 0 ? <PastTheEnd onBack={() => onFilter({ page: 0 })} /> : 'Nothing matches.'}
+        </EmptyState>
       )}
 
       <SectionTitle subtitle="Addresses behind the most refusals and flags. Sign-ins that worked are left out.">Top sources</SectionTitle>
