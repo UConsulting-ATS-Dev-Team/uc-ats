@@ -16,14 +16,12 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  Button,
   InputAdornment,
 } from '@mui/material';
 import {
   MarkEmailRead as MarkEmailReadIcon,
   AttachFile as AttachFileIcon,
   Search as SearchIcon,
-  Send as SendIcon,
 } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
@@ -31,6 +29,7 @@ import EmailTemplateEditor from '../components/EmailTemplateEditor';
 import EmailStyleEditor from '../components/EmailStyleEditor';
 import EmailThemeEditor from '../components/EmailThemeEditor';
 import EmailSignaturesEditor from '../components/EmailSignaturesEditor';
+import SendTestButton from '../components/SendTestButton';
 
 const AUDIENCE_COLORS = {
   Candidate: 'primary',
@@ -59,7 +58,6 @@ function AdminEmailTemplatesContent() {
   // How the Preview tab shows the email: at desktop width, at phone width, or
   // as the text/plain part a text-only client would show.
   const [view, setView] = useState('desktop');
-  const [testState, setTestState] = useState({ sending: false, message: '', severity: 'success' });
 
   useEffect(() => {
     let cancelled = false;
@@ -132,15 +130,6 @@ function AdminEmailTemplatesContent() {
     return [...byCategory.entries()];
   }, [templates, query]);
 
-  const sendTest = () => {
-    setTestState({ sending: true, message: '', severity: 'success' });
-    apiClient
-      .post(`/admin/email-templates/${encodeURIComponent(selectedKey)}/test`, {})
-      .then((data) => setTestState({ sending: false, message: `Sent to ${data.sentTo}. Only you received it.`, severity: 'success' }))
-      .catch((err) =>
-        setTestState({ sending: false, message: err.serverMessage || 'The test email could not be sent', severity: 'error' })
-      );
-  };
 
   if (loading) {
     return (
@@ -250,7 +239,6 @@ function AdminEmailTemplatesContent() {
                       onClick={() => {
                         setSelectedKey(template.key);
                         setTab('preview');
-                        setTestState({ sending: false, message: '', severity: 'success' });
                       }}
                     >
                       <ListItemText
@@ -374,22 +362,9 @@ function AdminEmailTemplatesContent() {
                       <ToggleButton value="text">Plain text</ToggleButton>
                     </ToggleButtonGroup>
                     <Box sx={{ flex: 1 }} />
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<SendIcon />}
-                      disabled={testState.sending}
-                      onClick={sendTest}
-                    >
-                      {testState.sending ? 'Sending…' : 'Send test to me'}
-                    </Button>
+                    {/* Keyed so a result for one email is not left showing on the next. */}
+                    <SendTestButton key={preview.key} previewKey={preview.key} />
                   </Stack>
-                )}
-
-                {tab === 'preview' && testState.message && (
-                  <Alert severity={testState.severity} onClose={() => setTestState((s) => ({ ...s, message: '' }))}>
-                    {testState.message}
-                  </Alert>
                 )}
 
                 {tab === 'preview' && (

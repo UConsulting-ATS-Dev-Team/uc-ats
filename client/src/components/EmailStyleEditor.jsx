@@ -18,6 +18,7 @@ import { RestartAlt as RestartAltIcon, Save as SaveIcon } from '@mui/icons-mater
 import apiClient from '../utils/api';
 import useDraftPreview from '../hooks/useDraftPreview';
 import EmailPreviewFrame from './EmailPreviewFrame';
+import SendTestButton from './SendTestButton';
 
 /**
  * How one automatic email looks: Designed or Plain, and its header colour.
@@ -312,7 +313,14 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
         </Stack>
       </Stack>
 
-      <EmailPreviewFrame preview={preview} />
+      <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+        <EmailPreviewFrame preview={preview} />
+        <SendTestButton
+          key={previewKey}
+          previewKey={previewKey}
+          draft={dirty && customValid ? { style: { ...draft, signatureId: liveSignatureId(draft.signatureId, signatures) } } : null}
+        />
+      </Stack>
     </Box>
   );
 }

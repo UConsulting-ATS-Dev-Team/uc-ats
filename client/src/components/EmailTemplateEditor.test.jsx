@@ -195,4 +195,22 @@ describe('EmailTemplateEditor', () => {
 
     expect(heading()).toHaveValue('Attendance Confirmation');
   });
+
+  it('sends a test with the unsaved wording, so it can be checked in a real inbox first', async () => {
+    const post = vi.spyOn(apiClient, 'post').mockImplementation((url) =>
+      Promise.resolve(url.endsWith('/test') ? { sentTo: 'admin@example.com' } : { key: 'rsvp-confirmation', label: 'RSVP', subject: 'S', html: '<p/>' })
+    );
+    render(<EmailTemplateEditor templateKey="rsvp-confirmation" previewKey="rsvp-confirmation" />);
+
+    await userEvent.clear(await screen.findByLabelText('Heading'));
+    await userEvent.type(screen.getByLabelText('Heading'), 'You are on the list');
+    await userEvent.click(screen.getByRole('button', { name: /send test to me/i }));
+
+    const [url, body] = post.mock.calls.find(([u]) => u.endsWith('/test'));
+    expect(url).toBe('/admin/email-templates/rsvp-confirmation/test');
+    expect(body.copy.heading).toBe('You are on the list');
+    expect(await screen.findByText(/with your unsaved changes/)).toBeInTheDocument();
+    expect(apiClient.put).not.toHaveBeenCalled();
+  });
 });
+

@@ -13,6 +13,7 @@ import { RestartAlt as RestartAltIcon, Save as SaveIcon } from '@mui/icons-mater
 import apiClient from '../utils/api';
 import useDraftPreview from '../hooks/useDraftPreview';
 import EmailPreviewFrame from './EmailPreviewFrame';
+import SendTestButton from './SendTestButton';
 
 /**
  * The wording of one automatic email, in boxes an admin can type into.
@@ -234,9 +235,10 @@ export default function EmailTemplateEditor({ templateKey, previewKey = null, on
         </Stack>
       </Stack>
       {previewKey && (
-        <Box sx={{ position: { lg: 'sticky' }, top: { lg: 16 } }}>
-          <EmailPreviewFrame preview={preview} height={{ xs: 420, lg: '70vh' }} />
-        </Box>
+        <Stack spacing={1.5} sx={{ position: { lg: 'sticky' }, top: { lg: 16 }, minWidth: 0 }}>
+          <EmailPreviewFrame preview={preview} height={{ xs: 420, lg: '64vh' }} />
+          <SendTestButton key={previewKey} previewKey={previewKey} draft={dirty ? { copy: draft } : null} />
+        </Stack>
       )}
     </Box>
   );
