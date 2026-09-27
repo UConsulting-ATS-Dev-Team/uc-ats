@@ -63,6 +63,14 @@ describe('GET /api/applications', () => {
     prisma.groups.findMany.mockResolvedValue([]);
   });
 
+  // Answers groups.findMany the way the database would, cycle filter included.
+  function mockGroups(groups) {
+    prisma.groups.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(groups.filter(g =>
+        where.id.in.includes(g.id) && (where.cycleId === undefined || where.cycleId === g.cycleId)))
+    );
+  }
+
   async function get(token = tokenFor(adminUser)) {
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -132,7 +140,7 @@ describe('GET /api/applications', () => {
     prisma.candidate.findMany.mockImplementation(({ where }) =>
       Promise.resolve(where?.recordsLockedAt ? [] : [{ id: 'candidate-1', assignedGroupId: group.id }])
     );
-    prisma.groups.findMany.mockResolvedValue([group]);
+    mockGroups([group]);
 
     const res = await get();
     expect(res.status).toBe(200);
@@ -229,10 +237,7 @@ describe('GET /api/applications', () => {
     prisma.candidate.findMany.mockImplementation(({ where }) =>
       Promise.resolve(where?.recordsLockedAt ? [] : [{ id: 'candidate-3', assignedGroupId: pastTeam.id }])
     );
-    prisma.groups.findMany.mockImplementation(({ where }) =>
-      Promise.resolve([pastTeam].filter(g =>
-        where.id.in.includes(g.id) && (where.cycleId === undefined || where.cycleId === g.cycleId)))
-    );
+    mockGroups([pastTeam]);
 
     const res = await get();
     expect(res.status).toBe(200);
