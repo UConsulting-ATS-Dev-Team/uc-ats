@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -36,7 +36,19 @@ export default function CustomEmailsPanel() {
   // Identifies one editing session. It changes when a different email is
   // opened or "New" is pressed - never when a new email is saved and gets its
   // id, because remounting then would throw away anything typed during the save.
+  //
+  // The ref is what a response checks when it lands. A save or an open that
+  // outlives its session is ignored: otherwise saving A, then opening B before
+  // A's reply arrives, would point B's editor at A, and the next Save would
+  // write B's content over A.
   const [session, setSession] = useState(0);
+  const sessionRef = useRef(0);
+  const startSession = () => {
+    sessionRef.current += 1;
+    setSession(sessionRef.current);
+    return sessionRef.current;
+  };
+  const isCurrent = (mine) => sessionRef.current === mine;
 
   const loadList = () =>
     apiClient
@@ -53,14 +65,14 @@ export default function CustomEmailsPanel() {
       .catch(() => {});
   }, []);
 
-  const open = (id) =>
+  const open = (id) => {
+    const mine = startSession();
+    setSelected(null);
     apiClient
       .get(`/admin/automatic-emails/${id}`)
-      .then((email) => {
-        setSelected(email);
-        setSession((n) => n + 1);
-      })
-      .catch((err) => setError(err.serverMessage || 'Failed to open that email'));
+      .then((email) => isCurrent(mine) && setSelected(email))
+      .catch((err) => isCurrent(mine) && setError(err.serverMessage || 'Failed to open that email'));
+  };
 
   const askToEnable = (email) => {
     setToggling(email.id);
@@ -98,8 +110,8 @@ export default function CustomEmailsPanel() {
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '300px 1fr' }, gap: 3, alignItems: 'start' }}>
       <Box>
         <Button fullWidth variant="outlined" startIcon={<AddIcon />} onClick={() => {
+            startSession();
             setSelected({ ...BLANK_EMAIL });
-            setSession((n) => n + 1);
           }} sx={{ mb: 1 }}>
           New automatic email
         </Button>
@@ -153,11 +165,11 @@ export default function CustomEmailsPanel() {
             options={options}
             signatures={signatures}
             onSaved={(saved) => {
-              setSelected(saved);
+              if (isCurrent(session)) setSelected(saved);
               loadList();
             }}
             onDeleted={() => {
-              setSelected(null);
+              if (isCurrent(session)) setSelected(null);
               loadList();
             }}
           />

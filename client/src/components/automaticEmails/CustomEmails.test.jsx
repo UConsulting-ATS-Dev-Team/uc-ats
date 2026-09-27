@@ -159,6 +159,42 @@ describe('the editor', () => {
     expect(apiClient.put).toHaveBeenCalledWith('/admin/automatic-emails/created-1', expect.anything());
   });
 
+  it('ignores a save that returns after another email was opened', async () => {
+    const OTHER = { ...EMAIL, id: 'ae2', name: 'Interview reminder', triggerSummary: '1 day before their interview' };
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/admin/automatic-emails') return Promise.resolve([EMAIL, OTHER]);
+      if (url === '/admin/automatic-emails/options') return Promise.resolve(OPTIONS);
+      if (url === '/admin/email-templates/signatures') return Promise.resolve([]);
+      if (url === '/admin/automatic-emails/ae1') return Promise.resolve(EMAIL);
+      if (url === '/admin/automatic-emails/ae2') return Promise.resolve(OTHER);
+      return Promise.reject(new Error(url));
+    });
+    let finishA;
+    apiClient.put.mockImplementation((url, body) =>
+      url.endsWith('/ae1')
+        ? new Promise((resolve) => {
+            finishA = () => resolve({ ...EMAIL, ...body.email });
+          })
+        : Promise.resolve({ ...OTHER, ...body.email })
+    );
+    render(<CustomEmailsPanel />);
+
+    await userEvent.click(await screen.findByText('Waitlist note'));
+    await userEvent.type(await screen.findByLabelText('Name'), ' v2');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await userEvent.click(screen.getByText('Interview reminder'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Interview reminder'));
+    finishA();
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/admin/automatic-emails'));
+
+    // Still B, and B's Save goes to B.
+    expect(screen.getByLabelText('Name')).toHaveValue('Interview reminder');
+    await userEvent.type(screen.getByLabelText('Name'), '!');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(apiClient.put).toHaveBeenLastCalledWith('/admin/automatic-emails/ae2', expect.anything());
+  });
+
   it('shows the fill-ins the trigger can supply', async () => {
     render(<CustomEmailsPanel />);
     await userEvent.click(await screen.findByText('Waitlist note'));
