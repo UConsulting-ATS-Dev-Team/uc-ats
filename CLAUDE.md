@@ -502,6 +502,18 @@ The system follows a **recruiting cycle-based workflow**:
 - Every server on the database runs this cron on the same tick, so each send takes
   `pg_try_advisory_xact_lock` on the slot and re-checks the log once it holds it (the
   attendance reminder does the same). Without the lock, five servers sent five copies.
+- **Attendance is "done" or "outstanding" per slot**, decided in one place
+  ([server/src/services/meetingAttendance.js](server/src/services/meetingAttendance.js),
+  mirrored for the pages in [client/src/utils/gtkucAttendance.js](client/src/utils/gtkucAttendance.js)).
+  `MeetingSignup.attended` defaults to false, so it cannot tell a no-show from someone
+  never marked. A slot is done when a host or admin pressed **Attendance done**
+  (`MeetingSlot.attendanceMarkedAt`) or every signup is checked; an ended slot with
+  anyone unchecked and no such press is outstanding. Moving a slot clears the mark.
+- The attendance reminder cron only looks back 24 hours past the end, so older slots are
+  reminded by hand: Get to Know UC → Time Slots → **Attendance overdue**, per row or in
+  bulk (`POST /api/admin/meeting-slots/attendance-reminders`). A manual send has no
+  once-only rule, re-checks the slot under the cron's lock, and logs the same
+  `ATTENDANCE_REMINDER` row, which is where "last reminded" comes from.
 - The member and admin slot pages have an "iMessage / email signups" button: one group
   iMessage (`sms://open?addresses=…`) in Messages, or one email as a Gmail compose tab
   (`mail.google.com/mail/?view=cm`, not `mailto:`, which opens whatever desktop mail app

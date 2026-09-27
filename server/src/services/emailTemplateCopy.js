@@ -237,7 +237,7 @@ const MEETING_ATTENDANCE_REMINDER = {
     block(
       'outro',
       'Closing',
-      "Attendance counts toward each candidate's application, so someone left unmarked loses credit for coming. The button below opens this slot; tick the box next to everyone who came."
+      "Attendance counts toward each candidate's application, so someone left unmarked loses credit for coming. The button below opens this slot: tick the box next to everyone who came, then press Attendance done so anyone left unticked counts as a no-show."
     ),
     signOff(RECRUITMENT_TEAM),
   ],
