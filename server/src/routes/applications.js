@@ -498,9 +498,11 @@ router.get('/', async (req, res) => {
     const candidateGroupMap = new Map(assignedGroupIdsForCandidates.map(c => [c.id, c.assignedGroupId]));
     const groupIdsForTeams = [...new Set(assignedGroupIdsForCandidates.map(c => c.assignedGroupId).filter(Boolean))];
 
+    // assignedGroupId lives on the candidate and survives into later cycles, but a
+    // team belongs to one cycle: a returning applicant would show last cycle's team.
     const reviewTeams = groupIdsForTeams.length > 0
       ? await prisma.groups.findMany({
-          where: { id: { in: groupIdsForTeams } },
+          where: { id: { in: groupIdsForTeams }, cycleId: activeCycle.id },
           include: groupMemberUserInclude
         })
       : [];
