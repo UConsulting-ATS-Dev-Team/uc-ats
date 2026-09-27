@@ -105,7 +105,9 @@ describe('externalContainment - CLIENT is confined to the portal', () => {
       '/api/client/resumes/assignment-1/pdf',
       '/api/auth/login',
       '/api/auth/verify',
-      '/api/health'
+      '/api/health',
+      // Site Analytics ingestion: the portal's own page views and errors.
+      '/api/analytics/events'
     ];
 
     const results = await Promise.all(

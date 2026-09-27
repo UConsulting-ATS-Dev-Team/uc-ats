@@ -49,6 +49,17 @@ import sesWebhookRoutes from './routes/sesWebhooks.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import lumaIntegrationRoutes from './routes/lumaIntegration.js';
 import lumaAdminRoutes from './routes/lumaAdmin.js';
+import analyticsAdminRoutes from './routes/analyticsAdmin.js';
+import analyticsIngestRoutes from './routes/analyticsIngest.js';
+import { requestMetrics } from './services/analytics/requestMetrics.js';
+import { installErrorCapture, expressErrorHandler } from './services/analytics/errorCapture.js';
+import { startAnalyticsJobs } from './services/analytics/rollup.js';
+import { flushAll, sleep } from './services/analytics/buffer.js';
+
+// Record every console.error and crash as a server error for Site Analytics.
+// Here rather than at import time so tests, which import services directly,
+// never get the wrapper. See services/analytics/errorCapture.js.
+installErrorCapture();
 
 const app = express();
 
@@ -93,8 +104,14 @@ app.use('/api/uploads', express.static('uploads', {
 // Transparent to every other role and to unauthenticated requests.
 app.use(externalContainment);
 
+// Times every request and records denied or suspicious ones. After
+// externalContainment, which has already resolved req.user from the token.
+app.use(requestMetrics);
+
 // Routes
 app.use('/api/auth', authRoutes);
+// Public: browsers post page views, clicks and errors here, signed in or not.
+app.use('/api/analytics/events', analyticsIngestRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
@@ -103,6 +120,7 @@ app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRout
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
 app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
+app.use('/api/admin/analytics', requireAuth, requireAdmin, analyticsAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);
@@ -135,28 +153,6 @@ app.use('/api/resume-uploads', resumeUploadsRoutes);
 app.use('/api/applicant-info', applicantInfoRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
-
-// Test endpoint to check if uploads directory is accessible
-app.get('/api/test-uploads', (req, res) => {
-  const fs = require('fs');
-  const path = require('path');
-  const uploadsPath = path.join(process.cwd(), 'uploads', 'profile-images');
-  
-  try {
-    const files = fs.readdirSync(uploadsPath);
-    res.json({ 
-      message: 'Uploads directory accessible',
-      files: files,
-      uploadsPath: uploadsPath
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Cannot access uploads directory',
-      details: error.message,
-      uploadsPath: uploadsPath
-    });
-  }
-});
 
 // Health check endpoint to test database connection
 app.get('/api/health', async (req, res) => {
@@ -200,6 +196,10 @@ if (serveClient) {
 
   console.log(`Serving client bundle from ${clientDistPath}`);
 }
+
+// Last: anything a route throws without catching, plus body-parser and CORS
+// failures, answers JSON instead of Express's HTML page, and a 5xx is recorded.
+app.use(expressErrorHandler);
 
 // Scheduled jobs run on one kind of server only; see `runCrons` in config.js.
 if (config.runCrons) {
@@ -250,10 +250,22 @@ if (config.runCrons) {
       attendanceRemindersRunning = false;
     }
   });
+
+  // Site analytics: roll up yesterday and prune raw rows, 02:15 Los Angeles.
+  startAnalyticsJobs(cron);
 } else {
   console.log(`Scheduled jobs are off here (CLIENT_URL ${config.clientUrl}). Set RUN_CRONS=true to run them.`);
 }
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);
+});
+
+// Render sends SIGTERM on every deploy. Give buffered analytics rows a moment
+// to reach the database, then close, and never hang the deploy on it.
+process.once('SIGTERM', () => {
+  Promise.race([flushAll(), sleep(2000)]).finally(() => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+  });
 });

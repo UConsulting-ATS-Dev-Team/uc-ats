@@ -231,6 +231,8 @@ The system follows a **recruiting cycle-based workflow**:
   `LUMA_SYNC_TOKEN` as a bearer token
 - `/api/admin/luma` - The admin side of that sync: the guests it could not settle, and
   linking one to a candidate or member by hand
+- `/api/admin/analytics` - Site Analytics read API and `POST /rollup` (admin only)
+- `/api/analytics/events` - Public: browsers post page views, clicks, errors and web vitals
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -651,6 +653,54 @@ The system follows a **recruiting cycle-based workflow**:
   of candidate resolution closes it, because both directions of the conflict leak through
   the same door.
 
+**Site analytics:**
+- Administration → Site Analytics (`/admin/analytics`): speed per user type, errors, and
+  what needs attention. Everything lives in
+  [server/src/services/analytics/](server/src/services/analytics/) and
+  [client/src/analytics/](client/src/analytics/).
+- User types are `roleOf()` in `roles.js`: ADMIN, MEMBER, CANDIDATE, TALENT (a `USER` with
+  `isExternalTalent`), CLIENT, ANON. Every table and chart uses these, not `UserRole`.
+- Four raw tables, written in batches by in-memory buffers (`buffer.js`, every 10s or 200
+  rows, capped, never throwing): `analytics_request_samples` (14 days),
+  `analytics_client_events` (30), `server_error_logs` (30), `security_events` (180).
+  Retention is `RETENTION_DAYS` in `constants.js`. A failed write drops the batch and says
+  so on the Errors tab; it never retries and never fails a request.
+- `requestMetrics` is mounted right after `externalContainment`, so `req.user` is already
+  known. It times every `/api` request (not `/api/health` or `/api/analytics`) and turns
+  401-with-a-token, 403, 423, 429, scanner paths and impossible successes into security
+  events.
+- **Impossible successes come from `GUARD_TABLE` in `guardBypass.js`**: which user types may
+  ever get a 2xx from each router. A success outside it is `GUARD_BYPASS_SUSPECT`,
+  CRITICAL. Add a row, and a test, whenever you mount a new role-gated router. Only list a
+  prefix whose router gates every route. Mixed-gate routers (`member.js` serves candidates
+  on bare `requireAuth`) are anonymous-only rows at WARN.
+- `installErrorCapture()` wraps `console.error` from `index.js` only, so the 500+ existing
+  `console.error` calls feed the Errors tab without changing. Tests never get the wrapper.
+  Code under `services/analytics/` logs through `logError` (the unwrapped original), or a
+  failed analytics write would capture itself. `unhandledRejection` / `uncaughtException`
+  record, flush for up to 1.5s, then exit(1) exactly as Node would.
+- `expressErrorHandler` is the last middleware: uncaught route errors, body-parse and CORS
+  failures now answer JSON (a 5xx never carries the message) instead of Express's HTML.
+- Sign-in attempts are recorded by `routes/auth.js`; five failures for one address or one
+  IP inside 15 minutes is one `BRUTE_FORCE` CRITICAL. Detected and shown, **not blocked**:
+  there is still no rate limit on `/api/auth/login`.
+- The browser tracker batches to `/api/analytics/events` with `fetch({ keepalive })`, which
+  carries the bearer token even on page close; identity comes only from that token, never
+  the body. Clicks are one document listener: label is `data-track`, then `aria-label`,
+  then text, capped at 60 with addresses masked. Put `data-track="…"` on a button whose text
+  is a person's name, and `data-no-track` on anything that must not be recorded. Paths are
+  normalized (ids, tokens, addresses replaced) on both ends and the query string is never
+  read. `apiClient` reports failed and slow (>2s) calls; `ErrorBoundary` in `main.jsx`
+  reports render crashes.
+- Nightly at 02:15 Los Angeles (inside the `runCrons` block) `runRollup` rolls up yesterday
+  **and** the day before into `analytics_daily_summaries` / `analytics_daily_facts`, then
+  prunes. It is idempotent (delete then insert per day). `POST /api/admin/analytics/rollup`
+  and the page's "Run rollup now" run the same thing. Today is always computed live.
+- Raw SQL against these `timestamp(3)` columns must pass times as
+  `${ts(date)}::timestamp` (`aggregate.js`). A JS `Date` is compared in the session's time
+  zone: fine on Supabase (UTC), hours off on any other database.
+- Kill switches: `ANALYTICS_DISABLED=1` (server), `VITE_ANALYTICS_DISABLED=1` (client).
+
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
@@ -805,6 +855,8 @@ Required in `server/.env`:
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
   that works elsewhere can still fail here with `ACCESS_DENIED`.
+- `ANALYTICS_DISABLED` - (Optional) `1` stops Site Analytics recording anything on the
+  server. The client's equivalent is `VITE_ANALYTICS_DISABLED=1` in `client/.env`.
 - `RUN_CRONS` - (Optional) Scheduled jobs (form sync, scheduled sends, GTKUC reminders)
   run only where `CLIENT_URL` is not localhost and `IS_PULL_REQUEST` is not set, so a
   laptop or preview on the shared database never emails anyone its own links. `true`

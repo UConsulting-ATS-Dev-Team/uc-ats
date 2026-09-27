@@ -89,6 +89,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'User Management', href: '/user-management', icon: UserIcon },
       { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
       { name: 'Automatic Emails', href: '/admin/email-templates', icon: EnvelopeOpenIcon },
+      { name: 'Site Analytics', href: '/admin/analytics', icon: ChartBarIcon },
     ],
   },
 ];

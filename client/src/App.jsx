@@ -65,6 +65,8 @@ import AdminQuestionBank from './pages/AdminQuestionBank';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import MasterCommunications from './pages/MasterCommunications';
+import AdminAnalytics from './pages/AdminAnalytics';
+import { trackRouteChange } from './analytics';
 import Profile from './pages/Profile';
 import ClientResumeLibrary from './pages/ClientResumeLibrary';
 import TalentSignUp from './pages/TalentSignUp';
@@ -222,7 +224,13 @@ const HomeRoute = () => {
 
 const AppRoutes = () => {
   const { user } = useAuth();
-  
+  const location = useLocation();
+
+  // Site Analytics page views. The pathname only: tokens live in the query.
+  useEffect(() => {
+    trackRouteChange(location.pathname);
+  }, [location.pathname]);
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -693,6 +701,16 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MasterCommunications />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Site Analytics (admin only; the page gates itself) */}
+      <Route
+        path="/admin/analytics"
+        element={
+          <ProtectedRoute>
+            <AdminAnalytics />
           </ProtectedRoute>
         }
       />

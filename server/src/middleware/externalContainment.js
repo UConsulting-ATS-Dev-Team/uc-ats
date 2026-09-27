@@ -30,7 +30,11 @@ const CLIENT_ALLOWED_EXACT = new Set([
   // would be turned away from the endpoint that signs them in.
   '/api/auth/google',
   '/api/auth/verify',
-  '/api/health'
+  '/api/health',
+  // Site Analytics ingestion. A partner client's page views and errors belong
+  // on the Performance and Errors tabs like anyone else's; the endpoint writes
+  // only to analytics tables and reads nothing back.
+  '/api/analytics/events'
 ]);
 
 const CLIENT_ALLOWED_PREFIX = '/api/client/';

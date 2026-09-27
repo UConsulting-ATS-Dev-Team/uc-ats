@@ -1,3 +1,9 @@
+import { track } from '../analytics/tracker';
+import { normalizePath } from '../analytics/normalizePath';
+
+// A call slower than this is reported to Site Analytics. Mirrors SLOW_API_MS on the server.
+export const SLOW_API_MS = 2000;
+
 class ApiClient {
   constructor() {
     this.baseURL = '/api';
@@ -37,7 +43,22 @@ class ApiClient {
       config.headers['X-Exec-Unlock'] = this.execUnlockToken;
     }
 
-    const response = await fetch(url, config);
+    const method = (config.method || 'GET').toUpperCase();
+    const startedAt = performance.now();
+    let response;
+    try {
+      response = await fetch(url, config);
+    } catch (networkError) {
+      // Offline, DNS, CORS, or the server dropped the connection: the request
+      // never got an answer. Previously nothing saw these at all.
+      track('api_error', { path: normalizePath(endpoint), name: '0', meta: { method, network: true } });
+      throw networkError;
+    }
+
+    const elapsed = performance.now() - startedAt;
+    if (elapsed > SLOW_API_MS) {
+      track('api_slow', { path: normalizePath(endpoint), value: Math.round(elapsed), meta: { method } });
+    }
 
     if (!response.ok) {
       let error;
@@ -51,6 +72,16 @@ class ApiClient {
         } catch (textError) {
           error = { error: `Server Error (${response.status}): ${response.statusText}` };
         }
+      }
+
+      // An expired session answering 401 on its way to the login page is
+      // expected, not a failure worth a row.
+      if (!(response.status === 401 && endpoint.startsWith('/auth/'))) {
+        track('api_error', {
+          path: normalizePath(endpoint),
+          name: String(response.status),
+          meta: { method, code: error?.code || null },
+        });
       }
 
       console.error('API Error Response:', {
