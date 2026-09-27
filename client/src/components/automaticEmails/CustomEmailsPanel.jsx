@@ -65,13 +65,20 @@ export default function CustomEmailsPanel() {
       .catch(() => {});
   }, []);
 
+  // The editor on screen stays until the next email has actually loaded: if
+  // the load fails, the admin keeps their unsaved draft and sees the error
+  // beside it. Only the latest click counts when two loads race.
+  const openRef = useRef(0);
   const open = (id) => {
-    const mine = startSession();
-    setSelected(null);
+    const request = ++openRef.current;
     apiClient
       .get(`/admin/automatic-emails/${id}`)
-      .then((email) => isCurrent(mine) && setSelected(email))
-      .catch((err) => isCurrent(mine) && setError(err.serverMessage || 'Failed to open that email'));
+      .then((email) => {
+        if (request !== openRef.current) return;
+        startSession();
+        setSelected(email);
+      })
+      .catch((err) => request === openRef.current && setError(err.serverMessage || 'Failed to open that email'));
   };
 
   const askToEnable = (email) => {
@@ -110,6 +117,7 @@ export default function CustomEmailsPanel() {
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '300px 1fr' }, gap: 3, alignItems: 'start' }}>
       <Box>
         <Button fullWidth variant="outlined" startIcon={<AddIcon />} onClick={() => {
+            openRef.current += 1; // an email still loading must not replace this
             startSession();
             setSelected({ ...BLANK_EMAIL });
           }} sx={{ mb: 1 }}>

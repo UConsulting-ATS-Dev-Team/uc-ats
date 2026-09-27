@@ -195,6 +195,25 @@ describe('the editor', () => {
     expect(apiClient.put).toHaveBeenLastCalledWith('/admin/automatic-emails/ae2', expect.anything());
   });
 
+  it('keeps an unsaved draft when the next email fails to open', async () => {
+    const OTHER = { ...EMAIL, id: 'ae2', name: 'Interview reminder' };
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/admin/automatic-emails') return Promise.resolve([EMAIL, OTHER]);
+      if (url === '/admin/automatic-emails/options') return Promise.resolve(OPTIONS);
+      if (url === '/admin/email-templates/signatures') return Promise.resolve([]);
+      if (url === '/admin/automatic-emails/ae1') return Promise.resolve(EMAIL);
+      return Promise.reject(Object.assign(new Error('x'), { serverMessage: 'Failed to load the automatic email' }));
+    });
+    render(<CustomEmailsPanel />);
+    await userEvent.click(await screen.findByText('Waitlist note'));
+    await userEvent.type(await screen.findByLabelText('Name'), ' unsaved');
+
+    await userEvent.click(screen.getByText('Interview reminder'));
+
+    expect(await screen.findByText('Failed to load the automatic email')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Waitlist note unsaved');
+  });
+
   it('shows the fill-ins the trigger can supply', async () => {
     render(<CustomEmailsPanel />);
     await userEvent.click(await screen.findByText('Waitlist note'));
