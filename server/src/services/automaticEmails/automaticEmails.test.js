@@ -10,6 +10,7 @@ vi.mock('../../prismaClient.js', () => ({
     emailTemplateStyle: { findMany: vi.fn() },
     application: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
+    $transaction: vi.fn(),
   },
 }));
 vi.mock('../emailNotifications.js', () => ({ sendEmail: vi.fn() }));
@@ -52,6 +53,7 @@ beforeEach(() => {
   prisma.emailTemplateStyle.findMany.mockResolvedValue([]);
   prisma.application.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
 describe('what an admin may save', () => {
@@ -100,6 +102,24 @@ describe('turning one on', () => {
 
     expect(prisma.automaticEmail.update.mock.calls[0][0].data.enabledAt).toBeInstanceOf(Date);
     expect(prisma.automaticEmailSend.createMany.mock.calls[0][0].data[0]).toMatchObject({ status: 'SKIPPED', email: 'w@ucla.edu' });
+  });
+
+  it('seeds the skipped before turning it on, in one transaction, so no run sees one without the other', async () => {
+    const order = [];
+    prisma.application.findMany.mockResolvedValue([{ id: 'a1', email: 'w@ucla.edu', firstName: 'W', lastName: 'X' }]);
+    prisma.automaticEmailSend.createMany.mockImplementation(async () => {
+      order.push('seed');
+      return { count: 1 };
+    });
+    prisma.automaticEmail.update.mockImplementation(async ({ data }) => {
+      order.push('enable');
+      return (row = { ...row, ...data });
+    });
+
+    await setAutomaticEmailEnabled({ id: 'ae1', enabled: true });
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['seed', 'enable']);
   });
 
   it('starts over when the trigger of an enabled email changes', async () => {

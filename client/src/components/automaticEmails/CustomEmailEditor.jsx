@@ -117,6 +117,9 @@ export default function CustomEmailEditor({ email, options, signatures = [], onS
       'save',
       () => (email?.id ? apiClient.put(`/admin/automatic-emails/${email.id}`, { email: draft }) : apiClient.post('/admin/automatic-emails', { email: draft })),
       (data) => {
+        // What the server stored (trimmed, normalised), so Save goes quiet
+        // rather than offering to send the same thing again.
+        setDraft(editable(data));
         setMessage({ severity: 'success', text: email?.enabled ? 'Saved. The next send uses this.' : 'Saved. It stays off until you turn it on.' });
         onSaved?.(data);
       }

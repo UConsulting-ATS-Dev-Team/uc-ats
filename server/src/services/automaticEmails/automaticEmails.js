@@ -183,16 +183,33 @@ const sameTrigger = (a, b) => a.trigger === b.trigger && JSON.stringify(a.trigge
  * turning it on would: a rule that used to watch "Rejected" and now watches
  * "Waitlisted" must not reach everyone already waitlisted.
  */
+/**
+ * Writes the rule and, when its cut moves, seeds the people it must skip - in
+ * one transaction. The runner reads enabled rules outside it, so it sees the
+ * new trigger and the skipped rows together or neither. Seeding after the
+ * update instead leaves a moment where a run could email everybody already in
+ * the status.
+ */
+async function writeRule(client, id, data, { seedFrom = null } = {}) {
+  return client.$transaction(async (tx) => {
+    // `seedFrom` is the rule as it will be once written: seeding reads its
+    // trigger, which an enable-only update does not carry.
+    if (seedFrom) await seedExisting({ ...seedFrom, id }, { client: tx });
+    return tx.automaticEmail.update({ where: { id }, data });
+  });
+}
+
 export async function updateAutomaticEmail({ client = prisma, id, input, user }) {
   const before = await loadOrThrow(id, client);
   const data = await normalizeAutomaticEmail(input, { client });
   const retrigger = before.enabled && !sameTrigger(before, data);
 
-  const row = await client.automaticEmail.update({
-    where: { id },
-    data: { ...data, updatedById: user?.id ?? null, ...(retrigger ? { enabledAt: new Date() } : {}) },
-  });
-  if (retrigger) await seedExisting(row, { client });
+  await writeRule(
+    client,
+    id,
+    { ...data, updatedById: user?.id ?? null, ...(retrigger ? { enabledAt: new Date() } : {}) },
+    { seedFrom: retrigger ? data : null }
+  );
   return getAutomaticEmail(id, { client });
 }
 
@@ -201,11 +218,12 @@ export async function setAutomaticEmailEnabled({ client = prisma, id, enabled, u
   const before = await loadOrThrow(id, client);
   if (before.enabled === enabled) return getAutomaticEmail(id, { client });
 
-  const row = await client.automaticEmail.update({
-    where: { id },
-    data: { enabled, updatedById: user?.id ?? null, ...(enabled ? { enabledAt: new Date() } : {}) },
-  });
-  if (enabled) await seedExisting(row, { client });
+  await writeRule(
+    client,
+    id,
+    { enabled, updatedById: user?.id ?? null, ...(enabled ? { enabledAt: new Date() } : {}) },
+    { seedFrom: enabled ? before : null }
+  );
   return getAutomaticEmail(id, { client });
 }
 

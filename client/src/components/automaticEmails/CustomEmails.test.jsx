@@ -98,6 +98,19 @@ describe('the editor', () => {
     expect(body.email).not.toHaveProperty('enabled');
   });
 
+  it('goes quiet after saving, even when the server trimmed what was sent', async () => {
+    apiClient.put.mockImplementation((url, body) => Promise.resolve({ ...EMAIL, ...body.email, name: body.email.name.trim() }));
+    render(<CustomEmailsPanel />);
+    await userEvent.click(await screen.findByText('Waitlist note'));
+
+    await userEvent.type(await screen.findByLabelText('Name'), ' v2   ');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(/stays off until you turn it on/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Waitlist note v2');
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
   it('shows the fill-ins the trigger can supply', async () => {
     render(<CustomEmailsPanel />);
     await userEvent.click(await screen.findByText('Waitlist note'));

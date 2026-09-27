@@ -24,7 +24,7 @@ const occ = (n) => ({ subjectKey: `k${n}`, email: `p${n}@ucla.edu`, values: { fi
 
 let rows;
 const client = {
-  automaticEmail: { findMany: vi.fn() },
+  automaticEmail: { findMany: vi.fn(), findUnique: vi.fn() },
   automaticEmailSend: {
     findMany: vi.fn(async ({ where }) => rows.filter((r) => where.subjectKey.in.includes(r.subjectKey))),
     create: vi.fn(async ({ data }) => {
@@ -36,7 +36,7 @@ const client = {
     updateMany: vi.fn(async ({ where, data }) => {
       const row = rows.find((r) => r.id === where.id && r.status === where.status && r.attempts < where.attempts.lt);
       if (!row) return { count: 0 };
-      Object.assign(row, { status: data.status, attempts: row.attempts + 1 });
+      Object.assign(row, { status: data.status, attempts: row.attempts + 1, email: data.email });
       return { count: 1 };
     }),
     update: vi.fn(async ({ where, data }) => Object.assign(rows.find((r) => r.id === where.id), data)),
@@ -48,6 +48,11 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   rows = [];
   client.automaticEmail.findMany.mockResolvedValue([RULE]);
+  // The rule as it reads mid-run: unchanged unless a test says otherwise.
+  client.automaticEmail.findUnique.mockImplementation(async ({ where }) => {
+    const rules = await client.automaticEmail.findMany();
+    return rules.find((r) => r.id === where.id) ?? null;
+  });
   sendEmail.mockResolvedValue({ success: true });
 });
 
@@ -92,6 +97,34 @@ describe('runAutomaticEmails', () => {
 
     expect(sendEmail).toHaveBeenCalledTimes(3);
     expect(rows[0]).toMatchObject({ status: 'FAILED', attempts: 3, reason: 'SES throttled' });
+  });
+
+  it('records the current address when a retry reaches someone whose address changed', async () => {
+    findOccurrences.mockResolvedValue([occ(1)]);
+    sendEmail.mockResolvedValueOnce({ success: false, error: 'x' });
+    await runAutomaticEmails({ client });
+
+    findOccurrences.mockResolvedValue([{ ...occ(1), email: 'new@ucla.edu' }]);
+    await runAutomaticEmails({ client });
+
+    expect(sendEmail.mock.calls[1][0]).toBe('new@ucla.edu');
+    expect(rows[0]).toMatchObject({ status: 'SENT', email: 'new@ucla.edu' });
+  });
+
+  it('stops mid-run when the email is turned off', async () => {
+    findOccurrences.mockResolvedValue([occ(1), occ(2), occ(3)]);
+    let reads = 0;
+    client.automaticEmail.findUnique.mockImplementation(async () => (++reads > 1 ? { ...RULE, enabled: false } : RULE));
+
+    expect((await runAutomaticEmails({ client })).sent).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops mid-run when the email is pointed at another trigger', async () => {
+    findOccurrences.mockResolvedValue([occ(1), occ(2)]);
+    client.automaticEmail.findUnique.mockResolvedValue({ ...RULE, enabledAt: new Date(Date.now() + 1000) });
+
+    expect((await runAutomaticEmails({ client })).sent).toBe(0);
   });
 
   it('never retries one left mid-send, since it may already have gone', async () => {

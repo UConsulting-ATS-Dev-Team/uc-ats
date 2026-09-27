@@ -45,12 +45,25 @@ async function claim(client, rule, occurrence, existing) {
       throw error;
     }
   }
-  // A retry: only the run that flips FAILED to SENDING gets to send.
+  // A retry: only the run that flips FAILED to SENDING gets to send. The
+  // address is refreshed too, so the record names whoever this attempt reaches.
   const { count } = await client.automaticEmailSend.updateMany({
     where: { id: existing.id, status: 'FAILED', attempts: { lt: MAX_ATTEMPTS } },
-    data: { status: 'SENDING', attempts: { increment: 1 } },
+    data: { status: 'SENDING', attempts: { increment: 1 }, email: occurrence.email },
   });
   return count ? { id: existing.id } : null;
+}
+
+const sameCut = (a, b) =>
+  a.trigger === b.trigger &&
+  JSON.stringify(a.triggerConfig) === JSON.stringify(b.triggerConfig) &&
+  a.marketing === b.marketing &&
+  a.enabledAt?.getTime() === b.enabledAt?.getTime();
+
+/** The rule as it is now, or null if it was turned off or re-pointed since the run began. */
+async function stillCurrent(client, rule) {
+  const fresh = await client.automaticEmail.findUnique({ where: { id: rule.id } });
+  return fresh?.enabled && sameCut(fresh, rule) ? fresh : null;
 }
 
 async function runOne(rule, { client, now }) {
@@ -80,7 +93,14 @@ async function runOne(rule, { client, now }) {
 
   const tally = { sent: 0, failed: 0, suppressed: 0 };
   for (const occurrence of todo) {
-    const claimed = await claim(client, rule, occurrence, existing.get(occurrence.subjectKey));
+    // Re-read before every send. A run can take minutes, and an admin who
+    // turns an email off, or points it somewhere else, mid-run means it for
+    // the people not yet reached as much as for the next run. Wording edits
+    // carry on under the new wording.
+    const current = await stillCurrent(client, rule);
+    if (!current) break;
+
+    const claimed = await claim(client, current, occurrence, existing.get(occurrence.subjectKey));
     if (!claimed) continue;
 
     const status = marketingFor.get(occurrence.subjectKey);
@@ -96,7 +116,7 @@ async function runOne(rule, { client, now }) {
     const urls = status?.marketing ? unsubscribeUrls(occurrence.email) : null;
     let result;
     try {
-      const { subject, html } = await renderAutomaticEmail(rule, occurrence.values, { unsubscribeUrl: urls?.page ?? null });
+      const { subject, html } = await renderAutomaticEmail(current, occurrence.values, { unsubscribeUrl: urls?.page ?? null });
       result = await sendEmail(occurrence.email, subject, html, [], {
         category: 'CUSTOM_AUTOMATIC',
         recipientName: occurrence.values.fullName ?? null,
