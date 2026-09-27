@@ -57,6 +57,15 @@ const ORPHAN_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 export async function linkOrphanEngagement(client = prisma, now = new Date()) {
   try {
     const since = new Date(now.getTime() - ORPHAN_LOOKBACK_MS).toISOString();
+    // Nothing to do is the normal case; answer it from the communicationLogId
+    // index without touching communication_logs at all.
+    const orphan = await client.emailEngagementEvent.findFirst({
+      where: { communicationLogId: null, at: { gte: new Date(since) } },
+      select: { id: true },
+    });
+    if (!orphan) return 0;
+    // Only mail sent inside the same window can match, which bounds the log
+    // side to a range of its indexed sentAt instead of the whole table.
     return await client.$executeRaw`
       UPDATE email_engagement_events e
       SET "communicationLogId" = l.id,
@@ -64,6 +73,7 @@ export async function linkOrphanEngagement(client = prisma, now = new Date()) {
       FROM communication_logs l
       WHERE e."communicationLogId" IS NULL
         AND e.at >= ${since}::timestamp
+        AND l."sentAt" >= ${since}::timestamp
         AND l.channel = 'email'
         AND l."providerMessageId" LIKE '<' || e."sesMessageId" || '@%'
         AND lower(l.recipient) = e.recipient`;

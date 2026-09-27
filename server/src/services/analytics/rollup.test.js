@@ -20,6 +20,7 @@ const fakeClient = () => {
     $transaction: vi.fn(async (ops) => ops),
     $executeRawUnsafe: vi.fn(async () => 0),
     $executeRaw: vi.fn(async () => 0),
+    emailEngagementEvent: { findFirst: vi.fn(async () => null) },
   };
   return client;
 };

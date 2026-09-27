@@ -104,6 +104,9 @@ export function landingPath(link, clientUrl = config.clientUrl) {
   }
 }
 
+const ORPHAN_LINK_INTERVAL_MS = 5 * 60 * 1000;
+let lastOrphanLink = 0;
+
 // Statuses that mean the recipient's server accepted the message. A spam
 // complaint can only follow a delivery, so it counts.
 const DELIVERED_STATUSES = ['DELIVERED', 'CLICKED', 'COMPLAINED'];
@@ -135,8 +138,13 @@ export async function email(days, options = {}) {
   const clientFrom = later(from, new Date(now.getTime() - RETENTION_DAYS.clientEvents * DAY_MS));
 
   // A click or open stored before its log row was written has no log id yet;
-  // attach it now so it counts under its email like every other.
-  await linkOrphanEngagement(client, now);
+  // attach it now so it counts under its email like every other. At most
+  // every few minutes per process: the nightly rollup does it too, and a busy
+  // admin reloading the tab should not repeat the work.
+  if (now.getTime() - lastOrphanLink >= ORPHAN_LINK_INTERVAL_MS) {
+    lastOrphanLink = now.getTime();
+    await linkOrphanEngagement(client, now);
+  }
 
   // Every rate below is over one set: emails sent in the range, each with
   // whether a person (not a scanner) opened or clicked it. An old email

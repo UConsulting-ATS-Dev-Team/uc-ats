@@ -31,15 +31,25 @@ describe('stripQuery', () => {
 });
 
 describe('linkOrphanEngagement', () => {
-  it('reports how many clicks it attached, and never throws', async () => {
-    await expect(linkOrphanEngagement({ $executeRaw: vi.fn(async () => 3) })).resolves.toBe(3);
-    await expect(
-      linkOrphanEngagement({
-        $executeRaw: vi.fn(async () => {
-          throw new Error('no table');
-        }),
-      })
-    ).resolves.toBe(0);
+  const client = (orphan) => ({
+    emailEngagementEvent: { findFirst: vi.fn(async () => orphan) },
+    $executeRaw: vi.fn(async () => 3),
+  });
+
+  it('does not touch the log at all when nothing is unlinked', async () => {
+    const c = client(null);
+    await expect(linkOrphanEngagement(c)).resolves.toBe(0);
+    expect(c.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('reports how many clicks it attached', async () => {
+    await expect(linkOrphanEngagement(client({ id: 'e1' }))).resolves.toBe(3);
+  });
+
+  it('never throws', async () => {
+    const c = client({ id: 'e1' });
+    c.$executeRaw.mockRejectedValue(new Error('no table'));
+    await expect(linkOrphanEngagement(c)).resolves.toBe(0);
   });
 });
 
