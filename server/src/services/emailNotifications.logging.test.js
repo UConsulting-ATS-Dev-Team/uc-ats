@@ -13,6 +13,18 @@ vi.mock('@aws-sdk/client-sesv2', () => ({
   SendEmailCommand: class {},
 }));
 
+// An empty database: every table reads as having no rows, so the wording, theme
+// and style lookups fall through to the shipped defaults these tests describe.
+// Without it those lookups went to whatever DATABASE_URL was set, which on a
+// developer's machine was production.
+vi.mock('../prismaClient.js', () => ({
+  default: new Proxy({}, {
+    get: () => new Proxy({}, {
+      get: (_, method) => async () => (String(method).startsWith('findMany') ? [] : null),
+    }),
+  }),
+}));
+
 const recordCommunication = vi.fn();
 vi.mock('./communicationLog.js', () => ({
   recordCommunication: (...args) => recordCommunication(...args),

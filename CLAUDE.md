@@ -927,8 +927,10 @@ const application = await prisma.application.findUnique({
   production's `communication_logs`. Mock what a test needs; do not undo the setup.
 - **Scheduled sends are claimed before they send.** `processScheduledMessages` moves a
   schedule `PENDING → SENDING` with a conditional update and only the run whose claim
-  lands sends it; every server on the database runs that cron each minute. A schedule
-  left `SENDING` means a server died mid-send, and is deliberately not retried.
+  lands sends it; every server on the database runs that cron each minute. While it
+  sends it refreshes the schedule's `updatedAt` about once a minute; one silent for 15
+  minutes shows as **Interrupted** and an admin may mark it failed. It is deliberately
+  never resent automatically, and the campaign is linked first so Logs show who got it.
 
 ## Git Workflow Notes
 

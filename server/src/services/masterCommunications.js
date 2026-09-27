@@ -115,38 +115,44 @@ function markdownToHtml(text) {
   return marked.parse(text, { breaks: true });
 }
 
-async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2, meta = {} }) {
+async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2, meta = {}, onProgress = null }) {
+  const sendTo = async (r) => {
+    const subject = renderMessage(baseSubject, r);
+    const body = renderMessage(baseBody, r);
+    // Marketing mail - anything to someone who is not active staff - carries
+    // an unsubscribe link in the footer and in the headers. applySuppressions
+    // has already held back whoever used one.
+    const unsubscribe = r.marketing ? unsubscribeUrls(r.email) : null;
+    const htmlBody = markdownToHtml(body) + (unsubscribe ? unsubscribeFooterHtml(unsubscribe.page) : '');
+    let lastError = 'Unknown error';
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const result = await sendEmail(r.email, subject, htmlBody, [], {
+        ...meta,
+        listUnsubscribeUrl: unsubscribe?.oneClick ?? null,
+        recipientName: r.fullName || null,
+        // Stable across this recipient's retries, so three attempts leave one
+        // row showing how the send ended, not three showing how it went.
+        attemptKey: meta.messageLogId ? `campaign:${meta.messageLogId}:${r.id}` : null,
+      });
+      if (result.success) {
+        return { recipientId: r.id, ...result };
+      }
+      lastError = result.error || 'Send failed';
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+
+    return { recipientId: r.id, success: false, error: lastError };
+  };
+
   return withConcurrency(
     recipients,
     async (r) => {
-      const subject = renderMessage(baseSubject, r);
-      const body = renderMessage(baseBody, r);
-      // Marketing mail - anything to someone who is not active staff - carries
-      // an unsubscribe link in the footer and in the headers. applySuppressions
-      // has already held back whoever used one.
-      const unsubscribe = r.marketing ? unsubscribeUrls(r.email) : null;
-      const htmlBody = markdownToHtml(body) + (unsubscribe ? unsubscribeFooterHtml(unsubscribe.page) : '');
-      let lastError = 'Unknown error';
-
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        const result = await sendEmail(r.email, subject, htmlBody, [], {
-          ...meta,
-          listUnsubscribeUrl: unsubscribe?.oneClick ?? null,
-          recipientName: r.fullName || null,
-          // Stable across this recipient's retries, so three attempts leave one
-          // row showing how the send ended, not three showing how it went.
-          attemptKey: meta.messageLogId ? `campaign:${meta.messageLogId}:${r.id}` : null,
-        });
-        if (result.success) {
-          return { recipientId: r.id, ...result };
-        }
-        lastError = result.error || 'Send failed';
-        if (attempt < retries) {
-          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-        }
-      }
-
-      return { recipientId: r.id, success: false, error: lastError };
+      const result = await sendTo(r);
+      if (onProgress) await onProgress();
+      return result;
     },
     concurrency
   );
@@ -475,6 +481,7 @@ export async function sendMasterCommunication({
   templateId,
   savedAudienceId,
   onCampaignLogged = null,
+  onProgress = null,
 }) {
   assertServerSentChannel(channel);
 
@@ -534,6 +541,7 @@ export async function sendMasterCommunication({
     baseBody: body,
     concurrency: 5,
     retries: 2,
+    onProgress,
     meta: {
       category: 'MASTER_COMMUNICATION',
       trigger: 'MANUAL',
@@ -610,9 +618,11 @@ export async function scheduleMessage({
   });
 }
 
-// How long a schedule may stay SENDING before it reads as interrupted. A send
-// to thousands takes minutes, so an hour means the server that claimed it died.
-export const STUCK_SENDING_MS = 60 * 60 * 1000;
+// A send in progress touches its schedule's updatedAt at most once a
+// HEARTBEAT_MS, however long it runs. A SENDING schedule silent for
+// STUCK_SENDING_MS therefore has no server working on it any more.
+const HEARTBEAT_MS = 60 * 1000;
+export const STUCK_SENDING_MS = 15 * 60 * 1000;
 
 const isInterrupted = (schedule, now = Date.now()) =>
   schedule.status === 'SENDING' && now - new Date(schedule.updatedAt).getTime() > STUCK_SENDING_MS;
@@ -647,8 +657,8 @@ export async function listScheduledMessages({ cycleId, status, limit = 50 }) {
 /**
  * Settle a scheduled send its server never finished, by marking it FAILED.
  * Sends nothing: part of the audience already has it, and messageLogId leads to
- * exactly who. Refused for a send still inside STUCK_SENDING_MS, which may just
- * be running.
+ * exactly who. Refused while the send is still beating its heartbeat, so a live
+ * send can never be marked failed under the worker still mailing it.
  */
 export async function markScheduleFailed({ id }) {
   const { count } = await prisma.messageSchedule.updateMany({
@@ -656,7 +666,7 @@ export async function markScheduleFailed({ id }) {
     data: { status: 'FAILED' },
   });
   if (count === 0) {
-    const err = new Error('Only a send interrupted for over an hour can be marked failed');
+    const err = new Error('Only a send that has stopped making progress can be marked failed');
     err.status = 409;
     throw err;
   }
@@ -702,9 +712,11 @@ export async function cancelScheduledMessage({ id, sentBy }) {
  * A server that dies mid-send leaves the schedule SENDING, and nothing sends
  * it again: some of the audience already has it, and mailing everyone a second
  * time is the bug this exists to prevent. Instead the campaign is linked to the
- * schedule as soon as it starts, so its per-recipient log shows who got it, and
- * after STUCK_SENDING_MS the schedule reads as interrupted for an admin to
- * settle with markScheduleFailed.
+ * schedule as soon as it starts, so its per-recipient log shows who got it; the
+ * send beats a heartbeat on the schedule while it runs; and a schedule whose
+ * heartbeat stops reads as interrupted for an admin to settle with
+ * markScheduleFailed. The final SENT / FAILED writes are conditional on the
+ * schedule still being SENDING, so they never overwrite that decision.
  */
 export async function processScheduledMessages() {
   const now = new Date();
@@ -729,6 +741,21 @@ export async function processScheduledMessages() {
     if (claimed === 0) continue; // another run claimed it, or it was cancelled
     processed += 1;
 
+    let lastBeat = Date.now();
+    const heartbeat = async () => {
+      if (Date.now() - lastBeat < HEARTBEAT_MS) return;
+      lastBeat = Date.now();
+      try {
+        await prisma.messageSchedule.updateMany({
+          where: { id: s.id, status: 'SENDING' },
+          data: { updatedAt: new Date() },
+        });
+      } catch (e) {
+        console.error(`[masterCommunications] heartbeat for schedule ${s.id} failed:`, e);
+      }
+    };
+    const settle = (data) => prisma.messageSchedule.updateMany({ where: { id: s.id, status: 'SENDING' }, data });
+
     try {
       const result = await sendMasterCommunication({
         audience: s.audience,
@@ -742,17 +769,12 @@ export async function processScheduledMessages() {
         savedAudienceId: s.savedAudienceId,
         onCampaignLogged: (logId) =>
           prisma.messageSchedule.update({ where: { id: s.id }, data: { messageLogId: logId } }),
+        onProgress: heartbeat,
       });
-      await prisma.messageSchedule.update({
-        where: { id: s.id },
-        data: { status: 'SENT', messageLogId: result.logId },
-      });
+      await settle({ status: 'SENT', messageLogId: result.logId });
     } catch (e) {
       console.error('[masterCommunications] scheduled send failed:', e);
-      await prisma.messageSchedule.update({
-        where: { id: s.id },
-        data: { status: 'FAILED' },
-      });
+      await settle({ status: 'FAILED' });
     }
   }
 
