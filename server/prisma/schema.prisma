@@ -2113,6 +2113,21 @@ enum LiveVoteValue {
   NO
 }
 
+/// The rubric graders score one document type against: 'resume' | 'coverLetter' | 'video'.
+/// No row means the rubric shipped in services/documentRubrics.js. Categories and how
+/// they add up are fixed by the code; the row holds wording and score ranges only.
+model DocumentRubric {
+  id          String   @id @default(uuid())
+  type        String   @unique
+  /// { categories: [{ id, title, description, min, max, criteria: [{ label, text }] }] }
+  rubric      Json
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("document_rubrics")
+}
+
 /// The default rubric for one Staging round, shown beside a live vote. Sessions
 /// copy it when they launch, so editing it never rewrites a past session.
 model DeliberationRubric {

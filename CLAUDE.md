@@ -224,6 +224,8 @@ The system follows a **recruiting cycle-based workflow**:
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
   (ADMIN/MEMBER read, admin-only write)
+- `/api/document-rubrics` - The resume / cover letter / video grading rubrics
+  (ADMIN/MEMBER read, admin-only write)
 - `/api/integrations/luma` - The hourly Luma sync routine's three endpoints. No user
   session ever reaches these; the caller is a scheduled Claude agent holding
   `LUMA_SYNC_TOKEN` as a bearer token
@@ -374,6 +376,33 @@ The system follows a **recruiting cycle-based workflow**:
 - `InterviewDecision` also has `UNSURE`, which no picker offers and the guide deliberately
   does not document. Adding it to the form means adding it to `DECISION_VALUES` in the
   service and `DECISION_OPTIONS` in the client.
+
+**Document grading rubrics:**
+- What a grader scores a resume, cover letter / short answer or video against. Admins edit
+  them from Admin Document Grading → "Edit rubrics": per category, the title, description,
+  whole-number range (min..max) and the criteria rows. Nothing about them is hard-coded in
+  the pages any more.
+- [server/src/services/documentRubrics.js](server/src/services/documentRubrics.js) owns the
+  defaults, validation, the overall-score rules and every range check. A type with no
+  `document_rubrics` row (or no table yet) reads as the shipped default.
+- **Not editable:** which categories exist and how they fold into the overall - resume
+  sums, cover letter averages, video is its one category. Every score table has exactly
+  three `Int` columns (`scoreOne/Two/Three`), and Staging reads `overallScore` with those
+  meanings.
+- **A range is a weight.** Staging's Resume Review ranking adds the three documents' raw
+  overall scores plus up to `PARTICIPATION_MAX` (3). Raising one type's max gives it more
+  say in the ranking; the editor says so as the range changes.
+- Scores are checked server-side on every grader save (`scoreFromRubric`) and admin edit
+  (`adminScorePatch`), `400 SCORE_OUT_OF_RANGE` otherwise. An admin edit checks only the
+  values it changes, so a score graded under an older, wider range stays editable.
+- Changing a range never rescales existing scores. Save previews first
+  (`POST /:type/preview`) and warns with how many of the admin cycle's scores would fall
+  outside it.
+- A blank category is `null`, not 0: 0 can be a real score, and a blank must not pull a
+  cover letter average down.
+- Every denominator on the client (`/13`, `/21`, the Staging bar) reads
+  [client/src/utils/documentRubrics.js](client/src/utils/documentRubrics.js), which shares one
+  fetch across the page and falls back to the shipped maxima until it arrives.
 
 **Live votes:**
 - An admin starts a session from any Staging tab. Admins and members join from anywhere in

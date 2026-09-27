@@ -97,6 +97,7 @@ import {
   updatePointConfig
 } from '../services/accountabilityPoints.js';
 import { mergeFieldsUsed } from '../services/emailCopyRender.js';
+import { adminScorePatch } from '../services/documentRubrics.js';
 
 const router = express.Router();
 
@@ -4562,7 +4563,7 @@ router.delete('/flagged-documents/:id', async (req, res) => {
 router.patch('/resume-scores/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { overallScore, scoreOne, scoreTwo, scoreThree, notes, adminScore, adminNotes } = req.body;
+    const { notes, adminNotes } = req.body;
 
     const resumeScore = await prisma.resumeScore.findUnique({
       where: { id }
@@ -4572,24 +4573,9 @@ router.patch('/resume-scores/:id', async (req, res) => {
       return res.status(404).json({ error: 'Resume score not found' });
     }
 
-    const updateData = {};
-    if (scoreOne !== undefined) updateData.scoreOne = scoreOne !== null ? parseInt(scoreOne) : null;
-    if (scoreTwo !== undefined) updateData.scoreTwo = scoreTwo !== null ? parseInt(scoreTwo) : null;
-    if (scoreThree !== undefined) updateData.scoreThree = scoreThree !== null ? parseInt(scoreThree) : null;
+    const updateData = await adminScorePatch({ type: 'resume', existing: resumeScore, body: req.body });
     if (notes !== undefined) updateData.notes = notes;
-    if (adminScore !== undefined) updateData.adminScore = adminScore !== null ? parseFloat(adminScore) : null;
     if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
-    
-    // Calculate overallScore if not explicitly provided but individual scores are updated
-    if (overallScore === undefined && (scoreOne !== undefined || scoreTwo !== undefined)) {
-      const scores = [
-        scoreOne !== undefined ? (scoreOne !== null ? parseInt(scoreOne) : null) : resumeScore.scoreOne,
-        scoreTwo !== undefined ? (scoreTwo !== null ? parseInt(scoreTwo) : null) : resumeScore.scoreTwo
-      ].filter(score => score !== null && score !== undefined);
-      updateData.overallScore = scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) : 0;
-    } else if (overallScore !== undefined) {
-      updateData.overallScore = parseFloat(overallScore);
-    }
 
     const updatedScore = await prisma.resumeScore.update({
       where: { id },
@@ -4606,6 +4592,7 @@ router.patch('/resume-scores/:id', async (req, res) => {
 
     res.json(updatedScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('[PATCH /api/admin/resume-scores/:id]', error);
     res.status(500).json({ error: 'Failed to update resume score' });
   }
@@ -4615,7 +4602,7 @@ router.patch('/resume-scores/:id', async (req, res) => {
 router.patch('/cover-letter-scores/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { overallScore, scoreOne, scoreTwo, scoreThree, notesOne, adminScore, adminNotes } = req.body;
+    const { notesOne, adminNotes } = req.body;
 
     const coverLetterScore = await prisma.coverLetterScore.findUnique({
       where: { id }
@@ -4625,25 +4612,9 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
       return res.status(404).json({ error: 'Cover letter score not found' });
     }
 
-    const updateData = {};
-    if (scoreOne !== undefined) updateData.scoreOne = scoreOne !== null ? parseInt(scoreOne) : null;
-    if (scoreTwo !== undefined) updateData.scoreTwo = scoreTwo !== null ? parseInt(scoreTwo) : null;
-    if (scoreThree !== undefined) updateData.scoreThree = scoreThree !== null ? parseInt(scoreThree) : null;
+    const updateData = await adminScorePatch({ type: 'coverLetter', existing: coverLetterScore, body: req.body });
     if (notesOne !== undefined) updateData.notesOne = notesOne;
-    if (adminScore !== undefined) updateData.adminScore = adminScore !== null ? parseFloat(adminScore) : null;
     if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
-    
-    // Calculate overallScore if not explicitly provided but individual scores are updated
-    if (overallScore === undefined && (scoreOne !== undefined || scoreTwo !== undefined || scoreThree !== undefined)) {
-      const scores = [
-        scoreOne !== undefined ? (scoreOne !== null ? parseInt(scoreOne) : null) : coverLetterScore.scoreOne,
-        scoreTwo !== undefined ? (scoreTwo !== null ? parseInt(scoreTwo) : null) : coverLetterScore.scoreTwo,
-        scoreThree !== undefined ? (scoreThree !== null ? parseInt(scoreThree) : null) : coverLetterScore.scoreThree
-      ].filter(score => score !== null && score !== undefined);
-      updateData.overallScore = scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
-    } else if (overallScore !== undefined) {
-      updateData.overallScore = parseFloat(overallScore);
-    }
 
     const updatedScore = await prisma.coverLetterScore.update({
       where: { id },
@@ -4660,6 +4631,7 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
 
     res.json(updatedScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('[PATCH /api/admin/cover-letter-scores/:id]', error);
     res.status(500).json({ error: 'Failed to update cover letter score' });
   }
@@ -4669,7 +4641,7 @@ router.patch('/cover-letter-scores/:id', async (req, res) => {
 router.patch('/video-scores/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { overallScore, scoreOne, scoreTwo, scoreThree, notesOne, adminScore, adminNotes } = req.body;
+    const { notesOne, adminNotes } = req.body;
 
     const videoScore = await prisma.videoScore.findUnique({
       where: { id }
@@ -4679,20 +4651,9 @@ router.patch('/video-scores/:id', async (req, res) => {
       return res.status(404).json({ error: 'Video score not found' });
     }
 
-    const updateData = {};
-    if (scoreOne !== undefined) updateData.scoreOne = scoreOne !== null ? parseInt(scoreOne) : null;
-    if (scoreTwo !== undefined) updateData.scoreTwo = scoreTwo !== null ? parseInt(scoreTwo) : null;
-    if (scoreThree !== undefined) updateData.scoreThree = scoreThree !== null ? parseInt(scoreThree) : null;
+    const updateData = await adminScorePatch({ type: 'video', existing: videoScore, body: req.body });
     if (notesOne !== undefined) updateData.notesOne = notesOne;
-    if (adminScore !== undefined) updateData.adminScore = adminScore !== null ? parseFloat(adminScore) : null;
     if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
-    
-    // Calculate overallScore if not explicitly provided but individual scores are updated
-    if (overallScore === undefined && scoreOne !== undefined) {
-      updateData.overallScore = scoreOne !== null ? parseInt(scoreOne) : 0;
-    } else if (overallScore !== undefined) {
-      updateData.overallScore = parseFloat(overallScore);
-    }
 
     const updatedScore = await prisma.videoScore.update({
       where: { id },
@@ -4709,6 +4670,7 @@ router.patch('/video-scores/:id', async (req, res) => {
 
     res.json(updatedScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('[PATCH /api/admin/video-scores/:id]', error);
     res.status(500).json({ error: 'Failed to update video score' });
   }

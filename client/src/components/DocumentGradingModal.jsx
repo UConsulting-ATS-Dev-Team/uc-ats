@@ -19,6 +19,7 @@ import {
   MenuItem,
   Chip,
   Divider,
+  Stack,
   Alert,
   CircularProgress
 } from '@mui/material';
@@ -34,10 +35,37 @@ import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
 import { toSameOriginDocumentUrl } from '../utils/documentUrl';
 import { coverLetterLabel } from '../utils/coverLetter';
+import {
+  aggregationText,
+  formatScore,
+  rangeLabel,
+  useDocumentRubrics
+} from '../utils/documentRubrics';
+
+const EMPTY_SCORES = Object.freeze({ scoreOne: '', scoreTwo: '', scoreThree: '' });
+
+/** A stored score as the input shows it. 0 is a score, not a blank. */
+const asInput = (value) => (value === null || value === undefined ? '' : String(value));
+
+/** Whether a criterion's label ("4-6", "2") covers `score`, to highlight the row that applies. */
+function labelCovers(label, score) {
+  if (score === '') return false;
+  const match = /^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$/.exec(label);
+  if (!match) return false;
+  const value = Number(score);
+  const low = Number(match[1]);
+  const high = match[2] !== undefined ? Number(match[2]) : low;
+  return value >= low && value <= high;
+}
+
+/** A category's score is out of its range (blank is not). */
+const outOfRange = (category, value) =>
+  value !== '' && (Number(value) < category.min || Number(value) > category.max);
 
 const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const { user, token } = useAuth();
   const isMobile = useIsMobile();
+  const { data: rubricData, error: rubricError, reload: reloadRubrics } = useDocumentRubrics();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -48,16 +76,18 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [mobileTab, setMobileTab] = useState(0);
 
-  // Resizable columns state
-  const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 83.3);
+  // Resizable columns state. The rubric needs roughly a third of the width to
+  // read without wrapping every word; a video wants more room than text.
+  const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 62);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef(null);
 
-  // Grading form state
-  const [scoreOne, setScoreOne] = useState('');
-  const [scoreTwo, setScoreTwo] = useState('');
-  const [scoreThree, setScoreThree] = useState('');
+  // Grading form state, keyed by score column
+  const [scores, setScores] = useState(EMPTY_SCORES);
   const [notes, setNotes] = useState('');
+
+  const rubricInfo = rubricData?.rubrics?.[documentType];
+  const categories = rubricInfo?.rubric?.categories || [];
 
   // Fall 2026 onward the cover letter slot holds a written answer, not a file.
   // It is graded with the cover letter rubric and shown as text.
@@ -74,30 +104,6 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           previewTitle: 'Resume Preview',
           icon: <DocumentIcon />,
           urlField: 'resumeUrl',
-          rubricCategories: [
-            {
-              id: 'scoreOne',
-              title: 'Content, Relevance, and Impact',
-              description: 'Evaluates how well the resume showcases relevant experience, leadership, and business acumen while clearly demonstrating measurable impact and achievements.',
-              maxScore: 10,
-              criteria: {
-                '1-3': 'Mostly generic experience, little relevance, no clear results',
-                '4-6': 'Relevant experience present, but minimal quantification or impact',
-                '7-10': 'Strong, relevant experience with leadership/impact metrics and quantifiable outcomes'
-              }
-            },
-            {
-              id: 'scoreTwo',
-              title: 'Structure & Formatting',
-              description: 'Assesses professionalism, organization, and readability.',
-              maxScore: 3,
-              criteria: {
-                1: 'Major red flags',
-                2: 'Easy to read but lacks professionalism',
-                3: 'Professional, structured and fully complete bullet points'
-              }
-            }
-          ],
           apiEndpoint: '/review-teams/resume-score',
           getScoreEndpoint: (candidateId, cycleId) => {
             const baseUrl = `/review-teams/resume-score/${candidateId}`;
@@ -110,41 +116,6 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           previewTitle: coverLetterLabel(application),
           icon: <EditIcon />,
           urlField: 'coverLetterUrl',
-          rubricCategories: [
-            {
-              id: 'scoreOne',
-              title: 'Consulting Interest',
-              description: 'Demonstrates understanding and passion for consulting career',
-              maxScore: 3,
-              criteria: {
-                3: 'Clearly articulates professional goals in consulting that strongly align personal experiences, traits, and skills. Shows passion and purpose for consulting interest.',
-                2: 'Shows substantial knowledge of consulting industry. Has clear goals set defining match between personality and consulting.',
-                1: 'Minimal or unclear interest in consulting. Little to no effort made to explore or understand the field.'
-              }
-            },
-            {
-              id: 'scoreTwo',
-              title: 'UC Interest',
-              description: 'Shows specific knowledge and interest in UConsulting',
-              maxScore: 3,
-              criteria: {
-                3: 'Applies specific references of UC to personal growth objectives. Displays sincere interest to capitalize on and contribute to UC initiatives and resources.',
-                2: 'References to specific initiatives, including but not limited to past projects, committees, firm events, etc.',
-                1: 'Fails to include any UC specific details. Absence of personalization.'
-              }
-            },
-            {
-              id: 'scoreThree',
-              title: 'Culture Addition',
-              description: 'Demonstrates unique traits and contributions to UC culture',
-              maxScore: 3,
-              criteria: {
-                3: 'Exceptionally unique story and background. Advanced explanation of how candidate traits advance and contribute to UC.',
-                2: 'Describes noteworthy traits, qualifications, or experiences and how to apply them at UC. Demonstrates passion for something.',
-                1: 'Does not elaborate on any traits, qualifications, or experiences that make the candidate unique.'
-              }
-            }
-          ],
           apiEndpoint: '/review-teams/cover-letter-score',
           getScoreEndpoint: (candidateId, cycleId) => {
             const baseUrl = `/review-teams/cover-letter-score/${candidateId}`;
@@ -157,19 +128,6 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           previewTitle: 'Video Preview',
           icon: <VideoIcon />,
           urlField: 'videoUrl',
-          rubricCategories: [
-            {
-              id: 'scoreOne',
-              title: 'Overall Video Assessment',
-              description: 'Comprehensive evaluation of the candidate based on video content',
-              maxScore: 2,
-              criteria: {
-                0: 'Learn little about the person, low energy, not good fit for UC',
-                1: 'Learn a little about the person, medium energy, ok fit',
-                2: 'Awesome video learn a lot about the person, high energy, definite fit for UC'
-              }
-            }
-          ],
           apiEndpoint: '/review-teams/video-score',
           getScoreEndpoint: (candidateId, cycleId) => {
             const baseUrl = `/review-teams/video-score/${candidateId}`;
@@ -231,9 +189,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
     if (open && application?.candidateId) {
       // Immediately reset form state before fetching
       setExistingScore(null);
-      setScoreOne('');
-      setScoreTwo('');
-      setScoreThree('');
+      setScores(EMPTY_SCORES);
       setNotes('');
       setError(null);
       setSuccess(false);
@@ -294,16 +250,16 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       const response = await apiClient.get(config.getScoreEndpoint(application.candidateId, application.cycleId));
       if (response) {
         setExistingScore(response);
-        setScoreOne(response.scoreOne || '');
-        setScoreTwo(response.scoreTwo || '');
-        setScoreThree(response.scoreThree || '');
+        setScores({
+          scoreOne: asInput(response.scoreOne),
+          scoreTwo: asInput(response.scoreTwo),
+          scoreThree: asInput(response.scoreThree)
+        });
         setNotes(response.notes || '');
       } else {
         // Reset form state when no existing score is found
         setExistingScore(null);
-        setScoreOne('');
-        setScoreTwo('');
-        setScoreThree('');
+        setScores(EMPTY_SCORES);
         setNotes('');
       }
     } catch (err) {
@@ -318,12 +274,15 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       setSaving(true);
       setError(null);
 
+      // A blank category is sent as null, not 0: 0 can be a real score, and
+      // a blank must not pull an average down.
+      const toPayload = (value) => (value === '' ? null : parseInt(value, 10));
       const scoreData = {
         candidateId: application.candidateId,
         assignedGroupId: application.groupId,
-        scoreOne: parseInt(scoreOne) || 0,
-        scoreTwo: parseInt(scoreTwo) || 0,
-        scoreThree: parseInt(scoreThree) || 0,
+        scoreOne: toPayload(scores.scoreOne),
+        scoreTwo: toPayload(scores.scoreTwo),
+        scoreThree: toPayload(scores.scoreThree),
         notes
       };
 
@@ -334,115 +293,40 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       setTimeout(() => {
         onClose(true); // Pass true to indicate data was saved and refresh is needed
         setSuccess(false);
-        // Reset form
-        setScoreOne('');
-        setScoreTwo('');
-        setScoreThree('');
+        setScores(EMPTY_SCORES);
         setNotes('');
       }, 1500);
 
     } catch (err) {
       console.error('Error saving score:', err);
-      setError('Failed to save score. Please try again.');
+      setError(err?.message?.replace(/ \(Status: \d+\)$/, '') || 'Failed to save score. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
+  // Mirrors computeOverall in server/src/services/documentRubrics.js: resume
+  // sums, cover letter averages, video is its one category. Blanks are skipped.
+  // A score still out of range is left out until it is fixed.
   const calculateOverallScore = () => {
-    // For video, we only use scoreOne since it's a single category
-    if (documentType === 'video') {
-      return scoreOne !== '' && scoreOne !== null ? scoreOne : 0;
-    }
-    
-    // For resume, we have 2 categories that should be summed (10 + 3 = 13 total)
-    if (documentType === 'resume') {
-      const score1 = scoreOne !== '' && scoreOne !== null ? parseInt(scoreOne) : 0;
-      const score2 = scoreTwo !== '' && scoreTwo !== null ? parseInt(scoreTwo) : 0;
-      return score1 + score2;
-    }
-    
-    // For other document types (cover letter), use all three scores
-    const scores = [scoreOne, scoreTwo, scoreThree].filter(score => score !== '' && score !== null);
-    if (scores.length === 0) return 0;
-    const average = scores.reduce((sum, score) => sum + parseInt(score), 0) / scores.length;
-    return average.toFixed(1);
+    const values = categories
+      .filter((category) => scores[category.id] !== '' && !outOfRange(category, scores[category.id]))
+      .map((category) => Number(scores[category.id]));
+    if (values.length === 0) return 0;
+    if (documentType === 'resume') return values.reduce((sum, value) => sum + value, 0);
+    if (documentType === 'coverLetter') return values.reduce((sum, value) => sum + value, 0) / values.length;
+    return values[0];
   };
 
-  const getMaxScore = () => {
-    if (documentType === 'resume') {
-      return 13; // Sum of (10 + 3) for Content/Relevance/Impact + Structure/Formatting
-    }
-    return config.rubricCategories[0]?.maxScore || 10;
-  };
-
+  // Whole numbers only. Anything else is ignored as it is typed; a number
+  // outside the range is kept and flagged, so "15" can be typed on a 5-20 scale.
   const handleScoreChange = (field, value) => {
-    // Allow empty string for deletion
-    if (value === '') {
-      switch (field) {
-        case 'scoreOne':
-          setScoreOne('');
-          break;
-        case 'scoreTwo':
-          setScoreTwo('');
-          break;
-        case 'scoreThree':
-          setScoreThree('');
-          break;
-        default:
-          break;
-      }
-      return;
-    }
-
-    // Only allow integers - reject any input containing decimal points or non-numeric characters
-    if (!/^\d+$/.test(value)) {
-      return;
-    }
-
-    const numValue = parseInt(value);
-    let minScore = 0;
-    if (documentType === 'coverLetter') {
-      minScore = 1;
-    } else if (documentType === 'resume' && field === 'scoreOne') {
-      minScore = 1; // Content, Relevance, and Impact minimum is 1
-    }
-    
-    // Get the max score for the specific field
-    let effectiveMaxScore;
-    if (documentType === 'resume') {
-      if (field === 'scoreOne') {
-        effectiveMaxScore = 10; // Content, Relevance, and Impact
-      } else if (field === 'scoreTwo') {
-        effectiveMaxScore = 3; // Structure & Formatting
-      } else {
-        effectiveMaxScore = 0; // scoreThree not used for resume
-      }
-    } else if (documentType === 'video') {
-      effectiveMaxScore = 2;
-    } else if (documentType === 'coverLetter') {
-      effectiveMaxScore = 3; // All cover letter categories now max at 3
-    } else {
-      effectiveMaxScore = getMaxScore();
-    }
-    
-    // Allow intermediate states (like "4" when typing "42")
-    if (!isNaN(numValue) && numValue >= minScore && numValue <= effectiveMaxScore) {
-      switch (field) {
-        case 'scoreOne':
-          setScoreOne(value);
-          break;
-        case 'scoreTwo':
-          setScoreTwo(value);
-          break;
-        case 'scoreThree':
-          setScoreThree(value);
-          break;
-        default:
-          break;
-      }
-    }
+    if (value !== '' && !/^\d{1,3}$/.test(value)) return;
+    setScores((current) => ({ ...current, [field]: value }));
   };
+
+  const hasOutOfRange = categories.some((category) => outOfRange(category, scores[category.id]));
+  const hasAnyScore = categories.some((category) => scores[category.id] !== '');
 
   if (!application) return null;
 
@@ -505,11 +389,12 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
         </Tabs>
       )}
 
-      <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>
+      <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box
           ref={containerRef}
           sx={{
-            height: '100%',
+            flex: 1,
+            minHeight: 0,
             display: 'flex',
             flexDirection: { xs: 'column', md: 'row' },
             position: 'relative'
@@ -524,7 +409,9 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
               borderColor: 'divider',
               flexDirection: 'column',
               minWidth: { xs: 'auto', md: '200px' },
-              flex: { xs: 1, md: 'none' }
+              minHeight: 0,
+              // Gives way to the rubric's minimum width on a narrow screen.
+              flex: { xs: 1, md: '0 1 auto' }
             }}
           >
             <Box sx={{ p: 2, height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -616,21 +503,29 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           <Box
             sx={{
               display: isMobile && mobileTab !== 1 ? 'none' : 'flex',
-              width: { xs: '100%', md: `${100 - leftWidth}%` },
+              width: { xs: '100%', md: 'auto' },
               flexDirection: 'column',
-              minWidth: { xs: 'auto', md: '200px' },
-              flex: { xs: 1, md: 'none' }
+              minWidth: { xs: 'auto', md: '360px' },
+              minHeight: 0,
+              flex: { xs: 1, md: '1 1 0' }
             }}
           >
-            <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-              <Typography variant="h6" sx={{ mb: 3 }}>
+            <Box sx={{ p: 2, flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>
                 Grading Rubric
               </Typography>
 
-              {loading ? (
+              {loading || (!rubricInfo && !rubricError) ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                   <CircularProgress />
                 </Box>
+              ) : !rubricInfo ? (
+                <Alert
+                  severity="error"
+                  action={<Button color="inherit" size="small" onClick={reloadRubrics}>Retry</Button>}
+                >
+                  The grading rubric could not be loaded. {rubricError}
+                </Alert>
               ) : (
                 <>
                   {error && (
@@ -652,102 +547,98 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                   )}
 
                   {/* Rubric Categories */}
-                  <Box sx={{ mb: 3 }}>
-                    {config.rubricCategories.map((category, index) => (
-                      <Paper key={category.id} sx={{ p: 2, mb: 2 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-                          {category.title} ({documentType === 'coverLetter' ? '1' : 
-                                           documentType === 'resume' && category.id === 'scoreOne' ? '1' : 
-                                           documentType === 'resume' && category.id === 'scoreTwo' ? '1' : '0'}-{documentType === 'video' ? Math.min(category.maxScore, 2) : category.maxScore})
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {category.description}
-                        </Typography>
-                        
-                        {/* Show detailed criteria if available */}
-                        {category.criteria && (
-                          <Box sx={{ mb: 2 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
-                              Scoring Criteria:
-                            </Typography>
-                            <Box sx={{ 
-                              border: 1, 
-                              borderColor: 'grey.300', 
-                              borderRadius: 1, 
-                              overflow: 'hidden',
-                              mb: 1
-                            }}>
-                              <Box sx={{ 
-                                display: 'grid', 
-                                gridTemplateColumns: 'auto 1fr',
-                                '& > *': { 
-                                  borderBottom: 1, 
-                                  borderColor: 'grey.300',
-                                  p: 1
-                                }
-                              }}>
-                                <Box sx={{ 
-                                  bgcolor: 'grey.100', 
-                                  fontWeight: 600,
-                                  borderRight: 1,
-                                  borderColor: 'grey.300'
-                                }}>
-                                  Score Range
-                                </Box>
-                                <Box sx={{ 
-                                  bgcolor: 'grey.100', 
-                                  fontWeight: 600
-                                }}>
-                                  Description
-                                </Box>
-                                {Object.entries(category.criteria).map(([score, description]) => (
-                                  <React.Fragment key={score}>
-                                    <Box sx={{ 
-                                      bgcolor: 'grey.50',
-                                      borderRight: 1,
-                                      borderColor: 'grey.300',
-                                      fontWeight: 500
-                                    }}>
-                                      {score}
-                                    </Box>
-                                    <Box sx={{ bgcolor: 'grey.50' }}>
-                                      {description}
-                                    </Box>
-                                  </React.Fragment>
-                                ))}
-                              </Box>
+                  <Stack spacing={2} sx={{ mb: 3 }}>
+                    {categories.map((category) => {
+                      const value = scores[category.id];
+                      const invalid = outOfRange(category, value);
+                      const inputId = `rubric-score-${category.id}`;
+                      return (
+                        <Paper key={category.id} variant="outlined" sx={{ p: 2 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography
+                                component="label"
+                                htmlFor={inputId}
+                                variant="subtitle1"
+                                sx={{ fontWeight: 600, display: 'block', lineHeight: 1.3 }}
+                              >
+                                {category.title}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                Score {rangeLabel(category)}
+                              </Typography>
                             </Box>
+                            <TextField
+                              id={inputId}
+                              size="small"
+                              value={value}
+                              onChange={(e) => handleScoreChange(category.id, e.target.value)}
+                              error={invalid}
+                              placeholder="–"
+                              inputProps={{
+                                inputMode: 'numeric',
+                                'aria-describedby': invalid ? `${inputId}-range` : undefined,
+                                style: { textAlign: 'center', fontWeight: 600 }
+                              }}
+                              InputProps={{
+                                endAdornment: (
+                                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap', pl: 0.5 }}>
+                                    / {category.max}
+                                  </Typography>
+                                )
+                              }}
+                              sx={{ width: 104, flexShrink: 0 }}
+                            />
                           </Box>
-                        )}
-                        
-                        <TextField
-                          type="number"
-                          label="Score"
-                          value={category.id === 'scoreOne' ? scoreOne : category.id === 'scoreTwo' ? scoreTwo : scoreThree}
-                          onChange={(e) => handleScoreChange(category.id, e.target.value)}
-                          inputProps={{ 
-                            min: (documentType === 'coverLetter') ? 1 : 
-                                 (documentType === 'resume' && category.id === 'scoreOne') ? 1 : 0, 
-                            max: category.maxScore,
-                            onWheel: (e) => e.target.blur()
-                          }}
-                          sx={{ width: 100, mr: 2 }}
-                        />
-                      </Paper>
-                    ))}
-                  </Box>
+                          {invalid && (
+                            <Typography id={`${inputId}-range`} variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                              Enter a whole number from {category.min} to {category.max}.
+                            </Typography>
+                          )}
 
-                  {/* Overall Score */}
-                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'primary.main', color: 'primary.contrastText' }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                      Overall Score: {calculateOverallScore()}/{getMaxScore()}
-                    </Typography>
-                    <Typography variant="body2">
-                      {documentType === 'video' ? 'Single category score' : 
-                       documentType === 'resume' ? 'Sum of Content/Relevance/Impact (1-10) and Structure/Formatting (1-3)' :
-                       'Average of all three category scores'}
-                    </Typography>
-                  </Paper>
+                          {category.description && (
+                            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                              {category.description}
+                            </Typography>
+                          )}
+
+                          {category.criteria.length > 0 && (
+                            <Stack component="ul" spacing={0.5} sx={{ listStyle: 'none', p: 0, m: 0, mt: 1.5 }}>
+                              {category.criteria.map((criterion, index) => {
+                                const applies = labelCovers(criterion.label, value);
+                                return (
+                                  <Box
+                                    component="li"
+                                    key={`${criterion.label}-${index}`}
+                                    sx={{
+                                      display: 'flex',
+                                      gap: 1.5,
+                                      alignItems: 'flex-start',
+                                      p: 1,
+                                      borderRadius: 1,
+                                      bgcolor: applies ? 'action.selected' : 'grey.50',
+                                      outline: applies ? 1 : 0,
+                                      outlineColor: 'primary.main'
+                                    }}
+                                  >
+                                    <Chip
+                                      label={criterion.label}
+                                      size="small"
+                                      color={applies ? 'primary' : 'default'}
+                                      sx={{ minWidth: 44, fontWeight: 600, flexShrink: 0 }}
+                                    />
+                                    <Typography variant="body2" sx={{ pt: 0.25 }}>
+                                      {criterion.text}
+                                    </Typography>
+                                  </Box>
+                                );
+                              })}
+                            </Stack>
+                          )}
+                        </Paper>
+                      );
+                    })}
+                  </Stack>
 
                   {/* Overall Notes */}
                   <TextField
@@ -758,23 +649,49 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                     placeholder="Write any overall feedback here..."
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    sx={{ mb: 3 }}
                   />
-
-                  {/* Save Button */}
-                  <Button
-                    variant="contained"
-                    startIcon={<SaveIcon />}
-                    onClick={handleSave}
-                    disabled={saving || (documentType === 'resume' ? (!scoreOne && !scoreTwo) : (!scoreOne && !scoreTwo && !scoreThree))}
-                    fullWidth
-                    size="large"
-                  >
-                    {saving ? 'Saving...' : 'Save Score'}
-                  </Button>
                 </>
               )}
             </Box>
+
+            {/* Overall score and Save stay in view while the rubric scrolls */}
+            {rubricInfo && !loading && (
+              <Box
+                sx={{
+                  borderTop: 1,
+                  borderColor: 'divider',
+                  p: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2,
+                  bgcolor: 'background.paper'
+                }}
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+                    Overall {formatScore(calculateOverallScore())} / {formatScore(rubricInfo.maxOverall)}
+                  </Typography>
+                  {hasOutOfRange ? (
+                    <Typography variant="caption" color="error" role="status">
+                      A score is outside its range. Fix it to save.
+                    </Typography>
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      {aggregationText(documentType, rubricInfo.rubric)}
+                    </Typography>
+                  )}
+                </Box>
+                <Button
+                  variant="contained"
+                  startIcon={<SaveIcon />}
+                  onClick={handleSave}
+                  disabled={saving || !hasAnyScore || hasOutOfRange}
+                  sx={{ flexShrink: 0 }}
+                >
+                  {saving ? 'Saving...' : 'Save Score'}
+                </Button>
+              </Box>
+            )}
           </Box>
         </Box>
       </DialogContent>

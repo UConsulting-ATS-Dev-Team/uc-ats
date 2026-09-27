@@ -26,6 +26,7 @@ import conversationsRoutes from './routes/conversations.js';
 import execAccessRoutes from './routes/execAccess.js';
 import liveVoteRoutes from './routes/liveVotes.js';
 import decisionGuideRoutes from './routes/decisionGuides.js';
+import documentRubricRoutes from './routes/documentRubrics.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
 import { sendDueHostReminders } from './services/meetingHostReminders.js';
@@ -120,6 +121,7 @@ app.use('/api/conversations', conversationsRoutes);
 app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/decision-guides', decisionGuideRoutes);
+app.use('/api/document-rubrics', documentRubricRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
 app.use('/api/webhooks/ses', sesWebhookRoutes);
 // Public, token-gated: the Master Communications footer link and one-click header.
