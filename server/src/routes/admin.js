@@ -4935,7 +4935,7 @@ router.put('/meeting-slots/:id/attendance-complete', async (req, res) => {
   try {
     const slot = await setSlotAttendanceComplete({
       slotId: req.params.id,
-      complete: Boolean(req.body?.complete),
+      complete: req.body?.complete,
       actorId: req.user.id
     });
     res.json(slot);

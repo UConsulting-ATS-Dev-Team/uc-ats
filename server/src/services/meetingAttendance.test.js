@@ -7,7 +7,11 @@ import {
 } from './meetingAttendance.js';
 
 vi.mock('../prismaClient.js', () => ({
-  default: { meetingSlot: { findUnique: vi.fn(), update: vi.fn() } },
+  default: {
+    meetingSlot: { findUnique: vi.fn(), update: vi.fn() },
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
+  },
 }));
 
 const NOW = new Date('2026-09-27T17:00:00.000Z');
@@ -27,6 +31,8 @@ const slot = (overrides = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   prisma.meetingSlot.update.mockImplementation(({ data }) => Promise.resolve({ id: 'slot-1', ...data }));
+  prisma.$queryRaw.mockResolvedValue([]);
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
 describe('isAttendanceOutstanding', () => {
@@ -87,6 +93,25 @@ describe('setSlotAttendanceComplete', () => {
     await expect(
       setSlotAttendanceComplete({ slotId: 'slot-1', complete: true, actorId: 'm2', hostId: 'm2', now: NOW })
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('reads and writes the slot under the row lock a reschedule takes', async () => {
+    prisma.meetingSlot.findUnique.mockResolvedValue(slot());
+    await setSlotAttendanceComplete({ slotId: 'slot-1', complete: true, actorId: 'a', now: NOW });
+
+    const [strings] = prisma.$queryRaw.mock.calls[0];
+    expect(strings.join('?')).toMatch(/FOR UPDATE/);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0])
+      .toBeLessThan(prisma.meetingSlot.findUnique.mock.invocationCallOrder[0]);
+  });
+
+  it('refuses anything but a boolean, rather than guessing', async () => {
+    for (const complete of [undefined, 'false', 1]) {
+      await expect(
+        setSlotAttendanceComplete({ slotId: 'slot-1', complete, actorId: 'a', now: NOW })
+      ).rejects.toMatchObject({ status: 400 });
+    }
+    expect(prisma.meetingSlot.update).not.toHaveBeenCalled();
   });
 
   it('answers 404 for a slot that does not exist', async () => {

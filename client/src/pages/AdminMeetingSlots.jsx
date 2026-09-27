@@ -134,6 +134,9 @@ const SortableHeader = ({ field, sort, onSort, children, ...cellProps }) => (
   </TableCell>
 );
 
+// Matches MAX_MANUAL_REMINDERS in server/src/routes/admin.js.
+const REMINDER_BATCH = 200;
+
 const emptyForm = { memberId: '', location: '', startTime: '', endTime: '', capacity: 2 };
 
 export default function AdminMeetingSlots() {
@@ -350,7 +353,19 @@ export default function AdminMeetingSlots() {
     if (slotIds.length > 1 && !window.confirm(`Email the hosts of ${slotIds.length} slots to take attendance?`)) return;
     try {
       setReminding(true);
-      const { sent = 0, failed = 0, skipped = 0 } = await api.post('/admin/meeting-slots/attendance-reminders', { slotIds });
+      // The endpoint takes REMINDER_BATCH slots per request, and the first
+      // run after the migration can easily select more.
+      let sent = 0;
+      let failed = 0;
+      let skipped = 0;
+      for (let i = 0; i < slotIds.length; i += REMINDER_BATCH) {
+        const res = await api.post('/admin/meeting-slots/attendance-reminders', {
+          slotIds: slotIds.slice(i, i + REMINDER_BATCH)
+        });
+        sent += res?.sent || 0;
+        failed += res?.failed || 0;
+        skipped += res?.skipped || 0;
+      }
       const parts = [`${sent} reminder${sent === 1 ? '' : 's'} sent.`];
       if (skipped > 0) parts.push(`${skipped} skipped: already finished, host deactivated, or being sent right now.`);
       if (failed > 0) {
@@ -565,8 +580,12 @@ export default function AdminMeetingSlots() {
     );
   };
 
+  // The card counts every overdue slot in scope, so the list it opens must not
+  // be narrowed by a host or search filter left over from earlier.
   const showOverdue = () => {
     setTab(0);
+    setHostFilter('all');
+    setSlotSearch('');
     setStatusFilter('overdue');
   };
 
