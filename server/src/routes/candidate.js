@@ -45,7 +45,7 @@ router.get('/my-meeting-signups', requireAuth, async (req, res) => {
       .sort((a, b) => new Date(a.slot.startTime) - new Date(b.slot.startTime))
       .map((signup) => ({
         id: signup.id,
-        memberName: signup.slot.member?.fullName || 'UC Consulting Member',
+        memberName: signup.slot.member?.fullName || 'UConsulting Member',
         memberProfile: toCandidateCard(signup.slot.member),
         location: signup.slot.location,
         startTime: signup.slot.startTime,

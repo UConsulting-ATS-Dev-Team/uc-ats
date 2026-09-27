@@ -10,6 +10,8 @@ vi.mock('../prismaClient.js', () => ({
     user: { findMany: vi.fn().mockResolvedValue([]) },
     candidate: { findMany: vi.fn().mockResolvedValue([]) },
     application: { findMany: vi.fn().mockResolvedValue([]) },
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(),
   },
 }));
 
@@ -37,9 +39,21 @@ const reminder = (hoursFromNow, status = 'SENT') => ({
   recipient: 'avery@ucla.edu',
 });
 
+// The batch read, then the re-read of each slot under its lock: answer the
+// first from `batch` and the rest from `current` (defaults to the batch),
+// honouring `where.id` the way the database would.
+const slotsInDb = (batch, current = batch) => {
+  prisma.meetingSlot.findMany.mockImplementation(({ where }) => {
+    const rows = where.id ? current.filter((s) => s.id === where.id) : batch;
+    return Promise.resolve(rows);
+  });
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   sendMeetingHostReminder.mockResolvedValue({ success: true });
+  prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
 describe('findSlotsDueForHostReminder', () => {
@@ -144,5 +158,33 @@ describe('sendDueHostReminders', () => {
     expect(prisma.meetingCommunication.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ type: 'REMINDER', status: 'FAILED', error: 'SES throttled' }),
     });
+  });
+
+  it('skips a slot another server is sending right now', async () => {
+    // Every server on this database runs the cron on the same tick; only one may send.
+    prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
+    prisma.meetingSlot.findMany.mockResolvedValue([slotStarting(23)]);
+
+    expect(await sendDueHostReminders(NOW)).toBe(0);
+    expect(sendMeetingHostReminder).not.toHaveBeenCalled();
+  });
+
+  it('skips a slot another server already sent once the lock is free', async () => {
+    // Both picked the slot; the other one sent and released the lock first.
+    slotsInDb([slotStarting(23)], [slotStarting(23, [reminder(-0.01)])]);
+
+    expect(await sendDueHostReminders(NOW)).toBe(0);
+    expect(sendMeetingHostReminder).not.toHaveBeenCalled();
+    expect(prisma.meetingSlot.findMany.mock.calls[1][0].where.id).toBe('slot-1');
+  });
+
+  it('keeps going when one slot fails outside the send', async () => {
+    const other = { ...slotStarting(22), id: 'slot-2' };
+    slotsInDb([slotStarting(23), other]);
+    prisma.$queryRaw.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValue([{ locked: true }]);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(await sendDueHostReminders(NOW)).toBe(1);
+    expect(sendMeetingHostReminder).toHaveBeenCalledTimes(1);
   });
 });

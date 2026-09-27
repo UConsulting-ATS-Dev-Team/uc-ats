@@ -88,7 +88,7 @@ export async function sendAndLogMeetingCommunication(sendFn, meta) {
  */
 export async function notifyHostSlotCreated(slot, host) {
   if (!slot?.id || !host?.email) return { ok: false };
-  const hostName = host.fullName || 'UC Consulting Member';
+  const hostName = host.fullName || 'UConsulting Member';
 
   return sendAndLogMeetingCommunication(
     async () => {

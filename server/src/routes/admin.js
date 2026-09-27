@@ -4941,7 +4941,7 @@ router.delete('/meeting-slots/:id', async (req, res) => {
       return res.status(404).json({ error: 'Meeting slot not found' });
     }
 
-    const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
+    const memberName = existingSlot.member?.fullName || 'UConsulting Member';
 
     // Notify everyone involved: all signed-up candidates AND the host member.
     const notifications = [];
@@ -5137,7 +5137,7 @@ router.delete('/meeting-signups/:id', async (req, res) => {
       return res.status(404).json({ error: 'Signup not found' });
     }
 
-    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+    const memberName = signup.slot.member?.fullName || 'UConsulting Member';
 
     // Notify the candidate their signup was cancelled...
     await sendAndLogMeetingCommunication(

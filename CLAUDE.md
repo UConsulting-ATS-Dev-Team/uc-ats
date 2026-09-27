@@ -468,9 +468,13 @@ The system follows a **recruiting cycle-based workflow**:
   It is logged as a `REMINDER` `MeetingCommunication` with no signup, and that row is the
   dedupe: one `SENT` since the slot entered its 24-hour window means done, so a slot moved
   to a later day is reminded again. Failed sends retry, three attempts at most.
+- Every server on the database runs this cron on the same tick, so each send takes
+  `pg_try_advisory_xact_lock` on the slot and re-checks the log once it holds it (the
+  attendance reminder does the same). Without the lock, five servers sent five copies.
 - The member and admin slot pages have an "iMessage / email signups" button: one group
-  iMessage (`sms://open?addresses=…`) or one email (`mailto:`) to everyone in the slot,
-  opened in the host's own app, logged as `OPENED` in the communications log.
+  iMessage (`sms://open?addresses=…`) in Messages, or one email as a Gmail compose tab
+  (`mail.google.com/mail/?view=cm`, not `mailto:`, which opens whatever desktop mail app
+  is the default), logged as `OPENED` in the communications log.
 - `MeetingSignup` has no phone, so a number is found by email
   ([server/src/services/meetingSignupContacts.js](server/src/services/meetingSignupContacts.js)):
   `User.phoneNumber`, then candidate onboarding, then the latest application. The last
@@ -772,6 +776,10 @@ Required in `server/.env`:
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
   that works elsewhere can still fail here with `ACCESS_DENIED`.
+- `RUN_CRONS` - (Optional) Scheduled jobs (form sync, scheduled sends, GTKUC reminders)
+  run only where `CLIENT_URL` is not localhost and `IS_PULL_REQUEST` is not set, so a
+  laptop or preview on the shared database never emails anyone its own links. `true`
+  forces them on, `false` forces them off.
 
 ## Common Patterns
 

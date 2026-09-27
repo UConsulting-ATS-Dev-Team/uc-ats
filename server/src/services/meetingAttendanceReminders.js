@@ -30,6 +30,8 @@ const LOOKBACK_HOURS = 24;
 const DEFAULT_SLOT_HOURS = 1;
 const MAX_ATTEMPTS = 3;
 const HOUR_MS = 60 * 60 * 1000;
+// Under the 15-minute cron interval: see sendUnderSlotLock.
+const SLOT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 
 export const slotEndTime = (slot) =>
   slot.endTime ? new Date(slot.endTime) : new Date(new Date(slot.startTime).getTime() + DEFAULT_SLOT_HOURS * HOUR_MS);
@@ -94,7 +96,7 @@ export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId
 /** Send one slot's reminder. Never throws. */
 export async function sendAttendanceReminder(slot) {
   const host = slot.member;
-  const hostName = host.fullName || 'UC Consulting Member';
+  const hostName = host.fullName || 'UConsulting Member';
 
   return sendAndLogMeetingCommunication(
     async () => {
@@ -147,7 +149,10 @@ async function sendUnderSlotLock(slot, now) {
 
       return sendAttendanceReminder(current);
     },
-    { timeout: 60 * 1000 }
+    // Held until the SENT row is written, so a slow send cannot release the
+    // lock early and let another server send too. The cron runs every 15
+    // minutes, so a send stuck longer than this is retried on a later tick.
+    { maxWait: 10 * 1000, timeout: SLOT_LOCK_TIMEOUT_MS }
   );
 }
 
