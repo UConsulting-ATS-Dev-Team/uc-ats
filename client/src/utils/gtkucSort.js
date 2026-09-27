@@ -2,6 +2,8 @@
 // every slot and signup in memory, so sorting happens here rather than on the
 // server.
 
+import { attendanceState } from './gtkucAttendance';
+
 const STATUS_ORDER = { active: 0, upcoming: 1, past: 2 };
 
 export const slotStatus = (slot, now = new Date()) => {
@@ -14,7 +16,8 @@ export const slotStatus = (slot, now = new Date()) => {
 
 const time = (value) => (value ? new Date(value).getTime() : null);
 const text = (value) => (value ? String(value).toLowerCase() : null);
-const attendedCount = (slot) => (slot.signups || []).filter((s) => s.attended).length;
+// Outstanding first, then done; upcoming slots have no attendance and sort last.
+const ATTENDANCE_ORDER = { outstanding: 0, done: 1, none: null };
 
 // Each column maps a row to the value it sorts by. A null sorts last in both
 // directions, so rows missing a value never crowd the top of the list.
@@ -24,8 +27,7 @@ export const SLOT_SORT_KEYS = {
   start: (slot) => time(slot.startTime),
   status: (slot, now) => STATUS_ORDER[slotStatus(slot, now)],
   signups: (slot) => (slot.signups || []).length,
-  openSpots: (slot) => Math.max((slot.capacity || 0) - (slot.signups || []).length, 0),
-  attended: attendedCount
+  attendance: (slot, now) => ATTENDANCE_ORDER[attendanceState(slot, now)]
 };
 
 export const ATTENDANCE_SORT_KEYS = {
@@ -73,7 +75,7 @@ export const sortRows = (rows, keys, { field, dir }, { tiebreak, now = new Date(
 };
 
 // Counts are more useful biggest-first, so these start descending.
-const DESC_FIRST = new Set(['signups', 'openSpots', 'attended', 'present']);
+const DESC_FIRST = new Set(['signups', 'present']);
 
 // Clicking the active column flips it; clicking a new one starts in its
 // natural direction.

@@ -91,8 +91,8 @@ describe('AdminMeetingSlots time slots sorting', () => {
     render(<AdminMeetingSlots />);
     await screen.findByText('Kerckhoff Patio');
 
-    await user.click(screen.getByRole('button', { name: 'Open spots' }));
-    expect(columnValues(1)).toEqual(['Bruin Cafe', 'Kerckhoff Patio']);
+    await user.click(screen.getByRole('button', { name: 'Signups' }));
+    expect(columnValues(1)).toEqual(['Kerckhoff Patio', 'Bruin Cafe']);
   });
 });
 
@@ -149,5 +149,102 @@ describe('AdminMeetingSlots attendance sorting', () => {
 
     await user.click(screen.getByRole('button', { name: 'Signed up' }));
     expect(columnValues(1)).toEqual(['Ben Ortiz', 'Zoe Park', 'amy Liu']);
+  });
+});
+
+describe('AdminMeetingSlots overdue attendance', () => {
+  afterEach(() => vi.useRealTimers());
+
+  // Both fixture slots are over by Nov 10. Kerckhoff still has Ben unchecked;
+  // Bruin's only signup attended, so it is done without anyone pressing a button.
+  const renderAfterBothSlots = async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-11-10T18:00:00.000Z'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<AdminMeetingSlots />);
+    await screen.findByText('Kerckhoff Patio');
+    return user;
+  };
+
+  it('counts only unfinished slots as overdue and opens them from the card', async () => {
+    const user = await renderAfterBothSlots();
+
+    expect(screen.getByText('Attendance overdue')).toBeTruthy();
+    expect(screen.getByText(/slot · 1 person unmarked/)).toBeTruthy();
+
+    await user.click(screen.getByText('Attendance overdue'));
+    expect(columnValues(2)).toEqual(['Kerckhoff Patio']);
+    expect(screen.getByText('Never')).toBeTruthy();
+  });
+
+  it('does not count a slot whose host pressed Attendance done', async () => {
+    const marked = slots.map((s) =>
+      s.id === 'slot-early' ? { ...s, attendanceMarkedAt: '2026-10-28T18:00:00.000Z' } : s
+    );
+    api.get.mockImplementation((url) => {
+      if (url === '/admin/meeting-slots') return Promise.resolve({ slots: marked });
+      if (url === '/member/gtkuc-profile') return Promise.resolve({ confirmationRequired: false });
+      return Promise.resolve([]);
+    });
+    await renderAfterBothSlots();
+
+    expect(screen.getByText('Every past slot is marked')).toBeTruthy();
+    // Ben is a recorded no-show: 1 of 2 attended in Kerckhoff, 1 of 1 in Bruin.
+    expect(screen.getByText('67%')).toBeTruthy();
+  });
+
+  it('reminds the selected hosts and reports what was sent', async () => {
+    api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
+    const user = await renderAfterBothSlots();
+
+    await user.click(screen.getByText('Attendance overdue'));
+    await user.click(screen.getByRole('checkbox', { name: 'Select all overdue slots' }));
+    // A single slot sends without a confirmation.
+    await user.click(screen.getByRole('button', { name: 'Remind hosts (1)' }));
+
+    expect(api.post).toHaveBeenCalledWith('/admin/meeting-slots/attendance-reminders', { slotIds: ['slot-early'] });
+    expect(await screen.findByText('1 reminder sent.')).toBeTruthy();
+  });
+
+  it('keeps unsent slots selected when a request fails', async () => {
+    api.post.mockRejectedValue(new Error('Network error'));
+    const user = await renderAfterBothSlots();
+
+    await user.click(screen.getByText('Attendance overdue'));
+    await user.click(screen.getByRole('checkbox', { name: 'Select all overdue slots' }));
+    await user.click(screen.getByRole('button', { name: 'Remind hosts (1)' }));
+
+    expect(await screen.findByText(/0 reminders sent\. Stopped before 1 slot \(Network error\)/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remind hosts (1)' })).toBeTruthy();
+  });
+
+  it('keeps Remind disabled until the list has reloaded, and says if it could not', async () => {
+    api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
+    const user = await renderAfterBothSlots();
+
+    let finishReload;
+    api.get.mockImplementation((url) => {
+      if (url === '/admin/meeting-slots') return new Promise((_, reject) => { finishReload = reject; });
+      if (url === '/member/gtkuc-profile') return Promise.resolve({ confirmationRequired: false });
+      return Promise.resolve([]);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Remind host' }));
+    // Mid-reload, the table is replaced by the spinner, so no Remind can be pressed.
+    expect(screen.queryByRole('button', { name: 'Remind host' })).toBeNull();
+
+    await act(async () => { finishReload(new Error('Server unavailable')); });
+    expect(await screen.findByText(/1 reminder sent\. The slot list could not be refreshed/)).toBeTruthy();
+  });
+
+  it('reminds one host from the row', async () => {
+    api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
+    const user = await renderAfterBothSlots();
+
+    // Only the overdue slot offers the button.
+    const remind = screen.getAllByRole('button', { name: 'Remind host' });
+    expect(remind).toHaveLength(1);
+    await user.click(remind[0]);
+    expect(api.post).toHaveBeenCalledWith('/admin/meeting-slots/attendance-reminders', { slotIds: ['slot-early'] });
   });
 });
