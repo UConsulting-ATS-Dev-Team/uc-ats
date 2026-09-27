@@ -78,8 +78,9 @@ const connectWithRetry = async () => {
   }
 };
 
-// Initial connection attempt
-connectWithRetry();
+// Initial connection attempt. Skipped under tests, which have no database (see
+// vitest.setup.js) and would otherwise log three failed attempts per file.
+if (!process.env.VITEST) connectWithRetry();
 
 // Handle process termination
 process.on('beforeExit', async () => {

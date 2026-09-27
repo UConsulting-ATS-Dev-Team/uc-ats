@@ -635,18 +635,36 @@ export async function cancelScheduledMessage({ id, sentBy }) {
     err.status = 404;
     throw err;
   }
-  if (schedule.status !== 'PENDING') {
+  const notPending = () => {
     const err = new Error('Only pending messages can be cancelled');
     err.status = 400;
-    throw err;
-  }
-  return prisma.messageSchedule.update({
-    where: { id },
+    return err;
+  };
+  if (schedule.status !== 'PENDING') throw notPending();
+  // Conditional, so a cancel that lands after the scheduler claimed the message
+  // is refused instead of relabelling a send already under way as CANCELLED.
+  const { count } = await prisma.messageSchedule.updateMany({
+    where: { id, status: 'PENDING' },
     data: { status: 'CANCELLED' },
-    select: { id: true, status: true },
   });
+  if (count === 0) throw notPending();
+  return { id, status: 'CANCELLED' };
 }
 
+/**
+ * Send every schedule that has come due. Returns how many this run sent.
+ *
+ * Each schedule is claimed - PENDING to SENDING, conditional on it still being
+ * PENDING - before a single email goes out, and only the run whose claim lands
+ * sends it. Without the claim a schedule stayed PENDING for the whole send, so
+ * a send to a large audience that outlasted the one-minute cron was picked up
+ * again by the next tick, and by every other server on this database, and each
+ * of them mailed the whole audience again.
+ *
+ * A server that dies mid-send leaves the schedule SENDING for good. That is on
+ * purpose: nobody can tell who already got it, and a stuck row an admin can see
+ * is better than mailing everyone a second time.
+ */
 export async function processScheduledMessages() {
   const now = new Date();
   const pending = await prisma.messageSchedule.findMany({
@@ -654,7 +672,15 @@ export async function processScheduledMessages() {
     orderBy: { scheduledAt: 'asc' },
   });
 
+  let processed = 0;
   for (const s of pending) {
+    const { count } = await prisma.messageSchedule.updateMany({
+      where: { id: s.id, status: 'PENDING' },
+      data: { status: 'SENDING' },
+    });
+    if (count === 0) continue; // another run claimed it, or it was cancelled
+    processed += 1;
+
     try {
       const result = await sendMasterCommunication({
         audience: s.audience,
@@ -680,7 +706,7 @@ export async function processScheduledMessages() {
     }
   }
 
-  return pending.length;
+  return processed;
 }
 
 // Sends the composed message to whoever pressed the button, so an admin can see
