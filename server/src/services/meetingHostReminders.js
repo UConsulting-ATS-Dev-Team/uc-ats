@@ -25,6 +25,8 @@ import { resolveSignupContacts } from './meetingSignupContacts.js';
 export const REMINDER_LEAD_HOURS = 24;
 const MAX_ATTEMPTS = 3;
 const HOUR_MS = 60 * 60 * 1000;
+// Under the 15-minute cron interval: see sendUnderSlotLock.
+const SLOT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * The slots a run should remind, with host, signups and prior reminders.
@@ -132,7 +134,10 @@ async function sendUnderSlotLock(slot, now) {
 
       return sendHostReminder(current);
     },
-    { timeout: 60 * 1000 }
+    // Held until the SENT row is written, so a slow send cannot release the
+    // lock early and let another server send too. The cron runs every 15
+    // minutes, so a send stuck longer than this is retried on a later tick.
+    { maxWait: 10 * 1000, timeout: SLOT_LOCK_TIMEOUT_MS }
   );
 }
 

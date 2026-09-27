@@ -71,7 +71,8 @@ describe('SlotContactDialog', () => {
   });
 
   it('opens one Gmail compose tab to everyone, including people with no number', async () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const tab = { opener: window };
+    const open = vi.spyOn(window, 'open').mockImplementation(() => tab);
     renderDialog();
     fireEvent.click(await screen.findByRole('button', { name: /Email \(3\)/ }));
 
@@ -82,9 +83,21 @@ describe('SlotContactDialog', () => {
     expect(compose.searchParams.get('to')).toBe('jordan@ucla.edu,sam@ucla.edu,lee@ucla.edu');
     expect(compose.searchParams.get('su')).toBe('Get to Know UC - where to meet');
     expect(target).toBe('_blank');
-    // The ATS tab stays where it is.
+    // Gmail cannot reach back into the ATS tab, which stays where it is.
+    expect(tab.opener).toBeNull();
     expect(hrefs).toEqual([]);
     expect(api.post.mock.calls[0][1]).toMatchObject({ channel: 'email', signupIds: ['su-1', 'su-2', 'su-3'] });
+    open.mockRestore();
+  });
+
+  it('logs nothing when the browser blocks the Gmail tab', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderDialog();
+    fireEvent.click(await screen.findByRole('button', { name: /Email \(3\)/ }));
+
+    expect(await screen.findByText(/blocked the Gmail tab/)).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(screen.queryByText('Opened in Gmail.')).not.toBeInTheDocument();
     open.mockRestore();
   });
 

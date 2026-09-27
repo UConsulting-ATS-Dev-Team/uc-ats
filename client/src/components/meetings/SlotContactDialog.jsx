@@ -68,8 +68,19 @@ export default function SlotContactDialog({ open, onClose, slot, hostName }) {
   // even if the slot changes while the dialog is open.
   const openAndLog = async (channel, url, recipients) => {
     // Gmail opens in a new tab so the ATS stays put; sms: hands off to Messages.
-    if (channel === 'email') window.open(url, '_blank', 'noopener,noreferrer');
-    else window.location.href = url;
+    // No 'noopener' flag: with it, window.open returns null even on success, and
+    // null is the only sign a popup blocker stopped the tab. The opener is cut
+    // by hand instead.
+    if (channel === 'email') {
+      const tab = window.open(url, '_blank');
+      if (!tab) {
+        setError('Your browser blocked the Gmail tab. Allow pop-ups for this site and try again.');
+        return;
+      }
+      tab.opener = null;
+    } else {
+      window.location.href = url;
+    }
     try {
       await api.post(`/member/meeting-slots/${slot.id}/contacts/log`, {
         channel,
