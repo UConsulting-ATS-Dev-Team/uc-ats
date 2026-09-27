@@ -190,13 +190,18 @@ const sameTrigger = (a, b) => a.trigger === b.trigger && JSON.stringify(a.trigge
  * update instead leaves a moment where a run could email everybody already in
  * the status.
  */
+// Prisma's default is 5 seconds. Seeding reads every application in a status
+// and writes a row for each, which for a whole cycle's worth can take longer;
+// timing out would roll back and leave the admin unable to turn the email on.
+const SEED_TRANSACTION = { maxWait: 10_000, timeout: 60_000 };
+
 async function writeRule(client, id, data, { seedFrom = null } = {}) {
   return client.$transaction(async (tx) => {
     // `seedFrom` is the rule as it will be once written: seeding reads its
     // trigger, which an enable-only update does not carry.
     if (seedFrom) await seedExisting({ ...seedFrom, id }, { client: tx });
     return tx.automaticEmail.update({ where: { id }, data });
-  });
+  }, SEED_TRANSACTION);
 }
 
 export async function updateAutomaticEmail({ client = prisma, id, input, user }) {

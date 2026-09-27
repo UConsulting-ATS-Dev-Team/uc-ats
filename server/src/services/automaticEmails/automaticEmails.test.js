@@ -120,6 +120,8 @@ describe('turning one on', () => {
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['seed', 'enable']);
+    // Long enough for a whole cycle's applications, well past Prisma's 5s default.
+    expect(prisma.$transaction.mock.calls[0][1].timeout).toBeGreaterThanOrEqual(30_000);
   });
 
   it('starts over when the trigger of an enabled email changes', async () => {

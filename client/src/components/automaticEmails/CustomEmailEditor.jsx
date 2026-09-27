@@ -112,18 +112,21 @@ export default function CustomEmailEditor({ email, options, signatures = [], onS
       .finally(() => setBusy(''));
   };
 
-  const save = () =>
+  const save = () => {
+    const submitted = draft;
     run(
       'save',
-      () => (email?.id ? apiClient.put(`/admin/automatic-emails/${email.id}`, { email: draft }) : apiClient.post('/admin/automatic-emails', { email: draft })),
+      () => (email?.id ? apiClient.put(`/admin/automatic-emails/${email.id}`, { email: submitted }) : apiClient.post('/admin/automatic-emails', { email: submitted })),
       (data) => {
-        // What the server stored (trimmed, normalised), so Save goes quiet
-        // rather than offering to send the same thing again.
-        setDraft(editable(data));
+        // What the server stored (trimmed, normalised), so Save goes quiet -
+        // unless the admin kept typing while it saved. Those newer edits are
+        // theirs, and replacing them with the saved version would lose them.
+        setDraft((current) => (current === submitted ? editable(data) : current));
         setMessage({ severity: 'success', text: email?.enabled ? 'Saved. The next send uses this.' : 'Saved. It stays off until you turn it on.' });
         onSaved?.(data);
       }
     );
+  };
 
   const checkReach = () => run('reach', () => apiClient.post('/admin/automatic-emails/dry-run', { email: draft }), setReach);
 

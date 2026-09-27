@@ -111,6 +111,25 @@ describe('the editor', () => {
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
+  it('keeps what the admin typed while a save was still in flight', async () => {
+    let finish;
+    apiClient.put.mockImplementation((url, body) => new Promise((resolve) => {
+      finish = () => resolve({ ...EMAIL, ...body.email });
+    }));
+    render(<CustomEmailsPanel />);
+    await userEvent.click(await screen.findByText('Waitlist note'));
+    const name = await screen.findByLabelText('Name');
+
+    await userEvent.type(name, ' v2');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await userEvent.type(name, ' and v3');
+    finish();
+
+    expect(await screen.findByText(/stays off until you turn it on/)).toBeInTheDocument();
+    expect(name).toHaveValue('Waitlist note v2 and v3');
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+  });
+
   it('shows the fill-ins the trigger can supply', async () => {
     render(<CustomEmailsPanel />);
     await userEvent.click(await screen.findByText('Waitlist note'));
