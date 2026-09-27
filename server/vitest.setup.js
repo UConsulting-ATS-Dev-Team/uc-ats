@@ -20,3 +20,7 @@ process.env.AWS_SECRET_ACCESS_KEY = 'vitest-no-send';
 process.env.AWS_ENDPOINT_URL = 'http://127.0.0.1:1';
 process.env.EMAIL_PASS = '';
 process.env.SLACK_WEBHOOK_URL = '';
+// File storage: Supabase holds resumes and profile images, Drive the rest.
+process.env.SUPABASE_URL = 'http://127.0.0.1:1';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'vitest-no-access';
+process.env.GOOGLE_CLOUD_KEY_PATH = '';

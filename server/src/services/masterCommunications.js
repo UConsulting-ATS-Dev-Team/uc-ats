@@ -474,6 +474,7 @@ export async function sendMasterCommunication({
   cycleId,
   templateId,
   savedAudienceId,
+  onCampaignLogged = null,
 }) {
   assertServerSentChannel(channel);
 
@@ -518,6 +519,14 @@ export async function sendMasterCommunication({
   // the size of the audience either way - sendBulkEmails returns one result per
   // recipient whether or not the mail got through.
   const logId = await logMessage({ templateId, channel, recipientCount: recipients.length, subject, body, sentBy, cycleId });
+  if (onCampaignLogged && logId) {
+    try {
+      await onCampaignLogged(logId);
+    } catch (e) {
+      // Only a link for finding the send later; never a reason not to send.
+      console.error('[masterCommunications] onCampaignLogged failed:', e);
+    }
+  }
 
   const results = await sendBulkEmails({
     recipients,
@@ -601,11 +610,18 @@ export async function scheduleMessage({
   });
 }
 
+// How long a schedule may stay SENDING before it reads as interrupted. A send
+// to thousands takes minutes, so an hour means the server that claimed it died.
+export const STUCK_SENDING_MS = 60 * 60 * 1000;
+
+const isInterrupted = (schedule, now = Date.now()) =>
+  schedule.status === 'SENDING' && now - new Date(schedule.updatedAt).getTime() > STUCK_SENDING_MS;
+
 export async function listScheduledMessages({ cycleId, status, limit = 50 }) {
   const where = {};
   if (cycleId) where.cycleId = cycleId;
   if (status) where.status = status;
-  return prisma.messageSchedule.findMany({
+  const rows = await prisma.messageSchedule.findMany({
     where,
     orderBy: { scheduledAt: 'asc' },
     take: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200),
@@ -620,9 +636,31 @@ export async function listScheduledMessages({ cycleId, status, limit = 50 }) {
       body: true,
       cycleId: true,
       templateId: true,
+      messageLogId: true,
       createdAt: true,
+      updatedAt: true,
     },
   });
+  return rows.map((row) => ({ ...row, interrupted: isInterrupted(row) }));
+}
+
+/**
+ * Settle a scheduled send its server never finished, by marking it FAILED.
+ * Sends nothing: part of the audience already has it, and messageLogId leads to
+ * exactly who. Refused for a send still inside STUCK_SENDING_MS, which may just
+ * be running.
+ */
+export async function markScheduleFailed({ id }) {
+  const { count } = await prisma.messageSchedule.updateMany({
+    where: { id, status: 'SENDING', updatedAt: { lt: new Date(Date.now() - STUCK_SENDING_MS) } },
+    data: { status: 'FAILED' },
+  });
+  if (count === 0) {
+    const err = new Error('Only a send interrupted for over an hour can be marked failed');
+    err.status = 409;
+    throw err;
+  }
+  return { id, status: 'FAILED' };
 }
 
 export async function cancelScheduledMessage({ id, sentBy }) {
@@ -661,9 +699,12 @@ export async function cancelScheduledMessage({ id, sentBy }) {
  * again by the next tick, and by every other server on this database, and each
  * of them mailed the whole audience again.
  *
- * A server that dies mid-send leaves the schedule SENDING for good. That is on
- * purpose: nobody can tell who already got it, and a stuck row an admin can see
- * is better than mailing everyone a second time.
+ * A server that dies mid-send leaves the schedule SENDING, and nothing sends
+ * it again: some of the audience already has it, and mailing everyone a second
+ * time is the bug this exists to prevent. Instead the campaign is linked to the
+ * schedule as soon as it starts, so its per-recipient log shows who got it, and
+ * after STUCK_SENDING_MS the schedule reads as interrupted for an admin to
+ * settle with markScheduleFailed.
  */
 export async function processScheduledMessages() {
   const now = new Date();
@@ -674,11 +715,18 @@ export async function processScheduledMessages() {
 
   let processed = 0;
   for (const s of pending) {
-    const { count } = await prisma.messageSchedule.updateMany({
-      where: { id: s.id, status: 'PENDING' },
-      data: { status: 'SENDING' },
-    });
-    if (count === 0) continue; // another run claimed it, or it was cancelled
+    let claimed;
+    try {
+      ({ count: claimed } = await prisma.messageSchedule.updateMany({
+        where: { id: s.id, status: 'PENDING' },
+        data: { status: 'SENDING' },
+      }));
+    } catch (e) {
+      // Still PENDING, so a later tick tries it again; the rest go now.
+      console.error(`[masterCommunications] could not claim schedule ${s.id}:`, e);
+      continue;
+    }
+    if (claimed === 0) continue; // another run claimed it, or it was cancelled
     processed += 1;
 
     try {
@@ -692,6 +740,8 @@ export async function processScheduledMessages() {
         cycleId: s.cycleId,
         templateId: s.templateId,
         savedAudienceId: s.savedAudienceId,
+        onCampaignLogged: (logId) =>
+          prisma.messageSchedule.update({ where: { id: s.id }, data: { messageLogId: logId } }),
       });
       await prisma.messageSchedule.update({
         where: { id: s.id },

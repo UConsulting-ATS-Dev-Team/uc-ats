@@ -449,6 +449,19 @@ const MasterCommunications = () => {
     }
   };
 
+  // Settles an interrupted send. Sends nothing; resending is a new message the
+  // admin writes after checking Logs for who already has this one.
+  const handleMarkScheduleFailed = async (id) => {
+    clearMessages();
+    try {
+      await apiClient.post(`/master-communications/schedule/${id}/mark-failed`);
+      setSuccess('Marked as failed. Check Logs for who received it before sending again.');
+      fetchScheduled(primaryCycle);
+    } catch (e) {
+      setError(e.message || 'Failed to mark as failed');
+    }
+  };
+
   const insertMergeField = (field, target = 'body') => {
     const token = `{{${field}}}`;
     if (target === 'subject') {
@@ -1069,7 +1082,15 @@ const MasterCommunications = () => {
                 <TableCell>{new Date(m.scheduledAt).toLocaleString()}</TableCell>
                 <TableCell>{m.channel}</TableCell>
                 <TableCell>{m.savedAudience?.name || (m.audience === 'custom' ? 'Filtered' : m.audience)}</TableCell>
-                <TableCell>{m.status}</TableCell>
+                <TableCell>
+                  {m.interrupted ? (
+                    <Tooltip title="The server sending this stopped partway, so some of the audience may already have it. Check Logs before sending it again - it is never resent automatically.">
+                      <Chip size="small" color="warning" label="Interrupted" />
+                    </Tooltip>
+                  ) : (
+                    m.status
+                  )}
+                </TableCell>
                 <TableCell>{m.subject ? `${m.subject} — ` : ''}{m.body.slice(0, 60)}{m.body.length > 60 ? '…' : ''}</TableCell>
                 <TableCell>
                   {m.status === 'PENDING' && (
@@ -1080,6 +1101,11 @@ const MasterCommunications = () => {
                       onClick={() => handleCancelSchedule(m.id)}
                     >
                       Cancel
+                    </Button>
+                  )}
+                  {m.interrupted && (
+                    <Button size="small" color="warning" onClick={() => handleMarkScheduleFailed(m.id)}>
+                      Mark failed
                     </Button>
                   )}
                 </TableCell>

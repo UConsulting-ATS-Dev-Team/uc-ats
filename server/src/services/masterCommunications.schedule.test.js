@@ -7,7 +7,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { sendEmail } from './emailNotifications.js';
-import { processScheduledMessages, cancelScheduledMessage } from './masterCommunications.js';
+import {
+  processScheduledMessages,
+  cancelScheduledMessage,
+  listScheduledMessages,
+  markScheduleFailed,
+} from './masterCommunications.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -97,6 +102,35 @@ describe('processScheduledMessages', () => {
     expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps sending the rest when one claim fails', async () => {
+    prisma.messageSchedule.findMany.mockResolvedValue([schedule('s1'), schedule('s2')]);
+    prisma.messageSchedule.updateMany
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValueOnce({ count: 1 });
+
+    expect(await processScheduledMessages()).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    // s1 is still PENDING, so a later tick sends it; it is not marked failed.
+    expect(prisma.messageSchedule.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 's1' } })
+    );
+  });
+
+  it('links the campaign to the schedule before the first email, so an interrupted send shows who got it', async () => {
+    prisma.messageSchedule.findMany.mockResolvedValue([schedule('s1')]);
+    prisma.messageSchedule.updateMany.mockResolvedValue({ count: 1 });
+
+    await processScheduledMessages();
+
+    const link = prisma.messageSchedule.update.mock.calls.findIndex(
+      ([args]) => args.data.messageLogId === 'campaign-1' && !args.data.status
+    );
+    expect(link).toBeGreaterThanOrEqual(0);
+    expect(prisma.messageSchedule.update.mock.invocationCallOrder[link]).toBeLessThan(
+      sendEmail.mock.invocationCallOrder[0]
+    );
+  });
+
   it('marks a message whose send throws as failed', async () => {
     prisma.messageSchedule.findMany.mockResolvedValue([schedule('s1')]);
     prisma.messageSchedule.updateMany.mockResolvedValue({ count: 1 });
@@ -108,6 +142,38 @@ describe('processScheduledMessages', () => {
       where: { id: 's1' },
       data: { status: 'FAILED' },
     });
+  });
+});
+
+describe('an interrupted send', () => {
+  const HOUR = 60 * 60 * 1000;
+  const row = (status, updatedAgoMs) => ({ id: 's1', status, updatedAt: new Date(Date.now() - updatedAgoMs) });
+
+  it('reads as interrupted once it has been sending for over an hour', async () => {
+    prisma.messageSchedule.findMany.mockResolvedValue([
+      row('SENDING', 2 * HOUR),
+      { ...row('SENDING', 5 * 60 * 1000), id: 's2' },
+      { ...row('PENDING', 2 * HOUR), id: 's3' },
+    ]);
+
+    const list = await listScheduledMessages({});
+    expect(list.map((m) => m.interrupted)).toEqual([true, false, false]);
+  });
+
+  it('can be marked failed, which sends nothing', async () => {
+    prisma.messageSchedule.updateMany.mockResolvedValue({ count: 1 });
+
+    expect(await markScheduleFailed({ id: 's1' })).toEqual({ id: 's1', status: 'FAILED' });
+    const { where, data } = prisma.messageSchedule.updateMany.mock.calls[0][0];
+    expect(where).toMatchObject({ id: 's1', status: 'SENDING' });
+    expect(Date.now() - where.updatedAt.lt.getTime()).toBeGreaterThanOrEqual(HOUR);
+    expect(data).toEqual({ status: 'FAILED' });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('refuses a send that may still be running', async () => {
+    prisma.messageSchedule.updateMany.mockResolvedValue({ count: 0 });
+    await expect(markScheduleFailed({ id: 's1' })).rejects.toMatchObject({ status: 409 });
   });
 });
 

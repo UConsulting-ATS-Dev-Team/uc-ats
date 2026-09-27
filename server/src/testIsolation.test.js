@@ -16,4 +16,11 @@ describe('the test environment', () => {
     expect(process.env.EMAIL_PASS).toBe('');
     expect(process.env.SLACK_WEBHOOK_URL).toBe('');
   });
+
+  it('cannot reach file storage', async () => {
+    expect(new URL(process.env.SUPABASE_URL).host).toBe('127.0.0.1:1');
+    expect(process.env.SUPABASE_SERVICE_ROLE_KEY).toBe('vitest-no-access');
+    const { default: config } = await import('./config.js');
+    expect(config.gCloudKeyPath).toBeNull();
+  });
 });
