@@ -130,6 +130,35 @@ describe('the editor', () => {
     expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
   });
 
+  it('keeps edits typed while a new email is first saved, and saves the next change over it', async () => {
+    let finish;
+    apiClient.post.mockImplementation((url, body) => {
+      if (url === '/admin/automatic-emails') {
+        return new Promise((resolve) => {
+          finish = () => resolve({ ...EMAIL, ...body.email, id: 'created-1', recent: [] });
+        });
+      }
+      if (url.endsWith('/merge-fields')) return Promise.resolve({ mergeFields: ['firstName'] });
+      return Promise.resolve({ subject: 's', html: '<p/>', text: '' });
+    });
+    render(<CustomEmailsPanel />);
+    await userEvent.click(await screen.findByRole('button', { name: /new automatic email/i }));
+
+    const name = screen.getByLabelText('Name');
+    await userEvent.type(name, 'Deadline nudge');
+    await userEvent.type(screen.getByLabelText('Subject'), 'Soon');
+    await userEvent.click(screen.getByRole('button', { name: /create \(stays off\)/i }));
+    await userEvent.type(name, ' v2');
+    finish();
+
+    expect(await screen.findByText(/stays off until you turn it on/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Deadline nudge v2');
+
+    // Now it exists, so the next save updates it rather than creating another.
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(apiClient.put).toHaveBeenCalledWith('/admin/automatic-emails/created-1', expect.anything());
+  });
+
   it('shows the fill-ins the trigger can supply', async () => {
     render(<CustomEmailsPanel />);
     await userEvent.click(await screen.findByText('Waitlist note'));

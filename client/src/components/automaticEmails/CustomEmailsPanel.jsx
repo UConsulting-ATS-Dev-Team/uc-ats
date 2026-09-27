@@ -33,6 +33,10 @@ export default function CustomEmailsPanel() {
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState(null); // { email, reach }
   const [toggling, setToggling] = useState('');
+  // Identifies one editing session. It changes when a different email is
+  // opened or "New" is pressed - never when a new email is saved and gets its
+  // id, because remounting then would throw away anything typed during the save.
+  const [session, setSession] = useState(0);
 
   const loadList = () =>
     apiClient
@@ -52,7 +56,10 @@ export default function CustomEmailsPanel() {
   const open = (id) =>
     apiClient
       .get(`/admin/automatic-emails/${id}`)
-      .then(setSelected)
+      .then((email) => {
+        setSelected(email);
+        setSession((n) => n + 1);
+      })
       .catch((err) => setError(err.serverMessage || 'Failed to open that email'));
 
   const askToEnable = (email) => {
@@ -90,7 +97,10 @@ export default function CustomEmailsPanel() {
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '300px 1fr' }, gap: 3, alignItems: 'start' }}>
       <Box>
-        <Button fullWidth variant="outlined" startIcon={<AddIcon />} onClick={() => setSelected({ ...BLANK_EMAIL })} sx={{ mb: 1 }}>
+        <Button fullWidth variant="outlined" startIcon={<AddIcon />} onClick={() => {
+            setSelected({ ...BLANK_EMAIL });
+            setSession((n) => n + 1);
+          }} sx={{ mb: 1 }}>
           New automatic email
         </Button>
         {emails.length === 0 ? (
@@ -138,7 +148,7 @@ export default function CustomEmailsPanel() {
         )}
         {selected ? (
           <CustomEmailEditor
-            key={selected.id ?? 'new'}
+            key={session}
             email={selected.id ? selected : null}
             options={options}
             signatures={signatures}
