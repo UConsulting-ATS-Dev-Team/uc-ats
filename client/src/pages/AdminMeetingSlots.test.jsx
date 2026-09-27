@@ -218,6 +218,25 @@ describe('AdminMeetingSlots overdue attendance', () => {
     expect(screen.getByRole('button', { name: 'Remind hosts (1)' })).toBeTruthy();
   });
 
+  it('keeps Remind disabled until the list has reloaded, and says if it could not', async () => {
+    api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
+    const user = await renderAfterBothSlots();
+
+    let finishReload;
+    api.get.mockImplementation((url) => {
+      if (url === '/admin/meeting-slots') return new Promise((_, reject) => { finishReload = reject; });
+      if (url === '/member/gtkuc-profile') return Promise.resolve({ confirmationRequired: false });
+      return Promise.resolve([]);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Remind host' }));
+    // Mid-reload, the table is replaced by the spinner, so no Remind can be pressed.
+    expect(screen.queryByRole('button', { name: 'Remind host' })).toBeNull();
+
+    await act(async () => { finishReload(new Error('Server unavailable')); });
+    expect(await screen.findByText(/1 reminder sent\. The slot list could not be refreshed/)).toBeTruthy();
+  });
+
   it('reminds one host from the row', async () => {
     api.post.mockResolvedValue({ sent: 1, failed: 0, skipped: 0 });
     const user = await renderAfterBothSlots();

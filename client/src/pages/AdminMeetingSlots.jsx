@@ -208,6 +208,7 @@ export default function AdminMeetingSlots() {
     }
   };
 
+  // Resolves false when the slot list could not be fetched (the error is shown).
   const load = async () => {
     try {
       setLoading(true);
@@ -223,8 +224,10 @@ export default function AdminMeetingSlots() {
       setActiveCycle(cycle);
       setMembers((users || []).filter((u) => u.role === 'MEMBER' || u.role === 'ADMIN'));
       setGtkucProfiles(profiles || []);
+      return true;
     } catch (e) {
       setError(e.message || 'Failed to load meeting slots');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -377,10 +380,12 @@ export default function AdminMeetingSlots() {
       }
     }
 
-    // Reload first: load() clears the error banner as it starts.
+    // Reload before reporting: load() clears the error banner as it starts.
+    // The buttons stay disabled until then, because a Remind clicked against
+    // the old list would email a host who was just emailed.
     setSelectedIds(new Set(unsent));
+    const reloaded = await load();
     setReminding(false);
-    await load();
 
     const parts = [`${sent} reminder${sent === 1 ? '' : 's'} sent.`];
     if (skipped > 0) parts.push(`${skipped} skipped: already finished, host deactivated, or being sent right now.`);
@@ -391,7 +396,8 @@ export default function AdminMeetingSlots() {
         'They are still selected; press Remind hosts to send them.'
       );
     }
-    if (requestError || failed > 0) setError(parts.join(' '));
+    if (!reloaded) parts.push('The slot list could not be refreshed, so it may be out of date; reload the page.');
+    if (requestError || failed > 0 || !reloaded) setError(parts.join(' '));
     else flash(parts.join(' '));
   };
 
