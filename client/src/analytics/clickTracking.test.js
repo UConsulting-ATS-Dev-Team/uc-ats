@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { handleClick } from './clickTracking';
+import { handleClick, looksLikeUiCopy } from './clickTracking';
 import { queuedEvents, resetTracker } from './tracker';
 import { reportError, resetErrorTracking } from './errorTracking';
 
@@ -11,28 +11,43 @@ beforeEach(() => {
 });
 
 function clickOn(html, selector) {
+  resetTracker();
   document.body.innerHTML = html;
-  const target = document.querySelector(selector);
-  handleClick({ target });
+  handleClick({ target: document.querySelector(selector) });
   return queuedEvents().filter((e) => e.type === 'click');
 }
+const label = (html, selector) => clickOn(html, selector)[0]?.name;
 
-describe('click tracking', () => {
+describe('click labels', () => {
   it('records the nearest button, even when the click lands on its icon', () => {
     const [event] = clickOn('<button><svg><path id="icon"/></svg> Save changes</button>', '#icon');
     expect(event).toMatchObject({ type: 'click', name: 'Save changes', meta: { tag: 'button' } });
   });
 
-  it('prefers data-track over aria-label over text', () => {
-    expect(clickOn('<button data-track="Send decision" aria-label="x">Jane Doe</button>', 'button')[0].name).toBe('Send decision');
-    resetTracker();
-    expect(clickOn('<button aria-label="Close dialog">×</button>', 'button')[0].name).toBe('Close dialog');
+  it('uses data-track before anything on screen', () => {
+    expect(label('<button data-track="Send decision" aria-label="x">Jane Doe</button>', 'button')).toBe('Send decision');
   });
 
-  it('masks addresses and caps long labels', () => {
-    expect(clickOn('<a href="#">Email joe@ucla.edu</a>', 'a')[0].name).toBe('Email [email]');
-    resetTracker();
-    expect(clickOn(`<button>${'word '.repeat(40)}</button>`, 'button')[0].name.length).toBeLessThanOrEqual(60);
+  it('keeps short fixed copy from aria-label or text', () => {
+    expect(label('<button aria-label="Close dialog">×</button>', 'button')).toBe('Close dialog');
+    expect(label('<button>Run rollup now</button>', 'button')).toBe('Run rollup now');
+  });
+
+  it('never records a name, a position or a vote on a button', () => {
+    // RosterStrip's chip, before it had data-track.
+    expect(label('<button aria-label="3. Jane Doe, Voted"></button>', 'button')).toBe('(button)');
+    expect(label('<button>Message Maria Lopez</button>', 'button')).toBe('(button)');
+    expect(label('<button>Email joe@ucla.edu</button>', 'button')).toBe('(button)');
+  });
+
+  it('records where a link goes, never its text', () => {
+    expect(label('<a href="/applications/3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b?tab=x">Jane Doe</a>', 'a')).toBe('→ /applications/:id');
+    expect(label('<a href="https://www.linkedin.com/in/jane-doe">Jane on LinkedIn</a>', 'a')).toBe('→ www.linkedin.com');
+  });
+
+  it('records no text for anything in a table row or list', () => {
+    expect(label('<table><tr><td><button>Advance</button></td></tr></table>', 'button')).toBe('(button in a list)');
+    expect(label('<ul><li><div role="button" id="r">Priya</div></li></ul>', '#r')).toBe('(button in a list)');
   });
 
   it('never records form fields', () => {
@@ -47,6 +62,13 @@ describe('click tracking', () => {
   it('ignores clicks on nothing clickable', () => {
     expect(clickOn('<p id="p">Just text</p>', '#p')).toHaveLength(0);
   });
+});
+
+describe('looksLikeUiCopy', () => {
+  it.each(['Save', 'Save changes', 'Open', 'Next page', 'Performance'])('accepts %s', (t) => expect(looksLikeUiCopy(t)).toBe(true));
+  it.each(['Jane Doe', 'Round 2', 'x'.repeat(41), 'one two three four five six', 'a@b.co', ''])('rejects %s', (t) =>
+    expect(looksLikeUiCopy(t)).toBe(false)
+  );
 });
 
 describe('reportError', () => {

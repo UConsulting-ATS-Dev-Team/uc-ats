@@ -31,10 +31,11 @@ export function installPageTracking() {
   if (installed) return;
   installed = true;
   onPageHide(() => {
-    const now = Date.now();
-    closeCurrent(now);
-    // Time in the background is not time on the page.
-    since = now;
+    closeCurrent(Date.now());
+    // Closing a tab fires both visibilitychange and pagehide; with the clock
+    // stopped the second one records nothing. It restarts when the tab is
+    // visible again, so time in the background is not time on the page.
+    since = 0;
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') since = Date.now();

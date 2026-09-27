@@ -82,17 +82,31 @@ let running = false;
 export const isRollupRunning = () => running;
 
 /**
- * Roll up yesterday and the day before (a beacon sent at 23:59 and an error
- * buffered over midnight both land late), then prune.
- * Returns null when a run is already in progress.
+ * The days a run should roll up, newest first: yesterday and the day before
+ * (a beacon sent at 23:59 and an error buffered over midnight both land late),
+ * plus every day since the last one rolled up, so a server that was down for a
+ * week fills the gap on its first night back. Capped at the request-sample
+ * retention - older raw rows are gone, so there is nothing left to roll up.
  */
+export function daysToRollUp(today, lastRolled) {
+  const yesterday = shiftDay(today, -1);
+  const floor = shiftDay(today, -RETENTION_DAYS.requestSamples);
+  let from = shiftDay(yesterday, -1);
+  if (lastRolled && lastRolled < from) from = shiftDay(lastRolled, 1);
+  if (from < floor) from = floor;
+  const days = [];
+  for (let d = yesterday; d >= from; d = shiftDay(d, -1)) days.push(d);
+  return days;
+}
+
+/** Returns null when a run is already in progress. */
 export async function runRollup({ now = new Date(), client = prisma } = {}) {
   if (running) return null;
   running = true;
   const started = Date.now();
   try {
-    const yesterday = shiftDay(laDay(now), -1);
-    const days = [yesterday, shiftDay(yesterday, -1)];
+    const latest = await client.analyticsDailySummary.findFirst({ orderBy: { day: 'desc' }, select: { day: true } });
+    const days = daysToRollUp(laDay(now), latest ? latest.day.toISOString().slice(0, 10) : null);
     const results = [];
     for (const day of days) results.push(await rollupDay(day, client));
     const pruned = await pruneRaw(now, client);

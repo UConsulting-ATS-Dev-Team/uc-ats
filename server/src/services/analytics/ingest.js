@@ -21,12 +21,17 @@ function readMeta(meta) {
     return { ok: false };
   }
   if (Buffer.byteLength(json, 'utf8') > INGEST.maxMetaBytes) return { ok: false };
-  // Round-trip so only plain JSON is stored, then redact each string value.
-  const plain = JSON.parse(json);
-  for (const [k, v] of Object.entries(plain)) {
-    if (typeof v === 'string') plain[k] = redactText(v, 200);
+  // Round-trip so only plain JSON is stored, then redact every string, at any depth.
+  return { ok: true, value: redactDeep(JSON.parse(json)) };
+}
+
+function redactDeep(value) {
+  if (typeof value === 'string') return redactText(value, 200);
+  if (Array.isArray(value)) return value.map(redactDeep);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactDeep(v)]));
   }
-  return { ok: true, value: plain };
+  return value;
 }
 
 function clampTime(ts, now) {

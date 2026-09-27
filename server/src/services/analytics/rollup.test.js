@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { computeDayAggregates, percentile } from './aggregate.js';
-import { dayBounds, laDay, pruneRaw, rollupDay, runRollup, shiftDay } from './rollup.js';
+import { dayBounds, daysToRollUp, laDay, pruneRaw, rollupDay, runRollup, shiftDay } from './rollup.js';
 
 vi.mock('../../prismaClient.js', () => ({ default: {} }));
 vi.mock('./aggregate.js', async (importOriginal) => ({
@@ -11,7 +11,11 @@ vi.mock('./aggregate.js', async (importOriginal) => ({
 
 const fakeClient = () => {
   const client = {
-    analyticsDailySummary: { deleteMany: vi.fn((a) => ({ op: 'delS', a })), createMany: vi.fn((a) => ({ op: 'addS', a })) },
+    analyticsDailySummary: {
+      deleteMany: vi.fn((a) => ({ op: 'delS', a })),
+      createMany: vi.fn((a) => ({ op: 'addS', a })),
+      findFirst: vi.fn(async () => null),
+    },
     analyticsDailyFact: { deleteMany: vi.fn((a) => ({ op: 'delF', a })), createMany: vi.fn((a) => ({ op: 'addF', a })) },
     $transaction: vi.fn(async (ops) => ops),
     $executeRawUnsafe: vi.fn(async () => 0),
@@ -105,7 +109,37 @@ describe('pruneRaw', () => {
   });
 });
 
+describe('daysToRollUp', () => {
+  it('is yesterday and the day before on a normal night', () => {
+    expect(daysToRollUp('2026-09-27', '2026-09-26')).toEqual(['2026-09-26', '2026-09-25']);
+    expect(daysToRollUp('2026-09-27', null)).toEqual(['2026-09-26', '2026-09-25']);
+  });
+
+  it('catches up every day missed while the job was not running', () => {
+    expect(daysToRollUp('2026-09-27', '2026-09-21')).toEqual([
+      '2026-09-26',
+      '2026-09-25',
+      '2026-09-24',
+      '2026-09-23',
+      '2026-09-22',
+    ]);
+  });
+
+  it('stops where the raw rows run out', () => {
+    const days = daysToRollUp('2026-09-27', '2026-06-01');
+    expect(days).toHaveLength(14);
+    expect(days.at(-1)).toBe('2026-09-13');
+  });
+});
+
 describe('runRollup', () => {
+  it('catches up from the last day already rolled up', async () => {
+    const client = fakeClient();
+    client.analyticsDailySummary.findFirst.mockResolvedValue({ day: new Date('2026-09-22T00:00:00Z') });
+    const result = await runRollup({ now: new Date('2026-09-27T18:00:00Z'), client });
+    expect(result.days).toEqual(['2026-09-26', '2026-09-25', '2026-09-24', '2026-09-23']);
+  });
+
   it('rolls up yesterday and the day before, then prunes', async () => {
     const client = fakeClient();
     const result = await runRollup({ now: new Date('2026-09-27T18:00:00Z'), client });

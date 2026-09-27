@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { maskText, normalizePath } from './normalizePath';
 import { FLUSH_AT, QUEUE_CAP, flush, getSessionId, queuedEvents, resetTracker, startTracker, track } from './tracker';
-import { resetPageTracking, trackRouteChange } from './pageTracking';
+import { installPageTracking, resetPageTracking, trackRouteChange } from './pageTracking';
 
 beforeEach(() => {
   resetTracker();
@@ -52,6 +52,20 @@ describe('tracker', () => {
     const body = JSON.parse(init.body);
     expect(body.sessionId).toBe(getSessionId());
     expect(body.events[0]).toMatchObject({ type: 'click', path: '/admin/users/:id', name: 'Save' });
+  });
+
+  it('sends each event under the session it happened in', () => {
+    startTracker();
+    track('page_view', { path: '/login' });
+    localStorage.setItem('token', 'jwt-new');
+    track('page_view', { path: '/dashboard' });
+    flush();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [[, first], [, second]] = fetch.mock.calls;
+    expect(first.headers.Authorization).toBeUndefined();
+    expect(JSON.parse(first.body).events.map((e) => e.path)).toEqual(['/login']);
+    expect(second.headers.Authorization).toBe('Bearer jwt-new');
+    expect(JSON.parse(second.body).events.map((e) => e.path)).toEqual(['/dashboard']);
   });
 
   it('flushes on its own once enough events wait', () => {
@@ -115,6 +129,19 @@ describe('trackRouteChange', () => {
     expect(events.map((e) => e.type)).toEqual(['page_view', 'page_dwell', 'page_view']);
     expect(events[1]).toMatchObject({ path: '/dashboard', value: 5_000 });
     expect(events[2]).toMatchObject({ path: '/cycles/:id' });
+  });
+
+  it('records the last page once when a tab close fires both hide events', () => {
+    installPageTracking();
+    startTracker();
+    trackRouteChange('/dashboard', Date.now() - 5000);
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
+    const dwell = sentBatches().flatMap((b) => b.events).filter((e) => e.type === 'page_dwell');
+    expect(dwell).toHaveLength(1);
+    expect(dwell[0].value).toBeGreaterThanOrEqual(5000);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
 
   it('ignores a change that normalizes to the same page', () => {

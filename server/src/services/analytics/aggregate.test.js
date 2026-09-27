@@ -79,6 +79,19 @@ describe('computeDayAggregates', () => {
     expect(facts[0]).toMatchObject({ kind: 'vital', key: 'CLS', p50Ms: 51, p95Ms: 200 });
   });
 
+  it('folds groups whose keys collide after truncation, so the unique index cannot abort the day', async () => {
+    const longPath = `/${'a'.repeat(199)}`;
+    const clicks = [
+      { key: `${longPath} › Save`, role: null, count: 3 },
+      { key: `${longPath} › Delete`, role: null, count: 2 },
+    ];
+    const { facts } = await computeDayAggregates(range, clientReturning({ clicks }));
+    const kept = facts.filter((f) => f.kind === 'click');
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ count: 5 });
+    expect(kept[0].key).toHaveLength(200);
+  });
+
   it('keeps only the 500 busiest buttons', async () => {
     const clicks = Array.from({ length: 600 }, (_, i) => ({ key: `/p › b${i}`, role: null, count: i }));
     const { facts } = await computeDayAggregates(range, clientReturning({ clicks }));

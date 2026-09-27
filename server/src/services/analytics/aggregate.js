@@ -230,5 +230,32 @@ export async function computeDayAggregates({ from, to }, client = prisma) {
     ...securityKinds.map((row) => fact('security_kind', row)),
   ];
 
-  return { summaries: [...summaries.values()], facts };
+  return { summaries: [...summaries.values()], facts: mergeDuplicateKeys(facts) };
+}
+
+/**
+ * Keys are capped at KEY_MAX, so two groups SQL kept apart (two buttons on one
+ * very long path) can arrive with the same key. The unique index on
+ * (day, kind, role, key) would then abort the whole day's rollup, so they are
+ * folded into one fact here: counts add up, and the percentiles of the busier
+ * group stand for both.
+ */
+export function mergeDuplicateKeys(facts) {
+  const merged = new Map();
+  for (const fact of facts) {
+    const id = `${fact.kind}|${fact.role}|${fact.key}`;
+    const seen = merged.get(id);
+    if (!seen) {
+      merged.set(id, { ...fact });
+      continue;
+    }
+    const busier = fact.count > seen.count ? fact : seen;
+    merged.set(id, {
+      ...busier,
+      count: seen.count + fact.count,
+      errorCount: seen.errorCount + fact.errorCount,
+      maxMs: seen.maxMs === null ? fact.maxMs : fact.maxMs === null ? seen.maxMs : Math.max(seen.maxMs, fact.maxMs),
+    });
+  }
+  return [...merged.values()];
 }

@@ -686,9 +686,14 @@ The system follows a **recruiting cycle-based workflow**:
   there is still no rate limit on `/api/auth/login`.
 - The browser tracker batches to `/api/analytics/events` with `fetch({ keepalive })`, which
   carries the bearer token even on page close; identity comes only from that token, never
-  the body. Clicks are one document listener: label is `data-track`, then `aria-label`,
-  then text, capped at 60 with addresses masked. Put `data-track="…"` on a button whose text
-  is a person's name, and `data-no-track` on anything that must not be recorded. Paths are
+  the body. A batch never spans a change of token, so views from before a sign-in are not
+  handed to the new account. Clicks are one document listener, and **page text is treated
+  as data**: names and votes are inside the buttons people click. The label is
+  `data-track` if present; a link's normalized destination, never its text; nothing but
+  the element kind inside a table row, list item or option; otherwise `aria-label` or text
+  only if `looksLikeUiCopy` passes (short, no digits or `@`, no "Jane Doe"-shaped pair).
+  Add `data-track="…"` to a button worth counting whose text is data, and `data-no-track`
+  to anything that must not be recorded at all. Paths are
   normalized (ids, tokens, addresses replaced) on both ends and the query string is never
   read. `apiClient` reports failed and slow (>2s) calls; `ErrorBoundary` in `main.jsx`
   reports render crashes.

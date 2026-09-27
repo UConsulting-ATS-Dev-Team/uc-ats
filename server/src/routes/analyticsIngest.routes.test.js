@@ -104,6 +104,11 @@ describe('POST /api/analytics/events', () => {
     expect(pushed()[0].name).toBe('Email [email]');
   });
 
+  it('redacts addresses nested anywhere in the metadata', async () => {
+    await post({ sessionId: SESSION, events: [event({ meta: { context: { who: 'joe@ucla.edu', list: ['ann@ucla.edu', 3] } } })] });
+    expect(pushed()[0].meta).toEqual({ context: { who: '[email]', list: ['[email]', 3] } });
+  });
+
   it('clamps a client clock that is far off', async () => {
     const before = Date.now();
     await post({ sessionId: SESSION, events: [event({ ts: 0 }), event({ ts: before + 10 * 60 * 60 * 1000 })] });

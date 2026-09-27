@@ -59,10 +59,9 @@ function authToken() {
   }
 }
 
-function send(events) {
+function send(events, token) {
   const body = JSON.stringify({ sessionId: getSessionId(), events });
   const headers = { 'Content-Type': 'text/plain' };
-  const token = authToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   try {
     const request = fetch(ENDPOINT, { method: 'POST', headers, body, keepalive: true, credentials: 'same-origin' });
@@ -81,7 +80,15 @@ function send(events) {
 export function flush() {
   try {
     if (!started || queue.length === 0) return;
-    while (queue.length) send(queue.splice(0, BATCH_MAX));
+    // Each event goes out under the session it happened in. A page viewed
+    // signed out and a login before the next flush must not hand those views
+    // to the new account, so a batch never spans a change of token.
+    while (queue.length) {
+      const token = queue[0].token;
+      let end = 0;
+      while (end < queue.length && end < BATCH_MAX && queue[end].token === token) end += 1;
+      send(queue.splice(0, end).map((item) => item.event), token);
+    }
   } catch {
     queue = [];
   }
@@ -103,7 +110,7 @@ export function track(type, { path, name, value, meta } = {}) {
     if (typeof value === 'number' && Number.isFinite(value)) event.value = value;
     if (meta && typeof meta === 'object') event.meta = meta;
     if (queue.length >= QUEUE_CAP) queue.shift();
-    queue.push(event);
+    queue.push({ event, token: authToken() });
     if (started && queue.length >= FLUSH_AT) flush();
   } catch {
     // Analytics never breaks the page.
@@ -150,4 +157,4 @@ export function resetTracker() {
 }
 
 /** Tests only. */
-export const queuedEvents = () => queue.slice();
+export const queuedEvents = () => queue.map((item) => item.event);
