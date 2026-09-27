@@ -53,6 +53,20 @@ const SECURITY_PARAMS = {
   asOf: 'sec_as_of',
 };
 
+const PAGING_KEYS = ['page', 'execPage', 'asOf'];
+
+/** Back to the first page of both security lists, read fresh. Returns whether anything changed. */
+function dropSnapshot(next) {
+  let changed = false;
+  for (const key of PAGING_KEYS) {
+    if (next.has(SECURITY_PARAMS[key])) {
+      next.delete(SECURITY_PARAMS[key]);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function describeRollup(days) {
   if (days.length <= 2) return days.map(fmtDay).join(' and ');
   return `${days.length} days (${fmtDay(days.at(-1))} to ${fmtDay(days[0])})`;
@@ -93,7 +107,17 @@ function AnalyticsDashboard() {
     const next = new URLSearchParams(params);
     if (value === fallback) next.delete(key);
     else next.set(key, String(value));
+    // A new range is a new question for the security lists too.
+    if (key === 'days') dropSnapshot(next);
     setParams(next, { replace: true });
+  };
+
+  // Refresh means now: leave any paging snapshot (which reloads through the
+  // URL change), or simply reload when there is none.
+  const refresh = () => {
+    const next = new URLSearchParams(params);
+    if (dropSnapshot(next)) setParams(next, { replace: true });
+    else load();
   };
 
   const load = useCallback(async () => {
@@ -124,6 +148,9 @@ function AnalyticsDashboard() {
 
   const onSecurityFilter = (changes) => {
     const next = new URLSearchParams(params);
+    // Anything but turning a page is a new question: both lists start again
+    // from their first page, read now rather than at an old snapshot.
+    if (!Object.keys(changes).every((k) => PAGING_KEYS.includes(k))) dropSnapshot(next);
     for (const [name, value] of Object.entries(changes)) {
       const param = SECURITY_PARAMS[name];
       const isFirstPage = (name === 'page' || name === 'execPage') && Number(value) === 0;
@@ -189,7 +216,7 @@ function AnalyticsDashboard() {
               </Select>
             </FormControl>
           )}
-          <Button variant="outlined" onClick={load} disabled={loading}>
+          <Button variant="outlined" onClick={refresh} disabled={loading}>
             Refresh
           </Button>
           <Button variant="outlined" onClick={runRollup} disabled={rollup.running}>

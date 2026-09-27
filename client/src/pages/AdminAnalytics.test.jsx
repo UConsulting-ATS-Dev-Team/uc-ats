@@ -129,6 +129,16 @@ describe('AdminAnalytics', () => {
     );
   });
 
+  it('drops an old paging snapshot on Refresh, so new events show', async () => {
+    apiClient.get.mockRejectedValue(new Error('offline'));
+    renderAt('/admin/analytics?tab=security&sec_exec_page=2&sec_as_of=2026-09-27T10%3A00%3A00.000Z');
+    expect(apiClient.get).toHaveBeenCalledWith('/admin/analytics/security?days=30&execPage=2&asOf=2026-09-27T10%3A00%3A00.000Z');
+    await screen.findByText('offline');
+    apiClient.get.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/admin/analytics/security?days=30'));
+  });
+
   it('describes a catch-up rollup by its span', () => {
     expect(describeRollup(['2026-09-26', '2026-09-25'])).toBe('Sep 26 and Sep 25');
     expect(describeRollup(['2026-09-26', '2026-09-25', '2026-09-24'])).toBe('3 days (Sep 24 to Sep 26)');
