@@ -2161,6 +2161,44 @@ model EmailTemplateCopy {
   @@map("email_template_copy")
 }
 
+/// How every automatic email looks: one row, id 'default'. A null column means
+/// the look the code ships (services/emailTheme.js), so a missing row and a
+/// missing table both render today's emails.
+model EmailTheme {
+  id               String   @id @default("default")
+  brandName        String?
+  /// https only. Replaces the brand name in the header when set.
+  logoUrl          String?
+  headerBackground String?
+  headerTextColor  String?
+  /// Buttons and links.
+  accentColor      String?
+  fontFamily       String?
+  footerText       String?
+  updatedById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("email_theme")
+}
+
+/// Per-email presentation over the theme, keyed like EmailTemplateCopy. Kept
+/// apart from the wording so restoring one does not restore the other.
+model EmailTemplateStyle {
+  id          String   @id @default(uuid())
+  templateKey String   @unique
+  /// 'DESIGNED' | 'PLAIN'. Null means the template's shipped default.
+  format      String?
+  /// A tone name ('brand', 'success', 'danger', 'warning', 'info') or a hex
+  /// colour. Null means the template's shipped banner.
+  banner      String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("email_template_style")
+}
+
 /// A person from the retired recruiting-interest mailing list whom the ATS had
 /// no other record of when they were imported. They exist so Master
 /// Communications can email them, through the "Mailing list" audience.

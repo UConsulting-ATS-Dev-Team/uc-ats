@@ -92,6 +92,8 @@ const SPACING = {
   loose: 'line-height: 1.6; margin-bottom: 20px;',
   tight: 'line-height: 1.6; margin: 8px 0;',
   snug: 'line-height: 1.6; margin: 5px 0;',
+  // A Plain email, which should read like something a person typed.
+  plain: 'line-height: 1.6; margin: 0 0 16px 0;',
 };
 
 /**
@@ -102,12 +104,19 @@ const SPACING = {
  * colour, packed tight). Passing them per call is what lets the rendered output
  * keep matching the markup it replaced, card by card.
  */
-export function copyHtml(text, values, { color = '#666', spacing = 'loose', link = '#007bff' } = {}) {
+export function copyHtml(text, values, options = {}) {
   const filled = escapedWithValues(text, values);
   if (!filled.trim()) return '';
+  return styleCopyHtml(defuseUnsafeLinks(marked.parse(filled, { breaks: true })), options);
+}
 
+/**
+ * Inline styles for HTML that marked produced, which arrives with bare tags.
+ * Split out of copyHtml for the decision letters, whose Markdown is rendered
+ * with trusted merge values and so cannot go through copyHtml itself.
+ */
+export function styleCopyHtml(html, { color = '#666', spacing = 'loose', link = '#007bff' } = {}) {
   const paragraph = `color: ${color}; ${SPACING[spacing] ?? SPACING.loose}`;
-  const html = defuseUnsafeLinks(marked.parse(filled, { breaks: true }));
 
   return html
     .replace(/<p>/g, `<p style="${paragraph}">`)

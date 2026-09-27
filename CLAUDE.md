@@ -330,6 +330,35 @@ The system follows a **recruiting cycle-based workflow**:
   ([server/src/services/sesEvents.js](server/src/services/sesEvents.js)). Unset topic ARN
   means it refuses everything.
 
+**How automatic emails look:**
+- Every automatic email is drawn by one renderer,
+  [server/src/services/emailLayout.js](server/src/services/emailLayout.js). A builder
+  never writes layout HTML: it hands `composeEmail(key, { subject, values, parts })` a
+  list of parts (`heading`, `greeting`, `copy`, `card`, `button`, `link`, `signOff`,
+  and `html` for the decision letters' rendered Markdown). **A new automatic email must
+  go through `composeEmail`**, or it will ignore the theme and have no Plain version.
+- The look is layered like the wording: shipped defaults, then the one-row `EmailTheme`
+  (brand, logo, header colours, accent, font, footer;
+  [emailTheme.js](server/src/services/emailTheme.js)), then the per-email
+  `EmailTemplateStyle` (Designed/Plain, header colour;
+  [emailTemplateStyle.js](server/src/services/emailTemplateStyle.js)), keyed by the same
+  keys as `EmailTemplateCopy`. Style lives in its own table so restoring the wording does
+  not restore the colour. Admins edit both on the Automatic Emails page (Theme tab, and
+  each email's Style tab).
+- Theme values end up inside `style` attributes and `<img src>`, so they are validated to
+  a narrow shape (hex colours, a font from `EMAIL_FONTS`, an https logo) rather than
+  escaped. Free text (brand name, footer) is escaped by the layout.
+- Plain has no header, card boxes or footer, and carries the same information: a card
+  becomes "Label: value" lines and a button becomes a link. Decision letters start Plain,
+  which is how they always looked; everything else starts Designed.
+- A missing theme or style table reads as the shipped look, and so does an unapplied
+  migration: a send never fails on presentation.
+- `sendEmail` adds a `text/plain` part to every message, derived from the HTML with
+  `htmlToPlainText`, so the two can never disagree. That includes Master Communications.
+- Previews can render an unsaved theme or style (`POST /:key/preview` with
+  `{ theme, style }`), validated as a save would be. The draft reaches the builders
+  through `withDraftPresentation` (AsyncLocalStorage), never on a send path.
+
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
   interview: a note on what deliberation is for, plus one description per decision. Admins

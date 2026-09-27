@@ -7,6 +7,7 @@ import {
   resolveEmailCopyMany,
 } from './emailTemplateCopy.js';
 import { defuseUnsafeLinks } from './emailCopyRender.js';
+import { composeEmail, part } from './emailLayout.js';
 
 // How a decision email is rendered for one recipient.
 //
@@ -134,4 +135,18 @@ export function renderDecisionEmail(template, recipient, context = {}) {
     marked.parse(fillMergeFields(template.body, values, { escape: true }), { breaks: true })
   );
   return { subject, html };
+}
+
+/**
+ * The decision email as it is actually sent: the body above, drawn in the
+ * admin's theme and in the format chosen for this round and outcome. Those
+ * start as Plain, which is how decision letters have always looked.
+ */
+export async function renderDecisionLetter(template, recipient, context, outcome) {
+  const { subject, html } = renderDecisionEmail(template, recipient, context);
+  return composeEmail(DECISION_COPY_KEY(context.round, outcome), {
+    subject,
+    brand: 'UConsulting Recruitment',
+    parts: [part.html(html)],
+  });
 }
