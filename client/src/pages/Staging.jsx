@@ -93,6 +93,7 @@ import RubricEditorDialog from '../components/staging/RubricEditorDialog';
 import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditorDialog';
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
 import { hasCoverLetter as hasCoverLetterSubmission } from '../utils/coverLetter';
+import { stagingMax, useDocumentRubrics } from '../utils/documentRubrics';
 
 const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
 const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
@@ -309,7 +310,7 @@ const ScoreDisplay = ({ score, maxScore = 10 }) => {
       >
         <Box
           sx={{
-            width: `${percentage}%`,
+            width: `${Math.min(percentage, 100)}%`,
             height: '100%',
             backgroundColor: `${getColor(percentage)}.main`,
             transition: 'width 0.3s ease'
@@ -487,6 +488,7 @@ ${hasVideo ? (hasVideoScore ? '✓ Video Scored' : '⏳ Video Pending') : '✗ N
 export default function Staging() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { data: rubricData } = useDocumentRubrics();
   const { triggerCelebration } = useCelebration();
   const isAdmin = user?.role === 'ADMIN';
   const { activeSession: activeLiveVote, refresh: refreshLiveVote } = useLiveVote();
@@ -2220,7 +2222,10 @@ export default function Staging() {
                             </Box>
                           </TableCell>
                           <TableCell data-label="Score">
-                            <ScoreDisplay score={getScoreForTab(candidate, currentTab)} />
+                            <ScoreDisplay
+                              score={getScoreForTab(candidate, currentTab)}
+                              maxScore={currentTab === 0 ? stagingMax(rubricData) : 10}
+                            />
                           </TableCell>
                           <TableCell data-label="Grading">
                             <GradingStatusDisplay candidate={candidate} gradingData={gradingData} />

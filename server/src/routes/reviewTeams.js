@@ -13,6 +13,7 @@ import {
 } from '../utils/groupMembers.js';
 import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
+import { scoreFromRubric } from '../services/documentRubrics.js';
 import {
   candidateParamGuard,
   guardCandidate,
@@ -1515,12 +1516,10 @@ router.get('/test', requireAuth, async (req, res) => {
 // Save resume score (per evaluator per candidate)
 router.post('/resume-score', requireAuth, async (req, res) => {
   try {
-    const { candidateId, assignedGroupId, scoreOne, scoreTwo, scoreThree, notes, cycleId } = req.body;
+    const { candidateId, assignedGroupId, notes, cycleId } = req.body;
     const evaluatorId = req.user.id;
 
-    // Calculate overall score (sum of the two scores for resume: Content/Relevance/Impact + Structure/Formatting)
-    const scores = [scoreOne, scoreTwo].filter(score => score !== null && score !== undefined);
-    const overallScore = scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) : 0;
+    const { scoreOne, scoreTwo, scoreThree, overallScore } = await scoreFromRubric('resume', req.body);
 
     // Get cycleId from assignedGroup if not provided
     let finalCycleId = cycleId;
@@ -1590,6 +1589,7 @@ router.post('/resume-score', requireAuth, async (req, res) => {
 
     res.json(resumeScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('Error saving resume score:', error);
     res.status(500).json({ error: 'Failed to save resume score' });
   }
@@ -1662,12 +1662,10 @@ router.get('/resume-scores/:candidateId', requireAuth, requireAdminOrMember, asy
 // Save cover letter score (per evaluator per candidate)
 router.post('/cover-letter-score', requireAuth, async (req, res) => {
   try {
-    const { candidateId, assignedGroupId, scoreOne, scoreTwo, scoreThree, notes, cycleId } = req.body;
+    const { candidateId, assignedGroupId, notes, cycleId } = req.body;
     const evaluatorId = req.user.id;
 
-    // Calculate overall score (average of the three scores)
-    const scores = [scoreOne, scoreTwo, scoreThree].filter(score => score !== null && score !== undefined);
-    const overallScore = scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+    const { scoreOne, scoreTwo, scoreThree, overallScore } = await scoreFromRubric('coverLetter', req.body);
 
     // Get cycleId from assignedGroup if not provided
     let finalCycleId = cycleId;
@@ -1737,6 +1735,7 @@ router.post('/cover-letter-score', requireAuth, async (req, res) => {
 
     res.json(coverLetterScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('Error saving cover letter score:', error);
     res.status(500).json({ error: 'Failed to save cover letter score' });
   }
@@ -1818,11 +1817,10 @@ router.get('/cover-letter-scores/:candidateId', requireAuth, requireAdminOrMembe
 // Save video score (per evaluator per candidate)
 router.post('/video-score', requireAuth, async (req, res) => {
   try {
-    const { candidateId, assignedGroupId, scoreOne, scoreTwo, scoreThree, notes, cycleId } = req.body;
+    const { candidateId, assignedGroupId, notes, cycleId } = req.body;
     const evaluatorId = req.user.id;
 
-    // Calculate overall score (for video, just use scoreOne since it's a single category)
-    const overallScore = scoreOne || 0;
+    const { scoreOne, scoreTwo, scoreThree, overallScore } = await scoreFromRubric('video', req.body);
 
     // Get cycleId from assignedGroup if not provided
     let finalCycleId = cycleId;
@@ -1892,6 +1890,7 @@ router.post('/video-score', requireAuth, async (req, res) => {
 
     res.json(videoScore);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
     console.error('Error saving video score:', error);
     res.status(500).json({ error: 'Failed to save video score' });
   }
