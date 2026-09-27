@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { convert } from 'html-to-text';
 import {
   copyHtml,
@@ -9,6 +8,8 @@ import {
 } from './emailCopyRender.js';
 import { fontStack, isHexColour, resolveEmailTheme } from './emailTheme.js';
 import { resolveEmailStyle } from './emailTemplateStyle.js';
+import { resolveSignature } from './emailSignatures.js';
+import { currentEmailDraft } from './emailDrafts.js';
 
 /**
  * Every automatic email, drawn by one renderer.
@@ -61,7 +62,19 @@ export const part = {
   /** The raw URL under a button, for clients that strip buttons. */
   link: (href) => ({ kind: 'link', href }),
   signOff: (text) => ({ kind: 'signOff', text }),
+  /** A saved signature, put in place of signOff by composeEmail. */
+  signature: ({ body, imageUrl = null }) => ({ kind: 'signature', body, imageUrl }),
 };
+
+// A signature's Markdown with its optional image beneath. Merge fields are not
+// offered in a signature, so none are filled.
+function signatureHtml(p, { color, spacing, link }) {
+  const text = copyHtml(p.body, {}, { color, spacing, link });
+  const image = p.imageUrl
+    ? `<p style="margin: 0 0 20px 0;"><img src="${attr(p.imageUrl)}" alt="" height="48" style="display: block; max-height: 48px; border: 0;" /></p>`
+    : '';
+  return text + image;
+}
 
 // ---------------------------------------------------------------------------
 // Colours
@@ -146,6 +159,8 @@ function designedPart(p, values, theme) {
       return `<p style="color: ${link}; word-break: break-all; margin: 0 0 20px 0;"><a href="${attr(p.href)}" style="color: ${link}; text-decoration: underline;">${escapeCopyHtml(p.href)}</a></p>`;
     case 'signOff':
       return copySignOff(p.text, values);
+    case 'signature':
+      return signatureHtml(p, { color: '#666666', spacing: 'loose', link });
     default:
       return '';
   }
@@ -189,6 +204,8 @@ function plainPart(p, values, theme) {
       return '';
     case 'signOff':
       return copySignOff(p.text, values, { color: PLAIN_TEXT });
+    case 'signature':
+      return signatureHtml(p, { color: PLAIN_TEXT, spacing: 'plain', link });
     default:
       return '';
   }
@@ -294,23 +311,38 @@ export function htmlToPlainText(html) {
 // Composing with the stored theme and style
 // ---------------------------------------------------------------------------
 
-// Lets a preview render with a theme or style that has not been saved yet,
-// without threading an argument through every builder. Only ever entered by
-// the preview service; a real send never runs inside one.
-const draftPresentation = new AsyncLocalStorage();
-
-export function withDraftPresentation({ theme = null, styles = null } = {}, fn) {
-  return draftPresentation.run({ theme, styles }, fn);
-}
 
 /**
  * What a builder calls: resolves the theme and this email's style, then
  * renders. `key` is the template's copy key, which is also its style key.
  */
 export async function composeEmail(key, { subject, values = {}, parts, brand }) {
-  const draft = draftPresentation.getStore();
-  const theme = draft?.theme ?? (await resolveEmailTheme());
-  const style = draft?.styles?.[key] ?? (await resolveEmailStyle(key));
-  const html = renderEmailLayout({ parts, values, theme, style, brand, title: subject });
+  const draft = currentEmailDraft();
+  // Independent reads, so they go together: every email renders on a request.
+  const [theme, style] = await Promise.all([
+    draft?.theme ?? resolveEmailTheme(),
+    draft?.styles?.[key] ?? resolveEmailStyle(key),
+  ]);
+
+  // A signature replaces the email's own sign-off. An email with no sign-off
+  // part (the decision letters) is left as it is.
+  const hasSignOff = parts.some((p) => p?.kind === 'signOff');
+  const signature = hasSignOff ? await resolveSignature(style.signatureId) : null;
+  const finalParts = signature ? parts.map((p) => (p?.kind === 'signOff' ? part.signature(signature) : p)) : parts;
+
+  const html = renderEmailLayout({ parts: finalParts, values, theme, style, brand, title: subject });
   return { subject, html, format: style.format };
+}
+
+/**
+ * A notice at the top of a test send, so whoever receives it cannot mistake
+ * it for the real thing. Inside <body> rather than before the document: in
+ * front of a doctype it is invalid markup some clients drop.
+ */
+export function withTestBanner(html, message) {
+  const banner =
+    '<div style="background:#fff4e5;border:1px solid #ffb74d;border-radius:6px;padding:12px;margin:0 0 16px 0;font-family:sans-serif;font-size:13px;color:#663c00;">' +
+    `<strong>Test email</strong> - ${escapeCopyHtml(message)}` +
+    '</div>';
+  return /<body[^>]*>/i.test(html) ? html.replace(/(<body[^>]*>)/i, `$1${banner}`) : banner + html;
 }

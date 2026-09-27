@@ -47,7 +47,9 @@ describe('EmailThemeEditor', () => {
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenCalledWith('/admin/email-templates/application-acceptance/preview', {
         theme: DEFAULTS,
-      })
+      }),
+      // The preview is debounced (350ms); leave room for a busy test run.
+      { timeout: 3000 }
     );
     expect(await screen.findByTitle('Application advanced draft preview')).toBeInTheDocument();
   });

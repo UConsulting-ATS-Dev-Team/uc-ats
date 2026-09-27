@@ -1,6 +1,7 @@
 import prisma from '../prismaClient.js';
 import { isEditableTemplate } from './emailTemplateCopy.js';
 import { isHexColour } from './emailTheme.js';
+import { OWN_SIGN_OFF, signatureExists } from './emailSignatures.js';
 
 /**
  * Per-email presentation on top of the theme: Designed or Plain, and the
@@ -38,7 +39,16 @@ const shippedFormat = (key) => (key.startsWith('decision-') ? 'PLAIN' : 'DESIGNE
 export const defaultStyle = (key) => ({
   format: shippedFormat(key),
   banner: SHIPPED_BANNERS[key] ?? 'brand',
+  // Null follows the default signature, which does not exist until an admin
+  // makes one - so every email starts on its own sign-off.
+  signatureId: null,
 });
+
+// Decision letters end inside the letter an admin writes, with no separate
+// sign-off for a signature to replace.
+export const takesSignature = (key) => !key.startsWith('decision-');
+
+const SIGNATURE_ID = /^[0-9a-f-]{36}$/i;
 
 const fail = (status, message, code) => Object.assign(new Error(message), { status, code });
 
@@ -69,6 +79,17 @@ export function normalizeStyle(key, input) {
     if (banner.toLowerCase() !== shipped.banner) style.banner = banner;
   }
 
+  if (input.signatureId != null && input.signatureId !== '') {
+    const id = String(input.signatureId);
+    if (id !== OWN_SIGN_OFF && !SIGNATURE_ID.test(id)) {
+      throw fail(400, 'Unknown signature', 'INVALID_STYLE');
+    }
+    if (!takesSignature(key)) {
+      throw fail(400, 'This email has no separate sign-off; its closing is part of the letter', 'INVALID_STYLE');
+    }
+    style.signatureId = id;
+  }
+
   return style;
 }
 
@@ -90,6 +111,7 @@ const storedStyle = (row) => {
   const stored = {};
   if (row?.format && EMAIL_FORMATS.includes(row.format)) stored.format = row.format;
   if (row?.banner && (BANNER_TONES.includes(row.banner) || isHexColour(row.banner))) stored.banner = row.banner;
+  if (row?.signatureId) stored.signatureId = row.signatureId;
   return stored;
 };
 
@@ -117,6 +139,7 @@ export async function getEmailStyle(key, { client = prisma } = {}) {
     values: { ...defaultStyle(key), ...stored },
     formats: EMAIL_FORMATS,
     tones: BANNER_TONES,
+    takesSignature: takesSignature(key),
     customized: Object.keys(stored).length > 0,
     updatedAt: rows?.[0]?.updatedAt ?? null,
   };
@@ -124,9 +147,17 @@ export async function getEmailStyle(key, { client = prisma } = {}) {
 
 export async function saveEmailStyle({ client = prisma, key, style, user }) {
   const normalized = normalizeStyle(key, style);
+  if (!(await signatureExists(normalized.signatureId, { client }))) {
+    throw fail(400, 'That signature no longer exists', 'INVALID_STYLE');
+  }
   if (Object.keys(normalized).length === 0) return resetEmailStyle({ client, key });
 
-  const data = { format: normalized.format ?? null, banner: normalized.banner ?? null, updatedById: user?.id ?? null };
+  const data = {
+    format: normalized.format ?? null,
+    banner: normalized.banner ?? null,
+    signatureId: normalized.signatureId ?? null,
+    updatedById: user?.id ?? null,
+  };
   await client.emailTemplateStyle.upsert({
     where: { templateKey: key },
     create: { templateKey: key, ...data },

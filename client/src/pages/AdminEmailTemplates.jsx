@@ -13,16 +13,23 @@ import {
   Divider,
   Tab,
   Tabs,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  InputAdornment,
 } from '@mui/material';
 import {
   MarkEmailRead as MarkEmailReadIcon,
   AttachFile as AttachFileIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import EmailTemplateEditor from '../components/EmailTemplateEditor';
 import EmailStyleEditor from '../components/EmailStyleEditor';
 import EmailThemeEditor from '../components/EmailThemeEditor';
+import EmailSignaturesEditor from '../components/EmailSignaturesEditor';
+import SendTestButton from '../components/SendTestButton';
 
 const AUDIENCE_COLORS = {
   Candidate: 'primary',
@@ -47,6 +54,10 @@ function AdminEmailTemplatesContent() {
   // Bumped on every save, which is what re-runs the preview fetch below: the
   // whole point of editing here is seeing the email you just changed.
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [query, setQuery] = useState('');
+  // How the Preview tab shows the email: at desktop width, at phone width, or
+  // as the text/plain part a text-only client would show.
+  const [view, setView] = useState('desktop');
 
   useEffect(() => {
     let cancelled = false;
@@ -106,13 +117,19 @@ function AdminEmailTemplatesContent() {
   // Grouped for scanning: an admin looking for "the email we send when someone
   // cancels" thinks in terms of what part of recruitment it belongs to.
   const grouped = useMemo(() => {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = (template) => {
+      const haystack = `${template.label} ${template.audience} ${template.category} ${template.description ?? ''}`.toLowerCase();
+      return words.every((word) => haystack.includes(word));
+    };
     const byCategory = new Map();
-    for (const template of templates) {
+    for (const template of templates.filter(matches)) {
       if (!byCategory.has(template.category)) byCategory.set(template.category, []);
       byCategory.get(template.category).push(template);
     }
     return [...byCategory.entries()];
-  }, [templates]);
+  }, [templates, query]);
+
 
   if (loading) {
     return (
@@ -149,7 +166,14 @@ function AdminEmailTemplatesContent() {
       >
         <Tab value="emails" label="Emails" />
         <Tab value="theme" label="Theme" />
+        <Tab value="signatures" label="Signatures" />
       </Tabs>
+
+      {section === 'signatures' && (
+        <Paper sx={{ p: 3 }}>
+          <EmailSignaturesEditor onSaved={refresh} />
+        </Paper>
+      )}
 
       {section === 'theme' && (
         <Paper sx={{ p: 3 }}>
@@ -158,7 +182,6 @@ function AdminEmailTemplatesContent() {
       )}
 
       {section === 'emails' && (
-
         <Box
           sx={{
             display: 'flex',
@@ -175,6 +198,30 @@ function AdminEmailTemplatesContent() {
               overflowY: 'auto',
             }}
           >
+            <Box sx={{ p: 1.5, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'background.paper' }}>
+              <TextField
+                fullWidth
+                size="small"
+                placeholder="Search emails"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                slotProps={{
+                  htmlInput: { 'aria-label': 'Search emails' },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            </Box>
+            {grouped.length === 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ px: 2, pb: 2 }}>
+                No email matches &quot;{query}&quot;.
+              </Typography>
+            )}
             {grouped.map(([category, entries], index) => (
               <Box key={category}>
                 {index > 0 && <Divider />}
@@ -282,6 +329,7 @@ function AdminEmailTemplatesContent() {
                     // email's wording into another's boxes.
                     key={preview.copyKey}
                     templateKey={preview.copyKey}
+                    previewKey={preview.key}
                     // The list carries an "Edited" badge per template, so it has to
                     // hear about a save as well as the preview does.
                     onSaved={refresh}
@@ -301,6 +349,25 @@ function AdminEmailTemplatesContent() {
                 )}
 
                 {tab === 'preview' && (
+                  <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                    <ToggleButtonGroup
+                      size="small"
+                      exclusive
+                      value={view}
+                      onChange={(event, next) => next && setView(next)}
+                      aria-label="Preview as"
+                    >
+                      <ToggleButton value="desktop">Desktop</ToggleButton>
+                      <ToggleButton value="mobile">Phone</ToggleButton>
+                      <ToggleButton value="text">Plain text</ToggleButton>
+                    </ToggleButtonGroup>
+                    <Box sx={{ flex: 1 }} />
+                    {/* Keyed so a result for one email is not left showing on the next. */}
+                    <SendTestButton key={preview.key} previewKey={preview.key} />
+                  </Stack>
+                )}
+
+                {tab === 'preview' && (
                   <Box sx={{ bgcolor: 'action.hover', borderRadius: 1, p: 1.5 }}>
                     <Typography variant="caption" color="text.secondary" display="block">
                       Subject line
@@ -317,14 +384,18 @@ function AdminEmailTemplatesContent() {
                   `sandbox` with no permissions blocks scripts and navigation,
                   which also matches how a mail client treats the same markup.
                 */}
-                {tab === 'preview' && (
+                {tab === 'preview' && view !== 'text' && (
                   <Box
                     component="iframe"
                     title={`${preview.label} preview`}
                     srcDoc={preview.html}
                     sandbox=""
                     sx={{
-                      width: '100%',
+                      // 375px is an iPhone's width, which is where most of
+                      // these are read.
+                      width: view === 'mobile' ? 375 : '100%',
+                      maxWidth: '100%',
+                      alignSelf: view === 'mobile' ? 'center' : 'stretch',
                       height: { xs: 480, md: '58vh' },
                       border: '1px solid',
                       borderColor: 'divider',
@@ -332,6 +403,28 @@ function AdminEmailTemplatesContent() {
                       bgcolor: '#ffffff',
                     }}
                   />
+                )}
+
+                {tab === 'preview' && view === 'text' && (
+                  <Box
+                    component="pre"
+                    aria-label="Plain text version"
+                    sx={{
+                      m: 0,
+                      p: 2,
+                      height: { xs: 480, md: '58vh' },
+                      overflow: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                    }}
+                  >
+                    {preview.text}
+                  </Box>
                 )}
               </Stack>
             )}

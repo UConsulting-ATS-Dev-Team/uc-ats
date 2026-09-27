@@ -2192,11 +2192,33 @@ model EmailTemplateStyle {
   /// A tone name ('brand', 'success', 'danger', 'warning', 'info') or a hex
   /// colour. Null means the template's shipped banner.
   banner      String?
+  /// Null: the default signature, or the email's own sign-off if there is no
+  /// default. 'OWN': always the email's own sign-off. Otherwise an
+  /// EmailSignature id; one that has been deleted falls back as null does.
+  signatureId String?
   updatedById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@map("email_template_style")
+}
+
+/// A named sign-off an admin can put on any automatic email in place of the
+/// email's own. At most one is the default (enforced by a partial unique index
+/// in the migration, which Prisma cannot express).
+model EmailSignature {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  /// Markdown, like the email copy: bold, italics and links. No HTML.
+  body        String
+  /// https only. Shown under the text, about 48px tall.
+  imageUrl    String?
+  isDefault   Boolean  @default(false)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("email_signatures")
 }
 
 /// A person from the retired recruiting-interest mailing list whom the ATS had

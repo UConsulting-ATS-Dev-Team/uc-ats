@@ -3,8 +3,15 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import {
   listEmailTemplates,
   renderEmailTemplatePreview,
+  sendEmailTemplateTest,
   UnknownEmailTemplateError,
 } from '../services/emailTemplatePreview.js';
+import {
+  createEmailSignature,
+  deleteEmailSignature,
+  listEmailSignatures,
+  updateEmailSignature,
+} from '../services/emailSignatures.js';
 import { getEmailCopy, resetEmailCopy, saveEmailCopy } from '../services/emailTemplateCopy.js';
 import { getEmailTheme, resetEmailTheme, saveEmailTheme } from '../services/emailTheme.js';
 import { getEmailStyle, resetEmailStyle, saveEmailStyle } from '../services/emailTemplateStyle.js';
@@ -53,16 +60,41 @@ router.put('/theme', templateRoute('PUT /api/admin/email-templates/theme', 'Fail
 router.delete('/theme', templateRoute('DELETE /api/admin/email-templates/theme', 'Failed to reset the email theme',
   () => resetEmailTheme()));
 
+// Signatures: named sign-offs any email can use in place of its own.
+// Registered before the /:key routes so /signatures/<id> is never read as a key.
+router.get('/signatures', templateRoute('GET /api/admin/email-templates/signatures', 'Failed to load signatures',
+  () => listEmailSignatures()));
+
+router.post('/signatures', templateRoute('POST /api/admin/email-templates/signatures', 'Failed to save the signature',
+  (req) => createEmailSignature({ signature: req.body?.signature, user: req.user })));
+
+router.put('/signatures/:id', templateRoute('PUT /api/admin/email-templates/signatures/:id', 'Failed to save the signature',
+  (req) => updateEmailSignature({ id: req.params.id, signature: req.body?.signature, user: req.user })));
+
+router.delete('/signatures/:id', templateRoute('DELETE /api/admin/email-templates/signatures/:id', 'Failed to delete the signature',
+  (req) => deleteEmailSignature({ id: req.params.id })));
+
 // GET /api/admin/email-templates/:key/preview
 router.get('/:key/preview', templateRoute('GET /api/admin/email-templates/:key/preview', 'Failed to render email template',
   (req) => renderEmailTemplatePreview(req.params.key)));
 
-// POST /api/admin/email-templates/:key/preview - the same render with an
-// unsaved { theme, style } applied, for the editors. Saves nothing.
+// The unsaved edits an editor can send along: { theme, style, copy, signature }.
+const draftFrom = (body) => ({
+  theme: body?.theme ?? null,
+  style: body?.style ?? null,
+  copy: body?.copy ?? null,
+  signature: body?.signature ?? null,
+});
+
+// POST /api/admin/email-templates/:key/preview - the same render with unsaved
+// edits applied, for the editors. Saves nothing and sends nothing.
 router.post('/:key/preview', templateRoute('POST /api/admin/email-templates/:key/preview', 'Failed to render email template',
-  (req) => renderEmailTemplatePreview(req.params.key, {
-    draft: { theme: req.body?.theme ?? null, style: req.body?.style ?? null },
-  })));
+  (req) => renderEmailTemplatePreview(req.params.key, { draft: draftFrom(req.body) })));
+
+// POST /api/admin/email-templates/:key/test - sends this email, with sample
+// data, to the admin asking and nobody else.
+router.post('/:key/test', templateRoute('POST /api/admin/email-templates/:key/test', 'Failed to send the test email',
+  (req) => sendEmailTemplateTest(req.params.key, { user: req.user, draft: draftFrom(req.body) })));
 
 // GET /api/admin/email-templates/:key/style - Designed or Plain, header colour.
 router.get('/:key/style', templateRoute('GET /api/admin/email-templates/:key/style', 'Failed to load this email style',

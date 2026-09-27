@@ -40,5 +40,11 @@ export default function useDraftPreview(previewKey, draft, { delay = 350 } = {})
     return () => clearTimeout(timer);
   }, [previewKey, body, delay]);
 
-  return state;
+  // Keeping the last render while the next one loads avoids a blank flash as
+  // somebody types - but only for the same email. Two catalog entries can
+  // share one editor (the self-signup wording of an interviewer notification),
+  // and showing the other one's render beside a new request, or beside its
+  // error, would pass it off as this email.
+  const data = state.data?.key === previewKey ? state.data : null;
+  return { ...state, data };
 }

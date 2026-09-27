@@ -81,6 +81,7 @@ const PREVIEWS = {
     ...CATALOG[1],
     subject: 'Reset Your Password - UConsulting ATS',
     html: '<p>Use this link to reset your password.</p>',
+    text: 'Use this link to reset your password. [https://example.test/reset]',
   },
   'slot-confirmation': {
     ...CATALOG[2],
@@ -311,5 +312,69 @@ describe('AdminEmailTemplates', () => {
 
     await screen.findByText('Password reset link');
     expect(screen.getAllByText('Edited')).toHaveLength(1);
+  });
+
+  describe('finding and checking an email', () => {
+    it('narrows the list as the admin types', async () => {
+      mockApi();
+      render(<AdminEmailTemplates />);
+      await screen.findByText('Application advanced');
+
+      await userEvent.type(screen.getByLabelText('Search emails'), 'password');
+
+      // The open email stays open; only the list narrows.
+      expect(screen.getByRole('button', { name: /Password reset link/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Application advanced/ })).not.toBeInTheDocument();
+    });
+
+    it('says so when nothing matches', async () => {
+      mockApi();
+      render(<AdminEmailTemplates />);
+      await screen.findByText('Application advanced');
+
+      await userEvent.type(screen.getByLabelText('Search emails'), 'zzzz');
+      expect(screen.getByText(/No email matches/)).toBeInTheDocument();
+    });
+
+    it('shows the plain-text version a text-only client gets', async () => {
+      mockApi();
+      render(<AdminEmailTemplates />);
+      await userEvent.click(await screen.findByText('Password reset link'));
+      await userEvent.click(await screen.findByRole('button', { name: 'Plain text' }));
+
+      expect(screen.getByLabelText('Plain text version')).toHaveTextContent('[https://example.test/reset]');
+      expect(screen.queryByTitle('Password reset link preview')).not.toBeInTheDocument();
+    });
+
+    it('shows the email at phone width', async () => {
+      mockApi();
+      render(<AdminEmailTemplates />);
+      await userEvent.click(await screen.findByText('Password reset link'));
+      await userEvent.click(await screen.findByRole('button', { name: 'Phone' }));
+
+      expect(screen.getByTitle('Password reset link preview')).toBeInTheDocument();
+    });
+
+    it('sends a test to the admin and says where it went', async () => {
+      mockApi();
+      vi.spyOn(apiClient, 'post').mockResolvedValue({ sentTo: 'admin@example.com' });
+      render(<AdminEmailTemplates />);
+      await userEvent.click(await screen.findByText('Password reset link'));
+      await userEvent.click(await screen.findByRole('button', { name: /send test to me/i }));
+
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/email-templates/password-reset/test', {});
+      expect(await screen.findByText(/Sent to admin@example.com/)).toBeInTheDocument();
+    });
+
+    it('says why a test could not be sent', async () => {
+      mockApi();
+      const failure = Object.assign(new Error('x'), { serverMessage: 'No email address on your account' });
+      vi.spyOn(apiClient, 'post').mockRejectedValue(failure);
+      render(<AdminEmailTemplates />);
+      await userEvent.click(await screen.findByText('Password reset link'));
+      await userEvent.click(await screen.findByRole('button', { name: /send test to me/i }));
+
+      expect(await screen.findByText('No email address on your account')).toBeInTheDocument();
+    });
   });
 });
