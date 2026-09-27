@@ -37,6 +37,7 @@ const CATEGORY_LABELS = {
   ACCOUNTABILITY_REMINDER: 'Accountability reminder',
   MASTER_COMMUNICATION: 'Master communication',
   DECISION_BATCH: 'Decision batch',
+  CUSTOM_AUTOMATIC: 'Custom automatic email',
   TEST: 'Test send',
   OTHER: 'Other',
 };

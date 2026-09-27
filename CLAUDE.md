@@ -370,6 +370,35 @@ The system follows a **recruiting cycle-based workflow**:
   requesting admin only, logged as a `TEST` send, with no attachments (a sample calendar
   invite would land in the admin's real calendar).
 
+**Custom automatic emails:**
+- Admins write their own automatic emails in Automatic Emails → Custom
+  (`AutomaticEmail`, [server/src/services/automaticEmails/](server/src/services/automaticEmails/)).
+  Five triggers: an application reaches a status; something is created (application,
+  candidate RSVP, GTKUC signup, account); before/after an event a candidate RSVPed to;
+  before/after a candidate's interview; before/after a cycle date, to a saved audience.
+- **Nothing that happened before an email was enabled triggers it.** Created records are
+  cut by `createdAt`/`submittedAt >= enabledAt`. Application status has no "changed at",
+  so enabling a status email seeds a `SKIPPED` send row for everyone already in the status
+  (`seedExisting`). Time triggers fire at a computed moment that must be after `enabledAt`
+  and no more than 48 hours old, so a new email never works through a backlog. Changing
+  an enabled email's trigger re-cuts, as enabling does.
+- A new email is saved **disabled**. The list's switch turns it on, after showing the dry
+  run ("Who would this reach?"), which runs the real finder as if enabled a week ago.
+- Sending is `runAutomaticEmails` on a five-minute cron. Every send claims an
+  `AutomaticEmailSend` row first; the unique (`automaticEmailId`, `subjectKey`) makes a
+  double send impossible even across overlapping runs. `subjectKey` names the occurrence:
+  it includes the event/slot start time, so a rescheduled one reminds again. A row left
+  `SENDING` by a crash is never retried (it may have gone); `FAILED` is retried, three
+  attempts in all. At most 200 per email per run, so a bulk status change drains over a
+  few runs.
+- `marketing` emails honour `EmailSuppression` and carry the unsubscribe link and
+  headers, exactly as Master Communications does; staff are never marketing. A cycle-date
+  email to a saved audience is always marketing. Everything else is the admin's choice,
+  defaulting to transactional.
+- Merge fields are per trigger (`mergeFieldsFor`); saving refuses any the trigger cannot
+  fill. Custom emails render through `composeEmail` with their own style row, so theme,
+  Plain/Designed, header colour and signatures all apply. Logged as `CUSTOM_AUTOMATIC`.
+
 **Decision guide:**
 - The copy a reviewer reads while picking YES / MAYBE_YES / MAYBE_NO / NO after an
   interview: a note on what deliberation is for, plus one description per decision. Admins

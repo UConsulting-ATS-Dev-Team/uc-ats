@@ -44,6 +44,8 @@ import releaseNotesRoutes from './routes/releaseNotes.js';
 import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
 import emailTemplateRoutes from './routes/emailTemplates.js';
+import automaticEmailRoutes from './routes/automaticEmails.js';
+import { runAutomaticEmails } from './services/automaticEmails/automaticEmailRunner.js';
 import sesWebhookRoutes from './routes/sesWebhooks.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import lumaIntegrationRoutes from './routes/lumaIntegration.js';
@@ -101,6 +103,7 @@ app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoute
 app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRoutes);
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
+app.use('/api/admin/automatic-emails', requireAuth, requireAdmin, automaticEmailRoutes);
 app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
@@ -244,6 +247,27 @@ cron.schedule('*/15 * * * *', async () => {
     console.error('[gtkuc attendance reminders] run failed:', error);
   } finally {
     attendanceRemindersRunning = false;
+  }
+});
+
+// Admin-written automatic emails (Automatic Emails -> Custom). Every five
+// minutes, like form sync, so "when an application is submitted" follows the
+// sync that created it closely. Each send is claimed in the database before it
+// goes, so even an overlapping run could not send twice; the flag just saves
+// the work.
+let automaticEmailsRunning = false;
+cron.schedule('*/5 * * * *', async () => {
+  if (automaticEmailsRunning) return;
+  automaticEmailsRunning = true;
+  try {
+    const { sent, failed, suppressed } = await runAutomaticEmails();
+    if (sent || failed || suppressed) {
+      console.log(`Automatic emails: ${sent} sent, ${failed} failed, ${suppressed} held back as unsubscribed`);
+    }
+  } catch (error) {
+    console.error('[automatic emails] run failed:', error);
+  } finally {
+    automaticEmailsRunning = false;
   }
 });
 
