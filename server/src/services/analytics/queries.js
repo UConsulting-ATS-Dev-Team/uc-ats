@@ -44,7 +44,7 @@ function dayList(startDay, endDay) {
   return days;
 }
 
-async function rangeContext(days, { now = new Date(), client = prisma } = {}) {
+export async function rangeContext(days, { now = new Date(), client = prisma } = {}) {
   const today = laDay(now);
   const startDay = shiftDay(today, -(days - 1));
   const [summaries, live, latest] = await Promise.all([
@@ -310,7 +310,7 @@ function mergeFacts(rows) {
   }));
 }
 
-async function factsInRange(kinds, role, days, { now = new Date(), client = prisma } = {}) {
+export async function factsInRange(kinds, role, days, { now = new Date(), client = prisma } = {}) {
   const today = laDay(now);
   const startDay = shiftDay(today, -(days - 1));
   const [stored, live] = await Promise.all([

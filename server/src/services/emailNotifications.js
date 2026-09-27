@@ -4,6 +4,7 @@ import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js'
 import { describeRoster } from '../utils/candidateRoster.js';
 import { eventInviteFor } from './eventInvites.js';
 import { recordCommunication } from './communicationLog.js';
+import { markUntrackedLinks, sesTagValue } from './emailLinkTracking.js';
 import {
   SLOT_EMAIL_TYPES,
   defaultCopy,
@@ -136,7 +137,9 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
       replyTo: process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,
-      html: html,
+      // Credential links (reset, verify, invite, unsubscribe) are kept out of
+      // SES click tracking; see emailLinkTracking.js.
+      html: markUntrackedLinks(html),
       // Every message goes as multipart/alternative. An HTML-only email is a
       // spam signal to Gmail and unreadable in a text client, and deriving the
       // text from the HTML means the two can never disagree.
@@ -161,7 +164,13 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
     // The configuration set is what makes SES report deliveries, bounces and
     // complaints back to /api/webhooks/ses. Without it the row stays SENT.
     if (process.env.SES_CONFIGURATION_SET) {
-      mailOptions.ses = { ConfigurationSetName: process.env.SES_CONFIGURATION_SET };
+      mailOptions.ses = {
+        ConfigurationSetName: process.env.SES_CONFIGURATION_SET,
+        // Comes back on every delivery, bounce, open and click event, so the
+        // Email tab can group engagement by kind of email even for a message
+        // whose log row is gone.
+        EmailTags: [{ Name: 'category', Value: sesTagValue(context.category) }],
+      };
     }
 
     const info = await transporter.sendMail(mailOptions);

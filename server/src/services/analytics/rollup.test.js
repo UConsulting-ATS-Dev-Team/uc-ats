@@ -100,8 +100,8 @@ describe('pruneRaw', () => {
       .mockResolvedValue(0);
     const pruned = await pruneRaw(new Date('2026-09-27T12:00:00Z'), client);
     expect(pruned.analytics_request_samples).toBe(6200);
-    // two rounds for the first table, one for each of the other three
-    expect(client.$executeRawUnsafe).toHaveBeenCalledTimes(5);
+    // two rounds for the first table, one for each of the other four
+    expect(client.$executeRawUnsafe).toHaveBeenCalledTimes(6);
     const [sql, cutoff] = client.$executeRawUnsafe.mock.calls[0];
     expect(sql).toContain('DELETE FROM "analytics_request_samples"');
     expect(sql).toContain('$1::timestamp');
@@ -145,7 +145,7 @@ describe('runRollup', () => {
     const result = await runRollup({ now: new Date('2026-09-27T18:00:00Z'), client });
     expect(result.days).toEqual(['2026-09-26', '2026-09-25']);
     expect(result.summaries).toBe(2);
-    expect(Object.keys(result.pruned)).toHaveLength(4);
+    expect(Object.keys(result.pruned)).toHaveLength(5);
   });
 
   it('refuses to overlap a run already in progress', async () => {

@@ -75,7 +75,9 @@ export function SectionTitle({ children, subtitle }) {
 export function EmptyState({ children }) {
   return (
     <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-      <Typography color="text.secondary">{children}</Typography>
+      <Typography component="div" color="text.secondary">
+        {children}
+      </Typography>
     </Paper>
   );
 }

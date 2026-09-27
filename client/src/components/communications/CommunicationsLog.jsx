@@ -48,6 +48,8 @@ const STATUS_STYLES = {
   // accepting it, reported back later.
   SENT: { color: 'default', label: 'Sent' },
   DELIVERED: { color: 'success', label: 'Delivered' },
+  // SES click tracking saw a link followed, so it was delivered and read.
+  CLICKED: { color: 'success', label: 'Clicked' },
   DELAYED: { color: 'warning', label: 'Delayed' },
   BOUNCED: { color: 'error', label: 'Bounced' },
   COMPLAINED: { color: 'error', label: 'Marked as spam' },

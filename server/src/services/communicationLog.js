@@ -27,7 +27,10 @@ export const COMMUNICATION_CHANNELS = ['email', 'slack', 'imessage'];
 //
 // DELIVERED, DELAYED, BOUNCED and COMPLAINED arrive later, from SES through
 // /api/webhooks/ses (services/sesEvents.js), and only for email.
-export const COMMUNICATION_STATUSES = ['SENT', 'DELIVERED', 'DELAYED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED'];
+// CLICKED: SES click tracking saw the recipient follow a link (which implies
+// delivery). OPENED is older and means something else: an iMessage handed to
+// the admin's Messages app. SES opens never change a row's status.
+export const COMMUNICATION_STATUSES = ['SENT', 'DELIVERED', 'CLICKED', 'DELAYED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED'];
 
 const BODY_PREVIEW_LIMIT = 2000;
 
