@@ -201,4 +201,43 @@ describe('GET /api/applications', () => {
     const body = await res.json();
     expect(body.data[0].reviewTeam).toBeNull();
   });
+
+  it('does not show a review team from a past cycle', async () => {
+    // A returning applicant's candidate row still points at last cycle's team:
+    // assignedGroupId lives on the candidate, but a team belongs to one cycle.
+    const application = {
+      id: 'app-3',
+      status: 'SUBMITTED',
+      submittedAt: new Date(),
+      firstName: 'Returning',
+      lastName: 'Applicant',
+      studentId: '11111',
+      cycleId: activeCycle.id,
+      candidateId: 'candidate-3',
+    };
+    const pastTeam = {
+      id: 'group-old',
+      name: 'Last Year',
+      cycleId: 'cycle-old',
+      memberOne: null, memberOneUser: null,
+      memberTwo: null, memberTwoUser: null,
+      memberThree: null, memberThreeUser: null,
+      groupMembers: [],
+    };
+
+    prisma.application.findMany.mockResolvedValue([application]);
+    prisma.candidate.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(where?.recordsLockedAt ? [] : [{ id: 'candidate-3', assignedGroupId: pastTeam.id }])
+    );
+    prisma.groups.findMany.mockImplementation(({ where }) =>
+      Promise.resolve([pastTeam].filter(g =>
+        where.id.in.includes(g.id) && (where.cycleId === undefined || where.cycleId === g.cycleId)))
+    );
+
+    const res = await get();
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.data[0].reviewTeam).toBeNull();
+  });
 });
