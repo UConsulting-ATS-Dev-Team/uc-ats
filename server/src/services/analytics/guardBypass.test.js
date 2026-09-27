@@ -21,6 +21,8 @@ describe('evaluateGuardBypass', () => {
     ['CANDIDATE', '/api/review-teams/member-applications/1'],
     ['CANDIDATE', '/api/conversations'],
     ['MEMBER', '/api/master-communications/templates'],
+    ['MEMBER', '/api/admin/email-health'],
+    ['CANDIDATE', '/api/admin/email-health/test'],
   ])('flags %s getting 200 from %s as CRITICAL', (role, path) => {
     expect(ok(role, path)?.severity).toBe('CRITICAL');
   });
@@ -35,6 +37,7 @@ describe('evaluateGuardBypass', () => {
     ['ADMIN', '/api/live-votes/active'],
     ['MEMBER', '/api/document-rubrics'],
     ['ADMIN', '/api/master-communications/templates'],
+    ['ADMIN', '/api/admin/email-health'],
   ])('accepts %s getting 200 from %s', (role, path) => {
     expect(ok(role, path)).toBeNull();
   });
@@ -66,6 +69,10 @@ describe('evaluateGuardBypass', () => {
   it('does not match a longer word sharing a prefix', () => {
     expect(ok('ANON', '/api/administer')).toBeNull();
     expect(ok('ANON', '/api/membership')).toBeNull();
+  });
+
+  it('answers the email-health router from its own row, not /api/admin', () => {
+    expect(ok('MEMBER', '/api/admin/email-health/test').detail.prefix).toBe('/api/admin/email-health');
   });
 
   it('explains itself', () => {
