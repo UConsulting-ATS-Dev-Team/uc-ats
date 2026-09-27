@@ -28,7 +28,7 @@ const CRASH_FLUSH_MS = 1500;
 // yet, say) must not be captured as a server error, buffered, fail to write,
 // and be captured again.
 const ANALYTICS_OWN_WRITES =
-  /analytics_request_samples|analytics_client_events|server_error_logs|security_events|analytics_daily_|analyticsRequestSample|analyticsClientEvent|serverErrorLog|securityEvent\.|analyticsDaily|\[analytics\]/i;
+  /analytics_request_samples|analytics_client_events|server_error_logs|security_events|email_engagement_events|emailEngagementEvent|analytics_daily_|analyticsRequestSample|analyticsClientEvent|serverErrorLog|securityEvent\.|analyticsDaily|\[analytics\]/i;
 
 // Logged with console.error but not a server failure. requireAuth logs every
 // expired or forged token (middleware/auth.js); those are already counted as

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-import AdminAnalytics from './AdminAnalytics';
+import AdminAnalytics, { describeRollup } from './AdminAnalytics';
 import apiClient from '../utils/api';
 
 // recharts measures its container, which jsdom cannot do.
@@ -111,6 +111,19 @@ describe('AdminAnalytics', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run rollup now' }));
     expect(apiClient.post).toHaveBeenCalledWith('/admin/analytics/rollup', {});
     expect(await screen.findByText('Rolled up Sep 26 and Sep 25 in 42 ms.')).toBeInTheDocument();
+  });
+
+  it('sends the security filters in the URL to the server', async () => {
+    apiClient.get.mockImplementation(() => new Promise(() => {}));
+    renderAt('/admin/analytics?tab=security&sec_kind=LOGIN_FAILED&sec_ip=5.5.5.5&sec_page=2');
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith('/admin/analytics/security?days=30&kind=LOGIN_FAILED&ip=5.5.5.5&page=2')
+    );
+  });
+
+  it('describes a catch-up rollup by its span', () => {
+    expect(describeRollup(['2026-09-26', '2026-09-25'])).toBe('Sep 26 and Sep 25');
+    expect(describeRollup(['2026-09-26', '2026-09-25', '2026-09-24'])).toBe('3 days (Sep 24 to Sep 26)');
   });
 
   it('shows the load error instead of an empty page', async () => {

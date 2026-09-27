@@ -57,6 +57,7 @@ const PRUNE_TABLES = [
   ['analytics_client_events', RETENTION_DAYS.clientEvents],
   ['server_error_logs', RETENTION_DAYS.serverErrors],
   ['security_events', RETENTION_DAYS.securityEvents],
+  ['email_engagement_events', RETENTION_DAYS.emailEngagement],
 ];
 
 export async function pruneRaw(now = new Date(), client = prisma) {
