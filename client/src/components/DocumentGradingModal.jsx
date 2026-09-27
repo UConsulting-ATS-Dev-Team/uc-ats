@@ -65,7 +65,12 @@ const outOfRange = (category, value) =>
 const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const { user, token } = useAuth();
   const isMobile = useIsMobile();
-  const { data: rubricData, error: rubricError, reload: reloadRubrics } = useDocumentRubrics();
+  const {
+    data: rubricData,
+    error: rubricError,
+    refreshError: rubricRefreshError,
+    reload: reloadRubrics
+  } = useDocumentRubrics();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -538,6 +543,16 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
                   {error && (
                     <Alert severity="error" sx={{ mb: 2 }}>
                       {error}
+                    </Alert>
+                  )}
+
+                  {rubricRefreshError && (
+                    <Alert
+                      severity="warning"
+                      sx={{ mb: 2 }}
+                      action={<Button color="inherit" size="small" onClick={reloadRubrics}>Retry</Button>}
+                    >
+                      The rubric could not be refreshed, so the ranges below may be out of date.
                     </Alert>
                   )}
 

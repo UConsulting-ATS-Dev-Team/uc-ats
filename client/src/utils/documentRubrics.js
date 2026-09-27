@@ -35,10 +35,17 @@ const FALLBACK_PARTICIPATION_MAX = 3;
 
 let cache = null;
 let inflight = null;
+/**
+ * Bumped by every publish. A fetch remembers the generation it started in and
+ * publishes only if nothing was published since, so a GET that started before
+ * an admin's save and finished after it cannot put the old rubric back.
+ */
+let generation = 0;
 const listeners = new Set();
 
 const publish = (data) => {
   cache = data;
+  generation += 1;
   listeners.forEach((listener) => listener(data));
 };
 
@@ -49,45 +56,58 @@ export const setDocumentRubrics = (data) => {
 
 async function load() {
   if (!inflight) {
+    const startedAt = generation;
     inflight = documentRubricApi.all()
       .then((data) => {
-        if (data?.rubrics) publish(data);
-        else throw new Error('Rubrics response had no rubrics');
+        if (!data?.rubrics) throw new Error('Rubrics response had no rubrics');
+        if (generation === startedAt) publish(data);
       })
       .finally(() => { inflight = null; });
   }
   return inflight;
 }
 
+const loadFailure = (err) => err?.message?.replace(/ \(Status: \d+\)$/, '') || 'Could not load the grading rubrics';
+
 /**
- * `{ data, error, reload }`. `data` is the GET /document-rubrics body, or null
- * until it has loaded.
+ * `{ data, error, refreshError, reload }`.
+ *
+ * - `data` is the GET /document-rubrics body, or null until it has loaded.
+ * - `error` means there is nothing to show at all.
+ * - `refreshError` means the last refetch failed and `data` may be out of
+ *   date. It is not swallowed just because an older copy is on screen: a
+ *   grader told their score is out of range needs to know the range they are
+ *   looking at did not refresh.
  *
  * Every mount shows what is cached and refetches behind it, so a page opened
  * after another admin's edit catches up without a reload. Concurrent mounts
- * share one request. A failed refetch keeps the cached copy and only reports
- * an error when there is nothing to show.
+ * share one request. `reload` resolves true when the rubrics are current.
  */
 export function useDocumentRubrics() {
   const [data, setData] = useState(cache);
   const [error, setError] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
+
+  const reload = useCallback(() => load().then(
+    () => {
+      setError(null);
+      setRefreshError(null);
+      return true;
+    },
+    (err) => {
+      if (cache) setRefreshError(loadFailure(err));
+      else setError(loadFailure(err));
+      return false;
+    }
+  ), []);
 
   useEffect(() => {
     listeners.add(setData);
-    load().then(() => setError(null)).catch((err) => {
-      if (!cache) setError(err?.message || 'Could not load the grading rubrics');
-    });
+    reload();
     return () => { listeners.delete(setData); };
-  }, []);
+  }, [reload]);
 
-  const reload = useCallback(() => {
-    setError(null);
-    return load().catch((err) => {
-      if (!cache) setError(err?.message || 'Could not load the grading rubrics');
-    });
-  }, []);
-
-  return { data, error, reload };
+  return { data, error, refreshError, reload };
 }
 
 /** 13, 2.5, 2.33 - no trailing zeros. */

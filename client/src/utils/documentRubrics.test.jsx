@@ -1,8 +1,8 @@
 // A page opened after another admin edited a rubric must not grade against
 // the copy an earlier page cached.
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { useDocumentRubrics } from './documentRubrics';
+import { act, render, screen } from '@testing-library/react';
+import { setDocumentRubrics, useDocumentRubrics } from './documentRubrics';
 import apiClient from './api';
 
 vi.mock('./api', () => ({ default: { get: vi.fn() } }));
@@ -13,8 +13,13 @@ const body = (videoMax) => ({
 });
 
 function Reader() {
-  const { data } = useDocumentRubrics();
-  return <div>video max {data?.rubrics?.video?.maxOverall ?? 'loading'}</div>;
+  const { data, refreshError } = useDocumentRubrics();
+  return (
+    <>
+      <div>video max {data?.rubrics?.video?.maxOverall ?? 'loading'}</div>
+      {refreshError && <div>refresh failed: {refreshError}</div>}
+    </>
+  );
 }
 
 describe('useDocumentRubrics', () => {
@@ -31,10 +36,22 @@ describe('useDocumentRubrics', () => {
     expect(apiClient.get).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the cached copy when a refetch fails', async () => {
+  it('keeps the cached copy when a refetch fails, and says it is stale', async () => {
     apiClient.get.mockRejectedValueOnce(new Error('offline'));
     render(<Reader />);
-    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText('refresh failed: offline')).toBeInTheDocument();
     expect(screen.getByText('video max 5')).toBeInTheDocument();
+  });
+
+  it('does not let a fetch that started before a save overwrite it', async () => {
+    let answer;
+    apiClient.get.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    render(<Reader />);
+    // An admin saves while that GET is still out.
+    act(() => setDocumentRubrics(body(9)));
+    expect(screen.getByText('video max 9')).toBeInTheDocument();
+
+    await act(async () => { answer(body(5)); });
+    expect(screen.getByText('video max 9')).toBeInTheDocument();
   });
 });
