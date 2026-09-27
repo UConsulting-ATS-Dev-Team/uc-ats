@@ -11,11 +11,33 @@ import RecordSealControl from '../components/RecordSealControl';
 import { useAuth } from '../context/AuthContext';
 import { useExecUnlock } from '../context/ExecUnlockContext';
 import { isRecordLockedError } from '../utils/recordLock';
+import { documentMax, formatScore, stagingMax, useDocumentRubrics } from '../utils/documentRubrics';
 import '../styles/ApplicationDetail.css';
+
+/** The score detail modal labels a score by document name; the rubrics are keyed by type. */
+const DOCUMENT_LABEL_TO_TYPE = { Resume: 'resume', 'Cover Letter': 'coverLetter', Video: 'video' };
+
+/**
+ * The score columns each type uses, for when the rubrics could not be loaded:
+ * the scores are still worth showing, just without titles or ranges.
+ */
+const FALLBACK_CATEGORIES = {
+  resume: ['scoreOne', 'scoreTwo'],
+  coverLetter: ['scoreOne', 'scoreTwo', 'scoreThree'],
+  video: ['scoreOne']
+};
+
+/** '' means "not sent"; anything else is sent as a number, 0 included. */
+const numberOrUndefined = (value, parse) => (value === '' || value === null || value === undefined ? undefined : parse(value));
 
 // readOnly renders a past cycle's record inside the returning-applicant modal:
 // everything visible, nothing writable, and no nested past-applications list.
 export default function ApplicationDetail({ applicationId: propApplicationId, embedded = false, readOnly = false }) {
+  const { data: rubricData } = useDocumentRubrics();
+  const maxFor = (type) => formatScore(documentMax(rubricData, type));
+  const rubricCategoriesFor = (type) => rubricData?.rubrics?.[type]?.rubric?.categories
+    || (FALLBACK_CATEGORIES[type] || []).map((id, index) => ({ id, title: `Category ${index + 1}`, min: null, max: null }));
+  const participationMax = rubricData?.participationMax ?? 3;
   const { id: paramId } = useParams();
   const id = propApplicationId || paramId;
   const navigate = useNavigate();
@@ -216,7 +238,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
     
     // Add event points directly (raw points, not scaled), capped at 3
     const rawEventPoints = eventData.totalPoints || 0;
-    const eventPointsContribution = Math.min(rawEventPoints, 3);
+    const eventPointsContribution = Math.min(rawEventPoints, participationMax);
     overallTotal += eventPointsContribution;
     
     const result = {
@@ -309,11 +331,11 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
       const endpoint = `${endpointMap[editingScoreType]}/${editingScore.id}`;
       
       const updateData = {
-        overallScore: editScoreForm.overallScore ? parseFloat(editScoreForm.overallScore) : undefined,
-        scoreOne: editScoreForm.scoreOne ? parseInt(editScoreForm.scoreOne) : undefined,
-        scoreTwo: editScoreForm.scoreTwo ? parseInt(editScoreForm.scoreTwo) : undefined,
-        scoreThree: editScoreForm.scoreThree ? parseInt(editScoreForm.scoreThree) : undefined,
-        adminScore: editScoreForm.adminScore ? parseFloat(editScoreForm.adminScore) : undefined,
+        overallScore: numberOrUndefined(editScoreForm.overallScore, parseFloat),
+        scoreOne: numberOrUndefined(editScoreForm.scoreOne, (v) => parseInt(v, 10)),
+        scoreTwo: numberOrUndefined(editScoreForm.scoreTwo, (v) => parseInt(v, 10)),
+        scoreThree: numberOrUndefined(editScoreForm.scoreThree, (v) => parseInt(v, 10)),
+        adminScore: numberOrUndefined(editScoreForm.adminScore, parseFloat),
         adminNotes: editScoreForm.adminNotes || undefined
       };
       
@@ -530,7 +552,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         <span className="average-grade-label">Resume</span>
                         <div>
                           <span className="average-grade-value">{calculatedAverages.resume.toFixed(1)}</span>
-                          <span className="average-grade-total">/ 13</span>
+                          <span className="average-grade-total">/ {maxFor('resume')}</span>
                         </div>
                         {resumeScores.length > 0 && (
                           <div className="average-grade-count">
@@ -543,7 +565,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         <span className="average-grade-label">Video</span>
                         <div>
                           <span className="average-grade-value">{calculatedAverages.video.toFixed(1)}</span>
-                          <span className="average-grade-total">/ 2</span>
+                          <span className="average-grade-total">/ {maxFor('video')}</span>
                         </div>
                         {videoScores.length > 0 && (
                           <div className="average-grade-count">
@@ -556,7 +578,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         <span className="average-grade-label">Cover Letter</span>
                         <div>
                           <span className="average-grade-value">{calculatedAverages.cover_letter.toFixed(1)}</span>
-                          <span className="average-grade-total">/ 3</span>
+                          <span className="average-grade-total">/ {maxFor('coverLetter')}</span>
                         </div>
                         {coverLetterScores.length > 0 && (
                           <div className="average-grade-count">
@@ -568,8 +590,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                       <div className="average-grade">
                         <span className="average-grade-label">Event Points</span>
                         <div>
-                          <span className="average-grade-value">{Math.min(eventData.totalPoints, 3)}</span>
-                          <span className="average-grade-total">/ 3</span>
+                          <span className="average-grade-value">{Math.min(eventData.totalPoints, participationMax)}</span>
+                          <span className="average-grade-total">/ {participationMax}</span>
                         </div>
                         <div className="average-grade-count">
                           {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').filter(e => e.attendanceStatus === 'Attended').length} attended of {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').length} relevant
@@ -585,7 +607,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         <span className="average-grade-label">Overall</span>
                         <div>
                           <span className="average-grade-value" style={{ color: '#0369a1' }}>{calculatedAverages.total.toFixed(1)}</span>
-                          <span className="average-grade-total">/ 21</span>
+                          <span className="average-grade-total">/ {formatScore(stagingMax(rubricData))}</span>
                         </div>
                         {calculatedAverages.count > 0 && (
                           <div className="average-grade-count">
@@ -977,7 +999,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     alignItems: 'center'
                   }}>
                     <span style={{ fontWeight: '600', color: '#0369a1' }}>
-                      Total Event Points: {Math.min(eventData.totalPoints, 3)} / 3
+                      Total Event Points: {Math.min(eventData.totalPoints, participationMax)} / {participationMax}
                       {eventData.totalPoints > 3 && (
                         <span style={{ fontWeight: '400', color: '#6b7280', marginLeft: '8px' }}>
                           ({eventData.totalPoints} earned, capped at 3)
@@ -1458,8 +1480,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
-                          ? `${score.adminScore}/13 (Admin Override)`
-                          : `${score.overallScore}/13`}
+                          ? `${score.adminScore}/${maxFor('resume')} (Admin Override)`
+                          : `${score.overallScore}/${maxFor('resume')}`}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
                         Overall Score
@@ -1557,8 +1579,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
-                          ? `${score.adminScore}/3 (Admin Override)`
-                          : `${score.overallScore}/3`}
+                          ? `${score.adminScore}/${maxFor('coverLetter')} (Admin Override)`
+                          : `${score.overallScore}/${maxFor('coverLetter')}`}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
                         Overall Score
@@ -1656,8 +1678,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
-                          ? `${score.adminScore}/2 (Admin Override)`
-                          : `${score.overallScore}/2`}
+                          ? `${score.adminScore}/${maxFor('video')} (Admin Override)`
+                          : `${score.overallScore}/${maxFor('video')}`}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
                         Overall Score
@@ -2279,40 +2301,12 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 Category Scores
               </div>
               <div style={{ display: 'grid', gap: '8px' }}>
-                {selectedScore.documentType === 'Resume' && (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                      <span>Content, Relevance, and Impact</span>
-                      <span style={{ fontWeight: '600' }}>{selectedScore.scoreOne || 'N/A'}/10</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                      <span>Structure & Formatting</span>
-                      <span style={{ fontWeight: '600' }}>{selectedScore.scoreTwo || 'N/A'}/3</span>
-                    </div>
-                  </>
-                )}
-                {selectedScore.documentType === 'Cover Letter' && (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                      <span>Consulting Interest</span>
-                      <span style={{ fontWeight: '600' }}>{selectedScore.scoreOne || 'N/A'}/3</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                      <span>UC Interest</span>
-                      <span style={{ fontWeight: '600' }}>{selectedScore.scoreTwo || 'N/A'}/3</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                      <span>Culture Addition</span>
-                      <span style={{ fontWeight: '600' }}>{selectedScore.scoreThree || 'N/A'}/3</span>
-                    </div>
-                  </>
-                )}
-                {selectedScore.documentType === 'Video' && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                    <span>Overall Video Assessment</span>
-                    <span style={{ fontWeight: '600' }}>{selectedScore.scoreOne || 'N/A'}/2</span>
+                {rubricCategoriesFor(DOCUMENT_LABEL_TO_TYPE[selectedScore.documentType]).map((category) => (
+                  <div key={category.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
+                    <span>{category.title}</span>
+                    <span style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>{selectedScore[category.id] ?? 'N/A'}{category.max !== null ? `/${category.max}` : ''}</span>
                   </div>
-                )}
+                ))}
               </div>
             </div>
 
@@ -2321,9 +2315,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 Overall Score
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#059669' }}>
-                {selectedScore.overallScore}/{selectedScore.documentType === 'Resume' ? '13' : 
-                                           selectedScore.documentType === 'Cover Letter' ? '3' : 
-                                           selectedScore.documentType === 'Video' ? '2' : '10'}
+                {selectedScore.overallScore}/{maxFor(DOCUMENT_LABEL_TO_TYPE[selectedScore.documentType])}
               </div>
             </div>
 
@@ -2563,203 +2555,53 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               </div>
             </div>
 
-            {editingScoreType === 'resume' && (
-              <>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score One (Content/Relevance/Impact) (0-10)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    value={editScoreForm.scoreOne}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreOne: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score Two (Structure/Formatting) (0-3)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="3"
-                    value={editScoreForm.scoreTwo}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreTwo: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Overall Score (0-13)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="13"
-                    step="0.1"
-                    value={editScoreForm.overallScore}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, overallScore: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
-                    Leave empty to auto-calculate from Score One + Score Two
-                  </div>
-                </div>
-              </>
-            )}
-
-            {editingScoreType === 'coverLetter' && (
-              <>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score One (0-3)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="3"
-                    value={editScoreForm.scoreOne}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreOne: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score Two (0-3)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="3"
-                    value={editScoreForm.scoreTwo}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreTwo: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score Three (0-3)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="3"
-                    value={editScoreForm.scoreThree}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreThree: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Overall Score (0-3)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="3"
-                    step="0.1"
-                    value={editScoreForm.overallScore}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, overallScore: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
-                    Leave empty to auto-calculate from average of scores
-                  </div>
-                </div>
-              </>
-            )}
-
-            {editingScoreType === 'video' && (
-              <>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Score One (0-2)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="2"
-                    value={editScoreForm.scoreOne}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, scoreOne: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                    Overall Score (0-2)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={editScoreForm.overallScore}
-                    onChange={(e) => setEditScoreForm({ ...editScoreForm, overallScore: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '1rem'
-                    }}
-                  />
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
-                    Leave empty to use Score One
-                  </div>
-                </div>
-              </>
-            )}
+            {rubricCategoriesFor(editingScoreType).map((category) => (
+              <div key={category.id} style={{ marginBottom: '12px' }}>
+                <label htmlFor={`edit-${category.id}`} style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                  {category.title}{category.max !== null ? ` (${category.min}–${category.max})` : ''}
+                </label>
+                <input
+                  id={`edit-${category.id}`}
+                  type="number"
+                  min={category.min}
+                  max={category.max}
+                  step="1"
+                  value={editScoreForm[category.id]}
+                  onChange={(e) => setEditScoreForm({ ...editScoreForm, [category.id]: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    fontSize: '1rem'
+                  }}
+                />
+              </div>
+            ))}
+            <div style={{ marginBottom: '12px' }}>
+              <label htmlFor="edit-overallScore" style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                Overall Score (0–{maxFor(editingScoreType)})
+              </label>
+              <input
+                id="edit-overallScore"
+                type="number"
+                min="0"
+                max={documentMax(rubricData, editingScoreType)}
+                step="0.01"
+                value={editScoreForm.overallScore}
+                onChange={(e) => setEditScoreForm({ ...editScoreForm, overallScore: e.target.value })}
+                style={{
+                    width: '100%',
+                    padding: '8px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    fontSize: '1rem'
+                  }}
+              />
+              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+                Recalculated from the category scores when you change one. Type a different value to set it by hand.
+              </div>
+            </div>
 
             <div style={{ marginBottom: '12px' }}>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
@@ -2792,7 +2634,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 <input
                   type="number"
                   min="0"
-                  max={editingScoreType === 'resume' ? 13 : editingScoreType === 'coverLetter' ? 3 : 2}
+                  max={documentMax(rubricData, editingScoreType)}
                   step="0.1"
                   value={editScoreForm.adminScore}
                   onChange={(e) => setEditScoreForm({ ...editScoreForm, adminScore: e.target.value })}

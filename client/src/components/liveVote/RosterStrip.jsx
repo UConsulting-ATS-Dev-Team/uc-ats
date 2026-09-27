@@ -26,6 +26,7 @@ export default function RosterStrip({ roster, currentIndex, disabled, onJump }) 
                 onClick={() => !isCurrent && onJump(entry.position)}
                 disabled={disabled}
                 aria-current={isCurrent ? 'true' : undefined}
+                data-track="Jump to candidate"
                 aria-label={`${entry.position + 1}. ${entry.name}, ${status.label}`}
                 sx={{
                   borderRadius: '50%',

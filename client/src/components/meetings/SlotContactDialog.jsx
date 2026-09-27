@@ -16,12 +16,12 @@ import {
 import { Email as EmailIcon, Sms as SmsIcon } from '@mui/icons-material';
 import api from '../../utils/api';
 import { buildImessageUrl } from '../../utils/imessage';
-import { buildMailtoUrl, draftSignupMessage } from '../../utils/signupContact';
+import { buildGmailComposeUrl, draftSignupMessage } from '../../utils/signupContact';
 
 const EMAIL_SUBJECT = 'Get to Know UC - where to meet';
 
 // Reach everyone booked into a GTKUC slot in one go: a group iMessage or one
-// email, opened in the host's own Messages or mail app with a draft that asks
+// email, opened in the host's Messages app or in Gmail with a draft that asks
 // them to fill in exactly where to meet and how to find them.
 export default function SlotContactDialog({ open, onClose, slot, hostName }) {
   const [contacts, setContacts] = useState([]);
@@ -67,14 +67,27 @@ export default function SlotContactDialog({ open, onClose, slot, hostName }) {
   // `recipients` is exactly who the link addresses, so the log can name them
   // even if the slot changes while the dialog is open.
   const openAndLog = async (channel, url, recipients) => {
-    window.location.href = url;
+    // Gmail opens in a new tab so the ATS stays put; sms: hands off to Messages.
+    // No 'noopener' flag: with it, window.open returns null even on success, and
+    // null is the only sign a popup blocker stopped the tab. The opener is cut
+    // by hand instead.
+    if (channel === 'email') {
+      const tab = window.open(url, '_blank');
+      if (!tab) {
+        setError('Your browser blocked the Gmail tab. Allow pop-ups for this site and try again.');
+        return;
+      }
+      tab.opener = null;
+    } else {
+      window.location.href = url;
+    }
     try {
       await api.post(`/member/meeting-slots/${slot.id}/contacts/log`, {
         channel,
         body,
         signupIds: recipients.map((c) => c.signupId),
       });
-      setNotice(channel === 'imessage' ? 'Opened in Messages.' : 'Opened in your mail app.');
+      setNotice(channel === 'imessage' ? 'Opened in Messages.' : 'Opened in Gmail.');
     } catch (e) {
       // The message is already open in their app; only the log entry is missing.
       setError(`Opened, but it could not be logged: ${e.message}`);
@@ -148,7 +161,7 @@ export default function SlotContactDialog({ open, onClose, slot, hostName }) {
           startIcon={<EmailIcon />}
           variant="outlined"
           disabled={loading || contacts.length === 0}
-          onClick={() => openAndLog('email', buildMailtoUrl(contacts.map((c) => c.email), EMAIL_SUBJECT, body), contacts)}
+          onClick={() => openAndLog('email', buildGmailComposeUrl(contacts.map((c) => c.email), EMAIL_SUBJECT, body), contacts)}
         >
           Email ({contacts.length})
         </Button>

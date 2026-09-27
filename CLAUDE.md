@@ -226,11 +226,15 @@ The system follows a **recruiting cycle-based workflow**:
   session is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
   (ADMIN/MEMBER read, admin-only write)
+- `/api/document-rubrics` - The resume / cover letter / video grading rubrics
+  (ADMIN/MEMBER read, admin-only write)
 - `/api/integrations/luma` - The hourly Luma sync routine's three endpoints. No user
   session ever reaches these; the caller is a scheduled Claude agent holding
   `LUMA_SYNC_TOKEN` as a bearer token
 - `/api/admin/luma` - The admin side of that sync: the guests it could not settle, and
   linking one to a candidate or member by hand
+- `/api/admin/analytics` - Site Analytics read API and `POST /rollup` (admin only)
+- `/api/analytics/events` - Public: browsers post page views, clicks, errors and web vitals
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
 **Sealed recruiting records:**
@@ -390,6 +394,33 @@ The system follows a **recruiting cycle-based workflow**:
   does not document. Adding it to the form means adding it to `DECISION_VALUES` in the
   service and `DECISION_OPTIONS` in the client.
 
+**Document grading rubrics:**
+- What a grader scores a resume, cover letter / short answer or video against. Admins edit
+  them from Admin Document Grading → "Edit rubrics": per category, the title, description,
+  whole-number range (min..max) and the criteria rows. Nothing about them is hard-coded in
+  the pages any more.
+- [server/src/services/documentRubrics.js](server/src/services/documentRubrics.js) owns the
+  defaults, validation, the overall-score rules and every range check. A type with no
+  `document_rubrics` row (or no table yet) reads as the shipped default.
+- **Not editable:** which categories exist and how they fold into the overall - resume
+  sums, cover letter averages, video is its one category. Every score table has exactly
+  three `Int` columns (`scoreOne/Two/Three`), and Staging reads `overallScore` with those
+  meanings.
+- **A range is a weight.** Staging's Resume Review ranking adds the three documents' raw
+  overall scores plus up to `PARTICIPATION_MAX` (3). Raising one type's max gives it more
+  say in the ranking; the editor says so as the range changes.
+- Scores are checked server-side on every grader save (`scoreFromRubric`) and admin edit
+  (`adminScorePatch`), `400 SCORE_OUT_OF_RANGE` otherwise. An admin edit checks only the
+  values it changes, so a score graded under an older, wider range stays editable.
+- Changing a range never rescales existing scores. Save previews first
+  (`POST /:type/preview`) and warns with how many of the admin cycle's scores would fall
+  outside it.
+- A blank category is `null`, not 0: 0 can be a real score, and a blank must not pull a
+  cover letter average down.
+- Every denominator on the client (`/13`, `/21`, the Staging bar) reads
+  [client/src/utils/documentRubrics.js](client/src/utils/documentRubrics.js), which shares one
+  fetch across the page and falls back to the shipped maxima until it arrives.
+
 **Live votes:**
 - An admin starts a session from any Staging tab. Admins and members join from anywhere in
   the app (`LiveVoteProvider` in [client/src/context/LiveVoteContext.jsx](client/src/context/LiveVoteContext.jsx)
@@ -483,9 +514,25 @@ The system follows a **recruiting cycle-based workflow**:
   It is logged as a `REMINDER` `MeetingCommunication` with no signup, and that row is the
   dedupe: one `SENT` since the slot entered its 24-hour window means done, so a slot moved
   to a later day is reminded again. Failed sends retry, three attempts at most.
+- Every server on the database runs this cron on the same tick, so each send takes
+  `pg_try_advisory_xact_lock` on the slot and re-checks the log once it holds it (the
+  attendance reminder does the same). Without the lock, five servers sent five copies.
+- **Attendance is "done" or "outstanding" per slot**, decided in one place
+  ([server/src/services/meetingAttendance.js](server/src/services/meetingAttendance.js),
+  mirrored for the pages in [client/src/utils/gtkucAttendance.js](client/src/utils/gtkucAttendance.js)).
+  `MeetingSignup.attended` defaults to false, so it cannot tell a no-show from someone
+  never marked. A slot is done when a host or admin pressed **Attendance done**
+  (`MeetingSlot.attendanceMarkedAt`) or every signup is checked; an ended slot with
+  anyone unchecked and no such press is outstanding. Moving a slot clears the mark.
+- The attendance reminder cron only looks back 24 hours past the end, so older slots are
+  reminded by hand: Get to Know UC → Time Slots → **Attendance overdue**, per row or in
+  bulk (`POST /api/admin/meeting-slots/attendance-reminders`). A manual send has no
+  once-only rule, re-checks the slot under the cron's lock, and logs the same
+  `ATTENDANCE_REMINDER` row, which is where "last reminded" comes from.
 - The member and admin slot pages have an "iMessage / email signups" button: one group
-  iMessage (`sms://open?addresses=…`) or one email (`mailto:`) to everyone in the slot,
-  opened in the host's own app, logged as `OPENED` in the communications log.
+  iMessage (`sms://open?addresses=…`) in Messages, or one email as a Gmail compose tab
+  (`mail.google.com/mail/?view=cm`, not `mailto:`, which opens whatever desktop mail app
+  is the default), logged as `OPENED` in the communications log.
 - `MeetingSignup` has no phone, so a number is found by email
   ([server/src/services/meetingSignupContacts.js](server/src/services/meetingSignupContacts.js)):
   `User.phoneNumber`, then candidate onboarding, then the latest application. The last
@@ -632,6 +679,59 @@ The system follows a **recruiting cycle-based workflow**:
   see that candidate's history. It is the ownership check that has to be fixed; no choice
   of candidate resolution closes it, because both directions of the conflict leak through
   the same door.
+
+**Site analytics:**
+- Administration → Site Analytics (`/admin/analytics`): speed per user type, errors, and
+  what needs attention. Everything lives in
+  [server/src/services/analytics/](server/src/services/analytics/) and
+  [client/src/analytics/](client/src/analytics/).
+- User types are `roleOf()` in `roles.js`: ADMIN, MEMBER, CANDIDATE, TALENT (a `USER` with
+  `isExternalTalent`), CLIENT, ANON. Every table and chart uses these, not `UserRole`.
+- Four raw tables, written in batches by in-memory buffers (`buffer.js`, every 10s or 200
+  rows, capped, never throwing): `analytics_request_samples` (14 days),
+  `analytics_client_events` (30), `server_error_logs` (30), `security_events` (180).
+  Retention is `RETENTION_DAYS` in `constants.js`. A failed write drops the batch and says
+  so on the Errors tab; it never retries and never fails a request.
+- `requestMetrics` is mounted right after `externalContainment`, so `req.user` is already
+  known. It times every `/api` request (not `/api/health` or `/api/analytics`) and turns
+  401-with-a-token, 403, 423, 429, scanner paths and impossible successes into security
+  events.
+- **Impossible successes come from `GUARD_TABLE` in `guardBypass.js`**: which user types may
+  ever get a 2xx from each router. A success outside it is `GUARD_BYPASS_SUSPECT`,
+  CRITICAL. Add a row, and a test, whenever you mount a new role-gated router. Only list a
+  prefix whose router gates every route. Mixed-gate routers (`member.js` serves candidates
+  on bare `requireAuth`) are anonymous-only rows at WARN.
+- `installErrorCapture()` wraps `console.error` from `index.js` only, so the 500+ existing
+  `console.error` calls feed the Errors tab without changing. Tests never get the wrapper.
+  Code under `services/analytics/` logs through `logError` (the unwrapped original), or a
+  failed analytics write would capture itself. `unhandledRejection` / `uncaughtException`
+  record, flush for up to 1.5s, then exit(1) exactly as Node would.
+- `expressErrorHandler` is the last middleware: uncaught route errors, body-parse and CORS
+  failures now answer JSON (a 5xx never carries the message) instead of Express's HTML.
+- Sign-in attempts are recorded by `routes/auth.js`; five failures for one address or one
+  IP inside 15 minutes is one `BRUTE_FORCE` CRITICAL. Detected and shown, **not blocked**:
+  there is still no rate limit on `/api/auth/login`.
+- The browser tracker batches to `/api/analytics/events` with `fetch({ keepalive })`, which
+  carries the bearer token even on page close; identity comes only from that token, never
+  the body. A batch never spans a change of token, so views from before a sign-in are not
+  handed to the new account. Clicks are one document listener, and **page text is treated
+  as data**: names and votes are inside the buttons people click. The label is
+  `data-track` if present; a link's normalized destination, never its text; nothing but
+  the element kind inside a table row, list item or option; otherwise `aria-label` or text
+  only if `looksLikeUiCopy` passes (short, no digits or `@`, no "Jane Doe"-shaped pair).
+  Add `data-track="…"` to a button worth counting whose text is data, and `data-no-track`
+  to anything that must not be recorded at all. Paths are
+  normalized (ids, tokens, addresses replaced) on both ends and the query string is never
+  read. `apiClient` reports failed and slow (>2s) calls; `ErrorBoundary` in `main.jsx`
+  reports render crashes.
+- Nightly at 02:15 Los Angeles (inside the `runCrons` block) `runRollup` rolls up yesterday
+  **and** the day before into `analytics_daily_summaries` / `analytics_daily_facts`, then
+  prunes. It is idempotent (delete then insert per day). `POST /api/admin/analytics/rollup`
+  and the page's "Run rollup now" run the same thing. Today is always computed live.
+- Raw SQL against these `timestamp(3)` columns must pass times as
+  `${ts(date)}::timestamp` (`aggregate.js`). A JS `Date` is compared in the session's time
+  zone: fine on Supabase (UTC), hours off on any other database.
+- Kill switches: `ANALYTICS_DISABLED=1` (server), `VITE_ANALYTICS_DISABLED=1` (client).
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
@@ -787,6 +887,12 @@ Required in `server/.env`:
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
   that works elsewhere can still fail here with `ACCESS_DENIED`.
+- `ANALYTICS_DISABLED` - (Optional) `1` stops Site Analytics recording anything on the
+  server. The client's equivalent is `VITE_ANALYTICS_DISABLED=1` in `client/.env`.
+- `RUN_CRONS` - (Optional) Scheduled jobs (form sync, scheduled sends, GTKUC reminders)
+  run only where `CLIENT_URL` is not localhost and `IS_PULL_REQUEST` is not set, so a
+  laptop or preview on the shared database never emails anyone its own links. `true`
+  forces them on, `false` forces them off.
 
 ## Common Patterns
 

@@ -51,15 +51,24 @@ describe('sortRows on time slots', () => {
       .toEqual(['early', 'late']);
   });
 
-  it('sorts by signups, open spots and attended counts', () => {
+  it('sorts by signup count', () => {
     const counted = [
       slot('full', { capacity: 2, signups: [{ attended: true }, { attended: true }] }),
       slot('empty', { capacity: 3, signups: [] }),
       slot('half', { capacity: 2, signups: [{ attended: false }] })
     ];
     expect(ids(sortRows(counted, SLOT_SORT_KEYS, { field: 'signups', dir: 'desc' }))).toEqual(['full', 'half', 'empty']);
-    expect(ids(sortRows(counted, SLOT_SORT_KEYS, { field: 'openSpots', dir: 'desc' }))).toEqual(['empty', 'half', 'full']);
-    expect(ids(sortRows(counted, SLOT_SORT_KEYS, { field: 'attended', dir: 'desc' }))).toEqual(['full', 'empty', 'half']);
+  });
+
+  it('sorts attendance outstanding first, then done, with upcoming slots last', () => {
+    const past = '2026-09-30T18:00:00Z';
+    const slots = [
+      slot('upcoming', { signups: [{ attended: false }] }),
+      slot('done', { startTime: past, signups: [{ attended: false }], attendanceMarkedAt: past }),
+      slot('outstanding', { startTime: past, signups: [{ attended: false }] })
+    ];
+    expect(ids(sortRows(slots, SLOT_SORT_KEYS, { field: 'attendance', dir: 'asc' }, { now: NOW })))
+      .toEqual(['outstanding', 'done', 'upcoming']);
   });
 
   it('returns rows untouched for an unknown field', () => {

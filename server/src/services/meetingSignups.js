@@ -44,7 +44,7 @@ export class BookingError extends Error {
   }
 }
 
-const HOST_FALLBACK = 'UC Consulting Member';
+const HOST_FALLBACK = 'UConsulting Member';
 
 const formatDay = (date) =>
   new Date(date).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'long', day: 'numeric' });

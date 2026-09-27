@@ -26,6 +26,7 @@ import conversationsRoutes from './routes/conversations.js';
 import execAccessRoutes from './routes/execAccess.js';
 import liveVoteRoutes from './routes/liveVotes.js';
 import decisionGuideRoutes from './routes/decisionGuides.js';
+import documentRubricRoutes from './routes/documentRubrics.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
 import { sendDueHostReminders } from './services/meetingHostReminders.js';
@@ -49,6 +50,17 @@ import sesWebhookRoutes from './routes/sesWebhooks.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import lumaIntegrationRoutes from './routes/lumaIntegration.js';
 import lumaAdminRoutes from './routes/lumaAdmin.js';
+import analyticsAdminRoutes from './routes/analyticsAdmin.js';
+import analyticsIngestRoutes from './routes/analyticsIngest.js';
+import { requestMetrics } from './services/analytics/requestMetrics.js';
+import { installErrorCapture, expressErrorHandler } from './services/analytics/errorCapture.js';
+import { startAnalyticsJobs } from './services/analytics/rollup.js';
+import { flushAll, sleep } from './services/analytics/buffer.js';
+
+// Record every console.error and crash as a server error for Site Analytics.
+// Here rather than at import time so tests, which import services directly,
+// never get the wrapper. See services/analytics/errorCapture.js.
+installErrorCapture();
 
 const app = express();
 
@@ -93,8 +105,14 @@ app.use('/api/uploads', express.static('uploads', {
 // Transparent to every other role and to unauthenticated requests.
 app.use(externalContainment);
 
+// Times every request and records denied or suspicious ones. After
+// externalContainment, which has already resolved req.user from the token.
+app.use(requestMetrics);
+
 // Routes
 app.use('/api/auth', authRoutes);
+// Public: browsers post page views, clicks and errors here, signed in or not.
+app.use('/api/analytics/events', analyticsIngestRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/admin/release-notes', requireAuth, requireAdmin, releaseNotesRoutes);
@@ -104,6 +122,7 @@ app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
 app.use('/api/admin/email-health', requireAuth, requireAdmin, emailHealthRoutes);
 app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
+app.use('/api/admin/analytics', requireAuth, requireAdmin, analyticsAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);
@@ -122,6 +141,7 @@ app.use('/api/conversations', conversationsRoutes);
 app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/decision-guides', decisionGuideRoutes);
+app.use('/api/document-rubrics', documentRubricRoutes);
 app.use('/api/master-communications', masterCommunicationsRoutes);
 app.use('/api/webhooks/ses', sesWebhookRoutes);
 // Public, token-gated: the Master Communications footer link and one-click header.
@@ -135,28 +155,6 @@ app.use('/api/resume-uploads', resumeUploadsRoutes);
 app.use('/api/applicant-info', applicantInfoRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
-
-// Test endpoint to check if uploads directory is accessible
-app.get('/api/test-uploads', (req, res) => {
-  const fs = require('fs');
-  const path = require('path');
-  const uploadsPath = path.join(process.cwd(), 'uploads', 'profile-images');
-  
-  try {
-    const files = fs.readdirSync(uploadsPath);
-    res.json({ 
-      message: 'Uploads directory accessible',
-      files: files,
-      uploadsPath: uploadsPath
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Cannot access uploads directory',
-      details: error.message,
-      uploadsPath: uploadsPath
-    });
-  }
-});
 
 // Health check endpoint to test database connection
 app.get('/api/health', async (req, res) => {
@@ -201,54 +199,75 @@ if (serveClient) {
   console.log(`Serving client bundle from ${clientDistPath}`);
 }
 
-// Run initial sync on startup
-await syncFormResponses();
+// Last: anything a route throws without catching, plus body-parser and CORS
+// failures, answers JSON instead of Express's HTML page, and a 5xx is recorded.
+app.use(expressErrorHandler);
 
-// Schedule automatic sync every 5 minutes
-cron.schedule('*/5 * * * *', () => {
-  console.log('Running scheduled response sync...');
-  syncFormResponses();
-});
+// Scheduled jobs run on one kind of server only; see `runCrons` in config.js.
+if (config.runCrons) {
+  // Run initial sync on startup
+  await syncFormResponses();
 
-// Check for and send scheduled messages every minute
-cron.schedule('* * * * *', async () => {
-  const count = await processScheduledMessages();
-  if (count > 0) {
-    console.log(`Processed ${count} scheduled master communication(s)`);
-  }
-});
+  // Schedule automatic sync every 5 minutes
+  cron.schedule('*/5 * * * *', () => {
+    console.log('Running scheduled response sync...');
+    syncFormResponses();
+  });
 
-// Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
-// skipped over rather than overlapped, so one slot cannot be reminded twice.
-let hostRemindersRunning = false;
-cron.schedule('*/15 * * * *', async () => {
-  if (hostRemindersRunning) return;
-  hostRemindersRunning = true;
-  try {
-    const sent = await sendDueHostReminders();
-    if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
-  } catch (error) {
-    console.error('[gtkuc host reminders] run failed:', error);
-  } finally {
-    hostRemindersRunning = false;
-  }
-});
+  // Check for and send scheduled messages every minute
+  cron.schedule('* * * * *', async () => {
+    const count = await processScheduledMessages();
+    if (count > 0) {
+      console.log(`Processed ${count} scheduled master communication(s)`);
+    }
+  });
 
-// An hour after a Get to Know UC slot ends, ask its host to mark attendance.
-let attendanceRemindersRunning = false;
-cron.schedule('*/15 * * * *', async () => {
-  if (attendanceRemindersRunning) return;
-  attendanceRemindersRunning = true;
-  try {
-    const sent = await sendDueAttendanceReminders();
-    if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
-  } catch (error) {
-    console.error('[gtkuc attendance reminders] run failed:', error);
-  } finally {
-    attendanceRemindersRunning = false;
-  }
-});
+  // Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
+  // skipped over rather than overlapped, so one slot cannot be reminded twice.
+  let hostRemindersRunning = false;
+  cron.schedule('*/15 * * * *', async () => {
+    if (hostRemindersRunning) return;
+    hostRemindersRunning = true;
+    try {
+      const sent = await sendDueHostReminders();
+      if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
+    } catch (error) {
+      console.error('[gtkuc host reminders] run failed:', error);
+    } finally {
+      hostRemindersRunning = false;
+    }
+  });
 
-app.listen(config.port, () => {
+  // An hour after a Get to Know UC slot ends, ask its host to mark attendance.
+  let attendanceRemindersRunning = false;
+  cron.schedule('*/15 * * * *', async () => {
+    if (attendanceRemindersRunning) return;
+    attendanceRemindersRunning = true;
+    try {
+      const sent = await sendDueAttendanceReminders();
+      if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
+    } catch (error) {
+      console.error('[gtkuc attendance reminders] run failed:', error);
+    } finally {
+      attendanceRemindersRunning = false;
+    }
+  });
+
+  // Site analytics: roll up yesterday and prune raw rows, 02:15 Los Angeles.
+  startAnalyticsJobs(cron);
+} else {
+  console.log(`Scheduled jobs are off here (CLIENT_URL ${config.clientUrl}). Set RUN_CRONS=true to run them.`);
+}
+
+const server = app.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);
+});
+
+// Render sends SIGTERM on every deploy. Give buffered analytics rows a moment
+// to reach the database, then close, and never hang the deploy on it.
+process.once('SIGTERM', () => {
+  Promise.race([flushAll(), sleep(2000)]).finally(() => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+  });
 });

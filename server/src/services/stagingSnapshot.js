@@ -3,6 +3,7 @@ import { getGroupMemberUsers } from '../utils/groupMembers.js';
 import { readSnapshotVersion } from '../utils/snapshotVersion.js';
 // Staging is an admin console surface, so it follows the admin cycle pointer.
 import { resolveAdminCycle } from './activeCycle.js';
+import { PARTICIPATION_MAX } from './documentRubrics.js';
 
 // The Staging console renders six resources as a single screen, so each of them has
 // to be readable through the same database transaction: that is what makes one
@@ -371,7 +372,7 @@ export async function loadStagingCandidates(client, { page, limit, cycle } = {})
     }
 
     // Cap at 3 points max (even if they attended all 4: info, womens, case, GTKUC)
-    const totalParticipationPoints = Math.min(participationCount, 3);
+    const totalParticipationPoints = Math.min(participationCount, PARTICIPATION_MAX);
     overallScore += totalParticipationPoints;
 
 

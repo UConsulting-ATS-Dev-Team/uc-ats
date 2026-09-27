@@ -12,6 +12,7 @@ import {
   sendWelcomeEmail
 } from '../services/emailNotifications.js';
 import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
+import { recordLoginFailed, recordLoginOk } from '../services/analytics/securityEvents.js';
 import {
   sanitizeExternalSignup,
   createVerificationToken,
@@ -229,7 +230,12 @@ router.post('/login', async (req, res) => {
       where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
     });
 
+    // Every refusal below is reported for Site Analytics' brute-force detection.
+    // Fire-and-forget: it can neither fail nor slow the answer.
+    const refused = (reason) => recordLoginFailed({ email, ip: req.ip, reason });
+
     if (!user) {
+      refused('unknown_email');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -237,6 +243,7 @@ router.post('/login', async (req, res) => {
     // the only way the person learns which button actually works; it discloses
     // that the address has an account, which /register already does.
     if (!user.password) {
+      refused('google_account');
       return res.status(401).json({
         error: 'This account signs in with Google. Use "Continue with Google", or use Forgot password to set one.',
         code: 'GOOGLE_ACCOUNT'
@@ -247,13 +254,17 @@ router.post('/login', async (req, res) => {
     const isValidPassword = await bcrypt.compare(password, user.password);
 
     if (!isValidPassword) {
+      refused('wrong_password');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     if (user.isActive === false) {
+      refused('deactivated');
       return res.status(401).json({ error: 'Account deactivated' });
     }
-    
+
+    recordLoginOk({ user, ip: req.ip });
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
@@ -300,6 +311,8 @@ router.post('/google', async (req, res) => {
       await sendWelcome(user);
     }
 
+    recordLoginOk({ user, ip: req.ip, path: '/api/auth/google' });
+
     res.status(isNewAccount ? 201 : 200).json({
       message: isNewAccount ? 'Account created' : 'Signed in with Google',
       user: publicUser(user),
@@ -308,6 +321,7 @@ router.post('/google', async (req, res) => {
     });
   } catch (error) {
     if (error instanceof GoogleAuthError) {
+      recordLoginFailed({ email: null, ip: req.ip, reason: `google:${error.code || 'refused'}`, path: '/api/auth/google' });
       return res.status(error.status).json({ error: error.message, code: error.code });
     }
     console.error('Google sign-in error:', error);

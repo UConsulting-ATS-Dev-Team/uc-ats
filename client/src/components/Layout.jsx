@@ -91,6 +91,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
       { name: 'Automatic Emails', href: '/admin/email-templates', icon: EnvelopeOpenIcon },
       { name: 'Email Deliverability', href: '/admin/email-health', icon: ShieldCheckIcon },
+      { name: 'Site Analytics', href: '/admin/analytics', icon: ChartBarIcon },
     ],
   },
 ];

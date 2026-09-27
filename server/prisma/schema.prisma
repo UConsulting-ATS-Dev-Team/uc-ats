@@ -1275,6 +1275,12 @@ model MeetingSlot {
   capacity       Int                    @default(2)
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
+  /// When a host or admin said attendance for this slot is finished. `attended`
+  /// defaults to false, so without this a no-show and an unmarked signup look
+  /// the same. Cleared when the slot is moved to a new time. The marker's id is
+  /// kept for the record only, with no foreign key.
+  attendanceMarkedAt   DateTime?
+  attendanceMarkedById String?
   signups        MeetingSignup[]
   member         User                   @relation(fields: [memberId], references: [id])
   communications MeetingCommunication[]
@@ -2113,6 +2119,21 @@ enum LiveVoteValue {
   NO
 }
 
+/// The rubric graders score one document type against: 'resume' | 'coverLetter' | 'video'.
+/// No row means the rubric shipped in services/documentRubrics.js. Categories and how
+/// they add up are fixed by the code; the row holds wording and score ranges only.
+model DocumentRubric {
+  id          String   @id @default(uuid())
+  type        String   @unique
+  /// { categories: [{ id, title, description, min, max, criteria: [{ label, text }] }] }
+  rubric      Json
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("document_rubrics")
+}
+
 /// The default rubric for one Staging round, shown beside a live vote. Sessions
 /// copy it when they launch, so editing it never rewrites a past session.
 model DeliberationRubric {
@@ -2372,4 +2393,136 @@ model LiveVoteParticipant {
   @@unique([sessionId, userId])
   @@index([userId])
   @@map("live_vote_participants")
+}
+
+// ---------------------------------------------------------------------------
+// Site analytics (services/analytics/). Four raw tables written in batches by
+// in-memory buffers and pruned nightly, plus two rollup tables the nightly job
+// fills so the admin page keeps history without keeping every request.
+// ---------------------------------------------------------------------------
+
+/// One row per API request. Pruned after RETENTION_DAYS.requestSamples.
+model AnalyticsRequestSample {
+  id         String   @id @default(uuid())
+  at         DateTime @default(now())
+  method     String
+  /// Path with ids, tokens and addresses replaced (routeNormalizer.js). <=120 chars.
+  route      String
+  status     Int
+  durationMs Int
+  /// ADMIN | MEMBER | CANDIDATE | TALENT | CLIENT | ANON
+  role       String
+  userId     String?
+  ip         String?
+
+  @@index([at])
+  @@index([route, at])
+  @@map("analytics_request_samples")
+}
+
+/// Events the browser reports. Pruned after RETENTION_DAYS.clientEvents.
+model AnalyticsClientEvent {
+  id        String   @id @default(uuid())
+  at        DateTime
+  /// page_view | page_dwell | click | api_error | api_slow | js_error | vital
+  type      String
+  role      String
+  userId    String?
+  sessionId String
+  path      String
+  name      String?
+  value     Float?
+  meta      Json?
+
+  @@index([at])
+  @@index([type, at])
+  @@index([sessionId])
+  @@map("analytics_client_events")
+}
+
+/// Server-side failures: console.error, uncaught route errors, crashes.
+/// Repeats of one fingerprint within a minute fold into `count`.
+model ServerErrorLog {
+  id          String   @id @default(uuid())
+  at          DateTime @default(now())
+  /// console | request | unhandled | cron
+  source      String
+  message     String
+  stack       String?
+  route       String?
+  status      Int?
+  fingerprint String
+  count       Int      @default(1)
+
+  @@index([at])
+  @@index([fingerprint, at])
+  @@map("server_error_logs")
+}
+
+/// Denied or suspicious access. Pruned after RETENTION_DAYS.securityEvents.
+model SecurityEvent {
+  id       String   @id @default(uuid())
+  at       DateTime @default(now())
+  /// AUTH_DENIED | ROLE_DENIED | RECORD_LOCKED | RATE_LIMITED | LOGIN_FAILED | LOGIN_OK
+  /// | GUARD_BYPASS_SUSPECT | PATH_PROBE | BRUTE_FORCE | CORS_DENIED
+  kind     String
+  /// INFO | WARN | CRITICAL
+  severity String
+  userId   String?
+  role     String
+  ip       String?
+  path     String?
+  method   String?
+  status   Int?
+  detail   Json?
+
+  @@index([at])
+  @@index([kind, at])
+  @@index([severity, at])
+  @@index([ip, at])
+  @@map("security_events")
+}
+
+/// Nightly rollup: one row per Los Angeles day and role. Role 'ALL' is the total.
+model AnalyticsDailySummary {
+  id               String   @id @default(uuid())
+  day              DateTime @db.Date
+  role             String
+  activeUsers      Int      @default(0)
+  sessions         Int      @default(0)
+  pageViews        Int      @default(0)
+  clicks           Int      @default(0)
+  apiRequests      Int      @default(0)
+  apiErrors4xx     Int      @default(0)
+  apiErrors5xx     Int      @default(0)
+  p50Ms            Int?
+  p95Ms            Int?
+  jsErrors         Int      @default(0)
+  serverErrors     Int      @default(0)
+  securityWarn     Int      @default(0)
+  securityCritical Int      @default(0)
+  computedAt       DateTime @default(now())
+
+  @@unique([day, role])
+  @@map("analytics_daily_summaries")
+}
+
+/// Nightly rollup of one key per day.
+/// kind: route | page | click | vital | error_fingerprint | security_kind.
+/// For vitals the ms columns hold the metric's own unit; CLS is stored in thousandths.
+model AnalyticsDailyFact {
+  id         String   @id @default(uuid())
+  day        DateTime @db.Date
+  kind       String
+  role       String
+  key        String
+  count      Int      @default(0)
+  errorCount Int      @default(0)
+  p50Ms      Int?
+  p95Ms      Int?
+  maxMs      Int?
+
+  @@unique([day, kind, role, key])
+  @@index([day, kind])
+  @@map("analytics_daily_facts")
 }

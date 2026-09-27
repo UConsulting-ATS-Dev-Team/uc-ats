@@ -140,6 +140,13 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
     throw new SlotUpdateError(400, 'A meeting cannot be rescheduled into the past');
   }
 
+  // A move can only go forward, so the slot is upcoming again and any
+  // "attendance done" belonged to a meeting that has not happened yet.
+  if (timeChanged) {
+    data.attendanceMarkedAt = null;
+    data.attendanceMarkedById = null;
+  }
+
   // Capacity must not drop below the number of people already holding a place.
   //
   // The row lock serializes this against anything else that takes it, so two
@@ -177,7 +184,7 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
 
   const next = { location: updated.location, startTime: updated.startTime, endTime: updated.endTime };
   const previous = { location: existing.location, startTime: existing.startTime, endTime: existing.endTime };
-  const hostName = updated.member?.fullName || 'UC Consulting Member';
+  const hostName = updated.member?.fullName || 'UConsulting Member';
 
   const candidateSends = updated.signups.map((signup) =>
     sendAndLogMeetingCommunication(

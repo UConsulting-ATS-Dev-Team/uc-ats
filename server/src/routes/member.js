@@ -16,6 +16,7 @@ import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate } f
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
+import { setSlotAttendanceComplete, SlotAttendanceError } from '../services/meetingAttendance.js';
 import { resolveSignupContacts, logSignupContact } from '../services/meetingSignupContacts.js';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
@@ -1298,7 +1299,7 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
     
     // Send cancellation emails to all signups before deleting
     if (existingSlot.signups.length > 0) {
-      const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
+      const memberName = existingSlot.member?.fullName || 'UConsulting Member';
       
       // Send cancellation emails to all signups (and log each communication)
       const emailPromises = existingSlot.signups.map((signup) =>
@@ -1386,7 +1387,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
 
     // Send cancellation email to the signup (and log the communication).
     // Logged before deletion; the log survives with signupId set null (slot remains).
-    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+    const memberName = signup.slot.member?.fullName || 'UConsulting Member';
 
     await sendAndLogMeetingCommunication(
       () => sendMeetingCancellationEmail(
@@ -1432,6 +1433,26 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[DELETE /api/member/meeting-signups/:id]', error);
     res.status(500).json({ error: 'Failed to delete signup' });
+  }
+});
+
+// Member: say attendance for one of your own slots is finished, or undo that.
+// Unchecked signups then count as no-shows and the reminders stop.
+router.put('/meeting-slots/:id/attendance-complete', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const slot = await setSlotAttendanceComplete({
+      slotId: req.params.id,
+      complete: req.body?.complete,
+      actorId: req.user.id,
+      hostId: req.user.id
+    });
+    res.json(slot);
+  } catch (error) {
+    if (error instanceof SlotAttendanceError) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[PUT /api/member/meeting-slots/:id/attendance-complete]', error);
+    res.status(500).json({ error: 'Failed to update attendance' });
   }
 });
 

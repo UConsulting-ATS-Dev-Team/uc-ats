@@ -40,8 +40,10 @@ import {
   Flag as FlagIcon,
   FlagOutlined as FlagOutlinedIcon,
   CheckCircle as CheckCircleIcon,
-  Schedule as ScheduleIcon
+  Schedule as ScheduleIcon,
+  Rule as RuleIcon
 } from '@mui/icons-material';
+import DocumentRubricEditorDialog from '../components/DocumentRubricEditorDialog';
 import {
   Dialog,
   DialogTitle,
@@ -85,6 +87,7 @@ export default function AdminDocumentGrading() {
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [selectedDocumentType, setSelectedDocumentType] = useState('resume');
   const [gradeOnlyAssigned, setGradeOnlyAssigned] = useState(false);
+  const [rubricEditorOpen, setRubricEditorOpen] = useState(false);
   const [flagModalOpen, setFlagModalOpen] = useState(false);
   const [flaggingApplication, setFlaggingApplication] = useState(null);
   const [flaggingDocumentType, setFlaggingDocumentType] = useState('resume');
@@ -722,9 +725,15 @@ export default function AdminDocumentGrading() {
     <AccessControl allowedRoles={['ADMIN']}>
       <Box sx={{ p: 3 }}>
       {/* Main Title */}
-      <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark', mb: 4 }}>
-        Admin Document Grading
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 4 }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+          Admin Document Grading
+        </Typography>
+        <Button variant="outlined" startIcon={<RuleIcon />} onClick={() => setRubricEditorOpen(true)}>
+          Edit rubrics
+        </Button>
+      </Box>
+      <DocumentRubricEditorDialog open={rubricEditorOpen} onClose={() => setRubricEditorOpen(false)} />
 
       {/* Admin Summary */}
       {!loading && !error && (
