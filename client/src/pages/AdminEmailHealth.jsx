@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -187,14 +187,21 @@ function AdminEmailHealthContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // A check takes seconds (SES and DNS round trips), so switching windows
+  // mid-check is easy. Only the latest request may touch the page, or a slow
+  // older one would show one window's numbers under another's toggle.
+  const latestRequest = useRef(0);
+
   const load = useCallback(() => {
+    const request = ++latestRequest.current;
+    const isLatest = () => request === latestRequest.current;
     setLoading(true);
     setError('');
     return apiClient
       .get(`/admin/email-health?days=${days}`)
-      .then(setReport)
-      .catch((err) => setError(err.serverMessage || 'Failed to run the email health check'))
-      .finally(() => setLoading(false));
+      .then((data) => isLatest() && setReport(data))
+      .catch((err) => isLatest() && setError(err.serverMessage || 'Failed to run the email health check'))
+      .finally(() => isLatest() && setLoading(false));
   }, [days]);
 
   useEffect(() => {

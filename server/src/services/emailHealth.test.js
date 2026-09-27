@@ -163,19 +163,32 @@ describe('sesChecks', () => {
     expect(checks[0].detail).toContain('ses:GetAccount');
   });
 
-  it('falls back to the address identity when the domain is not one', async () => {
-    const notFound = Object.assign(new Error('nf'), { name: 'NotFoundException' });
-    const client = {
-      send: vi.fn(async (command) => {
-        const name = command.constructor.name;
-        if (name === 'GetAccountCommand') return { SendingEnabled: true, ProductionAccessEnabled: true, EnforcementStatus: 'HEALTHY' };
-        if (command.input.EmailIdentity === 'uc.org') throw notFound;
-        return { VerifiedForSendingStatus: true, DkimAttributes: { Status: 'SUCCESS' } };
-      }),
-    };
+  const sesWith = (identities) => ({
+    send: vi.fn(async (command) => {
+      if (command.constructor.name === 'GetAccountCommand') {
+        return { SendingEnabled: true, ProductionAccessEnabled: true, EnforcementStatus: 'HEALTHY' };
+      }
+      const identity = identities[command.input.EmailIdentity];
+      if (!identity) throw Object.assign(new Error('nf'), { name: 'NotFoundException' });
+      return identity;
+    }),
+  });
+
+  it('reports on the address identity when there is one, since SES sends with it', async () => {
+    const client = sesWith({
+      'uc.org': { VerifiedForSendingStatus: true, DkimAttributes: { Status: 'SUCCESS' } },
+      'noreply@uc.org': { VerifiedForSendingStatus: false, DkimAttributes: { Status: 'FAILED' } },
+    });
+    const checks = byKey(await sesChecks({ env, client }));
+    expect(checks.identity.status).toBe(STATUS.FAIL);
+    expect(checks.identity.detail).toContain('noreply@uc.org');
+  });
+
+  it('falls back to the domain identity when the address is not one', async () => {
+    const client = sesWith({ 'uc.org': { VerifiedForSendingStatus: true, DkimAttributes: { Status: 'SUCCESS' } } });
     const checks = byKey(await sesChecks({ env, client }));
     expect(checks.identity.status).toBe(STATUS.OK);
-    expect(checks.identity.detail).toContain('noreply@uc.org');
+    expect(checks.identity.detail).toContain('uc.org is verified');
   });
 });
 
@@ -264,6 +277,11 @@ describe('deliveryReport', () => {
     expect(where.channel).toBe('email');
     expect(where.sentAt.gte).toEqual(new Date('2026-09-19T12:00:00Z'));
     expect(client.emailSuppression.groupBy.mock.calls[0][0].where).toEqual({ resubscribedAt: null });
+    // Delivery-report coverage counts only mail SES accepted, never a mailto: row.
+    for (const [{ where: w }] of client.communicationLog.count.mock.calls) {
+      expect(w.providerMessageId).toEqual({ not: null });
+    }
+    expect(client.communicationLog.count.mock.calls[1][0].where.status).toEqual({ notIn: ['FAILED', 'OPENED'] });
     expect(report.totals.delivered).toBe(60);
     expect(report.suppressions).toEqual({ BOUNCED: 3 });
   });

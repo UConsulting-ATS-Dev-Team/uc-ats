@@ -300,15 +300,15 @@ export async function sesChecks({ env = process.env, client } = {}) {
   return checks;
 }
 
-// SES matches a From address against a verified address first, then its domain.
-// Either is a valid setup, so a domain that is not an identity falls through to
-// the address.
+// SES sends with the most specific identity it has: the From address when that
+// is verified on its own, else its domain. Report on the one SES would use, so
+// an unhealthy address identity is never hidden behind a healthy domain.
 async function getIdentity(ses, domain, address) {
   try {
-    return { name: domain, identity: await ses.send(new GetEmailIdentityCommand({ EmailIdentity: domain })) };
+    return { name: address, identity: await ses.send(new GetEmailIdentityCommand({ EmailIdentity: address })) };
   } catch (error) {
     if (error?.name !== 'NotFoundException') throw error;
-    return { name: address, identity: await ses.send(new GetEmailIdentityCommand({ EmailIdentity: address })) };
+    return { name: domain, identity: await ses.send(new GetEmailIdentityCommand({ EmailIdentity: domain })) };
   }
 }
 
@@ -525,12 +525,15 @@ export async function deliveryReport({ days = 7, env = process.env, now = new Da
   const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
   const graceCutoff = new Date(now.getTime() - FEEDBACK_GRACE_MS);
   const base = { channel: 'email', sentAt: { gte: since } };
-  const olderThanGrace = { channel: 'email', sentAt: { gte: since, lt: graceCutoff } };
+  // Only mail SES accepted can hear back from SES. A GTKUC host's mailto: is an
+  // email row too (OPENED, no provider id), and counting it would dilute a
+  // webhook that has gone silent into looking healthy.
+  const olderThanGrace = { channel: 'email', sentAt: { gte: since, lt: graceCutoff }, providerMessageId: { not: null } };
 
   const [grouped, awaitingFeedback, eligibleForFeedback, problems, lastDelivered, suppressions] = await Promise.all([
     client.communicationLog.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
     client.communicationLog.count({ where: { ...olderThanGrace, status: 'SENT' } }),
-    client.communicationLog.count({ where: { ...olderThanGrace, status: { not: 'FAILED' } } }),
+    client.communicationLog.count({ where: { ...olderThanGrace, status: { notIn: ['FAILED', 'OPENED'] } } }),
     client.communicationLog.findMany({
       where: { ...base, status: { in: PROBLEM_STATUSES } },
       orderBy: { sentAt: 'desc' },

@@ -73,6 +73,26 @@ describe('AdminEmailHealth', () => {
     await waitFor(() => expect(apiClient.get).toHaveBeenLastCalledWith('/admin/email-health?days=30'));
   });
 
+  it('ignores an older check that finishes after a newer one', async () => {
+    let finishWeek;
+    vi.spyOn(apiClient, 'get').mockImplementation((path) =>
+      path.endsWith('days=7')
+        ? new Promise((resolve) => {
+            finishWeek = resolve;
+          })
+        : Promise.resolve({ ...REPORT, delivery: { ...REPORT.delivery, totals: { ...REPORT.delivery.totals, delivered: 999 } } })
+    );
+    render(<AdminEmailHealth />);
+
+    await userEvent.click(screen.getByRole('button', { name: '30d' }));
+    expect(await screen.findByText('999')).toBeInTheDocument();
+
+    finishWeek(REPORT);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText('999')).toBeInTheDocument();
+    expect(screen.queryByText('110')).not.toBeInTheDocument();
+  });
+
   it('sends a test to the address typed', async () => {
     const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ sent: true, to: 'check@mail-tester.com' });
     render(<AdminEmailHealth />);
