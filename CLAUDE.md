@@ -717,6 +717,39 @@ The system follows a **recruiting cycle-based workflow**:
   `${ts(date)}::timestamp` (`aggregate.js`). A JS `Date` is compared in the session's time
   zone: fine on Supabase (UTC), hours off on any other database.
 - Kill switches: `ANALYTICS_DISABLED=1` (server), `VITE_ANALYTICS_DISABLED=1` (client).
+- **Engagement tab** (`engagementQueries.js`): daily active users and 7/30-day reach per
+  user type, sessions, top pages and clicks, and pages nobody opened. That last list is
+  `KNOWN_PAGES` in `knownPages.js`, and `knownPages.test.js` fails when it falls behind
+  the routes in `App.jsx`.
+- **Security tab** (`securityQueries.js`): the live `posture.js` checklist, critical
+  events first, suspicious activity grouped by source, every executive unlock and failed
+  attempt (read from `exec_access_logs`), sign-ins per day, a filterable and paged access
+  log, and the top offending IPs.
+
+**Email click and open tracking (SES):**
+- Uses SES's own tracking on the configuration set, not a redirect of ours, so
+  deliverability is SES's concern. **One-time AWS setup:** SES → Configuration sets → the
+  `SES_CONFIGURATION_SET` set → Event destinations → the SNS destination that already
+  points at `SES_SNS_TOPIC_ARN` → tick **Click** and **Open**. Nothing changes on the
+  webhook. Until then the Email tab says tracking is not reporting yet.
+- `sendEmail` runs every message through `markUntrackedLinks`
+  ([server/src/services/emailLinkTracking.js](server/src/services/emailLinkTracking.js)),
+  which adds `ses:no-track` to any link that is itself a credential. That means the same
+  `SECRET_PARAMS` the log redacts (reset, verify, invite tokens) plus unsubscribe links,
+  so they never pass through `awstrack.me`. A new credential link needs no change, as long
+  as its token is in one of those parameters.
+- Every send carries an SES message tag `category` (the `COMMUNICATION_CATEGORIES` value),
+  so events group by kind of email even when the log row is gone.
+- `applySesEvent` writes each Click and Open to `email_engagement_events` (365 days). The
+  row id is derived from the event, so SNS redelivering a notification counts once. A click
+  moves the log row to `CLICKED`, which ranks above DELIVERED and below BOUNCED/COMPLAINED.
+  An open never changes status, because `OPENED` already means an iMessage handed to
+  Messages.
+- Mail scanners (Proofpoint, SafeLinks, …) open every link on arrival. `isSuspectedBot`
+  (`analytics/emailEngagement.js`) flags non-browser agents, known scanners and clicks
+  within 3s of sending. Those clicks are stored, counted apart, and **do not** set
+  `CLICKED`. Apple Mail prefetches open pixels, so treat opens as a floor and clicks as the
+  signal.
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming

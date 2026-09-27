@@ -7,6 +7,7 @@ export const RETENTION_DAYS = Object.freeze({
   clientEvents: 30,
   serverErrors: 30,
   securityEvents: 180,
+  emailEngagement: 365,
 });
 
 /** Buffers write in batches: every FLUSH_INTERVAL_MS, or as soon as FLUSH_AT rows wait. */

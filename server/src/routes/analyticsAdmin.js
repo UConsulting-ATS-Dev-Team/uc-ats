@@ -6,6 +6,8 @@ import express from 'express';
 
 import { clampDays, clampRole, errors, overview, performance } from '../services/analytics/queries.js';
 import { runRollup } from '../services/analytics/rollup.js';
+import { email, engagement } from '../services/analytics/engagementQueries.js';
+import { readSecurityFilters, security } from '../services/analytics/securityQueries.js';
 
 const router = express.Router();
 
@@ -26,6 +28,18 @@ router.get(
 );
 
 router.get('/errors', route('GET /api/admin/analytics/errors', (req) => errors(clampDays(req.query.days))));
+
+router.get(
+  '/engagement',
+  route('GET /api/admin/analytics/engagement', (req) => engagement(clampDays(req.query.days), clampRole(req.query.role)))
+);
+
+router.get('/email', route('GET /api/admin/analytics/email', (req) => email(clampDays(req.query.days))));
+
+router.get(
+  '/security',
+  route('GET /api/admin/analytics/security', (req) => security(clampDays(req.query.days), readSecurityFilters(req.query)))
+);
 
 router.post('/rollup', async (req, res) => {
   try {

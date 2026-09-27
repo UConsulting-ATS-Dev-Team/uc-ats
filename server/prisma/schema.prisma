@@ -2526,3 +2526,28 @@ model AnalyticsDailyFact {
   @@index([day, kind])
   @@map("analytics_daily_facts")
 }
+
+/// SES open and click events from the configuration set (services/sesEvents.js).
+/// Pruned after RETENTION_DAYS.emailEngagement.
+model EmailEngagementEvent {
+  id                 String   @id @default(uuid())
+  at                 DateTime
+  /// CLICK | OPEN
+  kind               String
+  communicationLogId String?
+  sesMessageId       String
+  recipient          String
+  /// From the matched communications log row, else the SES `category` message tag.
+  category           String?
+  /// The clicked URL without its query string. Null for OPEN.
+  link               String?
+  userAgent          String?
+  ip                 String?
+  /// A mail scanner or link-preview bot rather than a person (emailEngagement.js).
+  suspectedBot       Boolean  @default(false)
+
+  @@index([at])
+  @@index([communicationLogId])
+  @@index([category, at])
+  @@map("email_engagement_events")
+}

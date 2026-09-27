@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -19,10 +19,12 @@ import {
 } from '@mui/material';
 
 import AccessControl from '../components/AccessControl';
+import EmailTab from '../components/analytics/EmailTab';
+import EngagementTab from '../components/analytics/EngagementTab';
 import ErrorsTab from '../components/analytics/ErrorsTab';
+import SecurityTab from '../components/analytics/SecurityTab';
 import OverviewTab from '../components/analytics/OverviewTab';
 import PerformanceTab from '../components/analytics/PerformanceTab';
-import { EmptyState } from '../components/analytics/parts';
 import { fmtDay, ROLE_LABELS, ROLES } from '../components/analytics/formatters';
 import apiClient from '../utils/api';
 
@@ -34,10 +36,41 @@ export const TABS = [
   { key: 'overview', label: 'Overview', endpoint: 'overview' },
   { key: 'performance', label: 'Performance', endpoint: 'performance', byRole: true },
   { key: 'errors', label: 'Errors', endpoint: 'errors' },
-  { key: 'engagement', label: 'Engagement' },
-  { key: 'email', label: 'Email' },
-  { key: 'security', label: 'Security' },
+  { key: 'engagement', label: 'Engagement', endpoint: 'engagement', byRole: true },
+  { key: 'email', label: 'Email', endpoint: 'email' },
+  { key: 'security', label: 'Security', endpoint: 'security' },
 ];
+
+// The Security tab's access-log filters, as URL parameters (sec_ prefixed so
+// they never collide with the page's own `role`).
+const SECURITY_PARAMS = {
+  kind: 'sec_kind',
+  role: 'sec_role',
+  ip: 'sec_ip',
+  page: 'sec_page',
+  execPage: 'sec_exec_page',
+  // When the first page was read; later pages stay inside that snapshot.
+  asOf: 'sec_as_of',
+};
+
+const PAGING_KEYS = ['page', 'execPage', 'asOf'];
+
+/** Back to the first page of both security lists, read fresh. Returns whether anything changed. */
+function dropSnapshot(next) {
+  let changed = false;
+  for (const key of PAGING_KEYS) {
+    if (next.has(SECURITY_PARAMS[key])) {
+      next.delete(SECURITY_PARAMS[key]);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+export function describeRollup(days) {
+  if (days.length <= 2) return days.map(fmtDay).join(' and ');
+  return `${days.length} days (${fmtDay(days.at(-1))} to ${fmtDay(days[0])})`;
+}
 
 const RANGES = [7, 30, 90];
 
@@ -61,17 +94,31 @@ function AnalyticsDashboard() {
   const tab = TABS[tabIndex(params.get('tab'))];
   const days = RANGES.includes(Number(params.get('days'))) ? Number(params.get('days')) : 30;
   const role = ROLES.includes(params.get('role')) ? params.get('role') : 'ALL';
+  const securityKey = Object.values(SECURITY_PARAMS)
+    .map((p) => params.get(p) || '')
+    .join('|');
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [rollup, setRollup] = useState({ running: false, message: '', severity: 'info' });
+  const requestSeq = useRef(0);
 
   const setParam = (key, value, fallback) => {
     const next = new URLSearchParams(params);
     if (value === fallback) next.delete(key);
     else next.set(key, String(value));
+    // A new range is a new question for the security lists too.
+    if (key === 'days') dropSnapshot(next);
     setParams(next, { replace: true });
+  };
+
+  // Refresh means now: leave any paging snapshot (which reloads through the
+  // URL change), or simply reload when there is none.
+  const refresh = () => {
+    const next = new URLSearchParams(params);
+    if (dropSnapshot(next)) setParams(next, { replace: true });
+    else load();
   };
 
   const load = useCallback(async () => {
@@ -79,19 +126,49 @@ function AnalyticsDashboard() {
       setData(null);
       return;
     }
+    // Only the latest request may touch the screen. Filters and pages change
+    // faster than the server answers, and an older response arriving last
+    // would otherwise show rows that do not match the filters in the URL.
+    const request = ++requestSeq.current;
+    const isLatest = () => request === requestSeq.current;
     setLoading(true);
     setError('');
     try {
       const query = new URLSearchParams({ days: String(days) });
       if (tab.byRole && role !== 'ALL') query.set('role', role);
-      setData({ tab: tab.key, payload: await apiClient.get(`/admin/analytics/${tab.endpoint}?${query}`) });
+      if (tab.key === 'security') {
+        for (const [name, param] of Object.entries(SECURITY_PARAMS)) {
+          if (params.get(param)) query.set(name, params.get(param));
+        }
+      }
+      const payload = await apiClient.get(`/admin/analytics/${tab.endpoint}?${query}`);
+      if (isLatest()) setData({ tab: tab.key, payload });
     } catch (e) {
+      if (!isLatest()) return;
       setError(e.serverMessage || e.message || 'Could not load analytics');
       setData(null);
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
-  }, [tab.key, tab.endpoint, tab.byRole, days, role]);
+    // securityKey stands in for the security params, so other URL changes do not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.key, tab.endpoint, tab.byRole, days, role, securityKey]);
+
+  const onSecurityFilter = (changes) => {
+    const next = new URLSearchParams(params);
+    // Anything but turning a page is a new question: both lists start again
+    // from their first page, read now rather than at an old snapshot.
+    if (!Object.keys(changes).every((k) => PAGING_KEYS.includes(k))) dropSnapshot(next);
+    for (const [name, value] of Object.entries(changes)) {
+      const param = SECURITY_PARAMS[name];
+      const isFirstPage = (name === 'page' || name === 'execPage') && Number(value) === 0;
+      if (value === null || value === undefined || value === '' || isFirstPage) next.delete(param);
+      else next.set(param, String(value));
+    }
+    // Back on the first page of both lists means a fresh read, not a snapshot.
+    if (!next.get(SECURITY_PARAMS.page) && !next.get(SECURITY_PARAMS.execPage)) next.delete(SECURITY_PARAMS.asOf);
+    setParams(next, { replace: true });
+  };
 
   useEffect(() => {
     load();
@@ -104,7 +181,7 @@ function AnalyticsDashboard() {
       setRollup({
         running: false,
         severity: 'success',
-        message: `Rolled up ${result.days.map(fmtDay).join(' and ')} in ${result.ms} ms.`,
+        message: `Rolled up ${describeRollup(result.days)} in ${result.ms} ms.`,
       });
       load();
     } catch (e) {
@@ -147,7 +224,7 @@ function AnalyticsDashboard() {
               </Select>
             </FormControl>
           )}
-          <Button variant="outlined" onClick={load} disabled={loading}>
+          <Button variant="outlined" onClick={refresh} disabled={loading}>
             Refresh
           </Button>
           <Button variant="outlined" onClick={runRollup} disabled={rollup.running}>
@@ -181,7 +258,6 @@ function AnalyticsDashboard() {
         </Alert>
       )}
 
-      {!tab.endpoint && <EmptyState>{tab.label} is coming in the next release.</EmptyState>}
 
       {tab.endpoint && loading && !payload && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
@@ -192,6 +268,9 @@ function AnalyticsDashboard() {
       {payload && tab.key === 'overview' && <OverviewTab data={payload} onOpenTab={(key) => setParam('tab', key, 'overview')} />}
       {payload && tab.key === 'performance' && <PerformanceTab data={payload} />}
       {payload && tab.key === 'errors' && <ErrorsTab data={payload} />}
+      {payload && tab.key === 'engagement' && <EngagementTab data={payload} />}
+      {payload && tab.key === 'email' && <EmailTab data={payload} />}
+      {payload && tab.key === 'security' && <SecurityTab data={payload} onFilter={onSecurityFilter} />}
     </Box>
   );
 }

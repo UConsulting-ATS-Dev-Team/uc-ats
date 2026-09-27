@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { suppressEmail } from './emailSuppression.js';
+import { isSuspectedBot, recordEmailEngagement } from './analytics/emailEngagement.js';
 
 // What happens to an email after SES accepts it.
 //
@@ -85,7 +86,9 @@ export async function verifySnsMessage(message, { fetchCert = fetchCertificate }
 // A row only moves forward. SNS does not promise order, so a Delivery that
 // arrives after the Bounce for the same message must not paper over it, and a
 // spam complaint - which can only follow a delivery - outranks everything.
-const STATUS_RANK = { SENT: 0, DELAYED: 1, DELIVERED: 2, BOUNCED: 3, FAILED: 3, COMPLAINED: 4 };
+// A click implies delivery, so it outranks DELIVERED; a bounce or a spam
+// complaint is still the more important thing to see, so they outrank it.
+const STATUS_RANK = { SENT: 0, DELAYED: 1, DELIVERED: 2, CLICKED: 3, BOUNCED: 4, FAILED: 4, COMPLAINED: 5 };
 
 const statusesBelow = (status) =>
   Object.keys(STATUS_RANK).filter((s) => STATUS_RANK[s] < STATUS_RANK[status]);
@@ -97,8 +100,13 @@ const addressOf = (value) => {
 };
 
 /**
- * Turn one SES event into { status, detail, recipients }, or null for events
- * the log has no use for (Send, Open, Click...).
+ * Turn one SES event into { status, detail, recipients, engagement? }, or null
+ * for events the log has no use for (Send, Subscription...).
+ *
+ * Open and Click (configuration-set click and open tracking) also carry
+ * `engagement`, written to email_engagement_events for Site Analytics. A click
+ * moves the row to CLICKED; an open changes no status, because OPENED already
+ * means something else in the log and pixel opens are unreliable anyway.
  *
  * Configuration-set destinations call the field `eventType`; the older
  * identity-level notifications call it `notificationType`. Both are accepted so
@@ -158,6 +166,26 @@ export function interpretSesEvent(event) {
         detail: `Rendering failure: ${event.failure?.errorMessage || 'unknown'}`,
         recipients: all,
       };
+    // Neither names a recipient, so the destination list stands in. This app
+    // sends one recipient per message, so that is the person who acted.
+    case 'Click': {
+      const click = event.click || {};
+      return {
+        status: 'CLICKED',
+        detail: null,
+        recipients: all,
+        engagement: { kind: 'CLICK', link: click.link || null, userAgent: click.userAgent, ip: click.ipAddress, at: click.timestamp },
+      };
+    }
+    case 'Open': {
+      const open = event.open || {};
+      return {
+        status: null,
+        detail: null,
+        recipients: all,
+        engagement: { kind: 'OPEN', link: null, userAgent: open.userAgent, ip: open.ipAddress, at: open.timestamp },
+      };
+    }
     default:
       return null;
   }
@@ -177,7 +205,14 @@ export async function applySesEvent(event) {
   const idPrefix = `<${sesId}@`;
   let updated = 0;
 
-  for (const entry of outcome.recipients) {
+  // A mail scanner following every link is not the recipient clicking, so a
+  // suspected-bot click is recorded as engagement but changes no status.
+  const botClick =
+    outcome.engagement?.kind === 'CLICK' &&
+    isSuspectedBot({ userAgent: outcome.engagement.userAgent, at: outcome.engagement.at, sentAt: event.mail?.timestamp });
+  const status = botClick ? null : outcome.status;
+
+  for (const entry of status ? outcome.recipients : []) {
     const { address, detail } = typeof entry === 'string' ? { address: entry, detail: outcome.detail } : entry;
     if (!address) continue;
     // One conditional write rather than read-then-write: two events for the
@@ -200,6 +235,7 @@ export async function applySesEvent(event) {
     updated += count;
   }
 
+  if (outcome.engagement) await recordEmailEngagement({ event, outcome, sesId });
   await suppressFromSesEvent(event, outcome);
   return updated;
 }

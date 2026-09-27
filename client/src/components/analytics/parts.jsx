@@ -75,7 +75,9 @@ export function SectionTitle({ children, subtitle }) {
 export function EmptyState({ children }) {
   return (
     <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-      <Typography color="text.secondary">{children}</Typography>
+      <Typography component="div" color="text.secondary">
+        {children}
+      </Typography>
     </Paper>
   );
 }
@@ -111,12 +113,26 @@ export function TrendChart({ data, series, height = 260, format = (v) => v }) {
 
 /**
  * A small sortable table. `columns` is [{ key, label, align, render, sortValue }].
+ *
+ * `sortable={false}` keeps rows in the order given and shows plain headers.
+ * Use it for a server-paged list: sorting here would only reorder the page on
+ * screen, while the page that should come first is still on the server.
  */
-export function SortableTable({ columns, rows, initialSort, initialDirection = 'desc', empty = 'Nothing yet.', maxRows = 50, rowKey }) {
+export function SortableTable({
+  columns,
+  rows,
+  initialSort,
+  initialDirection = 'desc',
+  empty = 'Nothing yet.',
+  maxRows = 50,
+  rowKey,
+  sortable = true,
+}) {
   const [sortKey, setSortKey] = useState(initialSort || columns[0]?.key);
   const [direction, setDirection] = useState(initialDirection);
 
   const sorted = useMemo(() => {
+    if (!sortable) return rows;
     const column = columns.find((c) => c.key === sortKey);
     const value = column?.sortValue || ((row) => row[sortKey]);
     return [...rows].sort((a, b) => {
@@ -128,7 +144,7 @@ export function SortableTable({ columns, rows, initialSort, initialDirection = '
       const cmp = x > y ? 1 : -1;
       return direction === 'asc' ? cmp : -cmp;
     });
-  }, [rows, columns, sortKey, direction]);
+  }, [rows, columns, sortKey, direction, sortable]);
 
   if (!rows.length) return <EmptyState>{empty}</EmptyState>;
 
@@ -146,10 +162,14 @@ export function SortableTable({ columns, rows, initialSort, initialDirection = '
         <TableHead>
           <TableRow>
             {columns.map((c) => (
-              <TableCell key={c.key} align={c.align || 'left'} sortDirection={sortKey === c.key ? direction : false}>
-                <TableSortLabel active={sortKey === c.key} direction={sortKey === c.key ? direction : 'desc'} onClick={() => onSort(c.key)}>
-                  {c.label}
-                </TableSortLabel>
+              <TableCell key={c.key} align={c.align || 'left'} sortDirection={sortable && sortKey === c.key ? direction : false}>
+                {sortable ? (
+                  <TableSortLabel active={sortKey === c.key} direction={sortKey === c.key ? direction : 'desc'} onClick={() => onSort(c.key)}>
+                    {c.label}
+                  </TableSortLabel>
+                ) : (
+                  c.label
+                )}
               </TableCell>
             ))}
           </TableRow>

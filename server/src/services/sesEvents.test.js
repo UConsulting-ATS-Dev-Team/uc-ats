@@ -8,11 +8,16 @@ import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { verifySnsMessage, stringToSign, interpretSesEvent, applySesEvent, isSnsUrl } from './sesEvents.js';
 import { suppressEmail } from './emailSuppression.js';
+import { recordEmailEngagement } from './analytics/emailEngagement.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: { communicationLog: { updateMany: vi.fn() } },
 }));
 vi.mock('./emailSuppression.js', () => ({ suppressEmail: vi.fn() }));
+vi.mock('./analytics/emailEngagement.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  recordEmailEngagement: vi.fn(async () => 1),
+}));
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicPem = publicKey.export({ type: 'spki', format: 'pem' });
@@ -114,8 +119,23 @@ describe('interpretSesEvent', () => {
   });
 
   it('ignores events the log has no use for', () => {
-    expect(interpretSesEvent({ eventType: 'Open', mail })).toBeNull();
     expect(interpretSesEvent({ eventType: 'Send', mail })).toBeNull();
+  });
+
+  it('reads a click as CLICKED with what was clicked', () => {
+    const out = interpretSesEvent({
+      eventType: 'Click',
+      mail,
+      click: { link: 'https://ats.test/interview-signup', userAgent: 'Mozilla/5.0', ipAddress: '1.2.3.4', timestamp: '2026-09-22T12:05:00Z' },
+    });
+    expect(out.status).toBe('CLICKED');
+    expect(out.engagement).toMatchObject({ kind: 'CLICK', link: 'https://ats.test/interview-signup', ip: '1.2.3.4' });
+  });
+
+  it('reads an open as engagement only, never a status', () => {
+    const out = interpretSesEvent({ eventType: 'Open', mail, open: { userAgent: 'Mozilla/5.0', timestamp: '2026-09-22T12:05:00Z' } });
+    expect(out.status).toBeNull();
+    expect(out.engagement.kind).toBe('OPEN');
   });
 });
 
@@ -147,6 +167,40 @@ describe('applySesEvent', () => {
     await applySesEvent({ eventType: 'Delivery', mail, delivery: { recipients: ['ryan@example.com'] } });
     const [{ data }] = prisma.communicationLog.updateMany.mock.calls[0];
     expect(data).toEqual({ status: 'DELIVERED', error: null });
+  });
+
+  it('moves a sent or delivered row to CLICKED, never a bounced or complained one', async () => {
+    await applySesEvent({
+      eventType: 'Click',
+      mail: { ...mail, timestamp: '2026-09-22T12:00:00Z' },
+      click: { link: 'https://ats.test/x', userAgent: 'Mozilla/5.0 (Macintosh) Safari', timestamp: '2026-09-22T12:10:00Z' },
+    });
+    const [{ where, data }] = prisma.communicationLog.updateMany.mock.calls[0];
+    expect(data.status).toBe('CLICKED');
+    expect(where.status.in.sort()).toEqual(['DELAYED', 'DELIVERED', 'SENT']);
+    expect(recordEmailEngagement).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a scanner click as engagement but changes no status', async () => {
+    await applySesEvent({
+      eventType: 'Click',
+      mail: { ...mail, timestamp: '2026-09-22T12:00:00Z' },
+      click: { link: 'https://ats.test/x', userAgent: 'Mozilla/5.0 Proofpoint', timestamp: '2026-09-22T12:00:01Z' },
+    });
+    expect(prisma.communicationLog.updateMany).not.toHaveBeenCalled();
+    expect(recordEmailEngagement).toHaveBeenCalledTimes(1);
+  });
+
+  it('records an open without touching the row', async () => {
+    await applySesEvent({ eventType: 'Open', mail, open: { userAgent: 'Mozilla/5.0', timestamp: '2026-09-22T12:05:00Z' } });
+    expect(prisma.communicationLog.updateMany).not.toHaveBeenCalled();
+    expect(recordEmailEngagement).toHaveBeenCalledTimes(1);
+  });
+
+  it('never lets a late delivery overwrite a click', async () => {
+    await applySesEvent({ eventType: 'Delivery', mail, delivery: { recipients: ['ryan@example.com'] } });
+    const [{ where }] = prisma.communicationLog.updateMany.mock.calls[0];
+    expect(where.status.in).not.toContain('CLICKED');
   });
 
   it('lets a complaint follow a delivery', async () => {
