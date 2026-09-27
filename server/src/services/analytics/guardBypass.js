@@ -13,6 +13,9 @@
 const STAFF = ['ADMIN', 'MEMBER'];
 
 export const GUARD_TABLE = Object.freeze([
+  // guardFor takes the first match, so a sub-prefix of /api/admin goes above it.
+  // index.js mounts routes/emailHealth.js behind requireAuth, requireAdmin.
+  { prefix: '/api/admin/email-health', allowed: ['ADMIN'], severity: 'CRITICAL' },
   // routes/admin.js L137 router.use(requireAuth, requireAdmin); every other
   // /api/admin mount in index.js is itself behind requireAdmin.
   { prefix: '/api/admin', allowed: ['ADMIN'], severity: 'CRITICAL' },

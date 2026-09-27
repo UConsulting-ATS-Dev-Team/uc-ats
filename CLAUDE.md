@@ -218,6 +218,8 @@ The system follows a **recruiting cycle-based workflow**:
   recruiting-interest list: upload the CSV, get back what the ATS has never seen
 - `/api/master-communications/audiences` - Saved audiences (named filter trees);
   `/audience-options` feeds the builder; `/suppressions` is the unsubscribe list
+- `/api/admin/email-health` - Administration → Email Deliverability: the health report and
+  `POST /test`, a real send to check end to end
 - `/api/unsubscribe` - Public, token-gated: the footer link's page actions and the
   RFC 8058 one-click `POST /one-click`
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
@@ -333,6 +335,19 @@ The system follows a **recruiting cycle-based workflow**:
   guarantee order. The route has no auth; the SNS signature and topic ARN are its auth
   ([server/src/services/sesEvents.js](server/src/services/sesEvents.js)). Unset topic ARN
   means it refuses everything.
+
+**Email deliverability page:**
+- Administration → Email Deliverability (`/admin/email-health`) answers "is our mail getting
+  through?" from four places, each checked on its own so one failing never hides the rest:
+  env config, the SES account/identity/configuration set (read with the sending credentials),
+  public DNS for the From domain, and `communication_logs` over 1/7/30 days.
+- All judgement lives in [server/src/services/emailHealth.js](server/src/services/emailHealth.js);
+  the page only lays it out. `unknown` means the check could not look (IAM without
+  `ses:Get*`, DNS timeout, database down), never that something is broken.
+- Bounce and complaint rates are not graded under 50 sends. "Delivery reports arriving"
+  fails when most mail over an hour old is still `SENT` - the SNS subscription is broken.
+- "Send test" goes through `sendEmail` as a `MANUAL` `TEST`, so its log row turning
+  `DELIVERED` proves SES and the webhook work together.
 
 **How automatic emails look:**
 - Every automatic email is drawn by one renderer,
