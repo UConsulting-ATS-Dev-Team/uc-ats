@@ -19,6 +19,7 @@ import {
   scheduleMessage,
   listScheduledMessages,
   cancelScheduledMessage,
+  markScheduleFailed,
 } from '../services/masterCommunications.js';
 import {
   listCommunications,
@@ -314,6 +315,16 @@ router.delete('/schedule/:id', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[DELETE /api/master-communications/schedule/:id]', err);
     res.status(err.status || 500).json({ error: err.message || 'Failed to cancel scheduled message' });
+  }
+});
+
+// Settles a send its server never finished. Sends nothing; see markScheduleFailed.
+router.post('/schedule/:id/mark-failed', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json(await markScheduleFailed({ id: req.params.id }));
+  } catch (err) {
+    if (!err.status) console.error('[POST /api/master-communications/schedule/:id/mark-failed]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to mark scheduled message failed' });
   }
 });
 

@@ -968,6 +968,17 @@ const application = await prisma.application.findUnique({
 - **Prisma Studio:** `npx prisma studio` - GUI for database inspection
 - **Form Sync Logs:** Check server console for "Fetching new responses..." messages
 - **Google Drive Permissions:** Files must be shared with service account email from `google-cloud-key.json`
+- **Tests never touch real services.** `server/vitest.setup.js` points `DATABASE_URL`, SES
+  and Slack at addresses that refuse, before `config.js` loads `.env` (dotenv never
+  overrides a set variable). A local `.env` is production's database and live SES keys,
+  so a test that mocks only part of a send path used to write fake `SENT` rows into
+  production's `communication_logs`. Mock what a test needs; do not undo the setup.
+- **Scheduled sends are claimed before they send.** `processScheduledMessages` moves a
+  schedule `PENDING → SENDING` with a conditional update and only the run whose claim
+  lands sends it; every server on the database runs that cron each minute. While it
+  sends it refreshes the schedule's `updatedAt` about once a minute; one silent for 15
+  minutes shows as **Interrupted** and an admin may mark it failed. It is deliberately
+  never resent automatically, and the campaign is linked first so Logs show who got it.
 
 ## Git Workflow Notes
 

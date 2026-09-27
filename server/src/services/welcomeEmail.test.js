@@ -12,6 +12,22 @@ vi.mock('nodemailer', () => ({
   default: { createTransport: () => ({ sendMail }) }
 }));
 
+// The communications log is sendEmail's concern (emailNotifications.logging.test.js);
+// here it would only write a row per send into the stand-in database below.
+vi.mock('./communicationLog.js', () => ({ recordCommunication: vi.fn().mockResolvedValue('row-1') }));
+
+// An empty database: every table reads as having no rows, so the wording, theme
+// and style lookups fall through to the shipped defaults these tests describe.
+// Without it those lookups went to whatever DATABASE_URL was set, which on a
+// developer's machine was production.
+vi.mock('../prismaClient.js', () => ({
+  default: new Proxy({}, {
+    get: () => new Proxy({}, {
+      get: (_, method) => async () => (String(method).startsWith('findMany') ? [] : null),
+    }),
+  }),
+}));
+
 const { sendWelcomeEmail } = await import('./emailNotifications.js');
 
 /** The one message handed to the transport. */
