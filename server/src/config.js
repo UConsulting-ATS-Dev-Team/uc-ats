@@ -46,6 +46,23 @@ const corsOrigin = renderUrl && !explicitCorsOrigin.includes(renderUrl)
   ? [...explicitCorsOrigin, renderUrl]
   : explicitCorsOrigin;
 
+const clientUrl = process.env.CLIENT_URL || previewUrl || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173');
+
+// Whether this process runs the scheduled jobs in index.js: form sync, scheduled
+// Master Communications, and the GTKUC host and attendance reminders. Every
+// server that shares a database runs the same crons on the same tick, and a
+// reminder sent from a laptop links to that laptop's localhost. So they run
+// only where CLIENT_URL is a real address and this is not a Render preview.
+// RUN_CRONS=true forces them on (to test one locally); RUN_CRONS=false forces
+// them off anywhere.
+const localClientUrl = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(clientUrl);
+const runCrons = (() => {
+  const flag = String(process.env.RUN_CRONS || '').toLowerCase();
+  if (flag === 'true') return true;
+  if (flag === 'false') return false;
+  return !isPreviewEnv && !localClientUrl;
+})();
+
 const config = {
   port: process.env.PORT || 3001,
   jwtSecret: process.env.JWT_SECRET,
@@ -83,7 +100,8 @@ const config = {
   googleClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || null,
 
   baseUrl: process.env.BASE_URL || previewUrl || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:3001'),
-  clientUrl: process.env.CLIENT_URL || previewUrl || (isProduction ? 'https://uconsultingats.com' : 'http://localhost:5173'),
+  clientUrl,
+  runCrons,
 
   corsOrigin,
 

@@ -199,53 +199,58 @@ if (serveClient) {
   console.log(`Serving client bundle from ${clientDistPath}`);
 }
 
-// Run initial sync on startup
-await syncFormResponses();
+// Scheduled jobs run on one kind of server only; see `runCrons` in config.js.
+if (config.runCrons) {
+  // Run initial sync on startup
+  await syncFormResponses();
 
-// Schedule automatic sync every 5 minutes
-cron.schedule('*/5 * * * *', () => {
-  console.log('Running scheduled response sync...');
-  syncFormResponses();
-});
+  // Schedule automatic sync every 5 minutes
+  cron.schedule('*/5 * * * *', () => {
+    console.log('Running scheduled response sync...');
+    syncFormResponses();
+  });
 
-// Check for and send scheduled messages every minute
-cron.schedule('* * * * *', async () => {
-  const count = await processScheduledMessages();
-  if (count > 0) {
-    console.log(`Processed ${count} scheduled master communication(s)`);
-  }
-});
+  // Check for and send scheduled messages every minute
+  cron.schedule('* * * * *', async () => {
+    const count = await processScheduledMessages();
+    if (count > 0) {
+      console.log(`Processed ${count} scheduled master communication(s)`);
+    }
+  });
 
-// Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
-// skipped over rather than overlapped, so one slot cannot be reminded twice.
-let hostRemindersRunning = false;
-cron.schedule('*/15 * * * *', async () => {
-  if (hostRemindersRunning) return;
-  hostRemindersRunning = true;
-  try {
-    const sent = await sendDueHostReminders();
-    if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
-  } catch (error) {
-    console.error('[gtkuc host reminders] run failed:', error);
-  } finally {
-    hostRemindersRunning = false;
-  }
-});
+  // Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is
+  // skipped over rather than overlapped, so one slot cannot be reminded twice.
+  let hostRemindersRunning = false;
+  cron.schedule('*/15 * * * *', async () => {
+    if (hostRemindersRunning) return;
+    hostRemindersRunning = true;
+    try {
+      const sent = await sendDueHostReminders();
+      if (sent > 0) console.log(`Sent ${sent} GTKUC host reminder(s)`);
+    } catch (error) {
+      console.error('[gtkuc host reminders] run failed:', error);
+    } finally {
+      hostRemindersRunning = false;
+    }
+  });
 
-// An hour after a Get to Know UC slot ends, ask its host to mark attendance.
-let attendanceRemindersRunning = false;
-cron.schedule('*/15 * * * *', async () => {
-  if (attendanceRemindersRunning) return;
-  attendanceRemindersRunning = true;
-  try {
-    const sent = await sendDueAttendanceReminders();
-    if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
-  } catch (error) {
-    console.error('[gtkuc attendance reminders] run failed:', error);
-  } finally {
-    attendanceRemindersRunning = false;
-  }
-});
+  // An hour after a Get to Know UC slot ends, ask its host to mark attendance.
+  let attendanceRemindersRunning = false;
+  cron.schedule('*/15 * * * *', async () => {
+    if (attendanceRemindersRunning) return;
+    attendanceRemindersRunning = true;
+    try {
+      const sent = await sendDueAttendanceReminders();
+      if (sent > 0) console.log(`Sent ${sent} GTKUC attendance reminder(s)`);
+    } catch (error) {
+      console.error('[gtkuc attendance reminders] run failed:', error);
+    } finally {
+      attendanceRemindersRunning = false;
+    }
+  });
+} else {
+  console.log(`Scheduled jobs are off here (CLIENT_URL ${config.clientUrl}). Set RUN_CRONS=true to run them.`);
+}
 
 app.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);

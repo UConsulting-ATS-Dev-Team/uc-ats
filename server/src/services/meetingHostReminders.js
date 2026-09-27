@@ -26,11 +26,16 @@ export const REMINDER_LEAD_HOURS = 24;
 const MAX_ATTEMPTS = 3;
 const HOUR_MS = 60 * 60 * 1000;
 
-/** The slots a run should remind, with host, signups and prior reminders. */
-export async function findSlotsDueForHostReminder(now = new Date()) {
+/**
+ * The slots a run should remind, with host, signups and prior reminders.
+ * Pass `slotId` to ask the same question of one slot, and `db` to ask it
+ * inside a transaction.
+ */
+export async function findSlotsDueForHostReminder(now = new Date(), slotId = null, db = prisma) {
   const horizon = new Date(now.getTime() + REMINDER_LEAD_HOURS * HOUR_MS);
-  const slots = await prisma.meetingSlot.findMany({
+  const slots = await db.meetingSlot.findMany({
     where: {
+      ...(slotId ? { id: slotId } : {}),
       startTime: { gt: now, lte: horizon },
       signups: { some: {} },
     },
@@ -104,13 +109,45 @@ export async function sendHostReminder(slot) {
   );
 }
 
+/**
+ * Send one slot's reminder under a lock on that slot. Returns { ok }.
+ *
+ * The in-process flag in index.js only stops a run overlapping itself, and
+ * every server pointed at this database runs the same cron on the same tick.
+ * All of them read the slot before any has logged it, so each one would send.
+ * Each send therefore takes a transaction-scoped advisory lock on the slot and
+ * asks whether it is still due once it holds it: whoever comes second either
+ * finds the lock taken or finds the first one's SENT row. Same pattern as
+ * meetingAttendanceReminders.js.
+ */
+async function sendUnderSlotLock(slot, now) {
+  return prisma.$transaction(
+    async (tx) => {
+      const [{ locked }] =
+        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`gtkuc-host-reminder:${slot.id}`})) AS locked`;
+      if (!locked) return { ok: false };
+
+      const [current] = await findSlotsDueForHostReminder(now, slot.id, tx);
+      if (!current) return { ok: false };
+
+      return sendHostReminder(current);
+    },
+    { timeout: 60 * 1000 }
+  );
+}
+
 /** One cron tick. Returns how many reminders went out. */
 export async function sendDueHostReminders(now = new Date()) {
   const due = await findSlotsDueForHostReminder(now);
   let sent = 0;
   for (const slot of due) {
-    const { ok } = await sendHostReminder(slot);
-    if (ok) sent += 1;
+    try {
+      const { ok } = await sendUnderSlotLock(slot, now);
+      if (ok) sent += 1;
+    } catch (error) {
+      // A lock or log read failing for one slot must not end the run for the rest.
+      console.error(`[gtkuc host reminders] slot ${slot.id} failed:`, error);
+    }
   }
   return sent;
 }

@@ -1,5 +1,6 @@
 // A GTKUC host reaching everyone booked into their slot at once: one group
-// iMessage (see imessage.js) or one email, both opened in the host's own app.
+// iMessage (see imessage.js) in their Messages app, or one email opened in
+// Gmail in the browser.
 
 const firstName = (fullName) => String(fullName || '').trim().split(/\s+/)[0] || '';
 
@@ -37,17 +38,17 @@ export function draftSignupMessage({ hostName, contacts, startTime, location }) 
 }
 
 /**
- * One email to everyone, addressed in To so a reply-all reaches the group the
- * same way the group iMessage does.
+ * One email to everyone, as a Gmail compose window in the browser. A mailto:
+ * link would open whatever mail app the machine defaults to (often Outlook,
+ * which most hosts never set up). Addressed in To so a reply-all reaches the
+ * group the same way the group iMessage does. Gmail opens it in whichever
+ * account is signed in.
  */
-export function buildMailtoUrl(emails, subject, body) {
-  // Encoded so a + or & in an address cannot break the link, but with the @
-  // left as is: some mail apps do not decode %40 in the address list.
-  const to = [...new Set(emails.filter(Boolean))]
-    .map((e) => encodeURIComponent(e).replace(/%40/g, '@'))
-    .join(',');
-  const params = [];
-  if (subject) params.push(`subject=${encodeURIComponent(subject)}`);
-  if (body) params.push(`body=${encodeURIComponent(body)}`);
-  return `mailto:${to}${params.length ? `?${params.join('&')}` : ''}`;
+export function buildGmailComposeUrl(emails, subject, body) {
+  const params = new URLSearchParams({ view: 'cm', fs: '1' });
+  const to = [...new Set(emails.filter(Boolean))].join(',');
+  if (to) params.set('to', to);
+  if (subject) params.set('su', subject);
+  if (body) params.set('body', body);
+  return `https://mail.google.com/mail/?${params.toString()}`;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMailtoUrl, draftSignupMessage } from './signupContact';
+import { buildGmailComposeUrl, draftSignupMessage } from './signupContact';
 
 describe('draftSignupMessage', () => {
   const base = {
@@ -28,13 +28,21 @@ describe('draftSignupMessage', () => {
   });
 });
 
-describe('buildMailtoUrl', () => {
-  it('addresses everyone once, with subject and body encoded', () => {
-    expect(buildMailtoUrl(['a@ucla.edu', 'b+x@ucla.edu', 'a@ucla.edu'], 'Get to Know UC', 'Hi & see you\nsoon'))
-      .toBe('mailto:a@ucla.edu,b%2Bx@ucla.edu?subject=Get%20to%20Know%20UC&body=Hi%20%26%20see%20you%0Asoon');
+describe('buildGmailComposeUrl', () => {
+  const parse = (url) => new URL(url);
+
+  it('opens a Gmail compose window addressed to everyone once', () => {
+    const url = parse(buildGmailComposeUrl(['a@ucla.edu', 'b+x@ucla.edu', 'a@ucla.edu'], 'Get to Know UC', 'Hi & see you\nsoon'));
+    expect(url.origin + url.pathname).toBe('https://mail.google.com/mail/');
+    expect(url.searchParams.get('view')).toBe('cm');
+    expect(url.searchParams.get('to')).toBe('a@ucla.edu,b+x@ucla.edu');
+    expect(url.searchParams.get('su')).toBe('Get to Know UC');
+    expect(url.searchParams.get('body')).toBe('Hi & see you\nsoon');
   });
 
-  it('omits the query when there is nothing to prefill', () => {
-    expect(buildMailtoUrl(['a@ucla.edu'])).toBe('mailto:a@ucla.edu');
+  it('leaves out subject and body when there is nothing to prefill', () => {
+    const url = parse(buildGmailComposeUrl(['a@ucla.edu']));
+    expect(url.searchParams.has('su')).toBe(false);
+    expect(url.searchParams.has('body')).toBe(false);
   });
 });
