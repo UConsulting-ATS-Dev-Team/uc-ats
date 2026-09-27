@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import apiClient from './api';
 
 // Document grading rubrics (server/src/services/documentRubrics.js). Members
@@ -14,6 +14,8 @@ export const documentRubricApi = {
   all: () => apiClient.get(base),
   /** Validates a draft and counts this cycle's scores it would leave out of range. */
   preview: (type, rubric) => apiClient.post(`${base}/${type}/preview`, { rubric }),
+  /** The same count for going back to the shipped default. */
+  previewReset: (type) => apiClient.post(`${base}/${type}/preview`, { reset: true }),
   save: (type, rubric) => apiClient.put(`${base}/${type}`, { rubric }),
   reset: (type) => apiClient.delete(`${base}/${type}`)
 };
@@ -60,6 +62,11 @@ async function load() {
 /**
  * `{ data, error, reload }`. `data` is the GET /document-rubrics body, or null
  * until it has loaded.
+ *
+ * Every mount shows what is cached and refetches behind it, so a page opened
+ * after another admin's edit catches up without a reload. Concurrent mounts
+ * share one request. A failed refetch keeps the cached copy and only reports
+ * an error when there is nothing to show.
  */
 export function useDocumentRubrics() {
   const [data, setData] = useState(cache);
@@ -67,16 +74,18 @@ export function useDocumentRubrics() {
 
   useEffect(() => {
     listeners.add(setData);
-    if (!cache) {
-      load().catch((err) => setError(err?.message || 'Could not load the grading rubrics'));
-    }
+    load().then(() => setError(null)).catch((err) => {
+      if (!cache) setError(err?.message || 'Could not load the grading rubrics');
+    });
     return () => { listeners.delete(setData); };
   }, []);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     setError(null);
-    return load().catch((err) => setError(err?.message || 'Could not load the grading rubrics'));
-  };
+    return load().catch((err) => {
+      if (!cache) setError(err?.message || 'Could not load the grading rubrics');
+    });
+  }, []);
 
   return { data, error, reload };
 }

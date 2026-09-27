@@ -38,6 +38,8 @@ const TYPES = ['resume', 'coverLetter', 'video'];
 const TITLE_MAX = 120;
 const DESCRIPTION_MAX = 1000;
 const CRITERIA_MAX = 12;
+const CRITERION_LABEL_MAX = 20;
+const CRITERION_TEXT_MAX = 1000;
 const SCORE_CEILING = 100;
 
 const AGGREGATION_NOTE = {
@@ -89,9 +91,18 @@ export function draftProblem(draft) {
     if (filled.some((row) => !row.label.trim() || !row.text.trim())) {
       return `Every criterion under ${name} needs both a score and a description.`;
     }
+    if (filled.some((row) => labelTooLong(row))) {
+      return `A score label under ${name} is over ${CRITERION_LABEL_MAX} characters.`;
+    }
+    if (filled.some((row) => textTooLong(row))) {
+      return `A criterion under ${name} is over ${CRITERION_TEXT_MAX} characters.`;
+    }
   }
   return null;
 }
+
+const labelTooLong = (row) => row.label.trim().length > CRITERION_LABEL_MAX;
+const textTooLong = (row) => row.text.trim().length > CRITERION_TEXT_MAX;
 
 /**
  * Criterion labels ("7-10", "3") that name a score outside the category's
@@ -191,16 +202,17 @@ function CategoryEditor({ category, index, onChange }) {
                   placeholder="4-6"
                   value={row.label}
                   onChange={(event) => setRow(row.key, 'label', event.target.value)}
-                  error={!row.label.trim() && Boolean(row.text.trim())}
+                  error={(!row.label.trim() && Boolean(row.text.trim())) || labelTooLong(row)}
                   size="small"
-                  inputProps={{ 'aria-label': `Criterion ${rowIndex + 1} score` }}
+                  inputProps={{ 'aria-label': `Criterion ${rowIndex + 1} score`, maxLength: CRITERION_LABEL_MAX }}
                   sx={{ width: 96, flexShrink: 0 }}
                 />
                 <TextField
                   label="What this score looks like"
                   value={row.text}
                   onChange={(event) => setRow(row.key, 'text', event.target.value)}
-                  error={!row.text.trim() && Boolean(row.label.trim())}
+                  error={(!row.text.trim() && Boolean(row.label.trim())) || textTooLong(row)}
+                  helperText={textTooLong(row) ? `${row.text.trim().length}/${CRITERION_TEXT_MAX}` : undefined}
                   size="small"
                   multiline
                   fullWidth
@@ -237,12 +249,24 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(null);
-  /** A preview that found scores outside the new range, waiting on "Save anyway". */
+  /**
+   * A preview that found scores outside the new range, waiting on "Save anyway".
+   * Holds what it previewed - which tab, save or reset, and the exact rubric -
+   * so confirming acts on that and nothing typed or selected since.
+   */
   const [pendingWarning, setPendingWarning] = useState(null);
 
-  const adopt = (next) => {
+  const adoptAll = (next) => {
     setData(next);
     setDrafts(Object.fromEntries(TYPES.map((key) => [key, toDraft(next.rubrics[key].rubric)])));
+    setDocumentRubrics(next);
+  };
+
+  // A save answers with every rubric, but only the saved one's draft is
+  // replaced: the other tabs keep whatever the admin has typed there.
+  const adoptOne = (next, key) => {
+    setData(next);
+    setDrafts((prev) => ({ ...prev, [key]: toDraft(next.rubrics[key].rubric) }));
     setDocumentRubrics(next);
   };
 
@@ -254,7 +278,7 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
     let cancelled = false;
     setLoading(true);
     documentRubricApi.all()
-      .then((next) => { if (!cancelled) adopt(next); })
+      .then((next) => { if (!cancelled) adoptAll(next); })
       .catch((err) => { if (!cancelled) setError(err.serverMessage || 'Could not load the rubrics.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -276,6 +300,7 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
   }, [data, draft, type, problem, current]);
 
   const updateCategory = (index, next) => {
+    if (saving) return;
     setSaved(null);
     setPendingWarning(null);
     setDrafts((prev) => ({
@@ -284,52 +309,45 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
     }));
   };
 
-  const commit = async () => {
-    const next = await documentRubricApi.save(type, fromDraft(draft));
-    const keep = { ...drafts };
-    adopt(next);
-    // Other tabs' unsaved drafts survive this tab's save.
-    setDrafts((prev) => Object.fromEntries(TYPES.map((key) => [key, key === type ? prev[key] : keep[key]])));
-    setPendingWarning(null);
-    setSaved(`${DOCUMENT_TYPE_LABELS[type]} rubric saved. Graders see it the next time they open a document.`);
-  };
-
-  const save = async ({ confirmed = false } = {}) => {
+  /**
+   * Save or reset one tab. Everything it acts on is fixed when it starts:
+   * `key` and `rubric` are captured here, not read from state afterwards, so
+   * switching tabs while it runs cannot point it at another rubric. Tabs and
+   * fields are also locked while `saving`.
+   */
+  const run = async ({ action, key, rubric, confirmed = false }) => {
     setSaving(true);
     setError(null);
     setSaved(null);
+    setPendingWarning(null);
+    const label = DOCUMENT_TYPE_LABELS[key];
     try {
       if (!confirmed) {
-        const preview = await documentRubricApi.preview(type, fromDraft(draft));
+        const preview = action === 'reset'
+          ? await documentRubricApi.previewReset(key)
+          : await documentRubricApi.preview(key, rubric);
         if (preview?.outOfRange?.count > 0) {
-          setPendingWarning(preview.outOfRange);
+          setPendingWarning({ action, key, rubric, outOfRange: preview.outOfRange });
           return;
         }
       }
-      await commit();
+      if (action === 'reset') {
+        adoptOne(await documentRubricApi.reset(key), key);
+        setSaved(`${label} rubric is back to the default.`);
+      } else {
+        adoptOne(await documentRubricApi.save(key, rubric), key);
+        setSaved(`${label} rubric saved. Graders see it the next time they open a document.`);
+      }
     } catch (err) {
-      setError(err.serverMessage || 'Could not save the rubric.');
+      setError(err.serverMessage || `Could not ${action === 'reset' ? 'reset' : 'save'} the rubric.`);
     } finally {
       setSaving(false);
     }
   };
 
-  const reset = async () => {
-    setSaving(true);
-    setError(null);
-    setSaved(null);
-    try {
-      const keep = { ...drafts };
-      adopt(await documentRubricApi.reset(type));
-      setDrafts((prev) => Object.fromEntries(TYPES.map((key) => [key, key === type ? prev[key] : keep[key]])));
-      setPendingWarning(null);
-      setSaved(`${DOCUMENT_TYPE_LABELS[type]} rubric is back to the default.`);
-    } catch (err) {
-      setError(err.serverMessage || 'Could not reset the rubric.');
-    } finally {
-      setSaving(false);
-    }
-  };
+  const save = () => run({ action: 'save', key: type, rubric: fromDraft(draft) });
+  const reset = () => run({ action: 'reset', key: type });
+  const confirmPending = () => run({ ...pendingWarning, confirmed: true });
 
   const close = () => {
     if (anyDirty && !window.confirm('Discard your unsaved rubric changes?')) return;
@@ -341,11 +359,17 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
       <DialogTitle>Document grading rubrics</DialogTitle>
       <Tabs
         value={type}
-        onChange={(_, value) => { setType(value); setSaved(null); setPendingWarning(null); setError(null); }}
+        onChange={(_, value) => {
+          if (saving) return;
+          setType(value);
+          setSaved(null);
+          setPendingWarning(null);
+          setError(null);
+        }}
         sx={{ px: 3, borderBottom: 1, borderColor: 'divider' }}
       >
         {TYPES.map((key) => (
-          <Tab key={key} value={key} label={`${DOCUMENT_TYPE_LABELS[key]}${dirty(key) ? ' •' : ''}`} />
+          <Tab key={key} value={key} disabled={saving && key !== type} label={`${DOCUMENT_TYPE_LABELS[key]}${dirty(key) ? ' •' : ''}`} />
         ))}
       </Tabs>
       <DialogContent>
@@ -389,14 +413,15 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
             <Alert
               severity="warning"
               action={(
-                <Button color="inherit" size="small" onClick={() => save({ confirmed: true })} disabled={saving} sx={{ whiteSpace: 'nowrap' }}>
-                  Save anyway
+                <Button color="inherit" size="small" onClick={confirmPending} disabled={saving} sx={{ whiteSpace: 'nowrap' }}>
+                  {pendingWarning.action === 'reset' ? 'Reset anyway' : 'Save anyway'}
                 </Button>
               )}
             >
-              {pendingWarning.count} {DOCUMENT_TYPE_LABELS[type].toLowerCase()}{' '}
-              {pendingWarning.count === 1 ? 'score' : 'scores'}
-              {pendingWarning.cycleName ? ` in ${pendingWarning.cycleName}` : ''} fall outside the new range.
+              {pendingWarning.outOfRange.count} {DOCUMENT_TYPE_LABELS[pendingWarning.key].toLowerCase()}{' '}
+              {pendingWarning.outOfRange.count === 1 ? 'score' : 'scores'}
+              {pendingWarning.outOfRange.cycleName ? ` in ${pendingWarning.outOfRange.cycleName}` : ''} fall outside
+              {pendingWarning.action === 'reset' ? " the default's range." : ' the new range.'}
               They keep the values they were graded with; nothing is rescaled.
             </Alert>
           )}
@@ -416,7 +441,7 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
         <Button onClick={close} disabled={saving}>Close</Button>
         <Button
           variant="contained"
-          onClick={() => save()}
+          onClick={save}
           disabled={saving || loading || !draft || Boolean(problem) || !dirty(type) || Boolean(pendingWarning)}
         >
           {saving ? 'Saving…' : 'Save'}

@@ -229,4 +229,12 @@ describe('previewRubric', () => {
     expect(preview.maxOverall).toBe(11);
     expect((await getRubrics({ client: db })).rubrics.resume.customized).toBe(false);
   });
+
+  it('previews a reset to the default, which can narrow a range too', async () => {
+    db = fakeDb({ scores: { video: [{ cycleId: 'cycle-1', scoreOne: 4 }, { cycleId: 'cycle-1', scoreOne: 1 }] } });
+    await saveRubric({ client: db, type: 'video', rubric: edited('video', { scoreOne: { max: 5 } }), user });
+    const preview = await previewRubric({ client: db, type: 'video', reset: true });
+    expect(preview.maxOverall).toBe(2);
+    expect(preview.outOfRange.count).toBe(1);
+  });
 });

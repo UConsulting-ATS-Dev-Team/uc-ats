@@ -26,9 +26,10 @@ const rubricRoute = (label, handler) => async (req, res) => {
 router.get('/', rubricRoute('GET /api/document-rubrics',
   () => getRubrics()));
 
-// Validates a draft and counts this cycle's scores it would leave out of range. Writes nothing.
+// Validates a draft (or, with { reset: true }, the default) and counts this
+// cycle's scores it would leave out of range. Writes nothing.
 router.post('/:type/preview', requireAdmin, rubricRoute('POST /api/document-rubrics/:type/preview',
-  (req) => previewRubric({ type: req.params.type, rubric: req.body?.rubric })));
+  (req) => previewRubric({ type: req.params.type, rubric: req.body?.rubric, reset: req.body?.reset === true })));
 
 router.put('/:type', requireAdmin, rubricRoute('PUT /api/document-rubrics/:type',
   (req) => saveRubric({ type: req.params.type, rubric: req.body?.rubric, user: req.user })));

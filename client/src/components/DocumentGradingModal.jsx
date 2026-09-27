@@ -184,6 +184,11 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
     };
   }, [isResizing]);
 
+  // Pick up a rubric an admin edited since the page loaded.
+  useEffect(() => {
+    if (open) reloadRubrics();
+  }, [open, reloadRubrics]);
+
   // Load existing score when modal opens
   useEffect(() => {
     if (open && application?.candidateId) {
@@ -300,6 +305,8 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
     } catch (err) {
       console.error('Error saving score:', err);
       setError(err?.message?.replace(/ \(Status: \d+\)$/, '') || 'Failed to save score. Please try again.');
+      // The range changed under this grader: show them the one the server holds.
+      if (err?.code === 'SCORE_OUT_OF_RANGE') reloadRubrics();
     } finally {
       setSaving(false);
     }

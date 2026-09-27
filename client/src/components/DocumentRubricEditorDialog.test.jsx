@@ -84,6 +84,57 @@ describe('DocumentRubricEditorDialog', () => {
     await waitFor(() => expect(apiClient.put).toHaveBeenCalled());
   });
 
+  it('keeps another tab\'s unsaved edits when one tab saves', async () => {
+    apiClient.post.mockResolvedValue({ outOfRange: { count: 0 } });
+    apiClient.put.mockResolvedValue(response(12));
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Video' }));
+    fireEvent.change(await screen.findByDisplayValue('Video'), { target: { value: 'On camera' } });
+    fireEvent.click(screen.getByRole('tab', { name: /^Resume/ }));
+    fireEvent.change(contentMax(), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/Resume rubric saved/);
+
+    expect(screen.getByRole('tab', { name: 'Video •' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Video •' }));
+    expect(screen.getByDisplayValue('On camera')).toBeInTheDocument();
+  });
+
+  it('drops a pending warning when the admin switches tabs, so it cannot confirm another rubric', async () => {
+    apiClient.post.mockResolvedValue({ outOfRange: { count: 2, cycleName: 'Fall 2026' } });
+    apiClient.put.mockResolvedValue(response(8));
+    await openEditor();
+
+    fireEvent.change(contentMax(), { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/fall outside/);
+
+    // Switching tabs drops the warning rather than carrying it to the new tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Video' }));
+    expect(screen.queryByText(/fall outside/)).not.toBeInTheDocument();
+    expect(apiClient.put).not.toHaveBeenCalled();
+  });
+
+  it('warns before a reset narrows a range, and resets only on "Reset anyway"', async () => {
+    const customized = response(20);
+    customized.rubrics.resume.customized = true;
+    apiClient.get.mockResolvedValue(customized);
+    apiClient.post.mockResolvedValue({ outOfRange: { count: 3, cycleName: 'Fall 2026' } });
+    apiClient.delete.mockResolvedValue(response());
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    const warning = await screen.findByText(/fall outside/);
+    expect(apiClient.post).toHaveBeenCalledWith('/document-rubrics/resume/preview', { reset: true });
+    expect(warning).toHaveTextContent("3 resume scores in Fall 2026 fall outside the default's range");
+    expect(apiClient.delete).not.toHaveBeenCalled();
+
+    fireEvent.click(within(warning.closest('[role="alert"]')).getByRole('button', { name: 'Reset anyway' }));
+    await waitFor(() => expect(apiClient.delete).toHaveBeenCalledWith('/document-rubrics/resume'));
+    expect(await screen.findByText(/back to the default/)).toBeInTheDocument();
+  });
+
   it('keeps Save off until something changes', async () => {
     await openEditor();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -117,5 +168,7 @@ describe('draftProblem', () => {
     expect(draftProblem(draft({ max: '2.5' }))).toMatch(/whole numbers/);
     expect(draftProblem(draft({ title: ' ' }))).toMatch(/needs a title/);
     expect(draftProblem(draft({ criteria: [{ label: '1', text: '' }] }))).toMatch(/both a score and a description/);
+    expect(draftProblem(draft({ criteria: [{ label: 'x'.repeat(21), text: 'ok' }] }))).toMatch(/over 20 characters/);
+    expect(draftProblem(draft({ criteria: [{ label: '1', text: 'x'.repeat(1001) }] }))).toMatch(/over 1000 characters/);
   });
 });

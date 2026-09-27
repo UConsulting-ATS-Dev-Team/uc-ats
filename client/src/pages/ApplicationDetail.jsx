@@ -17,12 +17,26 @@ import '../styles/ApplicationDetail.css';
 /** The score detail modal labels a score by document name; the rubrics are keyed by type. */
 const DOCUMENT_LABEL_TO_TYPE = { Resume: 'resume', 'Cover Letter': 'coverLetter', Video: 'video' };
 
+/**
+ * The score columns each type uses, for when the rubrics could not be loaded:
+ * the scores are still worth showing, just without titles or ranges.
+ */
+const FALLBACK_CATEGORIES = {
+  resume: ['scoreOne', 'scoreTwo'],
+  coverLetter: ['scoreOne', 'scoreTwo', 'scoreThree'],
+  video: ['scoreOne']
+};
+
+/** '' means "not sent"; anything else is sent as a number, 0 included. */
+const numberOrUndefined = (value, parse) => (value === '' || value === null || value === undefined ? undefined : parse(value));
+
 // readOnly renders a past cycle's record inside the returning-applicant modal:
 // everything visible, nothing writable, and no nested past-applications list.
 export default function ApplicationDetail({ applicationId: propApplicationId, embedded = false, readOnly = false }) {
   const { data: rubricData } = useDocumentRubrics();
   const maxFor = (type) => formatScore(documentMax(rubricData, type));
-  const rubricCategoriesFor = (type) => rubricData?.rubrics?.[type]?.rubric?.categories || [];
+  const rubricCategoriesFor = (type) => rubricData?.rubrics?.[type]?.rubric?.categories
+    || (FALLBACK_CATEGORIES[type] || []).map((id, index) => ({ id, title: `Category ${index + 1}`, min: null, max: null }));
   const participationMax = rubricData?.participationMax ?? 3;
   const { id: paramId } = useParams();
   const id = propApplicationId || paramId;
@@ -317,11 +331,11 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
       const endpoint = `${endpointMap[editingScoreType]}/${editingScore.id}`;
       
       const updateData = {
-        overallScore: editScoreForm.overallScore ? parseFloat(editScoreForm.overallScore) : undefined,
-        scoreOne: editScoreForm.scoreOne ? parseInt(editScoreForm.scoreOne) : undefined,
-        scoreTwo: editScoreForm.scoreTwo ? parseInt(editScoreForm.scoreTwo) : undefined,
-        scoreThree: editScoreForm.scoreThree ? parseInt(editScoreForm.scoreThree) : undefined,
-        adminScore: editScoreForm.adminScore ? parseFloat(editScoreForm.adminScore) : undefined,
+        overallScore: numberOrUndefined(editScoreForm.overallScore, parseFloat),
+        scoreOne: numberOrUndefined(editScoreForm.scoreOne, (v) => parseInt(v, 10)),
+        scoreTwo: numberOrUndefined(editScoreForm.scoreTwo, (v) => parseInt(v, 10)),
+        scoreThree: numberOrUndefined(editScoreForm.scoreThree, (v) => parseInt(v, 10)),
+        adminScore: numberOrUndefined(editScoreForm.adminScore, parseFloat),
         adminNotes: editScoreForm.adminNotes || undefined
       };
       
@@ -2290,7 +2304,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 {rubricCategoriesFor(DOCUMENT_LABEL_TO_TYPE[selectedScore.documentType]).map((category) => (
                   <div key={category.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
                     <span>{category.title}</span>
-                    <span style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>{selectedScore[category.id] ?? 'N/A'}/{category.max}</span>
+                    <span style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>{selectedScore[category.id] ?? 'N/A'}{category.max !== null ? `/${category.max}` : ''}</span>
                   </div>
                 ))}
               </div>
@@ -2544,7 +2558,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             {rubricCategoriesFor(editingScoreType).map((category) => (
               <div key={category.id} style={{ marginBottom: '12px' }}>
                 <label htmlFor={`edit-${category.id}`} style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
-                  {category.title} ({category.min}–{category.max})
+                  {category.title}{category.max !== null ? ` (${category.min}–${category.max})` : ''}
                 </label>
                 <input
                   id={`edit-${category.id}`}

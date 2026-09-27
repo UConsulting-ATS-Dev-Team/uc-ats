@@ -425,9 +425,14 @@ async function countOutOfRange({ client, type, rubric }) {
   return { count, cycleName: cycle.name ?? null };
 }
 
-/** Validates a draft and reports what saving it would leave out of range. Writes nothing. */
-export async function previewRubric({ client = prisma, type, rubric: input }) {
-  const rubric = normalizeRubric(type, input);
+/**
+ * Validates a draft and reports what saving it would leave out of range.
+ * With `reset`, previews going back to the shipped default instead, which can
+ * narrow a range just as an edit can. Writes nothing.
+ */
+export async function previewRubric({ client = prisma, type, rubric: input, reset = false }) {
+  assertDocumentType(type);
+  const rubric = reset ? DEFAULT_RUBRICS[type] : normalizeRubric(type, input);
   const outOfRange = await countOutOfRange({ client, type, rubric });
   return { ...describe(type, rubric, true, null), outOfRange };
 }
