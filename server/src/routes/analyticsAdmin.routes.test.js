@@ -86,9 +86,17 @@ describe('analytics admin routes', () => {
     await get('/security?kind=LOGIN_FAILED&role=ANON&ip=10.0.0.1&page=2&execPage=1');
     await get("/security?kind=DROP TABLE&role=root&ip=1.1.1.1';--&page=-4&execPage=x");
     expect(security.mock.calls).toEqual([
-      [30, { kind: 'LOGIN_FAILED', role: 'ANON', ip: '10.0.0.1', page: 2, execPage: 1 }],
-      [30, { kind: null, role: null, ip: null, page: 0, execPage: 0 }],
+      [30, { kind: 'LOGIN_FAILED', role: 'ANON', ip: '10.0.0.1', page: 2, execPage: 1, asOf: null }],
+      [30, { kind: null, role: null, ip: null, page: 0, execPage: 0, asOf: null }],
     ]);
+  });
+
+  it('keeps paging inside the snapshot the first page was read at, never in the future', async () => {
+    security.mockResolvedValue({});
+    await get('/security?page=1&asOf=2026-09-27T10:00:00.000Z');
+    await get('/security?page=1&asOf=2999-01-01T00:00:00.000Z');
+    expect(security.mock.calls[0][1].asOf).toEqual(new Date('2026-09-27T10:00:00.000Z'));
+    expect(security.mock.calls[1][1].asOf).toBeNull();
   });
 
   it('runs a rollup on demand', async () => {

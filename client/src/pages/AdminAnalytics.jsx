@@ -43,7 +43,15 @@ export const TABS = [
 
 // The Security tab's access-log filters, as URL parameters (sec_ prefixed so
 // they never collide with the page's own `role`).
-const SECURITY_PARAMS = { kind: 'sec_kind', role: 'sec_role', ip: 'sec_ip', page: 'sec_page', execPage: 'sec_exec_page' };
+const SECURITY_PARAMS = {
+  kind: 'sec_kind',
+  role: 'sec_role',
+  ip: 'sec_ip',
+  page: 'sec_page',
+  execPage: 'sec_exec_page',
+  // When the first page was read; later pages stay inside that snapshot.
+  asOf: 'sec_as_of',
+};
 
 export function describeRollup(days) {
   if (days.length <= 2) return days.map(fmtDay).join(' and ');
@@ -122,6 +130,8 @@ function AnalyticsDashboard() {
       if (value === null || value === undefined || value === '' || isFirstPage) next.delete(param);
       else next.set(param, String(value));
     }
+    // Back on the first page of both lists means a fresh read, not a snapshot.
+    if (!next.get(SECURITY_PARAMS.page) && !next.get(SECURITY_PARAMS.execPage)) next.delete(SECURITY_PARAMS.asOf);
     setParams(next, { replace: true });
   };
 

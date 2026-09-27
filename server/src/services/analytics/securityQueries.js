@@ -23,7 +23,12 @@ export function readSecurityFilters(query = {}) {
   const role = ROLES.includes(query.role) ? query.role : null;
   const ip = typeof query.ip === 'string' && /^[0-9a-fA-F:.]{1,45}$/.test(query.ip) ? query.ip : null;
   const pageOf = (v) => Math.max(0, Math.min(1000, Number.parseInt(v, 10) || 0));
-  return { kind, role, ip, page: pageOf(query.page), execPage: pageOf(query.execPage) };
+  // The moment the first page was read. Later pages stay inside that snapshot,
+  // so an event logged while someone pages through cannot shift rows under
+  // them and make one repeat and another go unseen.
+  const asOfMs = Date.parse(query.asOf);
+  const asOf = Number.isFinite(asOfMs) && asOfMs <= Date.now() ? new Date(asOfMs) : null;
+  return { kind, role, ip, page: pageOf(query.page), execPage: pageOf(query.execPage), asOf };
 }
 
 const EXEC_ACTIONS = ['UNLOCK_OK', 'UNLOCK_FAILED', 'UNLOCK_RATE_LIMITED', 'UNLOCK_RECORD', 'PASSWORD_SET'];
@@ -40,10 +45,11 @@ export async function security(days, filters = {}, options = {}) {
   const ctx = await rangeContext(days, options);
   const from = ts(dayBounds(ctx.startDay).from);
   const { kind, role, ip, page = 0, execPage = 0 } = filters;
-  const execWhere = { createdAt: { gte: dayBounds(ctx.startDay).from }, action: { in: EXEC_ACTIONS } };
+  const asOf = filters.asOf || options.now || new Date();
+  const execWhere = { createdAt: { gte: dayBounds(ctx.startDay).from, lte: asOf }, action: { in: EXEC_ACTIONS } };
 
   const deniedWhere = {
-    at: { gte: dayBounds(ctx.startDay).from },
+    at: { gte: dayBounds(ctx.startDay).from, lte: asOf },
     kind: kind ? kind : { in: DENIED_KINDS },
     ...(role ? { role } : {}),
     ...(ip ? { ip } : {}),
@@ -64,7 +70,8 @@ export async function security(days, filters = {}, options = {}) {
       LIMIT 100`,
     client.securityEvent.findMany({
       where: deniedWhere,
-      orderBy: { at: 'desc' },
+      // id breaks ties, so rows logged in the same millisecond keep one order across pages.
+      orderBy: [{ at: 'desc' }, { id: 'desc' }],
       skip: page * PAGE_SIZE,
       take: PAGE_SIZE,
       select: { id: true, at: true, kind: true, severity: true, userId: true, role: true, ip: true, path: true, method: true, status: true, detail: true },
@@ -80,7 +87,7 @@ export async function security(days, filters = {}, options = {}) {
     // Paged, never capped: this list promises every use of the unlock.
     client.execAccessLog.findMany({
       where: execWhere,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       skip: execPage * PAGE_SIZE,
       take: PAGE_SIZE,
       select: { id: true, action: true, userId: true, ipAddress: true, candidateId: true, createdAt: true },
@@ -128,6 +135,8 @@ export async function security(days, filters = {}, options = {}) {
     today: ctx.today,
     dataThrough: ctx.dataThrough,
     filters: { kind, role, ip, page, execPage },
+    // Sent back with every page request, so paging stays inside this snapshot.
+    asOf: asOf.toISOString(),
     kinds: SECURITY_KINDS,
     posture,
     summary: Object.fromEntries(byKind.map((k) => [k.kind, { count: k.count, warn: k.warn, critical: k.critical }])),

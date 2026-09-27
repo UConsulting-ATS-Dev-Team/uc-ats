@@ -186,7 +186,7 @@ export default function SecurityTab({ data, onFilter }) {
           page={Math.min(data.execAccess.page, Math.max(0, Math.ceil(data.execAccess.total / data.execAccess.pageSize) - 1))}
           rowsPerPage={data.execAccess.pageSize}
           rowsPerPageOptions={[data.execAccess.pageSize]}
-          onPageChange={(e, execPage) => onFilter({ execPage })}
+          onPageChange={(e, execPage) => onFilter({ execPage, asOf: data.asOf })}
         />
       )}
 
@@ -277,7 +277,7 @@ export default function SecurityTab({ data, onFilter }) {
             page={data.denied.page}
             rowsPerPage={data.denied.pageSize}
             rowsPerPageOptions={[data.denied.pageSize]}
-            onPageChange={(e, page) => onFilter({ page })}
+            onPageChange={(e, page) => onFilter({ page, asOf: data.asOf })}
           />
         </Paper>
       ) : (

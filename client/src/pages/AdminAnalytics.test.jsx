@@ -121,6 +121,14 @@ describe('AdminAnalytics', () => {
     );
   });
 
+  it('sends the snapshot time with a later page of the access log', async () => {
+    apiClient.get.mockImplementation(() => new Promise(() => {}));
+    renderAt('/admin/analytics?tab=security&sec_page=1&sec_as_of=2026-09-27T10%3A00%3A00.000Z');
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith('/admin/analytics/security?days=30&page=1&asOf=2026-09-27T10%3A00%3A00.000Z')
+    );
+  });
+
   it('describes a catch-up rollup by its span', () => {
     expect(describeRollup(['2026-09-26', '2026-09-25'])).toBe('Sep 26 and Sep 25');
     expect(describeRollup(['2026-09-26', '2026-09-25', '2026-09-24'])).toBe('3 days (Sep 24 to Sep 26)');
