@@ -266,20 +266,15 @@ export default function AdminMeetingSlots() {
 
   const stats = useMemo(() => {
     const totalSlots = cycleSlots.length;
-    const totalSignups = cycleSlots.reduce((sum, s) => sum + (s.signups || []).length, 0);
+    const allSignups = cycleSlots.flatMap((s) => s.signups || []);
+    const totalSignups = allSignups.length;
+    const attended = allSignups.filter((s) => s.attended).length;
     const totalCapacity = cycleSlots.reduce((sum, s) => sum + (s.capacity || 0), 0);
     const upcoming = cycleSlots.filter((s) => getSlotStatus(s, now) === 'upcoming').length;
-    // The rate is over slots whose attendance is finished: an upcoming signup
-    // has not had the chance to attend, and an unmarked one is not a no-show yet.
-    const doneSignups = cycleSlots
-      .filter((s) => attendanceState(s, now) === 'done')
-      .flatMap((s) => s.signups || []);
-    const attended = doneSignups.filter((s) => s.attended).length;
     const overdue = cycleSlots.filter((s) => isOutstanding(s, now));
     return {
       totalSlots, totalSignups, totalCapacity, upcoming, attended,
-      finishedSignups: doneSignups.length,
-      attendanceRate: doneSignups.length > 0 ? Math.round((attended / doneSignups.length) * 100) : null,
+      attendanceRate: totalSignups > 0 ? Math.round((attended / totalSignups) * 100) : 0,
       overdueSlots: overdue.length,
       overdueSignups: overdue.reduce((sum, s) => sum + s.signups.filter((su) => !su.attended).length, 0)
     };
@@ -700,8 +695,8 @@ export default function AdminMeetingSlots() {
             <StatCard
               icon={<PercentIcon />}
               label="Attendance rate"
-              value={stats.attendanceRate === null ? '—' : `${stats.attendanceRate}%`}
-              sub={`${stats.attended} of ${stats.finishedSignups} in finished slots`}
+              value={`${stats.attendanceRate}%`}
+              sub={`${stats.attended} of ${stats.totalSignups} signups attended`}
             />
           </Grid>
           <Grid item xs={6} md={3}>
