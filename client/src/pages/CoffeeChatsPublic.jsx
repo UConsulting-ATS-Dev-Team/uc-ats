@@ -516,7 +516,7 @@ export default function CoffeeChatsPublic() {
           <Grid size={12}>
             <Box sx={{ maxWidth: 720, mx: 'auto' }}>
               <GtkucBookedMeetingCard
-                memberName={myBooking.slot.member?.fullName || 'UC Consulting Member'}
+                memberName={myBooking.slot.member?.fullName || 'UConsulting Member'}
                 profile={allSlots.find((s) => s.id === myBooking.slotId)?.memberProfile}
                 startTime={myBooking.slot.startTime}
                 location={myBooking.slot.location}
@@ -557,7 +557,7 @@ export default function CoffeeChatsPublic() {
             {picking && (
               <Alert severity="info" sx={{ mb: 3 }}>
                 Your current meeting is {formatSlotDateTime(myBooking.slot.startTime)} with{' '}
-                {myBooking.slot.member?.fullName || 'a UC Consulting member'}. It stays booked until you confirm a new time.
+                {myBooking.slot.member?.fullName || 'a UConsulting member'}. It stays booked until you confirm a new time.
               </Alert>
             )}
 

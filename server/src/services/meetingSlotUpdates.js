@@ -177,7 +177,7 @@ export async function updateMeetingSlot({ slotId, patch = {}, actorId = null, al
 
   const next = { location: updated.location, startTime: updated.startTime, endTime: updated.endTime };
   const previous = { location: existing.location, startTime: existing.startTime, endTime: existing.endTime };
-  const hostName = updated.member?.fullName || 'UC Consulting Member';
+  const hostName = updated.member?.fullName || 'UConsulting Member';
 
   const candidateSends = updated.signups.map((signup) =>
     sendAndLogMeetingCommunication(

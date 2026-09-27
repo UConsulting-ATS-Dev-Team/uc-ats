@@ -94,7 +94,7 @@ export async function findSlotsDueForAttendanceReminder(now = new Date(), slotId
 /** Send one slot's reminder. Never throws. */
 export async function sendAttendanceReminder(slot) {
   const host = slot.member;
-  const hostName = host.fullName || 'UC Consulting Member';
+  const hostName = host.fullName || 'UConsulting Member';
 
   return sendAndLogMeetingCommunication(
     async () => {

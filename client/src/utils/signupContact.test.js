@@ -13,7 +13,7 @@ describe('draftSignupMessage', () => {
       ...base,
       contacts: [{ fullName: 'Jordan Rivera' }, { fullName: 'Sam Patel' }, { fullName: 'Lee Kim' }],
     });
-    expect(text).toMatch(/^Hi Jordan, Sam and Lee! This is Avery from UC Consulting\./);
+    expect(text).toMatch(/^Hi Jordan, Sam and Lee! This is Avery from UConsulting\./);
   });
 
   it('gives the time in Pacific, where the meetings happen', () => {

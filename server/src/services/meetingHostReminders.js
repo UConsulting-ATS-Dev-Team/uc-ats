@@ -80,7 +80,7 @@ async function attendeesFor(slot) {
 /** Send one slot's reminder. Never throws. */
 export async function sendHostReminder(slot) {
   const host = slot.member;
-  const hostName = host.fullName || 'UC Consulting Member';
+  const hostName = host.fullName || 'UConsulting Member';
 
   return sendAndLogMeetingCommunication(
     async () => {

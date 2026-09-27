@@ -1298,7 +1298,7 @@ router.delete('/meeting-slots/:id', requireAuth, async (req, res) => {
     
     // Send cancellation emails to all signups before deleting
     if (existingSlot.signups.length > 0) {
-      const memberName = existingSlot.member?.fullName || 'UC Consulting Member';
+      const memberName = existingSlot.member?.fullName || 'UConsulting Member';
       
       // Send cancellation emails to all signups (and log each communication)
       const emailPromises = existingSlot.signups.map((signup) =>
@@ -1386,7 +1386,7 @@ router.delete('/meeting-signups/:id', requireAuth, async (req, res) => {
 
     // Send cancellation email to the signup (and log the communication).
     // Logged before deletion; the log survives with signupId set null (slot remains).
-    const memberName = signup.slot.member?.fullName || 'UC Consulting Member';
+    const memberName = signup.slot.member?.fullName || 'UConsulting Member';
 
     await sendAndLogMeetingCommunication(
       () => sendMeetingCancellationEmail(

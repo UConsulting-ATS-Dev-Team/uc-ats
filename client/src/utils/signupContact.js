@@ -26,9 +26,9 @@ const formatWhen = (startTime) =>
  */
 export function draftSignupMessage({ hostName, contacts, startTime, location }) {
   const names = joinNames(contacts.map((c) => firstName(c.fullName)).filter(Boolean));
-  const host = firstName(hostName) || 'your UC Consulting host';
+  const host = firstName(hostName) || 'your UConsulting host';
   return [
-    `Hi ${names || 'everyone'}! This is ${host} from UC Consulting. Looking forward to our Get to Know UC chat on ${formatWhen(startTime)}.`,
+    `Hi ${names || 'everyone'}! This is ${host} from UConsulting. Looking forward to our Get to Know UC chat on ${formatWhen(startTime)}.`,
     '',
     `Where to meet: ${location}, [exact spot, e.g. the tables by the second-floor windows]`,
     `How to find me: [what you'll be wearing / where you'll be sitting]`,
