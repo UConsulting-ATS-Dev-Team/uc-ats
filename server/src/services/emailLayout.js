@@ -316,12 +316,14 @@ export function htmlToPlainText(html) {
  * What a builder calls: resolves the theme and this email's style, then
  * renders. `key` is the template's copy key, which is also its style key.
  */
-export async function composeEmail(key, { subject, values = {}, parts, brand }) {
+export async function composeEmail(key, { subject, values = {}, parts, brand, style: ownStyle = null }) {
   const draft = currentEmailDraft();
   // Independent reads, so they go together: every email renders on a request.
+  // `ownStyle` is for emails that keep their style on their own row (the
+  // admin-written automatic emails) rather than in EmailTemplateStyle.
   const [theme, style] = await Promise.all([
     draft?.theme ?? resolveEmailTheme(),
-    draft?.styles?.[key] ?? resolveEmailStyle(key),
+    ownStyle ?? draft?.styles?.[key] ?? resolveEmailStyle(key),
   ]);
 
   // A signature replaces the email's own sign-off. An email with no sign-off

@@ -2221,6 +2221,62 @@ model EmailSignature {
   @@map("email_signatures")
 }
 
+/// An automatic email an admin wrote, with the trigger that sends it
+/// (services/automaticEmails). Starts disabled; enabling it records
+/// `enabledAt`, and nothing that happened before that moment triggers it.
+model AutomaticEmail {
+  id            String    @id @default(uuid())
+  name          String
+  enabled       Boolean   @default(false)
+  enabledAt     DateTime?
+  /// APPLICATION_STATUS | RECORD_CREATED | EVENT_TIME | INTERVIEW_TIME | CYCLE_DATE
+  trigger       String
+  /// Shape depends on `trigger`; validated by automaticEmailRules.js.
+  triggerConfig Json      @default("{}")
+  subject       String
+  /// Markdown with {{merge fields}}, like the built-in emails' copy.
+  body          String
+  /// Marketing mail honours unsubscribes and carries the unsubscribe link.
+  marketing     Boolean   @default(false)
+  format        String    @default("DESIGNED")
+  /// A tone name or hex, like EmailTemplateStyle.banner.
+  banner        String    @default("brand")
+  /// Null: the default signature, if any. 'OWN': none. Else an EmailSignature id.
+  signatureId   String?
+  createdById   String?
+  updatedById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sends         AutomaticEmailSend[]
+
+  @@map("automatic_emails")
+}
+
+/// One per person per occurrence an automatic email fired for. The unique
+/// (automaticEmailId, subjectKey) is what makes a double send impossible: a
+/// run claims the row before sending, so an overlapping run cannot.
+model AutomaticEmailSend {
+  id               String         @id @default(uuid())
+  automaticEmailId String
+  /// What this send is about, e.g. "application:<id>" or
+  /// "event:<rsvpId>:<eventStart>" - a rescheduled event is a new occurrence.
+  subjectKey       String
+  email            String
+  /// SENDING | SENT | FAILED | SUPPRESSED | SKIPPED
+  status           String
+  /// Why a row is SKIPPED or SUPPRESSED, or the error of a FAILED one.
+  reason           String?
+  attempts         Int            @default(0)
+  sentAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  automaticEmail   AutomaticEmail @relation(fields: [automaticEmailId], references: [id], onDelete: Cascade)
+
+  @@unique([automaticEmailId, subjectKey])
+  @@index([automaticEmailId, status])
+  @@map("automatic_email_sends")
+}
+
 /// A person from the retired recruiting-interest mailing list whom the ATS had
 /// no other record of when they were imported. They exist so Master
 /// Communications can email them, through the "Mailing list" audience.

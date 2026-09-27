@@ -14,6 +14,7 @@ export const COMMUNICATION_CATEGORIES = [
   'ACCOUNTABILITY_REMINDER', // members under their points target, sent by an admin
   'MASTER_COMMUNICATION', // composed by hand in Master Communications
   'DECISION_BATCH',       // queued by Process All Decisions, sent by an admin
+  'CUSTOM_AUTOMATIC',     // an automatic email an admin wrote (Automatic Emails -> Custom)
   'TEST',                 // "send this to me first"
   'OTHER',
 ];

@@ -30,6 +30,7 @@ import EmailStyleEditor from '../components/EmailStyleEditor';
 import EmailThemeEditor from '../components/EmailThemeEditor';
 import EmailSignaturesEditor from '../components/EmailSignaturesEditor';
 import SendTestButton from '../components/SendTestButton';
+import CustomEmailsPanel from '../components/automaticEmails/CustomEmailsPanel';
 
 const AUDIENCE_COLORS = {
   Candidate: 'primary',
@@ -167,7 +168,14 @@ function AdminEmailTemplatesContent() {
         <Tab value="emails" label="Emails" />
         <Tab value="theme" label="Theme" />
         <Tab value="signatures" label="Signatures" />
+        <Tab value="custom" label="Custom" />
       </Tabs>
+
+      {section === 'custom' && (
+        <Paper sx={{ p: 3 }}>
+          <CustomEmailsPanel />
+        </Paper>
+      )}
 
       {section === 'signatures' && (
         <Paper sx={{ p: 3 }}>
