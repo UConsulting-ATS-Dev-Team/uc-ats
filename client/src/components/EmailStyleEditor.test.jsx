@@ -85,6 +85,9 @@ describe('EmailStyleEditor', () => {
 
     expect(screen.getByRole('button', { name: /save style/i })).toBeDisabled();
     expect(screen.getByText('Like #0C74C1')).toBeInTheDocument();
+    // Nor send a test: that would quietly be the saved style, not this one.
+    expect(screen.getByRole('button', { name: /send test to me/i })).toBeDisabled();
+    expect(screen.getByText(/fix the header colour to send a test/i)).toBeInTheDocument();
   });
 
   it('picks a signature by name, naming the default', async () => {

@@ -319,6 +319,7 @@ export default function EmailStyleEditor({ templateKey, previewKey, onSaved }) {
           key={previewKey}
           previewKey={previewKey}
           draft={dirty && customValid ? { style: { ...draft, signatureId: liveSignatureId(draft.signatureId, signatures) } } : null}
+          blockedReason={customValid ? null : 'Fix the header colour to send a test of these changes.'}
         />
       </Stack>
     </Box>
