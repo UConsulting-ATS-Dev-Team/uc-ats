@@ -522,7 +522,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
   }
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    <AccessControl allowedRoles={['ADMIN']}>
       <div className="application-detail">
       {/* Header with back button and status */}
       <div className="detail-header">

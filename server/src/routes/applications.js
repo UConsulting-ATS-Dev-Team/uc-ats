@@ -136,7 +136,7 @@ router.use(requireAuth);
 
 // Staff-only routes that named nothing beyond requireAuth, so any signed-in
 // applicant could call them about anyone's application. Gated here, ahead of the
-// routes themselves. GET /:id stays open to the application's owner.
+// routes themselves. GET /:id is admin-only, apart from the application's owner.
 router.get('/', requireAdminOrMember);
 router.get('/candidate/:candidateId/latest', requireAdminOrMember);
 router.get('/:id/events', requireAdminOrMember);
@@ -869,7 +869,10 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    if (req.user.role !== 'ADMIN' && req.user.role !== 'MEMBER') {
+    // Admins, and the applicant themselves. Members review applications from
+    // /candidates (GET /api/member/all-applications) and have no detail page,
+    // so a member reads only an application of their own, like anyone else.
+    if (req.user.role !== 'ADMIN') {
       const ownsByEmail = req.user.email && (
         application.email === req.user.email ||
         application.candidate?.email === req.user.email
@@ -924,10 +927,9 @@ router.get('/:id', async (req, res) => {
 
     // Comments are staff notes about the applicant. The owner still gets their
     // application, just without what reviewers wrote about it.
-    const viewerIsStaff = req.user.role === 'ADMIN' || req.user.role === 'MEMBER';
     res.json({
       ...application,
-      comments: viewerIsStaff ? application.comments : [],
+      comments: req.user.role === 'ADMIN' ? application.comments : [],
       pastApplications
     });
   } catch (error) {

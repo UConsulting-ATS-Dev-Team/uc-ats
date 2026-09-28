@@ -224,7 +224,7 @@ const HomeRoute = () => {
   return <Navigate to="/login" replace />;
 };
 
-const AppRoutes = () => {
+export const AppRoutes = () => {
   const { user } = useAuth();
   const location = useLocation();
 
@@ -295,7 +295,9 @@ const AppRoutes = () => {
         path="/application/:id"
         element={
           <ProtectedRoute>
-            <ApplicationDetail />
+            <AdminOnly memberFallback="/candidates">
+              <ApplicationDetail />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />
