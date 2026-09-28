@@ -1754,7 +1754,7 @@ export default function Staging() {
   }
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    <AccessControl allowedRoles={['ADMIN']}>
       <Box className="staging-page" sx={{ p: 3 }}>
           <Box mb={3} display="flex" alignItems="center" justifyContent="space-between">
             <Box>

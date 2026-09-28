@@ -315,7 +315,9 @@ export const AppRoutes = () => {
         path="/review-teams"
         element={
           <ProtectedRoute>
-            <ReviewTeams />
+            <AdminOnly memberFallback="/candidates">
+              <ReviewTeams />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />
@@ -444,7 +446,9 @@ export const AppRoutes = () => {
         path="/staging"
         element={
           <ProtectedRoute>
-            <Staging />
+            <AdminOnly memberFallback="/candidates">
+              <Staging />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />

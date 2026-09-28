@@ -629,7 +629,7 @@ export default function ReviewTeams() {
   }
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    <AccessControl allowedRoles={['ADMIN']}>
       <Box>
       {/* Header */}
       <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" spacing={{ xs: 2, md: 0 }} mb={3}>

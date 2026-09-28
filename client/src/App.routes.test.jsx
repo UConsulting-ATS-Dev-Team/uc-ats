@@ -1,9 +1,9 @@
-// /application-list and /application/:id through the real route table: ProtectedRoute, then the
+// The admin application pages through the real route table: ProtectedRoute, then the
 // admin-only guard. Only the pages on either side of the redirect and the
 // staff layout are stubbed.
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 let auth;
@@ -15,6 +15,8 @@ vi.mock('./analytics', () => ({ trackRouteChange: () => {} }));
 vi.mock('./components/Layout', () => ({ default: ({ children }) => <>{children}</> }));
 vi.mock('./pages/ApplicationList', () => ({ default: () => <div>admin application queue</div> }));
 vi.mock('./pages/ApplicationDetail', () => ({ default: () => <div>application detail</div> }));
+vi.mock('./pages/Staging', () => ({ default: () => <div>staging</div> }));
+vi.mock('./pages/ReviewTeams', () => ({ default: () => <div>review teams</div> }));
 vi.mock('./pages/Candidates', () => ({ default: () => <div>member applications</div> }));
 vi.mock('./pages/Dashboard', () => ({ default: () => <div>admin dashboard</div> }));
 vi.mock('./pages/MemberDashboard', () => ({ default: () => <div>member dashboard</div> }));
@@ -56,6 +58,19 @@ describe('admin-only application pages', () => {
     renderAt('/application/app-1', { id: 2, role: 'MEMBER' });
     expect(screen.getByText('member applications')).toBeInTheDocument();
     expect(screen.queryByText('application detail')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['/staging', 'staging'],
+    ['/review-teams', 'review teams'],
+  ])('shows %s to an admin and sends a member away', (path, page) => {
+    renderAt(path, { id: 1, role: 'ADMIN' });
+    expect(screen.getByText(page)).toBeInTheDocument();
+    cleanup();
+
+    renderAt(path, { id: 2, role: 'MEMBER' });
+    expect(screen.getByText('member applications')).toBeInTheDocument();
+    expect(screen.queryByText(page)).not.toBeInTheDocument();
   });
 
   it('lands a member on their dashboard at /dashboard, where login now sends them', () => {
