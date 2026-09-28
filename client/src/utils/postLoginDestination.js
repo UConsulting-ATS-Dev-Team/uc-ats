@@ -15,5 +15,8 @@ export const postLoginDestination = (user) => {
   // every non-CLIENT account there, so a candidate signing in with a password
   // hit the same wall long before Google sign-in existed.
   if (user?.role === 'USER') return '/dashboard';
+  // Members too: /application-list is the admin queue, and their own view of
+  // applications is /candidates. The dashboard is their home, as at /.
+  if (user?.role === 'MEMBER') return '/dashboard';
   return '/application-list';
 };

@@ -11,6 +11,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import ClientLayout from './components/ClientLayout';
+import AdminOnly from './components/AdminOnly';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ExecUnlockProvider } from './context/ExecUnlockContext';
 import { DataProvider } from './context/DataContext';
@@ -283,7 +284,9 @@ const AppRoutes = () => {
         path="/application-list"
         element={
           <ProtectedRoute>
-            <ApplicationList />
+            <AdminOnly memberFallback="/candidates">
+              <ApplicationList />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />

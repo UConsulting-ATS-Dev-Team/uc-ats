@@ -85,7 +85,7 @@ const MemberSignUp = () => {
     });
 
     if (result.success) {
-      navigate('/application-list');
+      navigate('/dashboard');
     } else {
       setError(result.error);
     }
