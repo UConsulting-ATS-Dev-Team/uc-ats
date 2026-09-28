@@ -1272,9 +1272,15 @@ router.post('/cycles/:id/activate', async (req, res) => {
 router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
   const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
-  const formUrlError = formUrlProblem(formUrl);
-  if (formUrlError) return res.status(400).json({ error: formUrlError });
   try {
+    // Checked only when the link changes. The edit dialog sends every field on
+    // each save, so a cycle saved before this check with a shortlink would
+    // otherwise refuse an edit to its deadline until someone fixed the link.
+    if (formUrl) {
+      const existing = await prisma.recruitingCycle.findUnique({ where: { id }, select: { formUrl: true } });
+      const formUrlError = existing?.formUrl === formUrl ? null : formUrlProblem(formUrl);
+      if (formUrlError) return res.status(400).json({ error: formUrlError });
+    }
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
     
     const updateData = {

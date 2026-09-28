@@ -73,6 +73,18 @@ describe('cycle form links', () => {
     expect(prisma.recruitingCycle.update).not.toHaveBeenCalled();
   });
 
+  it('lets a cycle saved with an old shortlink be edited without replacing it', async () => {
+    prisma.recruitingCycle.findUnique.mockResolvedValue({ formUrl: 'https://forms.gle/AbC123xyz' });
+
+    const res = await request('/cycles/cycle-1', 'PATCH', {
+      name: 'Fall 2026 (renamed)',
+      formUrl: 'https://forms.gle/AbC123xyz'
+    });
+
+    expect(res.status).not.toBe(400);
+    expect(prisma.recruitingCycle.update).toHaveBeenCalled();
+  });
+
   it('accepts the editor link', async () => {
     const res = await request('/cycles', 'POST', {
       name: 'Fall 2026',
