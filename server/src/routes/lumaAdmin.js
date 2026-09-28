@@ -75,7 +75,7 @@ router.get('/events/:id/guests', async (req, res) => {
       })
     ]);
 
-    const counts = { total, held: held.length, unmatched: 0, flagged: 0, unknownStatus: 0 };
+    const counts = { total, held: held.length, flagged: 0, unknownStatus: 0 };
     for (const guest of held) {
       for (const hold of holdsFor(guest)) counts[hold] += 1;
     }

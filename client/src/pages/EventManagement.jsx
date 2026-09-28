@@ -939,24 +939,29 @@ export default function EventManagement() {
                     </Stack>
                   </TableCell>
                   <TableCell data-label="Attendance">
+                    {/* Luma door scans and the Google Form both land in the one
+                        attendance table, so the count stands with either. */}
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.attendanceForm ? (
+                      {event.attendanceForm || event.lumaUrl ? (
                         <>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Chip 
-                              label={`${stats.attendanceCount} Attended`} 
-                              size="small" 
-                              color="secondary" 
+                            <Chip
+                              label={`${stats.attendanceCount} Attended`}
+                              size="small"
+                              color="secondary"
                               variant="outlined"
                             />
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() => window.open(event.attendanceForm, '_blank')}
-                            >
-                              View Form
-                            </Button>
+                            {event.attendanceForm && (
+                              <Button
+                                size="small"
+                                variant="text"
+                                onClick={() => window.open(event.attendanceForm, '_blank')}
+                              >
+                                View Form
+                              </Button>
+                            )}
                           </Stack>
+                          {event.attendanceForm && (
                           <Button
                             size="small"
                             variant="outlined"
@@ -965,6 +970,7 @@ export default function EventManagement() {
                           >
                             {syncLoading[`${event.id}-attendance`] ? <CircularProgress size={16} /> : 'Sync'}
                           </Button>
+                          )}
                         </>
                       ) : (
                         <Typography variant="body2" color="text.secondary">No Form</Typography>
@@ -1032,7 +1038,7 @@ export default function EventManagement() {
                   </TableCell>
                   <TableCell data-label="Member Attendance">
                     <Stack spacing={1} alignItems="flex-start">
-                      {event.memberAttendanceForm ? (
+                      {event.memberAttendanceForm || event.lumaUrl ? (
                         <>
                           <Stack direction="row" spacing={1} alignItems="center">
                             <Chip
@@ -1041,14 +1047,17 @@ export default function EventManagement() {
                               color="success"
                               variant="outlined"
                             />
-                            <Button
-                              size="small"
-                              variant="text"
-                              onClick={() => window.open(event.memberAttendanceForm, '_blank')}
-                            >
-                              View Form
-                            </Button>
+                            {event.memberAttendanceForm && (
+                              <Button
+                                size="small"
+                                variant="text"
+                                onClick={() => window.open(event.memberAttendanceForm, '_blank')}
+                              >
+                                View Form
+                              </Button>
+                            )}
                           </Stack>
+                          {event.memberAttendanceForm && (
                           <Button
                             size="small"
                             variant="outlined"
@@ -1057,6 +1066,7 @@ export default function EventManagement() {
                           >
                             {syncLoading[`${event.id}-member-attendance`] ? <CircularProgress size={16} /> : 'Sync'}
                           </Button>
+                          )}
                         </>
                       ) : (
                         <Typography variant="body2" color="text.secondary">No Form</Typography>

@@ -40,11 +40,6 @@ import apiClient from '../utils/api';
 
 // What each hold means, in the words an admin needs to act on it.
 const HOLD_COPY = {
-  unmatched: {
-    label: 'Not matched',
-    color: 'error',
-    help: 'No candidate or member has this email address, and there was no usable UCLA UID to fall back on. Nothing has been recorded for this person.',
-  },
   flagged: {
     label: 'Check this match',
     color: 'warning',
@@ -136,7 +131,7 @@ export default function LumaGuestsPanel({ eventId, eventName, open, onClose, onC
           {counts && (
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Chip size="small" label={`${counts.total} guests synced`} variant="outlined" />
-              {['unmatched', 'flagged', 'unknownStatus'].map((hold) =>
+              {['flagged', 'unknownStatus'].map((hold) =>
                 counts[hold] > 0 ? (
                   <Tooltip key={hold} title={HOLD_COPY[hold].help}>
                     <Chip
@@ -161,7 +156,7 @@ export default function LumaGuestsPanel({ eventId, eventName, open, onClose, onC
             <Alert severity="success">
               {showAll
                 ? 'No Luma guests have been synced for this event yet.'
-                : 'Nothing is waiting. Every guest the sync has seen was matched to someone.'}
+                : 'Nothing needs a look. Guests without an ATS profile yet are linked automatically when they apply.'}
             </Alert>
           )}
 
@@ -259,14 +254,16 @@ function GuestRow({ guest, selected, onSelect, onLink, saving }) {
       <TableCell>
         <Stack spacing={0.5} alignItems="flex-start">
           {guest.holds.length === 0 && (
-            <Typography variant="caption" color="text.secondary">Settled</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {guest.matchStatus === 'UNMATCHED' ? 'Linked when they apply' : 'Settled'}
+            </Typography>
           )}
           {guest.holds.map((hold) => (
             <Tooltip key={hold} title={HOLD_COPY[hold].help}>
               <Chip size="small" color={HOLD_COPY[hold].color} label={HOLD_COPY[hold].label} />
             </Tooltip>
           ))}
-          {guest.matchNote && (
+          {guest.matchNote && guest.matchStatus !== 'UNMATCHED' && (
             <Typography variant="caption" color="text.secondary">{guest.matchNote}</Typography>
           )}
         </Stack>

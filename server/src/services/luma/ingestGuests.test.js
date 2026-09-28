@@ -12,7 +12,7 @@ import { readFileSync } from 'fs';
 
 vi.mock('../../prismaClient.js', () => ({ default: {} }));
 
-const { ingestGuests, extractUid, splitName, checkedInAtOf, parseGuest } = await import('./ingestGuests.js');
+const { ingestGuests, claimLumaGuestsForCandidate, extractUid, splitName, checkedInAtOf, parseGuest } = await import('./ingestGuests.js');
 const { fakeDb, snapshot, EVENT_ID } = await import('./__fixtures__/fakeDb.js');
 
 const fixture = JSON.parse(readFileSync(new URL('./__fixtures__/testEventGuests.json', import.meta.url), 'utf8'));
@@ -45,8 +45,17 @@ describe('field extraction', () => {
     expect(extractUid(answers)).toMatchObject({ uid: '405123456', problem: null });
   });
 
+  it('reads a question worded "UCLA Student ID" as the UID', () => {
+    // The Info Session asked it this way, and every answer used to read as "no UID".
+    expect(extractUid([{ label: 'UCLA Student ID (9 digits)', answer: '006855313' }]))
+      .toMatchObject({ uid: '006855313', problem: null });
+    expect(extractUid([{ label: 'Student id', answer: '405123456' }]).uid).toBe('405123456');
+    expect(extractUid([{ label: 'UCLA ID Number', answer: '006159201' }]).uid).toBe('006159201');
+  });
+
   it('does not take a label that merely contains the letters "uid"', () => {
     expect(extractUid([{ label: 'Guidance counselor', answer: '405123456' }]).uid).toBeNull();
+    expect(extractUid([{ label: 'Paid member?', answer: '405123456' }]).uid).toBeNull();
   });
 
   it('rejects a UID that is not exactly 9 digits and says why', () => {
@@ -430,5 +439,85 @@ describe('ingestGuests', () => {
 
   it('throws for an event the ATS does not have', async () => {
     await expect(ingestGuests('nope', fixture.entries, { db })).rejects.toThrow('Event not found');
+  });
+});
+
+// --- linking at the application ---------------------------------------------
+
+describe('matching on the other spellings of an address', () => {
+  it('treats x@g.ucla.edu and x@ucla.edu as the same person', async () => {
+    const guest = withAnswers(rsvpOnly, []);
+    guest.user_email = 'bruin@g.ucla.edu';
+    const known = await db.candidate.create({
+      data: { studentId: '405000001', email: 'bruin@ucla.edu', firstName: 'B', lastName: 'R' }
+    });
+
+    const summary = await ingestGuests(EVENT_ID, [guest], { db });
+
+    expect(summary.matchStatus.MATCHED_CANDIDATE).toBe(1);
+    expect(db.eventRsvp.rows).toEqual([expect.objectContaining({ candidateId: known.id })]);
+  });
+
+  it("finds a guest through an application's address when the candidate row has another", async () => {
+    const guest = withAnswers(rsvpOnly, []);
+    const candidate = await db.candidate.create({
+      data: { studentId: '405000002', email: 'school@ucla.edu', firstName: 'U', lastName: 'C' }
+    });
+    await db.application.create({ data: { email: 'UConsultingLA@gmail.com', candidateId: candidate.id } });
+
+    const summary = await ingestGuests(EVENT_ID, [guest], { db });
+
+    expect(summary.matchStatus.MATCHED_CANDIDATE).toBe(1);
+    expect(db.eventRsvp.rows).toEqual([expect.objectContaining({ candidateId: candidate.id })]);
+  });
+});
+
+describe('claimLumaGuestsForCandidate', () => {
+  const unknownGuest = () => withUid(checkedIn, 'n/a');
+
+  it('links an unmatched guest to the applicant with their address, and their rows follow', async () => {
+    await ingestGuests(EVENT_ID, [unknownGuest()], { db });
+    expect(db.eventAttendance.rows).toHaveLength(0);
+    const candidate = await db.candidate.create({
+      data: { studentId: '405000003', email: 'x@ucla.edu', firstName: 'T', lastName: 'G' }
+    });
+
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: candidate.id, email: 'Test.Guest@example.com', studentId: '405000003' },
+      { db }
+    );
+
+    expect(claimed).toEqual([checkedIn.api_id]);
+    expect(db.lumaGuest.rows[0]).toMatchObject({ candidateId: candidate.id, matchStatus: 'MATCHED_CANDIDATE', matchNote: null });
+    expect(db.eventRsvp.rows).toEqual([expect.objectContaining({ candidateId: candidate.id, source: 'LUMA' })]);
+    expect(db.eventAttendance.rows).toEqual([expect.objectContaining({ candidateId: candidate.id, source: 'LUMA' })]);
+  });
+
+  it('never re-decides a guest who is already matched', async () => {
+    const owner = await db.candidate.create({
+      data: { studentId: '405000004', email: 'test.guest@example.com', firstName: 'T', lastName: 'G' }
+    });
+    await ingestGuests(EVENT_ID, [unknownGuest()], { db });
+    const other = await db.candidate.create({
+      data: { studentId: '405000005', email: 'other@ucla.edu', firstName: 'O', lastName: 'P' }
+    });
+
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: other.id, email: 'test.guest@example.com', studentId: '405000005' },
+      { db }
+    );
+
+    expect(claimed).toEqual([]);
+    expect(db.lumaGuest.rows[0].candidateId).toBe(owner.id);
+  });
+
+  it('leaves guests with a different address alone', async () => {
+    await ingestGuests(EVENT_ID, [unknownGuest()], { db });
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: 'cand-x', email: 'someone@ucla.edu', studentId: '405000006' },
+      { db }
+    );
+    expect(claimed).toEqual([]);
+    expect(db.lumaGuest.rows[0].matchStatus).toBe('UNMATCHED');
   });
 });

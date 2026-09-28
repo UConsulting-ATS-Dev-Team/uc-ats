@@ -602,22 +602,25 @@ The system follows a **recruiting cycle-based workflow**:
   sync **reconciles rather than appends**: declining in Luma removes that guest's Luma RSVP,
   an undone check-in removes their attendance, and re-posting the same page changes nothing.
   It never touches a `GOOGLE_FORM` row, and a person who answered both counts once.
-- A guest the ATS cannot resolve, one matched on a typed UID alone, and an `approval_status`
-  it cannot read as going or not going are all **held and reported**, never guessed at.
-  What counts as held is [server/src/services/luma/heldGuests.js](server/src/services/luma/heldGuests.js),
-  one definition read by both the panel and the per-event badge on the event list. A guest
-  can be held for more than one reason, so the counts exceed the number of guests.
+- A guest matched on a typed UID alone, and an `approval_status` it cannot read as going
+  or not going, are **held and reported**, never guessed at. What counts as held is
+  [server/src/services/luma/heldGuests.js](server/src/services/luma/heldGuests.js), one
+  definition read by both the panel and the per-event badge on the event list.
+- A guest the ATS cannot resolve (`UNMATCHED`) is **not** a hold: it is someone with no
+  profile yet. Form sync links them when their application lands
+  (`claimLumaGuestsForCandidate`, by address or UID), and the panel does not count them.
+- The UID question is found by label: "UID", "Student ID" or "UCLA ID" all count
+  (`UID_LABEL`). An address matches in either UCLA spelling, and an application's own
+  address counts as well as the candidate's.
 - **A guest's history follows them into the ATS through the UID.** Someone can attend an
   event months before applying: the sync creates a Candidate keyed on the UID they typed,
   and their RSVP and attendance rows point at it. When their application arrives, form
   sync finds that same candidate by `studentId` and the history is already attached - the
   address they used on Luma is usually not the one on their application, which is why the
   UID question is required per event. `syncResponses.lumaHandoff.test.js` pins that seam.
-- **But only while the event is still on the routine's list.** An unmatched guest is
-  retried every sync, and an event drops off three days after it starts, so someone who
-  applies later than that is never retried - their old RSVPs stay unlinked until an admin
-  links them by hand. Work the guests panel after each event rather than after
-  applications open.
+- An unmatched guest is retried every sync while the event is on the routine's list
+  (three days after it starts), and after that when their application arrives, so
+  someone who applies weeks later still gets their RSVP and attendance.
 - Admins settle a held guest in Event Management → an event's Luma column → the guests
   panel. Linking runs
   [server/src/services/luma/linkGuest.js](server/src/services/luma/linkGuest.js), which
