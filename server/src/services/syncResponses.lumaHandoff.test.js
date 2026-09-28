@@ -26,6 +26,7 @@ vi.mock('../prismaClient.js', () => {
       findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn()
     },
     referral: { findMany: vi.fn(), updateMany: vi.fn() },
+    user: { findFirst: vi.fn() },
     lumaGuest: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     eventRsvp: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
     eventAttendance: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
@@ -101,6 +102,8 @@ beforeEach(() => {
   prisma.referral.updateMany.mockResolvedValue({ count: 0 });
   prisma.$executeRaw.mockResolvedValue(1);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
+  prisma.user.findFirst.mockResolvedValue(null);
+  prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.lumaGuest.findMany.mockResolvedValue([]);
   prisma.lumaGuest.findUnique.mockResolvedValue(null);
   prisma.lumaGuest.update.mockResolvedValue({});

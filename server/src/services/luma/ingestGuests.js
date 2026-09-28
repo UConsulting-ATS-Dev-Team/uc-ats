@@ -543,14 +543,25 @@ async function ingestOne(tx, eventId, guest) {
  * Only UNMATCHED guests are touched. A match that exists, by a sync or by an
  * admin's hand, is never re-decided here.
  *
- * `email` is the address that is this candidate's. A caller whose application
- * address belongs to a *different* candidate must leave it out, or that
- * person's registrations would be filed here.
+ * Any spelling of `email` that belongs to a different candidate, or to a
+ * member, is left out: registrations under it are that person's.
  *
  * @returns the lumaGuestIds that were claimed
  */
 export async function claimLumaGuestsForCandidate({ candidateId, email, studentId }, { db = prisma } = {}) {
-  const emails = emailVariants(email);
+  // Both UCLA spellings are one inbox. If either is another candidate's, or a
+  // member's, the inbox is theirs, and so are the registrations under it.
+  let emails = emailVariants(email);
+  for (const address of emails) {
+    const [candidateOwner, memberOwner] = await Promise.all([
+      db.candidate.findFirst({ where: { email: insensitive(address) } }),
+      db.user.findFirst({ where: { email: insensitive(address), role: { in: MEMBER_ROLES } } })
+    ]);
+    if (memberOwner || (candidateOwner && candidateOwner.id !== candidateId)) {
+      emails = [];
+      break;
+    }
+  }
   const who = [
     ...emails.map((address) => ({ email: insensitive(address) })),
     ...(studentId ? [{ uid: studentId }] : [])

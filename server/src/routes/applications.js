@@ -257,17 +257,7 @@ router.post('/manual', requireAdmin, async (req, res) => {
     // Same as form sync: Luma registrations nobody could place are this
     // applicant's now. Best-effort - the application is already saved.
     try {
-      const emailOwner = email
-        ? await prisma.candidate.findFirst({
-            where: { email: { equals: email, mode: 'insensitive' } },
-            select: { id: true }
-          })
-        : null;
-      await claimLumaGuestsForCandidate({
-        candidateId: candidate.id,
-        email: emailOwner && emailOwner.id !== candidate.id ? null : email,
-        studentId
-      });
+      await claimLumaGuestsForCandidate({ candidateId: candidate.id, email, studentId });
     } catch (lumaError) {
       console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
     }

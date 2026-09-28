@@ -580,4 +580,21 @@ describe('claimLumaGuestsForCandidate', () => {
     expect(claimed).toHaveLength(1);
     expect(db.lumaGuest.rows.filter((g) => g.matchStatus === 'UNMATCHED')).toHaveLength(1);
   });
+
+  it("leaves registrations under another candidate's spelling of the address alone", async () => {
+    const guest = withUid(checkedIn, 'n/a');
+    guest.user_email = 'bruin@g.ucla.edu';
+    await ingestGuests(EVENT_ID, [guest], { db });
+    // Somebody else holds the ucla.edu spelling of the same inbox.
+    await db.candidate.create({ data: { studentId: '405000020', email: 'bruin@ucla.edu', firstName: 'O', lastName: 'W' } });
+    const applicant = await db.candidate.create({ data: { studentId: '405000021', email: 'new@ucla.edu', firstName: 'N', lastName: 'A' } });
+
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: applicant.id, email: 'bruin@ucla.edu', studentId: '405000021' },
+      { db }
+    );
+
+    expect(claimed).toEqual([]);
+    expect(db.lumaGuest.rows[0].matchStatus).toBe('UNMATCHED');
+  });
 });
