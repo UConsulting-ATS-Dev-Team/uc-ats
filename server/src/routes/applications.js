@@ -5,6 +5,7 @@ import { getFormQuestions, getResponses } from '../services/google/forms.js';
 import { getGroupMemberUsers, groupMemberUserInclude } from '../utils/groupMembers.js';
 import config from '../config.js';
 import { resolveCycleForRequest } from '../services/activeCycle.js';
+import { claimLumaGuestsForCandidate } from '../services/luma/ingestGuests.js';
 import { applicationParamGuard, redactLockedApplications } from '../utils/lockedRecords.js';
 
 const router = express.Router();
@@ -252,6 +253,24 @@ router.post('/manual', requireAdmin, async (req, res) => {
     const application = await prisma.application.create({
       data: applicationData
     });
+
+    // Same as form sync: Luma registrations nobody could place are this
+    // applicant's now. Best-effort - the application is already saved.
+    try {
+      const emailOwner = email
+        ? await prisma.candidate.findFirst({
+            where: { email: { equals: email, mode: 'insensitive' } },
+            select: { id: true }
+          })
+        : null;
+      await claimLumaGuestsForCandidate({
+        candidateId: candidate.id,
+        email: emailOwner && emailOwner.id !== candidate.id ? null : email,
+        studentId
+      });
+    } catch (lumaError) {
+      console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
+    }
 
     res.status(201).json(application);
   } catch (error) {

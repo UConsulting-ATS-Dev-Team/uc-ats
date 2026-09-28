@@ -256,7 +256,9 @@ export default async function syncFormResponses() {
         try {
           const lumaClaimed = await claimLumaGuestsForCandidate({
             candidateId: candidate.id,
-            email: emailFromForm,
+            // When the address belongs to another candidate (the UID won - see
+            // resolveCandidate), its registrations are that person's, not these.
+            email: emailTaken ? null : emailFromForm,
             studentId
           });
           if (lumaClaimed.length > 0) {

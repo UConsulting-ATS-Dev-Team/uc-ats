@@ -472,6 +472,21 @@ describe('matching on the other spellings of an address', () => {
   });
 });
 
+describe('an address on applications of two candidates', () => {
+  it('answers nobody, and the UID decides instead', async () => {
+    const one = await db.candidate.create({ data: { studentId: '405000010', email: 'a@ucla.edu', firstName: 'A', lastName: 'A' } });
+    const two = await db.candidate.create({ data: { studentId: '405000011', email: 'b@ucla.edu', firstName: 'B', lastName: 'B' } });
+    await db.application.create({ data: { email: 'uconsultingla@gmail.com', candidateId: one.id } });
+    await db.application.create({ data: { email: 'uconsultingla@gmail.com', candidateId: two.id } });
+
+    // The fixture guest typed 123456789, which neither candidate has.
+    await ingestGuests(EVENT_ID, [rsvpOnly], { db });
+
+    expect(db.lumaGuest.rows[0].matchStatus).toBe('CREATED_CANDIDATE');
+    expect([one.id, two.id]).not.toContain(db.lumaGuest.rows[0].candidateId);
+  });
+});
+
 describe('claimLumaGuestsForCandidate', () => {
   const unknownGuest = () => withUid(checkedIn, 'n/a');
 
@@ -519,5 +534,50 @@ describe('claimLumaGuestsForCandidate', () => {
     );
     expect(claimed).toEqual([]);
     expect(db.lumaGuest.rows[0].matchStatus).toBe('UNMATCHED');
+  });
+
+  it('skips a guest whose address changed after the list was taken', async () => {
+    await ingestGuests(EVENT_ID, [unknownGuest()], { db });
+    const listed = db.lumaGuest.findMany;
+    db.lumaGuest.findMany = async (args) => {
+      const found = await listed(args);
+      // A sync re-reads the guest from Luma under a new address in between.
+      db.lumaGuest.rows[0].email = 'someone.new@example.com';
+      return found;
+    };
+
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: 'cand-x', email: 'test.guest@example.com', studentId: '405000007' },
+      { db }
+    );
+
+    expect(claimed).toEqual([]);
+    expect(db.lumaGuest.rows[0].matchStatus).toBe('UNMATCHED');
+  });
+
+  it('links the rest when one guest fails', async () => {
+    const second = withUid(rsvpOnly, 'n/a');
+    second.user_email = 'test.guest@example.com';
+    second.api_id = 'gst-secondreg';
+    await ingestGuests(EVENT_ID, [unknownGuest(), second], { db });
+    const candidate = await db.candidate.create({
+      data: { studentId: '405000008', email: 'x@ucla.edu', firstName: 'T', lastName: 'G' }
+    });
+    const transaction = db.$transaction;
+    let calls = 0;
+    db.$transaction = async (fn) => {
+      calls += 1;
+      if (calls === 1) throw new Error('connection dropped');
+      return transaction(fn);
+    };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const claimed = await claimLumaGuestsForCandidate(
+      { candidateId: candidate.id, email: 'test.guest@example.com' },
+      { db }
+    );
+
+    expect(claimed).toHaveLength(1);
+    expect(db.lumaGuest.rows.filter((g) => g.matchStatus === 'UNMATCHED')).toHaveLength(1);
   });
 });

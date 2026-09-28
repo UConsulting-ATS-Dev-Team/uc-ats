@@ -259,14 +259,17 @@ async function resolvePerson(tx, guest, previous) {
     }
 
     // An application keeps the address it was submitted with, which need not be
-    // the one on its candidate row.
-    const applicationByEmail = await tx.application.findFirst({
+    // the one on its candidate row. Application.email is not unique, so an
+    // address on applications of two different candidates answers nobody; the
+    // UID below, or an admin, decides instead.
+    const applicationOwners = await tx.application.findMany({
       where: { email: insensitive(email), candidateId: { not: null } },
       select: { candidateId: true },
-      orderBy: { submittedAt: 'desc' }
+      distinct: ['candidateId'],
+      take: 2
     });
-    if (applicationByEmail?.candidateId) {
-      return { candidateId: applicationByEmail.candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+    if (applicationOwners.length === 1) {
+      return { candidateId: applicationOwners[0].candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
     }
   }
 
@@ -540,6 +543,10 @@ async function ingestOne(tx, eventId, guest) {
  * Only UNMATCHED guests are touched. A match that exists, by a sync or by an
  * admin's hand, is never re-decided here.
  *
+ * `email` is the address that is this candidate's. A caller whose application
+ * address belongs to a *different* candidate must leave it out, or that
+ * person's registrations would be filed here.
+ *
  * @returns the lumaGuestIds that were claimed
  */
 export async function claimLumaGuestsForCandidate({ candidateId, email, studentId }, { db = prisma } = {}) {
@@ -555,22 +562,34 @@ export async function claimLumaGuestsForCandidate({ candidateId, email, studentI
     select: { lumaGuestId: true }
   });
 
+  const addresses = new Set(emails);
+  const stillTheirs = (guest) =>
+    addresses.has(String(guest.email ?? '').toLowerCase()) || Boolean(studentId && guest.uid === studentId);
+
   const claimed = [];
   for (const { lumaGuestId } of waiting) {
-    const done = await db.$transaction(async (tx) => {
-      await lockGuest(tx, lumaGuestId);
-      // Re-read under the lock: a sync or an admin may have settled them since.
-      const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId } });
-      if (!previous || previous.matchStatus !== MATCH_STATUS.UNMATCHED) return false;
-      const person = { candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
-      await tx.lumaGuest.update({
-        where: { lumaGuestId },
-        data: { candidateId, userId: null, matchStatus: person.matchStatus, matchNote: null }
+    // One guest at a time, each on its own: a guest that fails is logged and
+    // left UNMATCHED - still listed under "Show every guest" for a hand link -
+    // and does not stop the rest of this applicant's registrations.
+    try {
+      const done = await db.$transaction(async (tx) => {
+        await lockGuest(tx, lumaGuestId);
+        // Re-read under the lock: a sync may have settled them, or re-read them
+        // from Luma with a different address, since the list above was taken.
+        const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId } });
+        if (!previous || previous.matchStatus !== MATCH_STATUS.UNMATCHED || !stillTheirs(previous)) return false;
+        const person = { candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+        await tx.lumaGuest.update({
+          where: { lumaGuestId },
+          data: { candidateId, userId: null, matchStatus: person.matchStatus, matchNote: null }
+        });
+        await reconcileRows(tx, previous.eventId, previous, person, previous);
+        return true;
       });
-      await reconcileRows(tx, previous.eventId, previous, person, previous);
-      return true;
-    });
-    if (done) claimed.push(lumaGuestId);
+      if (done) claimed.push(lumaGuestId);
+    } catch (error) {
+      console.error(`[luma] failed to link guest ${lumaGuestId} to candidate ${candidateId}:`, error);
+    }
   }
   return claimed;
 }

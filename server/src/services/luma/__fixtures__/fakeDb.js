@@ -61,8 +61,16 @@ export function model(uniques, defaults = {}) {
     async findFirst({ where }) {
       return detach(rows.find((row) => matches(row, where))) ?? null;
     },
-    async findMany({ where = {} }) {
-      return rows.filter((row) => matches(row, where)).map(detach);
+    async findMany({ where = {}, distinct, take } = {}) {
+      let found = rows.filter((row) => matches(row, where));
+      if (distinct) {
+        const seen = new Set();
+        found = found.filter((row) => {
+          const key = distinct.map((f) => row[f]).join('|');
+          return seen.has(key) ? false : seen.add(key);
+        });
+      }
+      return found.slice(0, take ?? found.length).map(detach);
     },
     async create({ data }) {
       const row = { id: `${defaults.prefix ?? 'row'}-${next++}`, ...defaults.values, ...data };

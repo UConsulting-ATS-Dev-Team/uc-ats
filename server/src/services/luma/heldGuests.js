@@ -16,16 +16,18 @@
 //     read as going or not going, so the guest's RSVP row was left exactly as it
 //     was rather than guessed at in either direction.
 //
-// An UNMATCHED guest is deliberately not a hold. It is someone with no profile
-// in the ATS yet, not a question for an admin: form sync links them the moment
-// their application arrives (claimLumaGuestsForCandidate).
+// Being UNMATCHED is deliberately not a hold. It is someone with no profile in
+// the ATS yet, not a question for an admin: their application links them when
+// it arrives (claimLumaGuestsForCandidate). An unmatched guest whose status is
+// unreadable is still held for that.
 import { READABLE_APPROVAL_STATUSES } from './ingestGuests.js';
 
 /** A Prisma `where` fragment: either hold. */
 export const LUMA_HELD = {
-  matchStatus: { not: 'UNMATCHED' },
   OR: [
-    { matchNote: { not: null } },
+    // An UNMATCHED guest carries a note too (why nothing matched), so a note
+    // only means "check this match" on a guest that has one.
+    { matchStatus: { not: 'UNMATCHED' }, matchNote: { not: null } },
     { approvalStatus: { notIn: READABLE_APPROVAL_STATUSES } }
   ]
 };
@@ -33,8 +35,7 @@ export const LUMA_HELD = {
 /** Which holds apply to one guest row, for the panel to explain itself. */
 export function holdsFor(guest) {
   const holds = [];
-  if (guest.matchStatus === 'UNMATCHED') return holds;
-  if (guest.matchNote) holds.push('flagged');
+  if (guest.matchNote && guest.matchStatus !== 'UNMATCHED') holds.push('flagged');
   if (!READABLE_APPROVAL_STATUSES.includes(guest.approvalStatus)) holds.push('unknownStatus');
   return holds;
 }
