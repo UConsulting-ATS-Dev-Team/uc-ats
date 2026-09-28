@@ -83,6 +83,10 @@ describe('cycle form links', () => {
 
     expect(res.status).not.toBe(400);
     expect(prisma.recruitingCycle.update).toHaveBeenCalled();
+    // Never written back: a fix another admin saved meanwhile must survive.
+    const writes = prisma.recruitingCycle.update.mock.calls.map(([args]) => args.data);
+    expect(writes.some((data) => 'formUrl' in data)).toBe(false);
+    expect(writes.some((data) => data.name === 'Fall 2026 (renamed)')).toBe(true);
   });
 
   it('accepts the editor link', async () => {

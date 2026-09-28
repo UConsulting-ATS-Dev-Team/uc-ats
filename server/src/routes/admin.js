@@ -1273,19 +1273,22 @@ router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
   const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
   try {
-    // Checked only when the link changes. The edit dialog sends every field on
-    // each save, so a cycle saved before this check with a shortlink would
-    // otherwise refuse an edit to its deadline until someone fixed the link.
-    if (formUrl) {
+    // The edit dialog sends every field on each save, so a cycle saved before
+    // this check with a shortlink sends it back on an edit to its deadline.
+    // That is not refused, but the link is left out of the write: a link the
+    // sync cannot read is never written, so an admin whose dialog still holds
+    // the old one cannot put it back over a fix saved in the meantime.
+    let skipFormUrl = false;
+    if (formUrl && formUrlProblem(formUrl)) {
       const existing = await prisma.recruitingCycle.findUnique({ where: { id }, select: { formUrl: true } });
-      const formUrlError = existing?.formUrl === formUrl ? null : formUrlProblem(formUrl);
-      if (formUrlError) return res.status(400).json({ error: formUrlError });
+      if (existing?.formUrl !== formUrl) return res.status(400).json({ error: FORM_URL_ERROR });
+      skipFormUrl = true;
     }
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
     
     const updateData = {
       ...(name !== undefined ? { name } : {}),
-      ...(formUrl !== undefined ? { formUrl } : {}),
+      ...(formUrl !== undefined && !skipFormUrl ? { formUrl } : {}),
       ...(startDate !== undefined ? { startDate: startDate ? new Date(startDate) : null } : {}),
       ...(endDate !== undefined ? { endDate: endDate ? new Date(endDate) : null } : {}),
       // Activation is applied separately below so it goes through the ordered
