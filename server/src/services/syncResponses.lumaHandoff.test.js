@@ -26,6 +26,11 @@ vi.mock('../prismaClient.js', () => {
       findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn()
     },
     referral: { findMany: vi.fn(), updateMany: vi.fn() },
+    user: { findFirst: vi.fn() },
+    lumaGuest: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    eventRsvp: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    eventAttendance: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    memberEventRsvp: { deleteMany: vi.fn() },
     $executeRaw: vi.fn(),
     $transaction: vi.fn((fn) => fn(client))
   };
@@ -97,6 +102,56 @@ beforeEach(() => {
   prisma.referral.updateMany.mockResolvedValue({ count: 0 });
   prisma.$executeRaw.mockResolvedValue(1);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
+  prisma.user.findFirst.mockResolvedValue(null);
+  prisma.candidate.findFirst.mockResolvedValue(null);
+  prisma.lumaGuest.findMany.mockResolvedValue([]);
+  prisma.lumaGuest.findUnique.mockResolvedValue(null);
+  prisma.lumaGuest.update.mockResolvedValue({});
+  for (const model of [prisma.eventRsvp, prisma.eventAttendance]) {
+    model.findUnique.mockResolvedValue(null);
+    model.create.mockResolvedValue({});
+    model.deleteMany.mockResolvedValue({ count: 0 });
+  }
+  prisma.memberEventRsvp.deleteMany.mockResolvedValue({ count: 0 });
+});
+
+describe('Luma registrations nobody could place', () => {
+  // Registered on Luma under the address they later applied with, and gave no
+  // usable UID, so the Luma sync held them UNMATCHED.
+  const waiting = {
+    lumaGuestId: 'gst-waiting',
+    eventId: 'event-1',
+    email: 'maria@ucla.edu',
+    uid: null,
+    matchStatus: 'UNMATCHED',
+    approvalStatus: 'approved',
+    checkedInAt: null
+  };
+
+  it('are linked to the applicant, and their RSVP follows', async () => {
+    prisma.lumaGuest.findMany.mockResolvedValue([{ lumaGuestId: waiting.lumaGuestId }]);
+    prisma.lumaGuest.findUnique.mockResolvedValue(waiting);
+
+    await syncFormResponses();
+
+    expect(prisma.lumaGuest.update).toHaveBeenCalledWith({
+      where: { lumaGuestId: waiting.lumaGuestId },
+      data: expect.objectContaining({ candidateId: 'cand-new', matchStatus: 'MATCHED_CANDIDATE' })
+    });
+    expect(prisma.eventRsvp.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ eventId: 'event-1', candidateId: 'cand-new', source: 'LUMA', lumaGuestId: 'gst-waiting' })
+    });
+  });
+
+  it("are not looked up by an address that belongs to someone else", async () => {
+    byUid(fromLuma);
+    byEmail({ id: 'cand-address-owner', ...applicant });
+
+    await syncFormResponses();
+
+    const { where } = prisma.lumaGuest.findMany.mock.calls[0][0];
+    expect(where.OR).toEqual([{ uid: UID }]);
+  });
 });
 
 describe('an applicant the Luma sync already created a candidate for', () => {

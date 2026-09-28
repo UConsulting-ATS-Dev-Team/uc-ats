@@ -9,6 +9,7 @@ export const EVENT_ID = 'event-1';
 
 function matches(row, where) {
   return Object.entries(where).every(([field, condition]) => {
+    if (field === 'OR') return condition.some((branch) => matches(row, branch));
     const value = row[field];
     if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
       if ('in' in condition) return condition.in.includes(value);
@@ -60,6 +61,17 @@ export function model(uniques, defaults = {}) {
     async findFirst({ where }) {
       return detach(rows.find((row) => matches(row, where))) ?? null;
     },
+    async findMany({ where = {}, distinct, take } = {}) {
+      let found = rows.filter((row) => matches(row, where));
+      if (distinct) {
+        const seen = new Set();
+        found = found.filter((row) => {
+          const key = distinct.map((f) => row[f]).join('|');
+          return seen.has(key) ? false : seen.add(key);
+        });
+      }
+      return found.slice(0, take ?? found.length).map(detach);
+    },
     async create({ data }) {
       const row = { id: `${defaults.prefix ?? 'row'}-${next++}`, ...defaults.values, ...data };
       check(row);
@@ -97,6 +109,7 @@ export function fakeDb() {
     events: model([['id']]),
     user: model([['email'], ['studentId']], { prefix: 'user' }),
     candidate: model([['email'], ['studentId']], { prefix: 'cand' }),
+    application: model([], { prefix: 'app' }),
     lumaGuest: model([['lumaGuestId']], { prefix: 'lg' }),
     eventRsvp: model([['responseId'], ['lumaGuestId'], ['eventId', 'candidateId']], { values: { source: 'GOOGLE_FORM' } }),
     eventAttendance: model([['responseId'], ['lumaGuestId'], ['eventId', 'candidateId']], { values: { source: 'GOOGLE_FORM' } }),

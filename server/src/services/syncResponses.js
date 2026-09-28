@@ -5,6 +5,7 @@ import { transformFormResponse } from '../utils/dataMapper.js'
 import { extractFormIdFromUrl } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
+import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
 
 /**
  * The candidate whose email this is, resolved so the answer never depends on
@@ -246,6 +247,25 @@ export default async function syncFormResponses() {
           }
         } catch (referralError) {
           console.error(`Failed to claim referrals for candidate id=${candidate.id}:`, referralError);
+        }
+
+        // Luma guests the sync could not place - usually a registration under
+        // an address the ATS had never seen - are theirs now that the
+        // application gives us the address. Same rule as the referrals above:
+        // a failure is logged, never allowed to cost the application.
+        try {
+          const lumaClaimed = await claimLumaGuestsForCandidate({
+            candidateId: candidate.id,
+            // When the address belongs to another candidate (the UID won - see
+            // resolveCandidate), its registrations are that person's, not these.
+            email: emailTaken ? null : emailFromForm,
+            studentId
+          });
+          if (lumaClaimed.length > 0) {
+            console.log(`Linked ${lumaClaimed.length} Luma registration(s) to candidate id=${candidate.id}`);
+          }
+        } catch (lumaError) {
+          console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
         }
 
       } catch (error) {

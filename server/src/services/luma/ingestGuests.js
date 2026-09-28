@@ -18,10 +18,13 @@
 //
 // No ATS confirmation emails go out for these rows: Luma already sent its own.
 import prisma from '../../prismaClient.js';
+import { emailVariants } from '../../utils/mailingListImport.js';
 
 // The UID question is found by its label, because Luma gives every question a
-// fresh id per event.
-const UID_LABEL = /\buid\b/i;
+// fresh id per event. Events word it several ways - "UID", "UCLA Student ID
+// (9 digits)", "UCLA ID Number" - and a label that only matched the first read
+// every answer to the others as no UID at all.
+const UID_LABEL = /\buid\b|\b(?:student|ucla)\s*id\b|\bid\s*(?:number|#)/i;
 const UID_DIGITS = /^\d{9}$/;
 export const MEMBER_ROLES = ['MEMBER', 'ADMIN'];
 
@@ -240,16 +243,34 @@ async function resolvePerson(tx, guest, previous) {
     return { candidateId: previous.candidateId, matchStatus: previous.matchStatus, matchNote: previous.matchNote };
   }
 
-  const memberByEmail = await tx.user.findFirst({
-    where: { email: insensitive(guest.email), role: { in: MEMBER_ROLES } }
-  });
-  if (memberByEmail) {
-    return { userId: memberByEmail.id, matchStatus: MATCH_STATUS.MATCHED_MEMBER, matchNote: null };
-  }
+  // x@g.ucla.edu and x@ucla.edu are one inbox, so either spelling is the same
+  // person. The address exactly as registered is tried first.
+  for (const email of emailVariants(guest.email)) {
+    const memberByEmail = await tx.user.findFirst({
+      where: { email: insensitive(email), role: { in: MEMBER_ROLES } }
+    });
+    if (memberByEmail) {
+      return { userId: memberByEmail.id, matchStatus: MATCH_STATUS.MATCHED_MEMBER, matchNote: null };
+    }
 
-  const candidateByEmail = await tx.candidate.findFirst({ where: { email: insensitive(guest.email) } });
-  if (candidateByEmail) {
-    return { candidateId: candidateByEmail.id, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+    const candidateByEmail = await tx.candidate.findFirst({ where: { email: insensitive(email) } });
+    if (candidateByEmail) {
+      return { candidateId: candidateByEmail.id, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+    }
+
+    // An application keeps the address it was submitted with, which need not be
+    // the one on its candidate row. Application.email is not unique, so an
+    // address on applications of two different candidates answers nobody; the
+    // UID below, or an admin, decides instead.
+    const applicationOwners = await tx.application.findMany({
+      where: { email: insensitive(email), candidateId: { not: null } },
+      select: { candidateId: true },
+      distinct: ['candidateId'],
+      take: 2
+    });
+    if (applicationOwners.length === 1) {
+      return { candidateId: applicationOwners[0].candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+    }
   }
 
   if (guest.uid) {
@@ -505,6 +526,83 @@ async function ingestOne(tx, eventId, guest) {
 
   const effects = await reconcileRows(tx, eventId, guest, person, previous);
   return { matchStatus: person.matchStatus, matchNote: person.matchNote ?? null, effects };
+}
+
+/**
+ * Files a new applicant's earlier Luma registrations under them.
+ *
+ * A guest the ATS could not identify is held UNMATCHED and retried by each
+ * sync, but an event leaves the routine's list three days after it starts, so
+ * someone who registered with an address the ATS had never seen and applies
+ * later would otherwise never be picked up. Form sync calls this when their
+ * application lands, the way the Google event forms used to meet them at the
+ * application: every still-unmatched guest with the application's address
+ * (either UCLA spelling) or its UID is linked to the candidate and their RSVP
+ * and attendance rows follow.
+ *
+ * Only UNMATCHED guests are touched. A match that exists, by a sync or by an
+ * admin's hand, is never re-decided here.
+ *
+ * Any spelling of `email` that belongs to a different candidate, or to a
+ * member, is left out: registrations under it are that person's.
+ *
+ * @returns the lumaGuestIds that were claimed
+ */
+export async function claimLumaGuestsForCandidate({ candidateId, email, studentId }, { db = prisma } = {}) {
+  // Both UCLA spellings are one inbox. If either is another candidate's, or a
+  // member's, the inbox is theirs, and so are the registrations under it.
+  let emails = emailVariants(email);
+  for (const address of emails) {
+    const [candidateOwner, memberOwner] = await Promise.all([
+      db.candidate.findFirst({ where: { email: insensitive(address) } }),
+      db.user.findFirst({ where: { email: insensitive(address), role: { in: MEMBER_ROLES } } })
+    ]);
+    if (memberOwner || (candidateOwner && candidateOwner.id !== candidateId)) {
+      emails = [];
+      break;
+    }
+  }
+  const who = [
+    ...emails.map((address) => ({ email: insensitive(address) })),
+    ...(studentId ? [{ uid: studentId }] : [])
+  ];
+  if (!candidateId || who.length === 0) return [];
+
+  const waiting = await db.lumaGuest.findMany({
+    where: { matchStatus: MATCH_STATUS.UNMATCHED, OR: who },
+    select: { lumaGuestId: true }
+  });
+
+  const addresses = new Set(emails);
+  const stillTheirs = (guest) =>
+    addresses.has(String(guest.email ?? '').toLowerCase()) || Boolean(studentId && guest.uid === studentId);
+
+  const claimed = [];
+  for (const { lumaGuestId } of waiting) {
+    // One guest at a time, each on its own: a guest that fails is logged and
+    // left UNMATCHED - still listed under "Show every guest" for a hand link -
+    // and does not stop the rest of this applicant's registrations.
+    try {
+      const done = await db.$transaction(async (tx) => {
+        await lockGuest(tx, lumaGuestId);
+        // Re-read under the lock: a sync may have settled them, or re-read them
+        // from Luma with a different address, since the list above was taken.
+        const previous = await tx.lumaGuest.findUnique({ where: { lumaGuestId } });
+        if (!previous || previous.matchStatus !== MATCH_STATUS.UNMATCHED || !stillTheirs(previous)) return false;
+        const person = { candidateId, matchStatus: MATCH_STATUS.MATCHED_CANDIDATE, matchNote: null };
+        await tx.lumaGuest.update({
+          where: { lumaGuestId },
+          data: { candidateId, userId: null, matchStatus: person.matchStatus, matchNote: null }
+        });
+        await reconcileRows(tx, previous.eventId, previous, person, previous);
+        return true;
+      });
+      if (done) claimed.push(lumaGuestId);
+    } catch (error) {
+      console.error(`[luma] failed to link guest ${lumaGuestId} to candidate ${candidateId}:`, error);
+    }
+  }
+  return claimed;
 }
 
 /**

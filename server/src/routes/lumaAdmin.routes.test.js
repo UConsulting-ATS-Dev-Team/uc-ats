@@ -120,18 +120,19 @@ describe('GET /events/:id/guests', () => {
     expect(body.guests).toHaveLength(3);
   });
 
-  it('says why each guest is being held, and a guest can be held twice over', async () => {
+  it('says why each guest is being held, and never holds a guest who has no profile yet', async () => {
     const { guests } = await (await call('/events/event-1/guests')).json();
     const holds = Object.fromEntries(guests.map((g) => [g.lumaGuestId, g.holds]));
 
-    expect(holds['gst-1']).toEqual(['unmatched', 'flagged']);
+    // UNMATCHED waits for their application, which links them; not a question for an admin.
+    expect(holds['gst-1']).toEqual([]);
     expect(holds['gst-2']).toEqual(['flagged']);
     expect(holds['gst-3']).toEqual(['unknownStatus']);
   });
 
-  it('counts the holds rather than the guests, so one guest can raise two', async () => {
+  it('counts the holds and says nothing about guests without a profile', async () => {
     const { counts } = await (await call('/events/event-1/guests')).json();
-    expect(counts).toEqual({ total: 12, held: 3, unmatched: 1, flagged: 2, unknownStatus: 1 });
+    expect(counts).toEqual({ total: 12, held: 3, flagged: 1, unknownStatus: 1 });
   });
 
   it('presents the matched person as candidate or member, never as a bare user', async () => {
