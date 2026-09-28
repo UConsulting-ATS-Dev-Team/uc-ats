@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
+import ApplyHereButton from '../components/ApplyHereButton';
 import apiClient from '../utils/api';
+import { applyLinkFor } from '../utils/activeCycle';
 import { formatDeadline, getCycleDeadline } from '../utils/getNextDeadline';
 import '../styles/CandidateDashboard.css';
 
@@ -12,6 +14,7 @@ export default function CandidateDashboard() {
 
   const [deadline, setDeadline] = useState(null);
   const [deadlineLoading, setDeadlineLoading] = useState(true);
+  const [applyUrl, setApplyUrl] = useState(null);
 
   const handleViewEvents = () => {
     navigate('/events');
@@ -45,6 +48,15 @@ export default function CandidateDashboard() {
         const data = await apiClient.get('/active-cycle');
         if (!cancelled) {
           setDeadline(getCycleDeadline(data?.cycle));
+        }
+        // Applications are read only to hide "Apply Here" from someone who
+        // already applied, so only when there is a form to show. A candidate
+        // with no application gets a 404 here, which means show it.
+        if (applyLinkFor(data?.cycle, [])) {
+          const applications = await apiClient.get('/applications/my-applications').catch(() => []);
+          if (!cancelled) {
+            setApplyUrl(applyLinkFor(data?.cycle, applications));
+          }
         }
       } catch (error) {
         console.error('Error fetching next deadline:', error);
@@ -92,6 +104,11 @@ export default function CandidateDashboard() {
         <div className="next-deadline-banner" role="status" aria-live="polite" aria-atomic="true">
           <span className="next-deadline-label">Application deadline</span>
           <span className="next-deadline-value">{renderDeadlineValue()}</span>
+          {applyUrl && (
+            <span className="next-deadline-action">
+              <ApplyHereButton href={applyUrl} />
+            </span>
+          )}
         </div>
 
         <div className="dashboard-content">

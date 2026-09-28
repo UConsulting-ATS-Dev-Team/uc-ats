@@ -13,6 +13,7 @@ import {
 import { toCandidateCard } from '../utils/gtkucProfile.js';
 // Public routes are candidate-facing by definition: no token, so no role to key on.
 import { resolveCandidateCycle } from '../services/activeCycle.js';
+import { applicantFormLink } from '../utils/formUtils.js';
 
 const router = express.Router();
 
@@ -25,8 +26,9 @@ const router = express.Router();
  * showed the deadline of a cycle they had already applied to and ignored the one
  * actually open.
  *
- * Public because the answer already is: the application deadline is on the
- * recruitment site. Only the fields a deadline needs are returned.
+ * Public because the answer already is: the application deadline and the form
+ * link are on the recruitment site. Only the fields a deadline and an "Apply
+ * Here" button need are returned.
  */
 router.get('/active-cycle', async (req, res) => {
   try {
@@ -39,6 +41,9 @@ router.get('/active-cycle', async (req, res) => {
         startDate: cycle.startDate,
         endDate: cycle.endDate,
         applicationDeadline: cycle.applicationDeadline,
+        // The responder link, never the stored formUrl: that is usually the
+        // editor link, which applicants cannot open.
+        applyUrl: applicantFormLink(cycle.formUrl),
       },
     });
   } catch (error) {

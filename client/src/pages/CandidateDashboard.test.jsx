@@ -144,6 +144,50 @@ describe('which deadline the card shows', () => {
     );
   });
 
+  it('links "Apply Here" to the Google Form when the candidate has not applied', async () => {
+    apiClient.get.mockImplementation(async (url) => {
+      if (url === '/active-cycle') {
+        return {
+          cycle: {
+            id: 'cycle-1',
+            name: 'Fall 2026',
+            applicationDeadline: '2099-10-02T06:59:00.000Z',
+            applyUrl: 'https://docs.google.com/forms/d/abc123/viewform',
+          },
+        };
+      }
+      throw new Error('Candidate not found for this user');
+    });
+    renderWithRouter(<CandidateDashboard />);
+
+    const link = await screen.findByRole('link', { name: /apply here/i });
+    expect(link).toHaveAttribute('href', 'https://docs.google.com/forms/d/abc123/viewform');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(screen.getByText(/Google Form/)).toBeInTheDocument();
+  });
+
+  it('hides "Apply Here" from a candidate who already applied this cycle', async () => {
+    apiClient.get.mockImplementation(async (url) => {
+      if (url === '/active-cycle') {
+        return {
+          cycle: {
+            id: 'cycle-1',
+            name: 'Fall 2026',
+            applicationDeadline: '2099-10-02T06:59:00.000Z',
+            applyUrl: 'https://docs.google.com/forms/d/abc123/viewform',
+          },
+        };
+      }
+      return [{ id: 'app-1', cycle: { id: 'cycle-1', name: 'Fall 2026' } }];
+    });
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith('/applications/my-applications')
+    );
+    expect(screen.queryByRole('link', { name: /apply here/i })).not.toBeInTheDocument();
+  });
+
   it('shows nothing when the open cycle deadline has passed', async () => {
     apiClient.get.mockResolvedValue({
       cycle: { id: 'old', name: 'Fall 2025', applicationDeadline: '2025-10-02T06:59:00.000Z' },

@@ -76,6 +76,33 @@ const fillAndSubmit = async (
   await user.click(screen.getByRole('button', { name: /Finish setting up/ }));
 };
 
+describe('the not-an-application notice', () => {
+  const formLink = 'https://docs.google.com/forms/d/abc123/viewform';
+
+  it('says this is not an application and links the open cycle\'s Google Form', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) =>
+      url === '/active-cycle'
+        ? { cycle: { id: 'cycle-1', name: 'Fall 2026', applicationDeadline: null, applyUrl: formLink } }
+        : status()
+    );
+    render(<CandidateOnboarding />);
+
+    expect(await screen.findByText(/not an application to UConsulting/i)).toBeInTheDocument();
+    expect(screen.getByText(/Talent Partner Network, which shares/i)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /apply here/i })).toHaveAttribute('href', formLink);
+  });
+
+  it('still shows the notice, without a button, when no cycle is open', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) =>
+      url === '/active-cycle' ? { cycle: null } : status()
+    );
+    render(<CandidateOnboarding />);
+
+    expect(await screen.findByText(/not an application to UConsulting/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /apply here/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('what the module refuses to ask', () => {
   it('does not ask a candidate who already has an application', async () => {
     mockStatus({ required: false, hasApplication: true });

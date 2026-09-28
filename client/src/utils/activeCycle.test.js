@@ -1,5 +1,35 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fetchActiveCycle, slotsInCycleDates, slotsCreatedForCycle } from './activeCycle';
+import { applyLinkFor, fetchActiveCycle, slotsInCycleDates, slotsCreatedForCycle } from './activeCycle';
+
+describe('applyLinkFor', () => {
+  const now = new Date('2026-09-28T12:00:00.000Z');
+  const open = {
+    id: 'cycle-2',
+    applicationDeadline: '2026-10-02T06:59:00.000Z',
+    applyUrl: 'https://docs.google.com/forms/d/abc/viewform',
+  };
+
+  it('links to the form when the cycle is open and they have not applied', () => {
+    expect(applyLinkFor(open, [], now)).toBe(open.applyUrl);
+    expect(applyLinkFor(open, [{ cycle: { id: 'cycle-1' } }], now)).toBe(open.applyUrl);
+    expect(applyLinkFor(open, undefined, now)).toBe(open.applyUrl);
+  });
+
+  it('offers nothing once they have an application in the open cycle', () => {
+    expect(applyLinkFor(open, [{ cycle: { id: 'cycle-2' } }], now)).toBeNull();
+    expect(applyLinkFor(open, { applications: [{ cycleId: 'cycle-2' }] }, now)).toBeNull();
+  });
+
+  it('offers nothing without a cycle, a form, or after the deadline', () => {
+    expect(applyLinkFor(null, [], now)).toBeNull();
+    expect(applyLinkFor({ ...open, applyUrl: null }, [], now)).toBeNull();
+    expect(applyLinkFor(open, [], new Date('2026-10-03T00:00:00.000Z'))).toBeNull();
+  });
+
+  it('keeps the link open when no deadline is set', () => {
+    expect(applyLinkFor({ ...open, applicationDeadline: null }, [], now)).toBe(open.applyUrl);
+  });
+});
 
 // What GET /api/active-cycle actually answers.
 const response = {

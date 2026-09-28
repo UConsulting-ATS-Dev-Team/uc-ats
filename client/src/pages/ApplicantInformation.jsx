@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import ResumeReuploadSection from '../components/ResumeReuploadSection';
 import OnboardingResumeSection from '../components/OnboardingResumeSection';
 import ApplicantTalentPoolSection from '../components/ApplicantTalentPoolSection';
+import ApplyHereButton from '../components/ApplyHereButton';
+import { applyLinkFor, fetchActiveCycle } from '../utils/activeCycle';
 import '../styles/ApplicantInformation.css';
 
 // The fields a candidate may correct themselves, in the order they are shown.
@@ -136,6 +139,22 @@ export default function ApplicantInformation() {
   // 'application' when editing a submitted application, 'onboarding' when the
   // candidate never applied and is maintaining what they gave us at signup.
   const [mode, setMode] = useState('application');
+  // The cycle open to applicants, for the "this is not an application" notice.
+  const [activeCycle, setActiveCycle] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchActiveCycle(apiClient)
+      .then((cycle) => {
+        if (!cancelled) setActiveCycle(cycle);
+      })
+      // Without a cycle the notice still says what this page is; it just has
+      // no form to point at.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /**
    * Load what this candidate gave us at signup, for someone with no application.
@@ -329,6 +348,10 @@ export default function ApplicantInformation() {
     );
   };
 
+  const applyUrl = applyLinkFor(activeCycle, applications);
+  const appliedToOpenCycle =
+    Boolean(activeCycle) && applications.some((application) => application.cycle?.id === activeCycle.id);
+
   return (
     <AccessControl allowedRoles={['USER']}>
       <div className="applicant-info-container">
@@ -339,6 +362,28 @@ export default function ApplicantInformation() {
             straight away.
           </p>
         </header>
+
+        {/* People were saving this page and believing they had applied. */}
+        <div className="applicant-not-application" role="note">
+          <ExclamationTriangleIcon className="applicant-not-application-icon" aria-hidden="true" />
+          <div className="applicant-not-application-body">
+            <p className="applicant-not-application-title">This is not an application</p>
+            <p>
+              Saving this page only updates details we already have on file. It does not apply you
+              to UConsulting. Applications are submitted through a separate Google Form.
+              {appliedToOpenCycle
+                ? ` You have already applied for ${activeCycle.name}.`
+                : applyUrl
+                  ? ` To apply for ${activeCycle.name}, click Apply Here and submit that Google Form.`
+                  : ''}
+            </p>
+          </div>
+          {applyUrl && (
+            <div className="applicant-not-application-action">
+              <ApplyHereButton href={applyUrl} />
+            </div>
+          )}
+        </div>
 
         {applications.length > 1 && (
           <div className="applicant-cycle-picker">
