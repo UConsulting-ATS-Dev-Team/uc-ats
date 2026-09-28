@@ -19,22 +19,18 @@ function extractFormIdFromUrl(formUrl) {
 }
 
 /**
- * The link an applicant opens to fill in a cycle's form.
+ * The form id the application sync can read responses from, or null.
  *
- * Admins paste whatever Google gave them, usually the editor link
- * (`/forms/d/<id>/edit`), which an applicant cannot open. The form id works
- * with `/viewform` too, so that is what applicants get. A published link
- * (`/forms/d/e/<publishedId>/...`) carries a different id that only works
- * under `/d/e/`, so it keeps that shape. A `forms.gle` shortlink already opens
- * the responder view and is passed through.
- *
- * The host is checked before anything is rewritten. Matching the path alone
- * would turn `https://example.com/forms/d/abc/edit` into a Google link to a
- * form nobody configured.
+ * Only a `docs.google.com/forms/d/<id>` link carries the id the Forms API
+ * wants. A `forms.gle` shortlink carries none, and a published link
+ * (`/forms/d/e/<publishedId>/...`) carries a different id the API rejects, so
+ * a cycle saved with either never syncs a single application. The host is
+ * checked too: matching the path alone would accept
+ * `https://example.com/forms/d/abc/edit` as a Google Form.
  * @param {string} formUrl - The Google Form URL stored on the cycle
- * @returns {string|null} - The responder link, or null when it is not a Google Form
+ * @returns {string|null} - The form id, or null when sync could not use this link
  */
-function applicantFormLink(formUrl) {
+function syncableFormId(formUrl) {
     if (!formUrl || typeof formUrl !== 'string') {
         return null;
     }
@@ -45,29 +41,37 @@ function applicantFormLink(formUrl) {
     } catch {
         return null;
     }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.hostname !== 'docs.google.com') {
         return null;
     }
 
-    if (url.hostname === 'forms.gle') {
-        const shortId = url.pathname.match(/^\/([a-zA-Z0-9]+)\/?$/);
-        return shortId ? `https://forms.gle/${shortId[1]}` : null;
-    }
-
-    if (url.hostname !== 'docs.google.com') {
+    const match = url.pathname.match(/^\/forms\/d\/([a-zA-Z0-9-_]+)/);
+    if (!match || match[1] === 'e') {
         return null;
     }
+    return match[1];
+}
 
-    const published = url.pathname.match(/^\/forms\/d\/e\/([a-zA-Z0-9-_]+)/);
-    if (published) {
-        return `https://docs.google.com/forms/d/e/${published[1]}/viewform`;
-    }
-
-    const formId = url.pathname.match(/^\/forms\/d\/([a-zA-Z0-9-_]+)/);
-    return formId ? `https://docs.google.com/forms/d/${formId[1]}/viewform` : null;
+/**
+ * The link an applicant opens to fill in a cycle's form.
+ *
+ * Admins paste the editor link (`/forms/d/<id>/edit`), which an applicant
+ * cannot open. The same id works under `/viewform`, so that is what
+ * applicants get.
+ *
+ * Null for any link the sync cannot read. Sending someone to a form whose
+ * responses never reach the ATS is worse than showing no button: they would
+ * apply and never appear.
+ * @param {string} formUrl - The Google Form URL stored on the cycle
+ * @returns {string|null} - The responder link, or null
+ */
+function applicantFormLink(formUrl) {
+    const formId = syncableFormId(formUrl);
+    return formId ? `https://docs.google.com/forms/d/${formId}/viewform` : null;
 }
 
 export {
     extractFormIdFromUrl,
+    syncableFormId,
     applicantFormLink
 }; 

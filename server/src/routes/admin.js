@@ -13,6 +13,7 @@ import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdat
 import { setSlotAttendanceComplete, SlotAttendanceError } from '../services/meetingAttendance.js';
 import { sendAttendanceRemindersNow } from '../services/meetingAttendanceReminders.js';
 import { localInputToUTC, utcToLocalInput } from '../utils/timezoneUtils.js';
+import { syncableFormId } from '../utils/formUtils.js';
 import {
   getDeactivationCandidates,
   parseGraduationYear,
@@ -1132,10 +1133,19 @@ const parseApplicationDeadline = (value) => {
   return { value: parsed };
 };
 
+// A cycle's form link has to be one the application sync can read. A shortlink
+// or published link saves fine and then syncs nothing, while "Apply Here"
+// sends candidates to it, so their applications would never reach the ATS.
+const FORM_URL_ERROR =
+  "Use the form's editor link (docs.google.com/forms/d/.../edit). The application sync cannot read forms.gle shortlinks or published /d/e/ links.";
+const formUrlProblem = (formUrl) => (formUrl && !syncableFormId(formUrl) ? FORM_URL_ERROR : null);
+
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
     const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+    const formUrlError = formUrlProblem(formUrl);
+    if (formUrlError) return res.status(400).json({ error: formUrlError });
     const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
     if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
     const activate = Boolean(isActive);
@@ -1262,6 +1272,8 @@ router.post('/cycles/:id/activate', async (req, res) => {
 router.patch('/cycles/:id', async (req, res) => {
   const { id } = req.params;
   const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
+  const formUrlError = formUrlProblem(formUrl);
+  if (formUrlError) return res.status(400).json({ error: formUrlError });
   try {
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
     
