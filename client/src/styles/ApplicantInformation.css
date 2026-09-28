@@ -17,6 +17,42 @@
   line-height: 1.5;
 }
 
+.applicant-not-application {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  background-color: var(--status-warning-bg);
+  border: 1px solid var(--status-warning-border);
+  border-left: 6px solid var(--status-warning-border);
+  border-radius: var(--border-radius);
+  color: var(--status-warning-text);
+}
+
+.applicant-not-application-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.applicant-not-application-body {
+  flex: 1 1 18rem;
+}
+
+.applicant-not-application-body p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.applicant-not-application-body .applicant-not-application-title {
+  font-weight: 700;
+  font-size: 1.0625rem;
+  margin-bottom: 0.25rem;
+}
+
 .applicant-cycle-picker {
   margin-bottom: 1.5rem;
   max-width: 22rem;

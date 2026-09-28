@@ -1,13 +1,45 @@
 // The recruiting cycle open to candidates, and the two ways GTKUC pages scope
 // meeting slots to it.
 //
-// GET /api/active-cycle answers { cycle: { id, name, startDate, endDate, applicationDeadline } | null }.
+// GET /api/active-cycle answers
+// { cycle: { id, name, startDate, endDate, applicationDeadline, applyUrl } | null }.
 // Pages used to read that response as the bare cycle, found no startDate, and
 // showed either every slot ever created or none at all. Read it here.
 
 export const fetchActiveCycle = async (client) => {
   const response = await client.get('/active-cycle');
   return response?.cycle || null;
+};
+
+// A candidate's applications, or [] when they have none. The endpoint answers a
+// candidate with no application with an error rather than an empty list, so
+// only those two messages mean "none". Any other failure is rethrown: treating
+// it as "none" would offer the form to someone who already applied.
+export const fetchOwnApplications = async (client) => {
+  try {
+    const data = await client.get('/applications/my-applications');
+    return Array.isArray(data) ? data : data?.applications || [];
+  } catch (e) {
+    if (
+      e?.message?.includes('User not found or no studentId associated') ||
+      e?.message?.includes('Candidate not found for this user')
+    ) {
+      return [];
+    }
+    throw e;
+  }
+};
+
+// Where "Apply Here" should go, or null when there is nothing to apply to: no
+// open cycle, no form on it, its deadline has passed, or this candidate already
+// has an application in it. `applications` may be anything the applications
+// endpoint answered, including nothing.
+export const applyLinkFor = (cycle, applications, now = new Date()) => {
+  if (!cycle?.applyUrl) return null;
+  if (cycle.applicationDeadline && new Date(cycle.applicationDeadline) < now) return null;
+  const list = Array.isArray(applications) ? applications : applications?.applications || [];
+  if (list.some((application) => (application.cycle?.id ?? application.cycleId) === cycle.id)) return null;
+  return cycle.applyUrl;
 };
 
 // Slots whose start time falls inside the cycle's date range. What candidates

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   CircularProgress,
@@ -22,6 +23,8 @@ import {
 } from '@mui/material';
 import apiClient from '../utils/api';
 import UConsultingLogo from '../components/UConsultingLogo';
+import ApplyHereButton from '../components/ApplyHereButton';
+import { applyLinkFor, fetchActiveCycle } from '../utils/activeCycle';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
 import { markOnboardingComplete } from '../utils/onboardingStatus';
 import { MAJOR_OPTIONS, OTHER_MAJOR } from '../utils/majors';
@@ -107,6 +110,26 @@ const CandidateOnboarding = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The open cycle, for the notice's "Apply Here". Failing to load it only
+  // drops the button.
+  const [activeCycle, setActiveCycle] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchActiveCycle(apiClient)
+      .then((cycle) => {
+        if (!cancelled) setActiveCycle(cycle);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Offered only once the status call has said there is no application. The
+  // form still renders when that call fails, and a failure says nothing about
+  // whether this person already applied.
+  const applyUrl = status && !status.hasApplication ? applyLinkFor(activeCycle, []) : null;
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -215,13 +238,26 @@ const CandidateOnboarding = () => {
         <Stack spacing={1} alignItems="center" sx={{ mb: 3 }}>
           <UConsultingLogo />
           <Typography variant="h5" fontWeight={700} align="center">
-            Finish your applicant profile
+            Finish your profile
           </Typography>
           <Typography variant="body2" color="text.secondary" align="center">
-            We could not find a previous application for you, so we need a few details before
-            you can take part in recruitment.
+            We could not find an application for you, so we need a few details to set up your
+            account.
           </Typography>
         </Stack>
+
+        {/* People were finishing this form and believing they had applied. */}
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          <AlertTitle>This is not an application to UConsulting</AlertTitle>
+          These details are for our Talent Partner Network, which shares student resumes with
+          companies that are hiring. Applications to UConsulting are submitted through a
+          separate Google Form.
+          {applyUrl && (
+            <Box sx={{ mt: 2 }}>
+              <ApplyHereButton href={applyUrl} closesAt={activeCycle?.applicationDeadline} />
+            </Box>
+          )}
+        </Alert>
 
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>

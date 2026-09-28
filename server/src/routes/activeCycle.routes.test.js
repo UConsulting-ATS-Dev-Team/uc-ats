@@ -45,6 +45,7 @@ describe('GET /api/active-cycle', () => {
       endDate: new Date('2026-10-15T00:00:00Z'),
       applicationDeadline: new Date('2026-10-02T06:59:00Z'),
       isActive: true,
+      formUrl: 'https://docs.google.com/forms/d/abc123/edit',
       createdById: 'admin-1'
     });
 
@@ -57,9 +58,19 @@ describe('GET /api/active-cycle', () => {
         name: 'Fall 2026',
         startDate: '2026-09-01T00:00:00.000Z',
         endDate: '2026-10-15T00:00:00.000Z',
-        applicationDeadline: '2026-10-02T06:59:00.000Z'
+        applicationDeadline: '2026-10-02T06:59:00.000Z',
+        // Never the editor link that was stored.
+        applyUrl: 'https://docs.google.com/forms/d/abc123/viewform'
       }
     });
+  });
+
+  it('returns a null applyUrl when the cycle has no form', async () => {
+    resolveCandidateCycle.mockResolvedValue({ id: 'cycle-1', name: 'Fall 2026', formUrl: null });
+
+    const res = await get('/api/active-cycle');
+
+    expect((await res.json()).cycle.applyUrl).toBeNull();
   });
 
   it('returns { cycle: null } when no cycle is open', async () => {

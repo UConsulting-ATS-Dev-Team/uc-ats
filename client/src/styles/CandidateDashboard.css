@@ -54,6 +54,11 @@
   line-height: 1.5;
 }
 
+/* Pushed to the right edge; wraps under the deadline on a narrow screen. */
+.next-deadline-action {
+  margin-left: auto;
+}
+
 .dashboard-content {
   margin-top: 2rem;
 }
