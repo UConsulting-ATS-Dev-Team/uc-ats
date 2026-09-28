@@ -188,6 +188,30 @@ describe('which deadline the card shows', () => {
     expect(screen.queryByRole('link', { name: /apply here/i })).not.toBeInTheDocument();
   });
 
+  it('hides "Apply Here" when the applications lookup fails for another reason', async () => {
+    apiClient.get.mockImplementation(async (url) => {
+      if (url === '/active-cycle') {
+        return {
+          cycle: {
+            id: 'cycle-1',
+            name: 'Fall 2026',
+            applicationDeadline: '2099-10-02T06:59:00.000Z',
+            applyUrl: 'https://docs.google.com/forms/d/abc123/viewform',
+          },
+        };
+      }
+      throw new Error('Internal server error');
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderWithRouter(<CandidateDashboard />);
+
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith('/applications/my-applications')
+    );
+    await waitFor(() => expect(console.error).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /apply here/i })).not.toBeInTheDocument();
+  });
+
   it('shows nothing when the open cycle deadline has passed', async () => {
     apiClient.get.mockResolvedValue({
       cycle: { id: 'old', name: 'Fall 2025', applicationDeadline: '2025-10-02T06:59:00.000Z' },

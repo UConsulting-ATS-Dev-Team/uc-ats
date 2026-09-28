@@ -23,10 +23,23 @@ describe('applicantFormLink', () => {
     );
   });
 
+  it('passes a forms.gle shortlink through', () => {
+    expect(applicantFormLink('https://forms.gle/AbC123xyz')).toBe('https://forms.gle/AbC123xyz');
+    expect(applicantFormLink('  https://forms.gle/AbC123xyz/  ')).toBe('https://forms.gle/AbC123xyz');
+  });
+
   it('returns null for anything that is not a Google Form', () => {
     expect(applicantFormLink(null)).toBeNull();
     expect(applicantFormLink('')).toBeNull();
+    expect(applicantFormLink('not a url')).toBeNull();
     expect(applicantFormLink('https://example.com/apply')).toBeNull();
     expect(applicantFormLink('javascript:alert(1)')).toBeNull();
+    expect(applicantFormLink('https://docs.google.com/spreadsheets/d/abc/edit')).toBeNull();
+  });
+
+  it('refuses a Google-looking path on another host', () => {
+    expect(applicantFormLink('https://example.com/forms/d/abc/edit')).toBeNull();
+    expect(applicantFormLink('https://docs.google.com.evil.test/forms/d/abc/edit')).toBeNull();
+    expect(applicantFormLink('https://example.com/?next=docs.google.com/forms/d/abc')).toBeNull();
   });
 });

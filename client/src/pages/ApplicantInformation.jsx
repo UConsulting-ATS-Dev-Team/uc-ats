@@ -348,7 +348,9 @@ export default function ApplicantInformation() {
     );
   };
 
-  const applyUrl = applyLinkFor(activeCycle, applications);
+  // A load error leaves `applications` empty without meaning they have none,
+  // so the form is not offered until the list is known.
+  const applyUrl = loading || loadError ? null : applyLinkFor(activeCycle, applications);
   const appliedToOpenCycle =
     Boolean(activeCycle) && applications.some((application) => application.cycle?.id === activeCycle.id);
 
@@ -380,7 +382,7 @@ export default function ApplicantInformation() {
           </div>
           {applyUrl && (
             <div className="applicant-not-application-action">
-              <ApplyHereButton href={applyUrl} />
+              <ApplyHereButton href={applyUrl} closesAt={activeCycle?.applicationDeadline} />
             </div>
           )}
         </div>

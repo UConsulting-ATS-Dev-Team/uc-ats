@@ -16,6 +16,11 @@
   transition: opacity 0.2s ease;
 }
 
+/* The dark theme's primary is a light sky blue; white on it is unreadable. */
+[data-theme="dark"] .apply-here-button {
+  color: var(--bg-secondary);
+}
+
 .apply-here-button:hover {
   opacity: 0.9;
 }

@@ -111,20 +111,25 @@ const CandidateOnboarding = () => {
     load();
   }, [load]);
 
-  // Anyone on this form has no application, so the open cycle's form is always
-  // theirs to fill in. Failing to load it only drops the button.
-  const [applyUrl, setApplyUrl] = useState(null);
+  // The open cycle, for the notice's "Apply Here". Failing to load it only
+  // drops the button.
+  const [activeCycle, setActiveCycle] = useState(null);
   useEffect(() => {
     let cancelled = false;
     fetchActiveCycle(apiClient)
       .then((cycle) => {
-        if (!cancelled) setApplyUrl(applyLinkFor(cycle, []));
+        if (!cancelled) setActiveCycle(cycle);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Offered only once the status call has said there is no application. The
+  // form still renders when that call fails, and a failure says nothing about
+  // whether this person already applied.
+  const applyUrl = status && !status.hasApplication ? applyLinkFor(activeCycle, []) : null;
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -249,7 +254,7 @@ const CandidateOnboarding = () => {
           separate Google Form.
           {applyUrl && (
             <Box sx={{ mt: 2 }}>
-              <ApplyHereButton href={applyUrl} />
+              <ApplyHereButton href={applyUrl} closesAt={activeCycle?.applicationDeadline} />
             </Box>
           )}
         </Alert>

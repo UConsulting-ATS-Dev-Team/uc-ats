@@ -11,6 +11,25 @@ export const fetchActiveCycle = async (client) => {
   return response?.cycle || null;
 };
 
+// A candidate's applications, or [] when they have none. The endpoint answers a
+// candidate with no application with an error rather than an empty list, so
+// only those two messages mean "none". Any other failure is rethrown: treating
+// it as "none" would offer the form to someone who already applied.
+export const fetchOwnApplications = async (client) => {
+  try {
+    const data = await client.get('/applications/my-applications');
+    return Array.isArray(data) ? data : data?.applications || [];
+  } catch (e) {
+    if (
+      e?.message?.includes('User not found or no studentId associated') ||
+      e?.message?.includes('Candidate not found for this user')
+    ) {
+      return [];
+    }
+    throw e;
+  }
+};
+
 // Where "Apply Here" should go, or null when there is nothing to apply to: no
 // open cycle, no form on it, its deadline has passed, or this candidate already
 // has an application in it. `applications` may be anything the applications

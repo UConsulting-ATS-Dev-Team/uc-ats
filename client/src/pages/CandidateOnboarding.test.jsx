@@ -92,6 +92,20 @@ describe('the not-an-application notice', () => {
     expect(await screen.findByRole('link', { name: /apply here/i })).toHaveAttribute('href', formLink);
   });
 
+  it('does not offer the form when the status check fails', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/active-cycle') {
+        return { cycle: { id: 'cycle-1', name: 'Fall 2026', applicationDeadline: null, applyUrl: formLink } };
+      }
+      throw new Error('Internal server error');
+    });
+    render(<CandidateOnboarding />);
+
+    expect(await screen.findByText(/not an application to UConsulting/i)).toBeInTheDocument();
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/active-cycle'));
+    expect(screen.queryByRole('link', { name: /apply here/i })).not.toBeInTheDocument();
+  });
+
   it('still shows the notice, without a button, when no cycle is open', async () => {
     vi.spyOn(apiClient, 'get').mockImplementation(async (url) =>
       url === '/active-cycle' ? { cycle: null } : status()

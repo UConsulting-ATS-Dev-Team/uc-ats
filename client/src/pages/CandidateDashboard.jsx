@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import ApplyHereButton from '../components/ApplyHereButton';
 import apiClient from '../utils/api';
-import { applyLinkFor } from '../utils/activeCycle';
+import { applyLinkFor, fetchOwnApplications } from '../utils/activeCycle';
 import { formatDeadline, getCycleDeadline } from '../utils/getNextDeadline';
 import '../styles/CandidateDashboard.css';
 
@@ -14,7 +14,7 @@ export default function CandidateDashboard() {
 
   const [deadline, setDeadline] = useState(null);
   const [deadlineLoading, setDeadlineLoading] = useState(true);
-  const [applyUrl, setApplyUrl] = useState(null);
+  const [applyOffer, setApplyOffer] = useState(null);
 
   const handleViewEvents = () => {
     navigate('/events');
@@ -39,6 +39,21 @@ export default function CandidateDashboard() {
   useEffect(() => {
     let cancelled = false;
 
+    // Applications are read only to hide "Apply Here" from someone who already
+    // applied, so only when there is a form to show. If they cannot be read,
+    // the button stays hidden: showing it could invite a second application.
+    const offerApplication = async (cycle) => {
+      if (!applyLinkFor(cycle, [])) return;
+      try {
+        const applications = await fetchOwnApplications(apiClient);
+        if (!cancelled) {
+          setApplyOffer({ href: applyLinkFor(cycle, applications), closesAt: cycle.applicationDeadline });
+        }
+      } catch (error) {
+        console.error('Error checking for an existing application:', error);
+      }
+    };
+
     const fetchDeadline = async () => {
       try {
         setDeadlineLoading(true);
@@ -49,15 +64,8 @@ export default function CandidateDashboard() {
         if (!cancelled) {
           setDeadline(getCycleDeadline(data?.cycle));
         }
-        // Applications are read only to hide "Apply Here" from someone who
-        // already applied, so only when there is a form to show. A candidate
-        // with no application gets a 404 here, which means show it.
-        if (applyLinkFor(data?.cycle, [])) {
-          const applications = await apiClient.get('/applications/my-applications').catch(() => []);
-          if (!cancelled) {
-            setApplyUrl(applyLinkFor(data?.cycle, applications));
-          }
-        }
+        // Not awaited, so the deadline does not wait on it.
+        offerApplication(data?.cycle);
       } catch (error) {
         console.error('Error fetching next deadline:', error);
         if (!cancelled) {
@@ -104,9 +112,9 @@ export default function CandidateDashboard() {
         <div className="next-deadline-banner" role="status" aria-live="polite" aria-atomic="true">
           <span className="next-deadline-label">Application deadline</span>
           <span className="next-deadline-value">{renderDeadlineValue()}</span>
-          {applyUrl && (
+          {applyOffer?.href && (
             <span className="next-deadline-action">
-              <ApplyHereButton href={applyUrl} />
+              <ApplyHereButton href={applyOffer.href} closesAt={applyOffer.closesAt} />
             </span>
           )}
         </div>
