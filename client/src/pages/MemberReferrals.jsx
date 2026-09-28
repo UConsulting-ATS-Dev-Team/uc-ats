@@ -27,7 +27,7 @@ import apiClient from '../utils/api';
 
 const OTHER = { id: '__other__', isOther: true };
 
-const EMPTY_FORM = { referredFirstName: '', referredLastName: '', relationship: '' };
+const EMPTY_FORM = { referredFirstName: '', referredLastName: '', relationship: '', reason: '' };
 
 const candidateLabel = (option) => {
   if (!option) return '';
@@ -101,6 +101,7 @@ const MemberReferrals = () => {
 
   const canSubmit = Boolean(
     form.relationship.trim() &&
+      form.reason.trim() &&
       (isOther
         ? form.referredFirstName.trim() && form.referredLastName.trim()
         : selected?.id)
@@ -120,6 +121,7 @@ const MemberReferrals = () => {
     try {
       const created = await apiClient.post('/member/referrals', {
         relationship: form.relationship.trim(),
+        reason: form.reason.trim(),
         ...(isOther
           ? {
               referredFirstName: form.referredFirstName.trim(),
@@ -219,6 +221,18 @@ const MemberReferrals = () => {
               fullWidth
               placeholder="e.g. Classmate, former teammate, worked together at an internship"
               inputProps={{ maxLength: 120 }}
+            />
+
+            <TextField
+              label="Why do you want to refer them?"
+              value={form.reason}
+              onChange={handleChange('reason')}
+              required
+              fullWidth
+              multiline
+              minRows={3}
+              helperText="Admins read this when reviewing referrals"
+              inputProps={{ maxLength: 1000 }}
             />
 
             {error && <Alert severity="error">{error}</Alert>}

@@ -2634,6 +2634,7 @@ router.patch('/interviews/:interviewId/session-questions/reorder', requireAuth, 
 // same table and on the same profile.
 
 const MAX_REFERRAL_FIELD = 120;
+const MAX_REFERRAL_REASON = 1000;
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -2678,6 +2679,7 @@ router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) =>
     const referredFirstName = trimmed(req.body?.referredFirstName);
     const referredLastName = trimmed(req.body?.referredLastName);
     const relationship = trimmed(req.body?.relationship);
+    const reason = trimmed(req.body?.reason);
 
     // Either they picked someone out of the list, or they typed a name under
     // "Other". Nothing else is a referral.
@@ -2688,6 +2690,14 @@ router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) =>
     }
     if (!relationship) {
       return res.status(400).json({ error: 'Relationship is required' });
+    }
+    if (!reason) {
+      return res.status(400).json({ error: 'Say why you are referring them' });
+    }
+    if (reason.length > MAX_REFERRAL_REASON) {
+      return res
+        .status(400)
+        .json({ error: `Why you are referring them must be ${MAX_REFERRAL_REASON} characters or fewer` });
     }
     if (
       referredFirstName.length > MAX_REFERRAL_FIELD ||
@@ -2705,6 +2715,7 @@ router.post('/referrals', requireAuth, requireAdminOrMember, async (req, res) =>
     const { duplicate, notFound, sealed, referral } = await createMemberReferral({
       referrerName: req.user.fullName || req.user.email,
       relationship,
+      reason,
       referredFirstName,
       referredLastName,
       candidateId: candidateId || null,
@@ -2746,6 +2757,7 @@ router.get('/referrals', requireAuth, requireAdminOrMember, async (req, res) => 
       referrals.map((referral) => ({
         id: referral.id,
         relationship: referral.relationship,
+        reason: referral.reason,
         referredFirstName: referral.referredFirstName,
         referredLastName: referral.referredLastName,
         referredName: referredDisplayName(referral),

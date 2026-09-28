@@ -1358,6 +1358,11 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '4px' }}>
                       {item.relationship}
                     </div>
+                    {item.reason && (
+                      <div style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '4px', whiteSpace: 'pre-wrap' }}>
+                        {item.reason}
+                      </div>
+                    )}
                     <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
                       {item.source === 'PRE_APPLICATION'
                         ? `Submitted ${new Date(item.createdAt).toLocaleDateString()} before this application`

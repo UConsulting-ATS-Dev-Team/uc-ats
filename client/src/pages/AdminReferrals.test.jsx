@@ -46,6 +46,21 @@ describe('AdminReferrals', () => {
     expect(screen.getByText(/Referred by Pam Beesly/)).toBeInTheDocument();
   });
 
+  it('shows why the member referred them, and nothing when there is no reason', async () => {
+    mockApi({
+      referrals: [
+        { ...pendingReferral, reason: 'Carried our case team' },
+        { ...pendingReferral, id: 'ref-2', referredName: 'Jim Halpert', reason: null }
+      ]
+    });
+    render(<AdminReferrals />);
+
+    expect(await screen.findByText('Carried our case team')).toBeInTheDocument();
+    expect(screen.getByText('Jim Halpert')).toBeInTheDocument();
+    expect(screen.getAllByText(/Referred by Pam Beesly/)).toHaveLength(2);
+    expect(screen.queryByText('null')).not.toBeInTheDocument();
+  });
+
   it('says so plainly when nothing is waiting', async () => {
     render(<AdminReferrals />);
     expect(await screen.findByText(/nothing is waiting/i)).toBeInTheDocument();

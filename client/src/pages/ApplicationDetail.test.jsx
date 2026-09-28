@@ -46,8 +46,9 @@ const resumeScore = {
   createdAt: '2025-09-12T00:00:00.000Z',
 };
 
-function mockEndpoints() {
+function mockEndpoints({ referrals = null } = {}) {
   apiClient.get.mockImplementation((url) => {
+    if (referrals && url === '/applications/app-past/referrals') return Promise.resolve(referrals);
     if (url === '/applications/app-past') return Promise.resolve(pastApplication);
     if (url === '/applications/current-user/id') return Promise.resolve({ userId: 'admin-1' });
     if (url.includes('/grades/average')) return Promise.resolve({ resume: 11, video: 1, cover_letter: 2, total: 14, count: 1 });
@@ -126,5 +127,20 @@ describe('ApplicationDetail read-only past-cycle embed', () => {
 
     expect(screen.getByPlaceholderText('Type your comment here...')).toBeInTheDocument();
     expect(screen.getByText('Offer letter section')).toBeInTheDocument();
+  });
+
+  it('shows why a member referred them, and skips the line for a referral without one', async () => {
+    mockEndpoints({
+      referrals: [
+        { id: 'r-1', referrerName: 'Pam Beesly', relationship: 'Classmate', reason: 'Carried our case team', source: 'PRE_APPLICATION', createdAt: '2025-08-20T00:00:00.000Z' },
+        { id: 'r-2', referrerName: 'Jim Halpert', relationship: 'Teammate', reason: null, source: 'MANUAL', createdAt: '2025-08-21T00:00:00.000Z' },
+      ],
+    });
+    renderDetail({ readOnly: true });
+
+    expect(await screen.findByText('Carried our case team')).toBeInTheDocument();
+    expect(screen.getByText('Jim Halpert')).toBeInTheDocument();
+    expect(screen.getByText('Teammate')).toBeInTheDocument();
+    expect(screen.queryByText('null')).not.toBeInTheDocument();
   });
 });

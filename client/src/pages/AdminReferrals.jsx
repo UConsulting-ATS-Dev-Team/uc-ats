@@ -202,6 +202,11 @@ const AdminReferrals = () => {
                     Referred by {referral.referredBy?.fullName || referral.referrerName} ·{' '}
                     {referral.relationship}
                   </Typography>
+                  {referral.reason && (
+                    <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
+                      {referral.reason}
+                    </Typography>
+                  )}
                   <Typography variant="caption" color="text.secondary">
                     Submitted {new Date(referral.createdAt).toLocaleDateString()}
                   </Typography>
