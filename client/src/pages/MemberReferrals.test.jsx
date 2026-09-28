@@ -96,11 +96,13 @@ describe('MemberReferrals', () => {
     await openPicker(user, 'kar');
     await chooseOption(user, /Karen Filippelli/);
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.type(screen.getByLabelText(/why do you want to refer them/i), 'Sharp and kind');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenCalledWith('/member/referrals', {
         relationship: 'Classmate',
+        reason: 'Sharp and kind',
         candidateId: 'cand-7'
       })
     );
@@ -134,11 +136,13 @@ describe('MemberReferrals', () => {
     await user.type(await screen.findByLabelText(/first name/i), '  Karen ');
     await user.type(screen.getByLabelText(/last name/i), ' Filippelli ');
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.type(screen.getByLabelText(/why do you want to refer them/i), 'Sharp and kind');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenCalledWith('/member/referrals', {
         relationship: 'Classmate',
+        reason: 'Sharp and kind',
         referredFirstName: 'Karen',
         referredLastName: 'Filippelli'
       })
@@ -146,7 +150,7 @@ describe('MemberReferrals', () => {
     expect(await screen.findByText(/attach to their profile once they apply/i)).toBeInTheDocument();
   });
 
-  it('will not submit until there is both a person and a relationship', async () => {
+  it('will not submit until there is a person, a relationship and a reason', async () => {
     mockApi({ candidates: [karen] });
     const user = userEvent.setup();
     render(<MemberReferrals />);
@@ -160,6 +164,9 @@ describe('MemberReferrals', () => {
     expect(submit).toBeDisabled(); // person, but no relationship
 
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    expect(submit).toBeDisabled(); // relationship, but no reason
+
+    await user.type(screen.getByLabelText(/why do you want to refer them/i), 'Sharp and kind');
     expect(submit).toBeEnabled();
   });
 
@@ -189,6 +196,7 @@ describe('MemberReferrals', () => {
     await openPicker(user, 'kar');
     await chooseOption(user, /Karen Filippelli/);
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.type(screen.getByLabelText(/why do you want to refer them/i), 'Sharp and kind');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
     expect(await screen.findByText(/already referred this person/i)).toBeInTheDocument();
@@ -203,9 +211,11 @@ describe('MemberReferrals', () => {
     await openPicker(user, 'kar');
     await chooseOption(user, /Karen Filippelli/);
     await user.type(screen.getByLabelText(/how do you know them/i), 'Classmate');
+    await user.type(screen.getByLabelText(/why do you want to refer them/i), 'Sharp and kind');
     await user.click(screen.getByRole('button', { name: /submit referral/i }));
 
     await waitFor(() => expect(screen.getByLabelText(/how do you know them/i)).toHaveValue(''));
+    expect(screen.getByLabelText(/why do you want to refer them/i)).toHaveValue('');
     expect(screen.getByLabelText(/who are you referring/i)).toHaveValue('');
   });
 });

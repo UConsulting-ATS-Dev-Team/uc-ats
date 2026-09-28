@@ -107,6 +107,27 @@ describe('GET /api/admin/referrals', () => {
     expect(row.referredName).toBe('Karen Filippelli');
   });
 
+  it('shows admins why the member referred them', async () => {
+    prisma.referral.findMany.mockResolvedValue([{ ...pending, reason: 'Best analyst in our club' }]);
+    const res = await request('/api/admin/referrals', { user: adminUser });
+    const [row] = await res.json();
+
+    expect(row.reason).toBe('Best analyst in our club');
+  });
+
+  it('withholds the reason on a sealed candidate, with the rest of their record', async () => {
+    prisma.referral.findMany.mockResolvedValue([
+      { ...pending, candidateId: 'cand-9', reason: 'Best analyst in our club' }
+    ]);
+    prisma.candidate.findMany.mockResolvedValue([{ id: 'cand-9', studentId: null, email: null }]);
+
+    const res = await request('/api/admin/referrals', { user: adminUser });
+    const [row] = await res.json();
+
+    expect(row.locked).toBe(true);
+    expect(row.reason).toBeNull();
+  });
+
   it('returns nothing rather than erroring when no cycle is open', async () => {
     prisma.recruitingCycle.findFirst.mockResolvedValue(null);
     const res = await request('/api/admin/referrals', { user: adminUser });

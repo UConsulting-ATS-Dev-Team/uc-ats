@@ -482,6 +482,9 @@ The system follows a **recruiting cycle-based workflow**:
 - One member cannot refer the same person twice in a cycle. The unique index on
   (`referredByUserId`, `cycleId`, `referredNameKey`) is what enforces it; the service's
   lookup races with itself, so it also treats `P2002` as the duplicate it is.
+- A member's referral also carries `reason` (why they are vouching, required, up to 1000
+  characters) for admins to weigh. It is null on `MANUAL` referrals and on ones made
+  before the question existed. The admin queue withholds it on a sealed candidate.
 - Both kinds coexist on a candidate. The application page reads `GET /:id/referrals`
   (plural) for the whole list, while the manual add and remove still own exactly one
   `MANUAL` referral per candidate per cycle and never touch a member's submission.

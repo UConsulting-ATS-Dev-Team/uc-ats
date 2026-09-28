@@ -145,7 +145,7 @@ const referralInclude = { candidate: { select: { id: true, firstName: true, last
  * the same person are both kept: that is real signal, not a duplicate.
  */
 export async function createMemberReferral(
-  { referrerName, relationship, referredFirstName, referredLastName, candidateId, cycleId, referredByUserId },
+  { referrerName, relationship, reason, referredFirstName, referredLastName, candidateId, cycleId, referredByUserId },
   client = prisma
 ) {
   // Scoped to the cycle, exactly like the typeahead that produced this id. The
@@ -197,6 +197,7 @@ export async function createMemberReferral(
       data: {
         referrerName,
         relationship,
+        reason: reason || null,
         source: 'PRE_APPLICATION',
         referredFirstName: String(firstName).trim(),
         referredLastName: String(lastName).trim(),

@@ -834,6 +834,9 @@ model Referral {
   id                String           @id @default(uuid())
   referrerName      String
   relationship      String
+  // Why the member is vouching for them, for admins weighing the referral.
+  // Null on referrals made before the question existed and on MANUAL ones.
+  reason            String?
   candidateId       String?
   createdAt         DateTime         @default(now())
   cycleId           String?

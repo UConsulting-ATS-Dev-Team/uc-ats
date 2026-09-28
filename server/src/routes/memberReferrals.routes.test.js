@@ -45,7 +45,8 @@ const request = (path, { user, method = 'GET', body } = {}) => {
 const validBody = {
   referredFirstName: 'Karen',
   referredLastName: 'Filippelli',
-  relationship: 'Classmate'
+  relationship: 'Classmate',
+  reason: 'Led our case team and carried the final deck'
 };
 
 beforeAll(async () => {
@@ -115,7 +116,7 @@ describe('POST /api/member/referrals validation', () => {
     const res = await request('/api/member/referrals', {
       user: memberUser,
       method: 'POST',
-      body: { candidateId: 'cand-7', relationship: 'Classmate' }
+      body: { candidateId: 'cand-7', relationship: 'Classmate', reason: 'Strong' }
     });
 
     expect(res.status).toBe(201);
@@ -126,7 +127,7 @@ describe('POST /api/member/referrals validation', () => {
     const res = await request('/api/member/referrals', {
       user: memberUser,
       method: 'POST',
-      body: { candidateId: 'gone', relationship: 'Classmate' }
+      body: { candidateId: 'gone', relationship: 'Classmate', reason: 'Strong' }
     });
     expect(res.status).toBe(404);
   });
@@ -142,7 +143,7 @@ describe('POST /api/member/referrals validation', () => {
     const res = await request('/api/member/referrals', {
       user: memberUser,
       method: 'POST',
-      body: { candidateId: 'cand-8', relationship: 'Teammate' }
+      body: { candidateId: 'cand-8', relationship: 'Teammate', reason: 'Strong' }
     });
     expect(res.status).toBe(409);
   });
@@ -154,6 +155,32 @@ describe('POST /api/member/referrals validation', () => {
       body: { ...validBody, relationship: '  ' }
     });
     expect(res.status).toBe(400);
+  });
+
+  it('requires a reason, so admins know why the member is vouching', async () => {
+    const res = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { ...validBody, reason: '  ' }
+    });
+    expect(res.status).toBe(400);
+    expect(prisma.referral.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a paragraph of reason but refuses an overlong one', async () => {
+    const ok = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { ...validBody, reason: 'a'.repeat(1000) }
+    });
+    expect(ok.status).toBe(201);
+
+    const tooLong = await request('/api/member/referrals', {
+      user: memberUser,
+      method: 'POST',
+      body: { ...validBody, reason: 'a'.repeat(1001) }
+    });
+    expect(tooLong.status).toBe(400);
   });
 
   it('refuses an overlong field rather than truncating it', async () => {
@@ -188,6 +215,7 @@ describe('POST /api/member/referrals records the submission', () => {
     expect(data).toMatchObject({
       referrerName: 'Pam Beesly',
       relationship: 'Classmate',
+      reason: 'Led our case team and carried the final deck',
       source: 'PRE_APPLICATION',
       referredFirstName: 'Karen',
       referredLastName: 'Filippelli',
@@ -202,13 +230,14 @@ describe('POST /api/member/referrals records the submission', () => {
     await request('/api/member/referrals', {
       user: memberUser,
       method: 'POST',
-      body: { referredFirstName: '  Karen ', referredLastName: ' Filippelli  ', relationship: ' Classmate ' }
+      body: { referredFirstName: '  Karen ', referredLastName: ' Filippelli  ', relationship: ' Classmate ', reason: '  Strong  ' }
     });
 
     const { data } = prisma.referral.create.mock.calls[0][0];
     expect(data.referredFirstName).toBe('Karen');
     expect(data.referredLastName).toBe('Filippelli');
     expect(data.relationship).toBe('Classmate');
+    expect(data.reason).toBe('Strong');
   });
 
   it('leaves an "Other" submission pending for sync or an admin', async () => {

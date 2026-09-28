@@ -5830,6 +5830,9 @@ router.get('/referrals', async (req, res) => {
         id: referral.id,
         referrerName: referral.referrerName,
         relationship: referral.relationship,
+        // An endorsement of a sealed candidate is part of how they were
+        // evaluated, so it goes with the rest of the record.
+        reason: isLocked(referral) ? null : referral.reason,
         source: referral.source,
         referredName: referredDisplayName(referral),
         referredBy: referral.referredBy,
