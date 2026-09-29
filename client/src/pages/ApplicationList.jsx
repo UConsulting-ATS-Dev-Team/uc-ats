@@ -211,7 +211,7 @@ export default function ApplicationList() {
   }
 
   return (
-    <AccessControl allowedRoles={['ADMIN', 'MEMBER']}>
+    <AccessControl allowedRoles={['ADMIN']}>
       <div className="application-list">
       {/* Simple header */}
       <div className="application-list-header">

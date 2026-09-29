@@ -11,6 +11,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Layout from './components/Layout';
 import CandidateLayout from './components/CandidateLayout';
 import ClientLayout from './components/ClientLayout';
+import AdminOnly from './components/AdminOnly';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ExecUnlockProvider } from './context/ExecUnlockContext';
 import { DataProvider } from './context/DataContext';
@@ -223,7 +224,7 @@ const HomeRoute = () => {
   return <Navigate to="/login" replace />;
 };
 
-const AppRoutes = () => {
+export const AppRoutes = () => {
   const { user } = useAuth();
   const location = useLocation();
 
@@ -283,7 +284,9 @@ const AppRoutes = () => {
         path="/application-list"
         element={
           <ProtectedRoute>
-            <ApplicationList />
+            <AdminOnly memberFallback="/candidates">
+              <ApplicationList />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />
@@ -292,7 +295,9 @@ const AppRoutes = () => {
         path="/application/:id"
         element={
           <ProtectedRoute>
-            <ApplicationDetail />
+            <AdminOnly memberFallback="/candidates">
+              <ApplicationDetail />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />
@@ -310,7 +315,9 @@ const AppRoutes = () => {
         path="/review-teams"
         element={
           <ProtectedRoute>
-            <ReviewTeams />
+            <AdminOnly memberFallback="/candidates">
+              <ReviewTeams />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />
@@ -439,7 +446,9 @@ const AppRoutes = () => {
         path="/staging"
         element={
           <ProtectedRoute>
-            <Staging />
+            <AdminOnly memberFallback="/candidates">
+              <Staging />
+            </AdminOnly>
           </ProtectedRoute>
         }
       />

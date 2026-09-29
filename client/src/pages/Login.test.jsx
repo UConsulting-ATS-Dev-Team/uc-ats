@@ -101,13 +101,24 @@ describe('Login, signing in with Google', () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/dashboard'));
   });
 
-  it('sends staff to the review queue', async () => {
+  it('sends an admin to the review queue', async () => {
     loginWithGoogle.mockResolvedValue({ success: true, user: { role: 'ADMIN' } });
 
     renderLogin();
     await clickGoogle();
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/application-list'));
+  });
+
+  it('sends a member to their dashboard, not the admin review queue', async () => {
+    // /application-list is admin-only. Members read applications at /candidates.
+    loginWithGoogle.mockResolvedValue({ success: true, user: { role: 'MEMBER' } });
+
+    renderLogin();
+    await clickGoogle();
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/dashboard'));
+    expect(navigate).not.toHaveBeenCalledWith('/application-list');
   });
 
   it("shows the server's own words when Google sign-in is refused", async () => {
@@ -141,7 +152,7 @@ describe('Login, signing in with a password', () => {
     await userEvent.type(screen.getByLabelText(/password/i), 'a-password');
     await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
 
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/application-list'));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/dashboard'));
   });
 
   it('sends a candidate to their dashboard too, which it never used to', async () => {
