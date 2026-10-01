@@ -366,3 +366,46 @@ describe('GET /api/resume-uploads/:uploadId/file', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// "Open in new tab" carries no Authorization header, so a replacement resume
+// opens through a link signed for that one upload (services/documentLinks.js).
+describe('signed links to a replacement resume', () => {
+  const storedUpload = () => ({
+    storagePath: 'resumes/app-1/v2.pdf',
+    originalName: 'resume.pdf',
+    application: application(),
+  });
+
+  const signLink = async (user, uploadId = 'v2') => {
+    const res = await request(`/api/resume-uploads/${uploadId}/link`, { user, method: 'POST' });
+    return { status: res.status, body: await res.json() };
+  };
+
+  beforeEach(() => {
+    stored.set('resumes/app-1/v2.pdf', Buffer.from('%PDF-1.4 stored'));
+    prisma.resumeUpload.findUnique.mockResolvedValue(storedUpload());
+  });
+
+  it('opens the resume it was signed for, with no session header', async () => {
+    const { status, body } = await signLink(memberUser);
+    expect(status).toBe(200);
+
+    const res = await request(`/api/resume-uploads/v2/file?access=${encodeURIComponent(body.access)}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('%PDF-1.4 stored');
+  });
+
+  it('is not signed for someone else\'s resume', async () => {
+    expect((await signLink(otherCandidate)).status).toBe(403);
+  });
+
+  it('does not open a different upload', async () => {
+    const { body } = await signLink(memberUser);
+    const res = await request(`/api/resume-uploads/v3/file?access=${encodeURIComponent(body.access)}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('is refused without a session or a link', async () => {
+    expect((await request('/api/resume-uploads/v2/file')).status).toBe(401);
+  });
+});

@@ -67,6 +67,12 @@ describe('signedDocumentTarget', () => {
     expect(signedDocumentTarget('/api/files/abc/image').open('t')).toBe('/api/files/abc/image?access=t');
   });
 
+  it('signs a replacement resume', () => {
+    const target = signedDocumentTarget('/api/resume-uploads/up-1/file');
+    expect(target.linkEndpoint).toBe('/resume-uploads/up-1/link');
+    expect(target.open('t')).toBe('/api/resume-uploads/up-1/file?access=t');
+  });
+
   it('leaves anything else to a plain link', () => {
     expect(signedDocumentTarget('https://drive.google.com/file/d/abc/view')).toBeNull();
     expect(signedDocumentTarget('/api/applications/abc')).toBeNull();

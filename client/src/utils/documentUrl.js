@@ -33,10 +33,14 @@ export function toSameOriginDocumentUrl(url) {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
-const FILE_PATH = /^\/api(\/files\/[^/?#]+)\/(?:pdf|image)$/;
+// Documents served behind sign-in: a Drive file, or a replacement resume.
+const SIGNED_PATHS = [
+  /^\/api(\/files\/[^/?#]+)\/(?:pdf|image)$/,
+  /^\/api(\/resume-uploads\/[^/?#]+)\/file$/,
+];
 
 /**
- * For one of our Drive documents, the endpoint that signs a link to it (relative
+ * For one of our own documents, the endpoint that signs a link to it (relative
  * to apiClient's `/api` base) and the path to open with that link. Null for
  * anything else, which a plain link already opens.
  *
@@ -47,7 +51,7 @@ export function signedDocumentTarget(url) {
   const local = toSameOriginDocumentUrl(url);
   if (typeof local !== 'string') return null;
   const path = local.split(/[?#]/)[0];
-  const match = FILE_PATH.exec(path);
+  const match = SIGNED_PATHS.map((pattern) => pattern.exec(path)).find(Boolean);
   if (!match) return null;
   return {
     linkEndpoint: `${match[1]}/link`,
