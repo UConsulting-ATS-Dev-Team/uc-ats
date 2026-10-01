@@ -2,6 +2,7 @@ import express from 'express';
 import { getFileStream, getFileMetadata } from '../services/google/drive.js';
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
+import { parseByteRange } from '../services/byteRange.js';
 import prisma from '../prismaClient.js';
 
 const router = express.Router();
@@ -153,12 +154,35 @@ router.get('/:fileId/pdf', async (req, res) => {
     }
 
     const meta = await getFileMetadata(fileId);
-    const fileStream = await getFileStream(fileId);
+    // Drive reports size as a decimal string; missing for Google Docs exports.
+    const size = meta?.size != null ? Number(meta.size) : NaN;
+    // Videos (stored behind this route too) arrive as a series of ranges; see
+    // services/byteRange.js for why each answer is capped.
+    const range = parseByteRange(req.headers.range, size);
 
     res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (Number.isFinite(size)) res.setHeader('Accept-Ranges', 'bytes');
 
+    if (range === 'unsatisfiable') {
+      res.setHeader('Content-Range', `bytes */${size}`);
+      return res.status(416).end();
+    }
+
+    const fileStream = await getFileStream(fileId, range ? { range } : {});
+    if (range) {
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+      res.setHeader('Content-Length', String(range.end - range.start + 1));
+    } else if (Number.isFinite(size)) {
+      res.setHeader('Content-Length', String(size));
+    }
+
+    fileStream.on('error', (error) => {
+      console.error('Error streaming file:', error);
+      res.destroy(error);
+    });
     fileStream.pipe(res);
 
   } catch (error) {

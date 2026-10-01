@@ -11,15 +11,19 @@ async function getDriveClient() {
   return driveClient;
 }
 
-//Get direct download stream for a Google Drive file
-export async function getFileStream(fileId) {
+// Get direct download stream for a Google Drive file. `range` ({ start, end },
+// inclusive) reads only that slice; Drive honours Range on alt=media downloads.
+export async function getFileStream(fileId, { range } = {}) {
   try {
     const drive = await getDriveClient();
     const res = await drive.files.get({
       fileId: fileId,
       alt: 'media',
       supportsAllDrives: true // Required for shared drives
-    }, { responseType: 'stream' });
+    }, {
+      responseType: 'stream',
+      ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
+    });
     
     return res.data;
   } catch (error) {
