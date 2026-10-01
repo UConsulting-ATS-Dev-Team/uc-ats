@@ -25,6 +25,17 @@
   margin: 0;
 }
 
+.applications-sync-note {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0.75rem 0 0 0;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-white);
+  border: 1px solid var(--border-light);
+  border-radius: var(--border-radius);
+  line-height: 1.5;
+}
+
 .applications-content {
   margin-top: 2rem;
 }

@@ -319,6 +319,11 @@ export default function CandidateApplications() {
         <p className="applications-subtitle">
           Track the status of your UConsulting applications
         </p>
+        <p className="applications-sync-note">
+          Just applied? It can take a few hours for a new application to show up
+          here. If it still isn't here after a day, check that the UID on your
+          application matches the one on your account.
+        </p>
       </div>
 
       <div className="applications-content">
@@ -326,8 +331,8 @@ export default function CandidateApplications() {
           <div className="no-applications">
             <h2>No Applications Found</h2>
             <p>
-              You haven't submitted any applications yet. Check back here once you've 
-              applied to track your status.
+              We don't have an application from you yet. If you just submitted one,
+              give it a few hours and check back.
             </p>
           </div>
         ) : (
