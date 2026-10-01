@@ -362,7 +362,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
             <div className="form-group">
               <label htmlFor="resumeUrl">Resume URL *</label>
               <input
-                type="url"
+                type="text"
                 id="resumeUrl"
                 name="resumeUrl"
                 value={formData.resumeUrl}
@@ -374,7 +374,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
             <div className="form-group">
               <label htmlFor="blindResumeUrl">Blind Resume URL</label>
               <input
-                type="url"
+                type="text"
                 id="blindResumeUrl"
                 name="blindResumeUrl"
                 value={formData.blindResumeUrl}
@@ -385,7 +385,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
             <div className="form-group">
               <label htmlFor="headshotUrl">Headshot URL *</label>
               <input
-                type="url"
+                type="text"
                 id="headshotUrl"
                 name="headshotUrl"
                 value={formData.headshotUrl}
@@ -397,7 +397,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
             <div className="form-group">
               <label htmlFor="coverLetterUrl">Cover Letter URL</label>
               <input
-                type="url"
+                type="text"
                 id="coverLetterUrl"
                 name="coverLetterUrl"
                 value={formData.coverLetterUrl}
@@ -419,7 +419,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
             <div className="form-group">
               <label htmlFor="videoUrl">Video URL</label>
               <input
-                type="url"
+                type="text"
                 id="videoUrl"
                 name="videoUrl"
                 value={formData.videoUrl}
