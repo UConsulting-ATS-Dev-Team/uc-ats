@@ -321,8 +321,10 @@ export default function CandidateApplications() {
         </p>
         <p className="applications-sync-note">
           Just applied? It can take a few hours for a new application to show up
-          here. If it still isn't here after a day, check that the UID on your
-          application matches the one on your account.
+          here. If it still isn't here after a day, the UID on your application
+          may not match the one on your account. Email{' '}
+          <a href="mailto:uconsultingla@gmail.com">uconsultingla@gmail.com</a> with
+          your name and UID and we'll link it for you.
         </p>
       </div>
 
