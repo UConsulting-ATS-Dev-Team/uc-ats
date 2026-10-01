@@ -1,5 +1,6 @@
 // The Interviews page's "Questions" dialog: it shows a session's saved questions as
-// text, and saves them as a questions update the server recognises.
+// text, and saves them as a questions update the server recognises, each with the id
+// that keeps its row (and the notes written against it) through an edit.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -44,12 +45,23 @@ describe('Questions dialog', () => {
     expect(await screen.findByDisplayValue('Why consulting?')).toBeInTheDocument();
     expect(screen.queryByDisplayValue('[object Object]')).not.toBeInTheDocument();
 
+    fireEvent.change(screen.getByDisplayValue('Why consulting?'), { target: { value: 'Why consulting, and why us?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add a question' }));
+    const fields = screen.getAllByRole('textbox');
+    fireEvent.change(fields[fields.length - 1], { target: { value: 'A setback?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
       expect(apiClient.patch).toHaveBeenCalledWith('/admin/interviews/iv1/config', {
         type: 'behavioral_questions',
-        config: { behavioralQuestions: true, groupId: 's1', questions: ['Why consulting?'] },
+        config: {
+          behavioralQuestions: true,
+          groupId: 's1',
+          questions: [
+            { id: 'q1', text: 'Why consulting, and why us?' },
+            { id: null, text: 'A setback?' },
+          ],
+        },
       })
     );
   });

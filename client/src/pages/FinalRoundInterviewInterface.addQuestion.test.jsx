@@ -43,7 +43,7 @@ const renderPage = async () => {
 };
 
 describe('final round Add Question', () => {
-  it('saves the question typed into the prompt alongside the existing ones', async () => {
+  it('saves the question typed into the prompt alongside the existing ones, which keep their ids', async () => {
     vi.spyOn(window, 'prompt').mockReturnValue('  Tell us about a hard call you made.  ');
     await renderPage();
 
@@ -55,7 +55,7 @@ describe('final round Add Question', () => {
         config: {
           behavioralQuestions: true,
           groupId: 'g1',
-          questions: ['Why consulting?', 'Tell us about a hard call you made.'],
+          questions: [{ id: 'q1', text: 'Why consulting?' }, 'Tell us about a hard call you made.'],
         },
       })
     );

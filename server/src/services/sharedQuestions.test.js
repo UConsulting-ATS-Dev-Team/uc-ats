@@ -80,6 +80,37 @@ describe('saveSharedQuestions', () => {
     expect(listed(client.rows).map((r) => [r.id, r.questionText])).toEqual([['q1', 'Why consulting, and why us?']]);
   });
 
+  it('keeps each row by the id the editor sent, even when edits trade texts', async () => {
+    // "Foo" becomes "Bar" and "Bar" becomes "Baz". Matched by text alone, the first
+    // question would take the old "Bar" row, and each would show the other's notes.
+    const client = fakeClient([q('q1', 'old-g', 0, 'Foo'), q('q2', 'old-g', 1, 'Bar')]);
+
+    await saveSharedQuestions(
+      { interviewId: 'iv1', groupId: 'slot-1', questions: [{ id: 'q1', text: 'Bar' }, { id: 'q2', text: 'Baz' }], userId: 'm1' },
+      client
+    );
+
+    expect(listed(client.rows).map((r) => [r.id, r.questionText])).toEqual([
+      ['q1', 'Bar'],
+      ['q2', 'Baz'],
+    ]);
+  });
+
+  it('creates a new question for an entry whose id is not one of the group\'s rows', async () => {
+    const client = fakeClient([q('q1', 'old-g', 0, 'Why consulting?')]);
+
+    await saveSharedQuestions(
+      { interviewId: 'iv1', groupId: 'slot-1', questions: [{ id: 'q1', text: 'Why consulting?' }, { id: 'temp-1', text: 'New one' }, { text: 'Another' }], userId: 'm1' },
+      client
+    );
+
+    expect(listed(client.rows).map((r) => [r.id, r.questionText])).toEqual([
+      ['q1', 'Why consulting?'],
+      ['q2', 'New one'],
+      ['q3', 'Another'],
+    ]);
+  });
+
   it('leaves candidate-specific questions alone', async () => {
     const own = { ...q('c1', 'slot-1', 0, 'For Taylor'), applicationId: 'app1' };
     const client = fakeClient([q('q1', 'old-g', 0, 'Why consulting?'), own]);

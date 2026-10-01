@@ -12,6 +12,11 @@
 // Rows are reused, never recreated, wherever a question survives the edit: an
 // interviewer's notes are keyed by question id, so a kept question that came back
 // with a new id would lose every note written against it.
+//
+// An editor that loaded the questions sends each one as { id, text }, and that id is
+// what keeps its row. A bare string is matched as well as text allows - the same text
+// first, then the next unclaimed row - which cannot tell "Foo became Bar, Bar became
+// Baz" from "Foo was deleted, Baz was added". Only the id can.
 import prisma from '../prismaClient.js';
 import { canonicalGroupIdFor, expandGroupIdsForQuestions } from './interviewRoster.js';
 
@@ -26,13 +31,25 @@ export async function saveSharedQuestions({ interviewId, groupId: requestedGroup
       orderBy: { order: 'asc' },
     })
   ).sort((a, b) => a.order - b.order || (a.groupId === groupId ? -1 : 0) - (b.groupId === groupId ? -1 : 0));
-  const wanted = questions.filter((q) => typeof q === 'string' && q.trim() !== '');
+  const entries = questions
+    .map((q) => (typeof q === 'string' ? { id: null, text: q } : { id: q?.id ?? null, text: q?.text }))
+    .filter((q) => typeof q.text === 'string' && q.text.trim() !== '');
+  const wanted = entries.map((q) => q.text);
 
-  // Who keeps which row: the same text first, wherever it sits; then, for a question
-  // whose text was edited, the next unclaimed row in order.
+  // Who keeps which row: the row named by its id; then, for a bare string, the same
+  // text wherever it sits; then the next unclaimed row in order. An id that is not one
+  // of this group's rows (a client's temp id) counts as no id.
   const claimed = new Set();
   const rowFor = new Array(wanted.length).fill(null);
+  entries.forEach(({ id }, i) => {
+    const own = id && existing.find((row) => row.id === id && !claimed.has(row.id));
+    if (own) {
+      rowFor[i] = own;
+      claimed.add(own.id);
+    }
+  });
   wanted.forEach((text, i) => {
+    if (rowFor[i]) return;
     const same = existing.find((row) => !claimed.has(row.id) && row.questionText === text);
     if (same) {
       rowFor[i] = same;

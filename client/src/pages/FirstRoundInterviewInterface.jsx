@@ -549,9 +549,9 @@ export default function FirstRoundInterviewInterface() {
       console.log('Current questions for group:', currentQuestions);
       
       // Add new question with placeholder text (server filters out empty strings)
-      // Handle both object format (with .text property) and string format
+      // Existing questions are sent with their ids, so the server keeps their rows and notes.
       const questionTexts = currentQuestions.length > 0 
-        ? currentQuestions.map(q => (typeof q === 'string' ? q : (q.text || q)))
+        ? currentQuestions.map(q => (typeof q === 'string' ? q : { id: q.id, text: q.text }))
         : [];
       // Use a placeholder text so the server will create the question
       const newQuestionNumber = questionTexts.length + 1;
@@ -639,7 +639,7 @@ export default function FirstRoundInterviewInterface() {
         config: {
           behavioralQuestions: true,
           groupId: groupId,
-          questions: updatedQuestions.map(q => q.text)
+          questions: updatedQuestions.map(q => ({ id: q.id, text: q.text }))
         }
       });
       
