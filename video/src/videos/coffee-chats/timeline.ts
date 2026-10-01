@@ -97,42 +97,58 @@ export function buildWalkthrough(S: States): Walkthrough {
   page(1246, "face-yes", IFACE);
   ring(1250, box("face-yes", "yes1"), 36);
 
-  // ---------- 7. Save All ----------
-  head(1305, 1530, "Step 7", "Hit Save All when the chat ends", [1, 2]);
-  page(1305, "face-all", IFACE);
-  camReset(1312, 14);
+  // ---------- 7. The interview chat ----------
+  head(1305, 1515, "Step 7 · Interview chat", "Message everyone running this interview", [0]);
+  camReset(1310, 12);
+  ring(1316, pad(box("face-yes", "chat"), 6), 30);
+  press(1340, box("face-yes", "chat"), "hand", () => page(1346, "chat-open", IFACE), 22);
+  camZoom(1362, box("chat-open", "panel"), 1.4, 18);
+  ring(1372, pad(box("chat-open", "incoming"), 6), 40);
+  press(1418, box("chat-open", "input"), "text", undefined, 16);
+  const replies = (S["chat-count"] as unknown as { count: number }).count;
+  for (let i = 0; i < replies; i++) typePage(1426 + i * 3, `chat-t${i}`, IFACE);
+  const sendAt = 1426 + replies * 3 + 8;
+  press(sendAt, box(`chat-t${replies - 1}`, "send"), "hand", () => page(sendAt + 6, "chat-sent", IFACE), 12);
+  chime(sendAt + 6);
+  ring(sendAt + 10, pad(box("chat-sent", "sent"), 6), 30);
+  camReset(1500, 12);
+
+  // ---------- 8. Save All ----------
+  head(1515, 1740, "Step 8", "Hit Save All when you wrap up", [1, 2]);
+  page(1515, "face-all", IFACE);
+  camReset(1522, 14);
   const toCards = scrollFor("face-all", "card2", 120);
-  scrollTo(1316, 1356, toCards);
-  scrollTo(1384, 1414, 0);
-  camOn(1426, pad(box("face-all", "saveAll"), 160), 1.5, 14);
-  press(1440, box("face-all", "saveAll"), "hand", undefined, 20);
-  dialog(1446, "saved");
-  chime(1446);
-  camReset(1458, 12);
-  press(1500, box("saved", "back"), "hand", undefined, 22);
-  dialog(1506, null);
-  page(1506, "mine-done", "/assigned-interviews");
+  scrollTo(1526, 1566, toCards);
+  scrollTo(1594, 1624, 0);
+  camOn(1636, pad(box("face-all", "saveAll"), 160), 1.5, 14);
+  press(1650, box("face-all", "saveAll"), "hand", undefined, 20);
+  dialog(1656, "saved");
+  chime(1656);
+  camReset(1668, 12);
+  press(1710, box("saved", "back"), "hand", undefined, 22);
+  dialog(1716, null);
+  page(1716, "mine-done", "/assigned-interviews");
 
-  // ---------- 8. Finish line ----------
-  head(1530, 1710, "Finish line", "Your calls land in My Evaluations", [4, 5]);
+  // ---------- 9. Finish line ----------
+  head(1740, 1920, "Finish line", "Your calls land in My Evaluations", [4, 5]);
   const toEvals = scrollFor("mine-done", "evals", 140);
-  scrollTo(1532, 1566, toEvals);
-  ring(1576, pad(k.box("mine-done", "chip1"), 4), 34);
-  ring(1592, pad(k.box("mine-done", "chip2"), 4), 34);
+  scrollTo(1742, 1776, toEvals);
+  ring(1786, pad(k.box("mine-done", "chip1"), 4), 34);
+  ring(1802, pad(k.box("mine-done", "chip2"), 4), 34);
   const edit = k.box("mine-done", "edit1");
-  move(1630, mid(edit), "hand", 26);
-  ring(1636, pad(edit, 6), 40);
-  camTo(1640, mid(k.box("mine-done", "ev1")).x, mid(edit).y + 60, 1.35, 26);
-  camReset(1700, 14);
+  move(1840, mid(edit), "hand", 26);
+  ring(1846, pad(edit, 6), 40);
+  camTo(1850, mid(k.box("mine-done", "ev1")).x, mid(edit).y + 60, 1.35, 26);
+  camReset(1910, 14);
 
-  return done(1710);
+  return done(1920);
 }
 
 // ---------- the whole video ----------
 export const SCENES = [
   { name: "Intro", frames: 150 },
   { name: "Sittings", frames: 210 },
-  { name: "Walkthrough", frames: 1710, walk: true },
+  { name: "Walkthrough", frames: 1920, walk: true },
   { name: "After", frames: 195 },
   { name: "Close", frames: 150 },
 ] as const;
