@@ -16,23 +16,31 @@ import {
 } from '@mui/material';
 import apiClient from '../utils/api';
 import { getKnownVideoEmbedUrl } from '../utils/videoEmbed';
+import { GATE_COPY } from '../utils/tutorialCategories';
 
 // The tutorials someone must sit through before their first piece of `category` work
 // in a cycle. The server decides whether they still have to (see
 // server/src/services/tutorialGate.js); this only asks and shows them.
 //
-//   const gate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
+//   const gate = useTutorialGate('DOCUMENT_GRADING');
 //   const handleGrade = (app) => gate.run(() => openGradingModal(app));
 //   ...
 //   {gate.dialog}
+//
+// A page whose work belongs to more than one category passes it per call instead:
+// `gate.run(start, tutorialCategoryForInterviewType(interview.interviewType))`. A null
+// category is not gated. The popup's wording and button come from GATE_COPY unless
+// `continueLabel` is given.
 //
 // `run` asks the server every time rather than remembering the answer, so a page left
 // open across a cycle change, or a tutorial published meanwhile, still gates the next
 // document. It performs the action straight away when the gate is clear, and after
 // the tutorials are finished otherwise. A failed status check lets the action through:
 // a missed tutorial is recoverable, a grader who cannot grade is not.
-export function useTutorialGate(category, continueLabel = 'Continue') {
+export function useTutorialGate(category = null, continueLabel) {
   const [tutorials, setTutorials] = useState([]);
+  const [shownCategory, setShownCategory] = useState(category);
+  const categoryRef = useRef(category);
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -40,13 +48,17 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
   const pendingActionRef = useRef(null);
 
   const run = useCallback(
-    async (action) => {
+    async (action, forCategory = category) => {
       // The latest click wins: clicking B while A is still being checked opens B, and
       // a double click opens one document, not two.
       const runId = ++latestRunRef.current;
+      if (!forCategory) {
+        action();
+        return;
+      }
       let status;
       try {
-        status = await apiClient.get(`/member/help/tutorial-gates/${category}`);
+        status = await apiClient.get(`/member/help/tutorial-gates/${forCategory}`);
       } catch {
         status = null;
       }
@@ -57,6 +69,8 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
         return;
       }
       pendingActionRef.current = action;
+      categoryRef.current = forCategory;
+      setShownCategory(forCategory);
       setTutorials(status.tutorials || []);
       setError(null);
       setOpen(true);
@@ -68,7 +82,7 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
     setSubmitting(true);
     setError(null);
     try {
-      await apiClient.post(`/member/help/tutorial-gates/${category}/complete`);
+      await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`);
       setOpen(false);
       const action = pendingActionRef.current;
       pendingActionRef.current = null;
@@ -80,11 +94,13 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
     }
   };
 
+  const copy = GATE_COPY[shownCategory] || {};
   const dialog = (
     <TutorialGateDialog
       open={open}
       tutorials={tutorials}
-      continueLabel={continueLabel}
+      when={copy.when}
+      continueLabel={continueLabel || copy.continueLabel || 'Continue'}
       submitting={submitting}
       error={error}
       onComplete={complete}
@@ -99,7 +115,8 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
 export function TutorialGateDialog({
   open,
   tutorials,
-  continueLabel,
+  when = 'before you start',
+  continueLabel = 'Continue',
   submitting,
   error,
   onComplete,
@@ -122,8 +139,8 @@ export function TutorialGateDialog({
       <DialogTitle id="tutorial-gate-title">Before you start</DialogTitle>
       <DialogContent dividers>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          Watch this once each cycle before you grade. You can find it again later under
-          Help &amp; Tutorials.
+          Watch this once each cycle {when}. You can find it again later under Help &amp;
+          Tutorials.
         </Typography>
 
         <Stack spacing={3} divider={<Divider flexItem />}>

@@ -23,6 +23,8 @@ import CandidateQuestionSetup from '../components/interview/CandidateQuestionSet
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
 import { groupsForMember } from '../utils/interviewGroups';
 import { DecisionGuideButton, DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
+import { useTutorialGate } from '../components/TutorialGate';
+import { tutorialCategoryForInterviewType } from '../utils/tutorialCategories';
 import '../styles/AdminAssignedInterviews.css';
 
 // Application Group Card Component
@@ -240,6 +242,7 @@ export default function AssignedInterviews() {
   const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide(
     editingEvaluation ? guidePhaseForInterviewType(editingInterviewType) : null
   );
+  const tutorialGate = useTutorialGate();
 
   // Load applications for a specific group
   const loadGroupApplications = async (interviewId, groupId) => {
@@ -340,15 +343,19 @@ export default function AssignedInterviews() {
   }, []);
 
 
-  const handleStartInterview = async (interviewId) => {
-    setSelectedInterviewForStart(interviewId);
-    setGroupSelectionOpen(true);
-    setGroupSearchTerm('');
-    setSelectedGroups([]);
-    setShowBehavioralQuestionsConfig(false);
-    
-    // Don't load questions here - we'll load them when groups are selected
-    setBehavioralQuestionsConfig([]);
+  const handleStartInterview = (interviewId) => {
+    const interview = interviews.find((i) => i.id === interviewId);
+    // The round's tutorials come first, once a cycle (see useTutorialGate).
+    tutorialGate.run(() => {
+      setSelectedInterviewForStart(interviewId);
+      setGroupSelectionOpen(true);
+      setGroupSearchTerm('');
+      setSelectedGroups([]);
+      setShowBehavioralQuestionsConfig(false);
+
+      // Don't load questions here - we'll load them when groups are selected
+      setBehavioralQuestionsConfig([]);
+    }, tutorialCategoryForInterviewType(interview?.interviewType));
   };
 
   const handleGroupToggle = (groupId) => {
@@ -1296,6 +1303,7 @@ export default function AssignedInterviews() {
         </div>
       )}
       <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} />
+      {tutorialGate.dialog}
     </div>
     </AccessControl>
   );
