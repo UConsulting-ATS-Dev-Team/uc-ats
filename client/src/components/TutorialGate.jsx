@@ -71,7 +71,7 @@ export function useTutorialGate(category = null, continueLabel) {
       }
       pendingActionRef.current = action;
       categoryRef.current = forCategory;
-      cycleRef.current = status.cycleId ?? null;
+      cycleRef.current = { cycleId: status.cycleId ?? null, token: status.token ?? null };
       setShownCategory(forCategory);
       setTutorials([...(status.tutorials || [])]);
       setError(null);
@@ -88,7 +88,8 @@ export function useTutorialGate(category = null, continueLabel) {
       // open, the server records nothing and says so, and the gate is asked again: the
       // new cycle's tutorials may still be owed.
       const result = await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`, {
-        cycleId: cycleRef.current,
+        cycleId: cycleRef.current?.cycleId ?? null,
+        token: cycleRef.current?.token ?? null,
       });
       setOpen(false);
       const action = pendingActionRef.current;

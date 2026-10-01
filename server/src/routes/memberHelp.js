@@ -148,8 +148,11 @@ router.post('/tutorial-gates/:category/complete', requireAdminOrMember, async (r
     return res.status(404).json({ error: 'No tutorial gate for this category' });
   }
   try {
-    const shownCycleId = typeof req.body?.cycleId === 'string' ? req.body.cycleId : null;
-    const completion = await completeTutorialGate(req, category, shownCycleId);
+    const str = (v) => (typeof v === 'string' ? v : null);
+    const completion = await completeTutorialGate(req, category, {
+      cycleId: str(req.body?.cycleId),
+      token: str(req.body?.token),
+    });
     // false when nothing was recorded: no current cycle, or it moved since the popup
     // opened. The popup then asks the gate again rather than letting the work through.
     res.json({ completed: Boolean(completion), completedAt: completion?.completedAt ?? null });
