@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Dialog } from '@mui/material';
 import DocumentPreviewModal from './DocumentPreviewModal';
 
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ token: 't' }) }));
@@ -17,6 +18,28 @@ describe('DocumentPreviewModal', () => {
 
     expect(screen.getByText('Taylor Kim – Short Answer')).toBeInTheDocument();
     expect(container.textContent).not.toContain('Taylor Kim – Short Answer');
+  });
+
+  it('takes keyboard focus and Escape from an MUI dialog it opens over', async () => {
+    // Staging opens previews from inside a Dialog, whose focus trap would otherwise
+    // keep Tab and focus inside the dialog underneath, and whose Escape would close
+    // the dialog along with the preview.
+    const onPreviewClose = vi.fn();
+    const onDialogClose = vi.fn();
+    render(
+      <Dialog open onClose={onDialogClose}>
+        <button>Inside the dialog</button>
+        <DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onPreviewClose} />
+      </Dialog>
+    );
+
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+    await waitFor(() => expect(document.activeElement).toBe(close));
+
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(onPreviewClose).toHaveBeenCalledTimes(1);
+    expect(onDialogClose).not.toHaveBeenCalled();
   });
 
   it('still closes from its button', () => {

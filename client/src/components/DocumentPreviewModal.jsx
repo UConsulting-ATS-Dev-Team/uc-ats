@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { Modal } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import { toSameOriginDocumentUrl } from '../utils/documentUrl';
@@ -47,14 +47,6 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
   const isMobile = useIsMobile();
   
   useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  useEffect(() => {
     if (kind === 'text') return undefined;
     let localUrl;
     const load = async () => {
@@ -85,91 +77,94 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
     };
   }, [src, token, kind]);
 
-  // Portalled to <body>: the overlay is position: fixed, and fixed positions against
-  // the nearest transformed ancestor rather than the window. Rendered in place, a
-  // card with a hover transform (My Interviews' .interview-card:hover) became that
-  // ancestor the moment someone clicked Resume, and the preview opened shifted up
-  // under the top bar.
-  return createPortal(
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={getModalStyle(isMobile)} onClick={(e) => e.stopPropagation()}>
-        <div style={headerStyle}>
-          <div style={{ fontWeight: 600 }}>{title || 'Preview'}</div>
-          <button onClick={onClose} style={{ padding: '6px 10px' }}>Close</button>
-        </div>
-        <div style={contentStyle}>
-          {kind === 'text' && (
-            <div style={{ height: '100%', overflow: 'auto', background: '#fff' }}>
-              <p style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 32, whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 16 }}>
-                {text}
-              </p>
-            </div>
-          )}
-          {kind !== 'text' && error && (
-            <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>
-          )}
-          {kind !== 'text' && !error && !blobUrl && (
-            <div style={{ padding: 16 }}>Loading preview…</div>
-          )}
-          {kind !== 'text' && !error && blobUrl && (
-            kind === 'pdf' ? (
-              <iframe
-                title={title || 'Document preview'}
-                src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`}
-                style={{ width: '100%', height: '100%', border: 'none' }}
-              />
-            ) : kind === 'video' ? (
-              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
-                <video
-                  ref={videoRef}
-                  src={blobUrl}
-                  controls
-                  preload="auto"
-                  style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
-                  onLoadedData={() => {
-                    console.log('Video loaded successfully');
-                    // Try to play the video
-                    if (videoRef.current) {
-                      videoRef.current.play().catch(err => {
-                        console.log('Autoplay prevented, user can click play:', err);
-                      });
-                    }
-                  }}
-                  onError={(e) => {
-                    console.error('Video playback error:', e, videoRef.current?.error);
-                    const error = videoRef.current?.error;
-                    let errorMsg = 'Failed to play video.';
-                    if (error) {
-                      switch (error.code) {
-                        case error.MEDIA_ERR_ABORTED:
-                          errorMsg = 'Video playback was aborted.';
-                          break;
-                        case error.MEDIA_ERR_NETWORK:
-                          errorMsg = 'Network error while loading video.';
-                          break;
-                        case error.MEDIA_ERR_DECODE:
-                          errorMsg = 'Video format not supported or corrupted.';
-                          break;
-                        case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                          errorMsg = 'Video format not supported.';
-                          break;
+  // An MUI Modal, which renders on <body> and takes part in MUI's stack of modals.
+  // <body>: the overlay is position: fixed, and fixed positions against the nearest
+  // transformed ancestor rather than the window. Rendered in place, a card with a
+  // hover transform (My Interviews' .interview-card:hover) became that ancestor the
+  // moment someone clicked Resume, and the preview opened shifted up under the top
+  // bar. The stack: opened from an MUI Dialog (Staging), this is the top modal, so it
+  // holds keyboard focus and Escape closes it alone, not the dialog underneath too.
+  return (
+    <Modal open onClose={onClose} hideBackdrop>
+      <div style={overlayStyle} onClick={onClose}>
+        <div style={getModalStyle(isMobile)} onClick={(e) => e.stopPropagation()}>
+          <div style={headerStyle}>
+            <div style={{ fontWeight: 600 }}>{title || 'Preview'}</div>
+            <button onClick={onClose} style={{ padding: '6px 10px' }}>Close</button>
+          </div>
+          <div style={contentStyle}>
+            {kind === 'text' && (
+              <div style={{ height: '100%', overflow: 'auto', background: '#fff' }}>
+                <p style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 32, whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 16 }}>
+                  {text}
+                </p>
+              </div>
+            )}
+            {kind !== 'text' && error && (
+              <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>
+            )}
+            {kind !== 'text' && !error && !blobUrl && (
+              <div style={{ padding: 16 }}>Loading preview…</div>
+            )}
+            {kind !== 'text' && !error && blobUrl && (
+              kind === 'pdf' ? (
+                <iframe
+                  title={title || 'Document preview'}
+                  src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+                  style={{ width: '100%', height: '100%', border: 'none' }}
+                />
+              ) : kind === 'video' ? (
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
+                  <video
+                    ref={videoRef}
+                    src={blobUrl}
+                    controls
+                    preload="auto"
+                    style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
+                    onLoadedData={() => {
+                      console.log('Video loaded successfully');
+                      // Try to play the video
+                      if (videoRef.current) {
+                        videoRef.current.play().catch(err => {
+                          console.log('Autoplay prevented, user can click play:', err);
+                        });
                       }
-                    }
-                    setError(errorMsg);
-                  }}
-                >
-                  Your browser does not support the video tag.
-                </video>
-              </div>
-            ) : (
-              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-                <img src={blobUrl} alt={title || 'Image preview'} style={{ maxWidth: '100%', maxHeight: '100%' }} />
-              </div>
-            )
-          )}
+                    }}
+                    onError={(e) => {
+                      console.error('Video playback error:', e, videoRef.current?.error);
+                      const error = videoRef.current?.error;
+                      let errorMsg = 'Failed to play video.';
+                      if (error) {
+                        switch (error.code) {
+                          case error.MEDIA_ERR_ABORTED:
+                            errorMsg = 'Video playback was aborted.';
+                            break;
+                          case error.MEDIA_ERR_NETWORK:
+                            errorMsg = 'Network error while loading video.';
+                            break;
+                          case error.MEDIA_ERR_DECODE:
+                            errorMsg = 'Video format not supported or corrupted.';
+                            break;
+                          case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                            errorMsg = 'Video format not supported.';
+                            break;
+                        }
+                      }
+                      setError(errorMsg);
+                    }}
+                  >
+                    Your browser does not support the video tag.
+                  </video>
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
+                  <img src={blobUrl} alt={title || 'Image preview'} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                </div>
+              )
+            )}
+          </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 }
