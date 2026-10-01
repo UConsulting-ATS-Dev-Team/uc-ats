@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -182,6 +182,13 @@ export default function FinalRoundInterviewInterface() {
       setLoading(false);
     }
   }, [interviewId, groupIds.join(',')]);
+
+  // The autosave timer fires seconds after the render that scheduled it; reading
+  // `evaluations` from that render would send notes missing the latest edits.
+  const evaluationsRef = useRef(evaluations);
+  evaluationsRef.current = evaluations;
+  const latestEvaluation = (applicationId) =>
+    evaluationsRef.current[`${applicationId}_${currentUser?.id}`] || { behavioralNotes: '', casingNotes: {} };
 
   const getEvaluation = (applicationId) => {
     const key = `${applicationId}_${currentUser?.id}`;
@@ -372,7 +379,7 @@ export default function FinalRoundInterviewInterface() {
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
-      const evaluation = getEvaluation(applicationId);
+      const evaluation = latestEvaluation(applicationId);
       
       if (isAdmin) {
         await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
@@ -434,6 +441,12 @@ export default function FinalRoundInterviewInterface() {
   };
 
   const saveAllEvaluations = async () => {
+    // Pending autosaves would race these requests (two first saves of one evaluation
+    // collide on its unique key) or land after them, so they are cancelled now and
+    // rescheduled if Save All fails: then they are still the retry.
+    const pending = Object.keys(autoSaveTimeouts);
+    Object.values(autoSaveTimeouts).forEach(clearTimeout);
+    setAutoSaveTimeouts({});
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
@@ -443,7 +456,7 @@ export default function FinalRoundInterviewInterface() {
         if (isAdmin) {
           return apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
             applicationId: app.id,
-              behavioralNotes: evaluation.behavioralNotes,
+            behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
           });
@@ -451,7 +464,7 @@ export default function FinalRoundInterviewInterface() {
           return apiClient.post(`${basePath}/evaluations`, {
             interviewId,
             applicationId: app.id,
-              behavioralNotes: evaluation.behavioralNotes,
+            behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
           });
@@ -459,10 +472,6 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      // Every note is saved now, so a pending autosave would only repeat it. Cancelled
-      // only on success: if Save All failed, the autosave is still the retry.
-      Object.values(autoSaveTimeouts).forEach(clearTimeout);
-      setAutoSaveTimeouts({});
       if (applications.some((app) => !getEvaluation(app.id).decision)) {
         setDecisionPromptOpen(true);
       } else {
@@ -470,6 +479,7 @@ export default function FinalRoundInterviewInterface() {
       }
     } catch (error) {
       console.error('Failed to save evaluations:', error);
+      pending.forEach(scheduleAutoSave);
       alert('Failed to save evaluations');
     } finally {
       setSaving(false);
