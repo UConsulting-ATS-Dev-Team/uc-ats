@@ -3,7 +3,6 @@
 // pick a decision with the guide open, Save All, and see it under My
 // Evaluations.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   APPS,
   claimed,
@@ -15,30 +14,10 @@ import {
   SLOTS,
 } from "../../src/videos/coffee-chats/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
-import { expect, readServerConstant } from "../server-source.mjs";
+import { decisionGuideResponse, emptyInterviewChat } from "../stubs.mjs";
 
-const root = join(import.meta.dirname, "../..");
 
-/** The shipped decision guide, read out of the server so the video shows exactly it. */
-const DECISIONS_FILE = "server/src/services/decisionGuides.js";
-const LABELS = readServerConstant(DECISIONS_FILE, "DECISION_LABELS", (l) =>
-  expect(["YES", "MAYBE_YES", "MAYBE_NO", "NO"].every((k) => typeof l?.[k] === "string"), "DECISION_LABELS"),
-);
-const GUIDE = readServerConstant(DECISIONS_FILE, "DEFAULT_GUIDE", (g) => {
-  expect(typeof g?.intro === "string" && g.intro.length > 0, "DEFAULT_GUIDE.intro");
-  expect(Object.keys(LABELS).every((k) => typeof g.criteria?.[k] === "string"), "DEFAULT_GUIDE.criteria");
-});
-const guideResponse = {
-  guide: {
-    phase: "coffee",
-    phaseLabel: "Coffee Chat",
-    intro: GUIDE.intro,
-    introSource: "default",
-    decisions: Object.keys(LABELS).map((value) => ({ value, label: LABELS[value], criteria: GUIDE.criteria[value], source: "default" })),
-    customized: false,
-  },
-  updatedAt: null,
-};
+const guideResponse = decisionGuideResponse("coffee", "Coffee Chat");
 
 let slots = structuredClone(SLOTS);
 /** Saved evaluations, keyed by application id. */
@@ -101,12 +80,7 @@ export async function api({ path, req, route, json, url }) {
   }
   if (path === "/decision-guides/coffee") return json(guideResponse);
 
-  // Interview chat: an empty conversation, so the launcher shows and nothing else.
-  if (path === `/conversations/interviews/${INTERVIEW.id}`) {
-    return json({ id: "conv-1", contextType: "INTERVIEW", contextId: INTERVIEW.id, title: INTERVIEW.title, channelName: "conv-1", participants: [] });
-  }
-  if (path === "/conversations/conv-1/messages") return json([]);
-  if (path === "/conversations/conv-1/read") return json({ ok: true });
+  if (emptyInterviewChat(path, json, INTERVIEW)) return;
 
   if (path.startsWith("/files/")) {
     return route.fulfill({ status: 200, contentType: "application/pdf", body: readFileSync(docs.resume) });
