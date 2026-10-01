@@ -33,7 +33,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
-import { toSameOriginDocumentUrl } from '../utils/documentUrl';
+import { signedDocumentTarget, toSameOriginDocumentUrl } from '../utils/documentUrl';
 import { coverLetterLabel } from '../utils/coverLetter';
 import {
   aggregationText,
@@ -273,14 +273,27 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
         });
         if (!resp.ok) {
           const txt = await resp.text();
-          throw new Error(`${resp.status} ${resp.statusText} - ${txt}`);
+          let reason = resp.statusText;
+          try { reason = JSON.parse(txt).error || reason; } catch { /* not JSON */ }
+          throw new Error(`The server answered ${resp.status}: ${reason}`);
         }
-        const blob = await resp.blob();
+        let blob;
+        try {
+          blob = await resp.blob();
+        } catch (e) {
+          // Headers arrived, the body did not: the connection dropped part way
+          // through a large file.
+          throw new Error(`The download stopped before the file finished (${e.message})`);
+        }
         localUrl = URL.createObjectURL(blob);
         setPreviewUrl(localUrl);
       } catch (e) {
         console.error(`Failed to load ${documentType} preview:`, e);
-        setPreviewError(e.message || `Failed to load ${documentType} preview`);
+        setPreviewError(
+          e instanceof TypeError
+            ? `Could not reach the server (${e.message})`
+            : e.message || `Failed to load ${documentType} preview`
+        );
       } finally {
         setPreviewLoading(false);
       }
@@ -291,6 +304,33 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
       if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [open, application?.resumeUrl, application?.coverLetterUrl, application?.videoUrl, token, documentType]);
+
+  const [openTabError, setOpenTabError] = useState(null);
+  useEffect(() => { setOpenTabError(null); }, [open, documentType, application?.id]);
+
+  const openDocumentInNewTab = async () => {
+    const documentUrl = application?.[config.urlField];
+    const target = signedDocumentTarget(documentUrl);
+    if (!target) {
+      window.open(documentUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setOpenTabError(null);
+    // Opened inside the click, before the await, or a popup blocker eats it.
+    const tab = window.open('', '_blank');
+    try {
+      const { access } = await apiClient.post(target.linkEndpoint);
+      if (!tab) {
+        setOpenTabError('Your browser blocked the new tab. Allow pop-ups for this site and try again.');
+        return;
+      }
+      tab.opener = null;
+      tab.location.href = target.open(access);
+    } catch (e) {
+      tab?.close();
+      setOpenTabError(e.serverMessage || e.message || `Could not open the ${documentType}.`);
+    }
+  };
 
   const loadExistingScore = async () => {
     try {
@@ -530,19 +570,27 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
                 </Box>
               ) : (
                 <Paper sx={{ p: 2, textAlign: 'center', height: 'calc(100% - 60px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
-                  <Typography color="text.secondary" sx={{ mb: application?.[config.urlField] ? 2 : 0 }}>
+                  <Typography color="text.secondary" sx={{ mb: previewError ? 1 : application?.[config.urlField] ? 2 : 0 }}>
                     {previewError ? 'Failed to load preview' : `No ${documentType} available for preview`}
                   </Typography>
+                  {previewError && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2, maxWidth: 420, wordBreak: 'break-word' }}>
+                      {previewError}
+                    </Typography>
+                  )}
                   {application?.[config.urlField] && (
                     <Button
                       variant="outlined"
-                      href={application[config.urlField]}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      onClick={openDocumentInNewTab}
                       startIcon={config.icon}
                     >
                       Open {documentType} in new tab
                     </Button>
+                  )}
+                  {openTabError && (
+                    <Alert severity="error" sx={{ mt: 2, textAlign: 'left' }}>
+                      {openTabError}
+                    </Alert>
                   )}
                 </Paper>
               )}

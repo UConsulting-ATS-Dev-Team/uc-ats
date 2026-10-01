@@ -47,33 +47,40 @@ export const resolveUserFromRequest = async (req) => {
 
   try {
     const decoded = jwt.verify(token, config.jwtSecret);
-    const userId = decoded.userId;
-
-    const cached = userCache.get(userId);
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
-      return { user: cached.user };
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: AUTH_USER_SELECT
-    });
-
-    if (!user) {
-      return { error: 'not-found' };
-    }
-
-    if (user.isActive === false) {
-      userCache.delete(userId);
-      return { error: 'deactivated' };
-    }
-
-    userCache.set(userId, { user, timestamp: Date.now() });
-
-    return { user };
+    return await resolveUserById(decoded.userId);
   } catch (error) {
     return { error: 'invalid', cause: error };
   }
+};
+
+/**
+ * The lookup half of resolveUserFromRequest, for a caller that has already
+ * established who the user is some other way (a signed file link). Same cache,
+ * same deactivation check, same `{ user } | { error }` shape.
+ */
+export const resolveUserById = async (userId) => {
+  const cached = userCache.get(userId);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+    return { user: cached.user };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: AUTH_USER_SELECT
+  });
+
+  if (!user) {
+    return { error: 'not-found' };
+  }
+
+  if (user.isActive === false) {
+    userCache.delete(userId);
+    return { error: 'deactivated' };
+  }
+
+  userCache.set(userId, { user, timestamp: Date.now() });
+
+  return { user };
 };
 
 // Middleware to verify JWT token and attach user to request

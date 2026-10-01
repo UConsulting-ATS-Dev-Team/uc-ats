@@ -239,3 +239,84 @@ describe('DocumentGradingModal', () => {
     });
   });
 });
+
+// When the preview cannot load, the grader is told why and can still open the
+// document in a new tab. A new tab sends no Authorization header, so the button
+// signs a link first; it used to be a bare link that answered 401 for everyone.
+describe('a video preview that fails', () => {
+  const withVideo = { ...application, videoUrl: '/api/files/abc/pdf' };
+  const renderWithVideo = () => render(
+    <DocumentGradingModal open onClose={vi.fn()} application={withVideo} documentType="video" />
+  );
+
+  const previewFails = (response) => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
+  };
+  const notFound = {
+    ok: false,
+    status: 404,
+    statusText: 'Not Found',
+    text: () => Promise.resolve(JSON.stringify({ error: 'Failed to serve PDF' })),
+  };
+
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    mockServer();
+  });
+
+  it('says what the server answered', async () => {
+    previewFails(notFound);
+    renderWithVideo();
+    expect(await screen.findByText('Failed to load preview')).toBeInTheDocument();
+    expect(screen.getByText('The server answered 404: Failed to serve PDF')).toBeInTheDocument();
+  });
+
+  it('says when the download stopped part way', async () => {
+    previewFails({ ok: true, blob: () => Promise.reject(new TypeError('network error')) });
+    renderWithVideo();
+    expect(
+      await screen.findByText('The download stopped before the file finished (network error)')
+    ).toBeInTheDocument();
+  });
+
+  it('opens the video in a new tab through a signed link', async () => {
+    previewFails(notFound);
+    const tab = { location: { href: '' }, close: vi.fn(), opener: 'page' };
+    vi.spyOn(window, 'open').mockReturnValue(tab);
+    apiClient.post.mockResolvedValue({ access: 'tok.en' });
+
+    renderWithVideo();
+    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+
+    // The tab opens inside the click, before the await, or a popup blocker eats it.
+    expect(window.open).toHaveBeenCalledWith('', '_blank');
+    await waitFor(() => expect(tab.location.href).toBe('/api/files/abc/pdf?access=tok.en'));
+    expect(apiClient.post).toHaveBeenCalledWith('/files/abc/link');
+    expect(tab.opener).toBeNull();
+  });
+
+  it('closes the tab and says why when the link cannot be signed', async () => {
+    previewFails(notFound);
+    const tab = { location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(tab);
+    apiClient.post.mockRejectedValue(Object.assign(new Error('Forbidden (Status: 403)'), { serverMessage: 'Forbidden' }));
+
+    renderWithVideo();
+    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+
+    expect(await screen.findByText('Forbidden')).toBeInTheDocument();
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe('');
+  });
+
+  it('asks for pop-ups when the browser blocks the tab', async () => {
+    previewFails(notFound);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    apiClient.post.mockResolvedValue({ access: 'tok.en' });
+
+    renderWithVideo();
+    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+
+    expect(await screen.findByText(/allow pop-ups for this site/i)).toBeInTheDocument();
+  });
+});

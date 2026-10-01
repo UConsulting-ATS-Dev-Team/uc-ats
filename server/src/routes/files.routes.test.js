@@ -119,3 +119,78 @@ describe('staff', () => {
     expect((await get(`/api/files/${FILE_ID}/pdf`, admin)).status).toBe(403);
   });
 });
+
+// "Open in new tab" was a bare link, and a new tab sends no Authorization
+// header, so it answered 401 for everyone. The page now asks for a link signed
+// for one file and opens that.
+describe('signed links for opening a document in a new tab', () => {
+  const OTHER_FILE = '1zzzOtherFileIdzzzzzzzzzzzzzzzzz';
+
+  const signLink = async (user, fileId = FILE_ID) => {
+    const res = await fetch(`http://localhost:${port}/api/files/${fileId}/link`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenFor(user)}` },
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  const open = (path) => fetch(`http://localhost:${port}${path}`);
+
+  it('opens the file it was signed for, with no session header', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    const { status, body } = await signLink(admin);
+    expect(status).toBe(200);
+
+    const res = await open(`/api/files/${FILE_ID}/pdf?access=${encodeURIComponent(body.access)}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('%PDF-1.4 drive');
+  });
+
+  it('is not signed for a file the caller may not open', async () => {
+    expect((await signLink(candidate)).status).toBe(403);
+  });
+
+  it('does not open a different file', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    const { body } = await signLink(admin);
+    const res = await open(`/api/files/${OTHER_FILE}/pdf?access=${encodeURIComponent(body.access)}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('still checks access when the link is used', async () => {
+    prisma.application.findFirst.mockResolvedValueOnce({ id: 'app-1' });
+    const { body } = await signLink(candidate);
+    // The document has since been detached from their application.
+    prisma.application.findFirst.mockResolvedValue(null);
+    const res = await open(`/api/files/${FILE_ID}/pdf?access=${encodeURIComponent(body.access)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('is never accepted as a sign-in token', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    const { body } = await signLink(admin);
+    const res = await fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf`, {
+      headers: { Authorization: `Bearer ${body.access}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('does not take a sign-in token as a link', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    const res = await open(`/api/files/${FILE_ID}/pdf?access=${tokenFor(admin)}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses an expired link', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { body } = await signLink(admin);
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      const res = await open(`/api/files/${FILE_ID}/pdf?access=${encodeURIComponent(body.access)}`);
+      expect(res.status).toBe(401);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

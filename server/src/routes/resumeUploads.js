@@ -9,6 +9,7 @@ import { dirname } from 'path';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, removeResume } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
+import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { isOwnedBy, isStaff } from '../utils/applicationOwnership.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -281,9 +282,31 @@ router.post(
   }
 );
 
+// POST /api/resume-uploads/:uploadId/link
+// A short-lived link that opens the file below in a new tab, which carries no
+// Authorization header (services/documentLinks.js). Same access rule as the file.
+router.post('/:uploadId/link', requireAuth, async (req, res) => {
+  try {
+    const upload = await prisma.resumeUpload.findUnique({
+      where: { id: req.params.uploadId },
+      select: { application: { select: applicationWithOwnership } },
+    });
+    if (!upload) return res.status(404).json({ error: 'Resume not found' });
+    if (!isOwnedBy(upload.application, req.user) && !isStaff(req.user)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    res.json({ access: signDocumentLink(`resume-upload:${req.params.uploadId}`, req.user.id) });
+  } catch (error) {
+    console.error('[POST /api/resume-uploads/:uploadId/link]', error);
+    res.status(500).json({ error: 'Failed to create link' });
+  }
+});
+
+const linkedUpload = (req) => `resume-upload:${req.params.uploadId}`;
+
 // GET /api/resume-uploads/:uploadId/file
 // The only way a stored replacement resume is served. Applicant or staff.
-router.get('/:uploadId/file', requireAuth, async (req, res) => {
+router.get('/:uploadId/file', acceptDocumentLink(linkedUpload), requireAuth, async (req, res) => {
   try {
     const upload = await prisma.resumeUpload.findUnique({
       where: { id: req.params.uploadId },

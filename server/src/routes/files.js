@@ -1,11 +1,19 @@
 import express from 'express';
 import { getFileStream, getFileMetadata } from '../services/google/drive.js';
 import { requireAuth } from '../middleware/auth.js';
+import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import prisma from '../prismaClient.js';
 
 const router = express.Router();
 
-router.use(requireAuth);
+// The two routes a signed link may open (services/documentLinks.js).
+const LINK_PATH = /^\/([^/]+)\/(pdf|image)$/;
+const linkedFile = (req) => {
+  const match = LINK_PATH.exec(req.path);
+  return match ? `file:${decodeURIComponent(match[1])}` : null;
+};
+
+router.use(acceptDocumentLink(linkedFile), requireAuth);
 
 // Verify the caller may view this Google Drive fileId. Staff (ADMIN/MEMBER) may
 // view any file referenced by an application; USER role may only view files
@@ -88,6 +96,20 @@ async function authorizeFileAccess(fileId, user) {
   // applications this person owns.
   return referencedByVersionHistory(fileId, { OR: ownerFilters });
 }
+
+router.post('/:fileId/link', async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const allowed = await authorizeFileAccess(fileId, req.user);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    res.json({ access: signDocumentLink(`file:${fileId}`, req.user.id) });
+  } catch (error) {
+    console.error('Error signing file link:', error);
+    res.status(500).json({ error: 'Failed to create link' });
+  }
+});
 
 router.get('/:fileId/image', async (req, res) => {
   try {
