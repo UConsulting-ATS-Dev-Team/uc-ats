@@ -37,118 +37,106 @@ export function buildWalkthrough(S: States): Walkthrough {
   scrollTo(318, 352, toGroups);
   camReset(352, 34);
 
-  // ---------- 3. Skim the resume ----------
-  head(375, 600, "Step 3", "Skim each resume before you sit down", [2]);
-  press(392, box("mine", "group1"), "hand", undefined, 20);
-  page(398, "mine-group", "/assigned-interviews");
-  camOn(430, pad(box("mine-group", "cand1"), 60), 1.6, 24);
-  press(452, box("mine-group", "resume1"), "hand", undefined, 18);
-  dialog(458, "resume");
-  camReset(470, 12);
-  const doc = box("resume", "close");
-  camTo(500, 720, 470, 1.35, 24);
-  camTo(560, 720, 600, 1.35, 50);
-  press(584, doc, "hand", undefined, 18);
-  dialog(590, null);
-  camReset(596, 10);
+  // ---------- 3. Start the interview with the groups on your nametags ----------
+  head(375, 635, "Step 3", "Start Interview, then pick the groups on your nametags", [0, 1, 8]);
+  const toStart = scrollFor("mine", "start", 640);
+  scrollTo(379, 415, toStart);
+  camZoom(427, box("mine", "start"), 1.4, 14);
+  press(439, box("mine", "start"), "hand", undefined, 22);
+  dialog(445, "pick");
+  camReset(457, 12);
+  camOn(475, pad(box("pick", "opt1"), 70), 1.5, 18);
+  press(495, box("pick", "opt1"), "hand", undefined, 18);
+  dialog(500, "pick-1");
+  press(528, box("pick-1", "opt2"), "hand", undefined, 16);
+  dialog(533, "pick-2");
+  ring(546, pad(box("pick-2", "count"), 6), 34);
+  camOn(580, pad(box("pick-2", "go"), 120), 1.4, 16);
+  press(596, box("pick-2", "go"), "hand", undefined, 16);
+  dialog(602, null);
+  scrollTo(602, 603, 0);
+  page(603, "face", IFACE);
+  camReset(610, 8);
 
-  // ---------- 4. Start the interview ----------
-  head(600, 810, "Step 4", "Hit Start Interview and pick your groups", [1, 2, 6]);
-  const toStart = scrollFor("mine-group", "start", 640);
-  scrollTo(604, 640, toStart);
-  camZoom(652, box("mine-group", "start"), 1.4, 14);
-  press(664, box("mine-group", "start"), "hand", undefined, 22);
-  dialog(670, "pick");
-  camReset(682, 12);
-  camOn(700, pad(box("pick", "opt1"), 60), 1.5, 18);
-  press(716, box("pick", "opt1"), "hand", undefined, 18);
-  dialog(721, "pick-1");
-  ring(730, pad(box("pick-1", "count"), 6), 34);
-  camOn(752, pad(box("pick-1", "go"), 120), 1.4, 16);
-  press(768, box("pick-1", "go"), "hand", undefined, 16);
-  dialog(774, null);
-  scrollTo(774, 775, 0);
-  page(775, "face", IFACE);
-  camReset(782, 8);
-
-  // ---------- 5. Notes ----------
-  head(810, 1035, "Step 5", "Take notes as you talk", [1]);
-  ring(824, pad(box("face", "notice"), 4), 40);
+  // ---------- 4. Notes ----------
+  head(635, 860, "Step 4", "Take notes as you talk", [1]);
+  ring(649, pad(box("face", "notice"), 4), 40);
   const cardX = mid(box("face", "card1")).x;
-  camTo(870, cardX, mid(box("face", "notes1")).y, 1.35, 30);
-  press(884, box("face", "notes1"), "text", undefined, 18);
-  page(889, "face-n-focus", IFACE);
+  camTo(695, cardX, mid(box("face", "notes1")).y, 1.35, 30);
+  press(709, box("face", "notes1"), "text", undefined, 18);
+  page(714, "face-n-focus", IFACE);
   const notes = (S["face-notes"] as unknown as { count: number }).count;
-  for (let i = 0; i < notes; i++) typePage(896 + i * 3, `face-n${i}`, IFACE);
+  for (let i = 0; i < notes; i++) typePage(721 + i * 3, `face-n${i}`, IFACE);
   const typed = `face-n${notes - 1}`;
-  camTo(1000, cardX, mid(box(typed, "notes1")).y, 1.4, 22);
+  camTo(825, cardX, mid(box(typed, "notes1")).y, 1.4, 22);
 
-  // ---------- 6. Decide ----------
-  head(1035, 1305, "Step 6", "Pick a decision. Unsure? Open the guide.", [2, 6]);
-  camReset(1046, 14);
-  press(1064, box(typed, "guideBtn"), "hand", undefined, 22);
-  page(1070, "guide", IFACE);
-  camOn(1094, pad(box("guide", "drawer"), -20), 1.25, 22);
-  camTo(1170, 1210, 640, 1.25, 50);
-  move(1176, { x: 1100, y: 500 });
-  page(1196, typed, IFACE);
-  camTo(1222, cardX, mid(box(typed, "decide1")).y, 1.4, 20);
-  press(1240, box(typed, "yes1"), "hand", undefined, 18);
-  page(1246, "face-yes", IFACE);
-  ring(1250, box("face-yes", "yes1"), 36);
+  // ---------- 5. Decide ----------
+  head(860, 1130, "Step 5", "Pick a decision. Unsure? Open the guide.", [2, 6]);
+  camReset(871, 14);
+  press(889, box(typed, "guideBtn"), "hand", undefined, 22);
+  page(895, "guide", IFACE);
+  camOn(919, pad(box("guide", "drawer"), -20), 1.25, 22);
+  camTo(995, 1210, 640, 1.25, 50);
+  move(1001, { x: 1100, y: 500 });
+  page(1021, typed, IFACE);
+  camTo(1047, cardX, mid(box(typed, "decide1")).y, 1.4, 20);
+  press(1065, box(typed, "yes1"), "hand", undefined, 18);
+  page(1071, "face-yes", IFACE);
+  ring(1075, box("face-yes", "yes1"), 36);
 
-  // ---------- 7. The interview chat ----------
-  head(1305, 1515, "Step 7 · Interview chat", "Message everyone running this interview", [0]);
-  camReset(1310, 12);
-  ring(1316, pad(box("face-yes", "chat"), 6), 30);
-  press(1340, box("face-yes", "chat"), "hand", () => page(1346, "chat-open", IFACE), 22);
-  camZoom(1362, box("chat-open", "panel"), 1.4, 18);
-  ring(1372, pad(box("chat-open", "incoming"), 6), 40);
-  press(1418, box("chat-open", "input"), "text", undefined, 16);
+  // ---------- 6. The interview chat ----------
+  head(1130, 1340, "Step 6 · Interview chat", "Message everyone running this interview", [0]);
+  camReset(1135, 12);
+  ring(1141, pad(box("face-yes", "chat"), 6), 30);
+  press(1165, box("face-yes", "chat"), "hand", () => page(1171, "chat-open", IFACE), 22);
+  camZoom(1187, box("chat-open", "panel"), 1.4, 18);
+  ring(1197, pad(box("chat-open", "incoming"), 6), 40);
+  press(1243, box("chat-open", "input"), "text", undefined, 16);
   const replies = (S["chat-count"] as unknown as { count: number }).count;
-  for (let i = 0; i < replies; i++) typePage(1426 + i * 3, `chat-t${i}`, IFACE);
-  const sendAt = 1426 + replies * 3 + 8;
+  for (let i = 0; i < replies; i++) typePage(1251 + i * 3, `chat-t${i}`, IFACE);
+  const sendAt = 1251 + replies * 3 + 8;
   press(sendAt, box(`chat-t${replies - 1}`, "send"), "hand", () => page(sendAt + 6, "chat-sent", IFACE), 12);
   chime(sendAt + 6);
   ring(sendAt + 10, pad(box("chat-sent", "sent"), 6), 30);
-  camReset(1500, 12);
+  camReset(1325, 12);
 
-  // ---------- 8. Save All ----------
-  head(1515, 1740, "Step 8", "Hit Save All when you wrap up", [1, 2]);
-  page(1515, "face-all", IFACE);
-  camReset(1522, 14);
-  const toCards = scrollFor("face-all", "card2", 120);
-  scrollTo(1526, 1566, toCards);
-  scrollTo(1594, 1624, 0);
-  camOn(1636, pad(box("face-all", "saveAll"), 160), 1.5, 14);
-  press(1650, box("face-all", "saveAll"), "hand", undefined, 20);
-  dialog(1656, "saved");
-  chime(1656);
-  camReset(1668, 12);
-  press(1710, box("saved", "back"), "hand", undefined, 22);
-  dialog(1716, null);
-  page(1716, "mine-done", "/assigned-interviews");
+  // ---------- 7. Save All ----------
+  head(1340, 1565, "Step 7", "Same for 1B, then hit Save All", [2, 5, 6]);
+  page(1340, "face-all", IFACE);
+  camReset(1347, 14);
+  // Group 1B's candidates are on the same page, below 1A's.
+  scrollTo(1351, 1391, scrollFor("face-all", "card4", 160));
+  ring(1395, pad(box("face-all", "decide4"), 6), 22);
+  scrollTo(1419, 1449, 0);
+  camOn(1461, pad(box("face-all", "saveAll"), 160), 1.5, 14);
+  press(1475, box("face-all", "saveAll"), "hand", undefined, 20);
+  dialog(1481, "saved");
+  chime(1481);
+  camReset(1493, 12);
+  press(1535, box("saved", "back"), "hand", undefined, 22);
+  dialog(1541, null);
+  page(1541, "mine-done", "/assigned-interviews");
 
-  // ---------- 9. Finish line ----------
-  head(1740, 1920, "Finish line", "Your calls land in My Evaluations", [4, 5]);
+  // ---------- 8. Finish line ----------
+  head(1565, 1745, "Finish line", "Your calls land in My Evaluations", [4, 5]);
   const toEvals = scrollFor("mine-done", "evals", 140);
-  scrollTo(1742, 1776, toEvals);
-  ring(1786, pad(k.box("mine-done", "chip1"), 4), 34);
-  ring(1802, pad(k.box("mine-done", "chip2"), 4), 34);
+  scrollTo(1567, 1601, toEvals);
+  ring(1611, pad(k.box("mine-done", "chip1"), 4), 34);
+  ring(1627, pad(k.box("mine-done", "chip2"), 4), 34);
   const edit = k.box("mine-done", "edit1");
-  move(1840, mid(edit), "hand", 26);
-  ring(1846, pad(edit, 6), 40);
-  camTo(1850, mid(k.box("mine-done", "ev1")).x, mid(edit).y + 60, 1.35, 26);
-  camReset(1910, 14);
+  move(1665, mid(edit), "hand", 26);
+  ring(1671, pad(edit, 6), 40);
+  camTo(1675, mid(k.box("mine-done", "ev1")).x, mid(edit).y + 60, 1.35, 26);
+  camReset(1735, 14);
 
-  return done(1920);
+  return done(1745);
 }
 
 // ---------- the whole video ----------
 export const SCENES = [
   { name: "Intro", frames: 150 },
-  { name: "Sittings", frames: 210 },
-  { name: "Walkthrough", frames: 1920, walk: true },
+  { name: "Sittings", frames: 260 },
+  { name: "Walkthrough", frames: 1745, walk: true },
   { name: "After", frames: 195 },
   { name: "Close", frames: 150 },
 ] as const;
@@ -169,7 +157,7 @@ export function music(walks: Record<string, Walkthrough>): MusicPlan {
   return {
     slams: [0, 60, 75, 90],
     breaks: [
-      [W0 + 1070, W0 + 1196],
+      [W0 + 895, W0 + 1021],
       [sceneStart("After"), sceneStart("Close")],
     ],
   };

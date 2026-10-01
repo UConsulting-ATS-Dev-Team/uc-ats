@@ -1,5 +1,5 @@
 // Running a Coffee Chat: claim a sitting on Interview RSVP, find it in My
-// Interviews, skim a resume, start the interview with your groups, take notes,
+// Interviews, start the interview with the groups on your nametags, take notes,
 // pick a decision with the guide open, Save All, and see it under My
 // Evaluations.
 import { readFileSync } from "node:fs";
@@ -140,21 +140,7 @@ export async function run({ page, base, states, settle, pageState, viewState, el
   });
   await pageState("mine", mineTargets());
 
-  // ---------- 3. Skim a resume ----------
-  await groupRow("· 1A").click();
-  await page.locator(".candidate-card", { hasText: "Taylor Kim" }).waitFor();
-  await settle(600);
-  await pageState("mine-group", mineTargets());
-  await page.locator(".candidate-card", { hasText: "Taylor Kim" }).getByRole("button", { name: "Resume" }).click();
-  const previewClose = page.getByRole("button", { name: "Close", exact: true });
-  await page.locator("iframe[title]").waitFor();
-  await settle(2000); // the PDF renders inside the iframe
-  const preview = previewClose.locator("xpath=../..");
-  await elState("resume", preview, { close: previewClose });
-  await previewClose.click();
-  await settle(400);
-
-  // ---------- 4. Start Interview: pick groups ----------
+  // ---------- 3. Start Interview: pick the groups on your table's nametags ----------
   await page.getByRole("button", { name: /Start Interview/ }).click();
   await page.getByText("Select Application Groups to Evaluate").waitFor();
   await settle(500);
@@ -169,13 +155,10 @@ export async function run({ page, base, states, settle, pageState, viewState, el
   await elState("pick", picker, pickTargets());
   await option("· 1A").click();
   await elState("pick-1", picker, pickTargets());
+  // Both groups whose nametags are at the table (see the Sittings explainer).
   await option("· 1B").click();
   await page.mouse.move(0, 0);
   await elState("pick-2", picker, pickTargets());
-  // The interview page for one group keeps the walkthrough to three cards.
-  await option("· 1B").click();
-  await page.mouse.move(0, 0);
-  await elState("pick-3", picker, pickTargets());
   await picker.getByRole("button", { name: /^Start Interview/ }).click();
 
   // ---------- 5. The interview page ----------
@@ -196,6 +179,9 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     notes2: cardFor("Sam Okafor").locator("textarea"),
     myes2: cardFor("Sam Okafor").locator(".decision-option", { hasText: "Maybe-Yes" }),
     card3: cardFor("Avery Chen"),
+    // The first candidate of the second group: same notes and decision, same page.
+    card4: cardFor("Diego Martinez"),
+    decide4: cardFor("Diego Martinez").locator(".decision-options"),
     chat: page.getByRole("button", { name: /open chat/i }),
   });
   await pageState("face", faceTargets());

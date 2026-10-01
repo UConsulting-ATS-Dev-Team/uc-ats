@@ -5,8 +5,8 @@
 //   Interview (the case viewer and a five-part casing rubric: questions and prompt,
 //   framework, quantitative, qualitative, conclusion) and Confirm Candidate Details (a
 //   checklist of commitments).
-// - The final round page has no decision picker; the decision is set afterwards from
-//   My Interviews -> My Evaluations -> Edit Evaluation (AssignedInterviews.jsx).
+// - The decision is asked when Save All finishes, for each candidate still without
+//   one (FinalDecisionDialog.jsx); My Evaluations can still change it later.
 import { Card, Pop } from "../../kit/Bits";
 import { Exit, Sub, Title } from "../../kit/Explainer";
 import { Stage } from "../../kit/Light";
@@ -36,7 +36,7 @@ export function ThreeTabs() {
             </Pop>
           ))}
         </div>
-        <Sub text="The decision comes after, from My Interviews." accent={[5, 6]} at={120} exitAt={end} top={760} />
+        <Sub text="Your decision comes last, when you hit Save All." accent={[6, 7]} at={120} exitAt={end} top={760} />
       </Exit>
     </Stage>
   );
