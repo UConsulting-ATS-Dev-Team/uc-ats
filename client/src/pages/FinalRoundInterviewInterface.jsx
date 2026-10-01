@@ -434,9 +434,6 @@ export default function FinalRoundInterviewInterface() {
   };
 
   const saveAllEvaluations = async () => {
-    // Save All writes every candidate's notes now; a pending autosave would only repeat it.
-    Object.values(autoSaveTimeouts).forEach(clearTimeout);
-    setAutoSaveTimeouts({});
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
@@ -462,6 +459,10 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
+      // Every note is saved now, so a pending autosave would only repeat it. Cancelled
+      // only on success: if Save All failed, the autosave is still the retry.
+      Object.values(autoSaveTimeouts).forEach(clearTimeout);
+      setAutoSaveTimeouts({});
       if (applications.some((app) => !getEvaluation(app.id).decision)) {
         setDecisionPromptOpen(true);
       } else {
