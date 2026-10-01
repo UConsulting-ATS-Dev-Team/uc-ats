@@ -437,6 +437,10 @@ The system follows a **recruiting cycle-based workflow**:
   [client/src/components/TutorialGate.jsx](client/src/components/TutorialGate.jsx). To gate
   another kind of work, add its category to `GATED_CATEGORIES` and wrap the action in
   `gate.run(...)`.
+- `gate.run` asks the server on every click instead of caching the answer, so a page
+  left open across a cycle change still gates the next document.
+- Only YouTube, Loom and Vimeo links are framed (`getKnownVideoEmbedUrl`); any other
+  tutorial link is a button that opens it in a new tab.
 - It fails open: no cycle, an unapplied migration or a failed status check lets the
   grader through. Only a failed *save* keeps the popup up, with the error shown.
 

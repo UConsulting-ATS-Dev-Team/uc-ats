@@ -1,6 +1,12 @@
 // Turns a tutorial's share link (YouTube, Loom, Vimeo) into one an iframe can play.
 // Anything else is returned as given.
 export function getVideoEmbedUrl(url) {
+  return getKnownVideoEmbedUrl(url) ?? url ?? null;
+}
+
+// Like getVideoEmbedUrl, but null for anything that is not a YouTube, Loom or Vimeo
+// link, for callers that would rather link to an unknown page than frame it.
+export function getKnownVideoEmbedUrl(url) {
   if (!url) return null;
   try {
     const youtubeMatch = url.match(
@@ -20,5 +26,5 @@ export function getVideoEmbedUrl(url) {
   } catch {
     return null;
   }
-  return url;
+  return null;
 }

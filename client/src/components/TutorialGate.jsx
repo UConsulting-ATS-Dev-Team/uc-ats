@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/material';
 import apiClient from '../utils/api';
-import { getVideoEmbedUrl } from '../utils/videoEmbed';
+import { getKnownVideoEmbedUrl } from '../utils/videoEmbed';
 
 // The tutorials someone must sit through before their first piece of `category` work
 // in a cycle. The server decides whether they still have to (see
@@ -26,51 +26,50 @@ import { getVideoEmbedUrl } from '../utils/videoEmbed';
 //   ...
 //   {gate.dialog}
 //
-// `run` performs the action straight away once the gate is clear, and after the
-// tutorials are finished otherwise. A failed status check lets the action through:
+// `run` asks the server every time rather than remembering the answer, so a page left
+// open across a cycle change, or a tutorial published meanwhile, still gates the next
+// document. It performs the action straight away when the gate is clear, and after
+// the tutorials are finished otherwise. A failed status check lets the action through:
 // a missed tutorial is recoverable, a grader who cannot grade is not.
 export function useTutorialGate(category, continueLabel = 'Continue') {
-  const [gate, setGate] = useState(null);
+  const [tutorials, setTutorials] = useState([]);
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const statusRef = useRef(null);
+  const checkingRef = useRef(false);
   const pendingActionRef = useRef(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    const request = apiClient
-      .get(`/member/help/tutorial-gates/${category}`)
-      .then((data) => (data && data.required ? data : { required: false }))
-      .catch(() => ({ required: false }));
-    statusRef.current = request;
-    request.then((data) => {
-      if (!cancelled) setGate(data);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [category]);
+  const run = useCallback(
+    async (action) => {
+      // A double click must not open the document twice, or the popup twice.
+      if (checkingRef.current) return;
+      checkingRef.current = true;
+      let status;
+      try {
+        status = await apiClient.get(`/member/help/tutorial-gates/${category}`);
+      } catch {
+        status = null;
+      } finally {
+        checkingRef.current = false;
+      }
 
-  const run = useCallback(async (action) => {
-    const status = await statusRef.current;
-    if (!status?.required) {
-      action();
-      return;
-    }
-    pendingActionRef.current = action;
-    setError(null);
-    setOpen(true);
-  }, []);
+      if (!status?.required) {
+        action();
+        return;
+      }
+      pendingActionRef.current = action;
+      setTutorials(status.tutorials || []);
+      setError(null);
+      setOpen(true);
+    },
+    [category]
+  );
 
   const complete = async () => {
     setSubmitting(true);
     setError(null);
     try {
       await apiClient.post(`/member/help/tutorial-gates/${category}/complete`);
-      const cleared = { required: false };
-      statusRef.current = Promise.resolve(cleared);
-      setGate(cleared);
       setOpen(false);
       const action = pendingActionRef.current;
       pendingActionRef.current = null;
@@ -85,7 +84,7 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
   const dialog = (
     <TutorialGateDialog
       open={open}
-      tutorials={gate?.tutorials || []}
+      tutorials={tutorials}
       continueLabel={continueLabel}
       submitting={submitting}
       error={error}
@@ -177,7 +176,9 @@ export function TutorialGateDialog({
 }
 
 function TutorialContent({ tutorial }) {
-  const embedUrl = getVideoEmbedUrl(tutorial.videoUrl);
+  // Only frame YouTube, Loom and Vimeo. Any other link opens in its own tab, so an
+  // ordinary web page is never framed inside a popup nobody can close.
+  const embedUrl = getKnownVideoEmbedUrl(tutorial.videoUrl);
   const hasBody = Boolean(tutorial.body && tutorial.body.trim());
 
   return (
@@ -228,6 +229,18 @@ function TutorialContent({ tutorial }) {
             Video not loading? Open it in a new tab
           </Link>
         </Box>
+      )}
+
+      {tutorial.videoUrl && !embedUrl && (
+        <Button
+          variant="outlined"
+          href={tutorial.videoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          sx={{ mt: 2 }}
+        >
+          Open the tutorial in a new tab
+        </Button>
       )}
 
       {hasBody && (

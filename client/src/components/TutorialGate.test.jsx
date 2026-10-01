@@ -65,10 +65,41 @@ describe('useTutorialGate', () => {
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
-    // The next document opens straight away.
+    // Once the server says it is done, the next document opens straight away.
+    apiClient.get.mockResolvedValue({ required: false, cycleId: 'c1', tutorials: [] });
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(onOpenDocument).toHaveBeenCalledTimes(2));
-    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('asks again on every click, so a new cycle gates a page left open', async () => {
+    apiClient.get.mockResolvedValue({ required: false, cycleId: 'c1', tutorials: [] });
+    const onOpenDocument = renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(onOpenDocument).toHaveBeenCalledTimes(1));
+
+    // An admin activates the next cycle while the page stays open.
+    apiClient.get.mockResolvedValue({ required: true, cycleId: 'c2', tutorials: [TUTORIAL] });
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(onOpenDocument).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('links to a tutorial that is not a known video host instead of framing it', async () => {
+    apiClient.get.mockResolvedValue({
+      required: true,
+      cycleId: 'c1',
+      tutorials: [{ ...TUTORIAL, videoUrl: 'https://docs.google.com/document/d/abc' }]
+    });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    const link = await screen.findByRole('link', { name: 'Open the tutorial in a new tab' });
+    expect(link).toHaveAttribute('href', 'https://docs.google.com/document/d/abc');
+    expect(screen.queryByTitle('How we grade resumes')).not.toBeInTheDocument();
   });
 
   it('cannot be dismissed with Escape', async () => {
