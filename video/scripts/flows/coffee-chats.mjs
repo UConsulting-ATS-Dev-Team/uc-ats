@@ -179,6 +179,9 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     notes2: cardFor("Sam Okafor").locator("textarea"),
     myes2: cardFor("Sam Okafor").locator(".decision-option", { hasText: "Maybe-Yes" }),
     card3: cardFor("Avery Chen"),
+    // The first candidate of the second group: same notes and decision, same page.
+    card4: cardFor("Diego Martinez"),
+    decide4: cardFor("Diego Martinez").locator(".decision-options"),
     chat: page.getByRole("button", { name: /open chat/i }),
   });
   await pageState("face", faceTargets());

@@ -101,11 +101,12 @@ export function buildWalkthrough(S: States): Walkthrough {
   camReset(1325, 12);
 
   // ---------- 7. Save All ----------
-  head(1340, 1565, "Step 7", "Hit Save All when you wrap up", [1, 2]);
+  head(1340, 1565, "Step 7", "Same for 1B, then hit Save All", [2, 5, 6]);
   page(1340, "face-all", IFACE);
   camReset(1347, 14);
-  const toCards = scrollFor("face-all", "card2", 120);
-  scrollTo(1351, 1391, toCards);
+  // Group 1B's candidates are on the same page, below 1A's.
+  scrollTo(1351, 1391, scrollFor("face-all", "card4", 160));
+  ring(1395, pad(box("face-all", "decide4"), 6), 22);
   scrollTo(1419, 1449, 0);
   camOn(1461, pad(box("face-all", "saveAll"), 160), 1.5, 14);
   press(1475, box("face-all", "saveAll"), "hand", undefined, 20);
