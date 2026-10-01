@@ -4,7 +4,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import AssignedInterviews from './AssignedInterviews';
 import apiClient from '../utils/api';
 
@@ -40,10 +40,18 @@ const withCandidateQuestions = (byApplication) =>
     return Promise.resolve([]);
   });
 
+function Landed() {
+  const { pathname, search } = useLocation();
+  return <p>landed on {pathname}{search}</p>;
+}
+
 const openQuestionStep = async () => {
   render(
-    <MemoryRouter>
-      <AssignedInterviews />
+    <MemoryRouter initialEntries={['/assigned-interviews']}>
+      <Routes>
+        <Route path="/assigned-interviews" element={<AssignedInterviews />} />
+        <Route path="*" element={<Landed />} />
+      </Routes>
     </MemoryRouter>
   );
   fireEvent.click(await screen.findByRole('button', { name: /Start Interview/ }));
@@ -66,6 +74,14 @@ describe('Configure Questions on first round setup', () => {
     await openQuestionStep();
 
     await waitFor(() => expect(configure()).toBeEnabled());
+
+    fireEvent.click(configure());
+
+    expect(
+      await screen.findByText('landed on /member/first-round-interview?interviewId=iv1&groupIds=g1')
+    ).toBeInTheDocument();
+    // Nothing shared was written, so nothing shared is saved over what is there.
+    expect(apiClient.patch).not.toHaveBeenCalled();
   });
 
   it('waits while there is nothing to ask', async () => {
