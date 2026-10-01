@@ -1,4 +1,5 @@
 import prisma from '../prismaClient.js';
+import { interviewsStaffedBy } from './interviewRoster.js';
 
 // A case a MEMBER is assigned to but may not read yet answers 423 with this
 // code, so the client can tell "too early" apart from "not yours" (403).
@@ -94,8 +95,11 @@ export function unlockTimeFor(startDate, leadTimeHours) {
  *   { allowed: false, reason: 'FORBIDDEN' }                  -- not theirs at all
  *   { allowed: false, reason: 'LOCKED', unlocksAt: Date }    -- theirs, too early
  *
- * A MEMBER is assigned through InterviewAssignment on an interview that has
- * this case. Where several of their interviews use the same case, the earliest
+ * A MEMBER may read a case used by an interview they are on right now
+ * (interviewsStaffedBy in interviewRoster.js): a current session assignment where the
+ * interview has sessions, else the older InterviewAssignment table or a member group
+ * in the legacy config. Checking InterviewAssignment alone locked out every member
+ * staffed through a session, since nothing writes that table any more. Where several of their interviews use the same case, the earliest
  * unlock wins: access opens as soon as the first of them is near enough. An
  * interview already under way or past is never locked, since its unlock time
  * has gone by.
@@ -113,17 +117,16 @@ export async function authorizeCaseRead(caseId, user, now = new Date()) {
   const links = await prisma.caseAssignment.findMany({
     where: {
       caseId,
-      interview: {
-        status: { not: 'CANCELLED' },
-        assignments: { some: { userId: user.id } },
-      },
+      interview: { status: { not: 'CANCELLED' } },
     },
-    select: { interview: { select: { startDate: true } } },
+    select: { interview: { select: { id: true, startDate: true, description: true } } },
   });
-  if (links.length === 0) return { allowed: false, reason: 'FORBIDDEN' };
+  const interviews = [...new Map(links.map((link) => [link.interview.id, link.interview])).values()];
+  const mine = await interviewsStaffedBy(user.id, interviews);
+  if (mine.length === 0) return { allowed: false, reason: 'FORBIDDEN' };
 
   const leadTimeHours = await getLeadTimeHours();
-  const unlockTimes = links.map((link) => unlockTimeFor(link.interview.startDate, leadTimeHours));
+  const unlockTimes = mine.map((interview) => unlockTimeFor(interview.startDate, leadTimeHours));
   const earliest = unlockTimes.reduce((a, b) => (a <= b ? a : b));
 
   if (earliest.getTime() <= now.getTime()) return { allowed: true };

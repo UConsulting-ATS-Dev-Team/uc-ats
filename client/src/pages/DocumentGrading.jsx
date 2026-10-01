@@ -4,6 +4,7 @@ import apiClient from '../utils/api';
 import DocumentGradingModal from '../components/DocumentGradingModal';
 import FlagDocumentModal from '../components/FlagDocumentModal';
 import AccessControl from '../components/AccessControl';
+import { useTutorialGate } from '../components/TutorialGate';
 import {
   Box,
   Typography,
@@ -129,6 +130,7 @@ export default function DocumentGrading() {
   const [flaggingApplication, setFlaggingApplication] = useState(null);
   const [flaggingDocumentType, setFlaggingDocumentType] = useState('resume');
   const scrollPositionRef = useRef(0);
+  const tutorialGate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
 
   // Calculate progress data based on actual grading completion
   const calculateProgressData = () => {
@@ -339,9 +341,11 @@ export default function DocumentGrading() {
   };
 
   const handleGradeDocument = (application, documentType) => {
-    setSelectedApplication(application);
-    setSelectedDocumentType(documentType);
-    setGradingModalOpen(true);
+    tutorialGate.run(() => {
+      setSelectedApplication(application);
+      setSelectedDocumentType(documentType);
+      setGradingModalOpen(true);
+    });
   };
 
   const handleCloseGradingModal = () => {
@@ -764,6 +768,8 @@ export default function DocumentGrading() {
         application={selectedApplication}
         documentType={selectedDocumentType}
       />
+
+      {tutorialGate.dialog}
 
       {/* Flag Document Modal */}
       <FlagDocumentModal

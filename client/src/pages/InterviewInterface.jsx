@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -81,19 +81,6 @@ export default function InterviewInterface() {
         console.log('=== THIS IS THE ADMIN INTERVIEW INTERFACE ===');
         setInterview(interviewRes);
         
-        // Parse interview description to get application groups
-        let parsedDescription = {};
-        try {
-          parsedDescription = typeof interviewRes.description === 'string' 
-            ? JSON.parse(interviewRes.description) 
-            : interviewRes.description || {};
-        } catch (e) {
-          console.warn('Failed to parse interview description:', e);
-        }
-        
-        console.log('Parsed interview description:', parsedDescription);
-        console.log('Application groups:', parsedDescription.applicationGroups);
-        
         // Load applications for selected groups
         console.log('Loading applications for groups:', groupIds);
         console.log('API URL:', `/admin/interviews/${interviewId}/applications?groupIds=${groupIds.join(',')}`);
@@ -118,13 +105,20 @@ export default function InterviewInterface() {
         });
         setEvaluations(evaluationsMap);
 
-        // Set interview data with parsed description for group selection
-        console.log('Setting interview data with parsed description...');
-        const interviewDataWithGroups = {
-          ...interviewRes,
-          applicationGroups: parsedDescription.applicationGroups || []
-        };
-        setInterviewData(interviewDataWithGroups);
+        // The groups for "Select Groups" and "Interview Another Group". An admin
+        // can run any session, so this is every group in the interview's config,
+        // which reads sessions where the interview has them and the old
+        // description JSON where it does not.
+        let applicationGroups = [];
+        let groupsFailed = false;
+        try {
+          const config = await apiClient.get(`/admin/interviews/${interviewId}/config`);
+          applicationGroups = config?.applicationGroups || [];
+        } catch (configError) {
+          console.error('Failed to load interview groups:', configError);
+          groupsFailed = true;
+        }
+        setInterviewData({ ...interviewRes, applicationGroups, groupsFailed });
         
       } catch (error) {
         console.error('Failed to load interview data:', error);
@@ -152,9 +146,15 @@ export default function InterviewInterface() {
     }
   }, [interviewId, groupIds.join(',')]);
 
-  const getEvaluation = (applicationId) => {
+  // Autosave runs from a timer set during the edit, so its closure holds the
+  // evaluations from before that edit. It reads this ref instead, which is
+  // current by the time the timer fires.
+  const evaluationsRef = useRef(evaluations);
+  evaluationsRef.current = evaluations;
+
+  const getEvaluation = (applicationId, from = evaluations) => {
     const key = `${applicationId}_${currentUser?.id}`;
-    return evaluations[key] || {
+    return from[key] || {
       notes: '',
       decision: null
     };
@@ -165,7 +165,7 @@ export default function InterviewInterface() {
     setEvaluations(prev => ({
       ...prev,
       [key]: {
-        ...getEvaluation(applicationId),
+        ...getEvaluation(applicationId, prev),
         ...updates
       }
     }));
@@ -200,7 +200,7 @@ export default function InterviewInterface() {
 
   const autoSaveEvaluation = async (applicationId) => {
     try {
-      const evaluation = getEvaluation(applicationId);
+      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
       const { rubricScores, ...evaluationData } = evaluation;
       
       await apiClient.post(`/admin/interviews/${interviewId}/evaluations`, {
@@ -565,7 +565,9 @@ export default function InterviewInterface() {
                   
                   return filteredGroups.length === 0 ? (
                     <div className="no-groups-message">
-                      {groupSearchTerm ? 'No groups match your search' : 'No application groups available'}
+                      {data.groupsFailed
+                        ? 'Could not load the groups. Close this and reload the page to try again.'
+                        : groupSearchTerm ? 'No groups match your search' : 'No application groups available'}
                     </div>
                   ) : (
                     filteredGroups.map(group => {

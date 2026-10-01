@@ -1,12 +1,20 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
+import {
+  completeTutorialGate,
+  getTutorialGate,
+  isGatedCategory,
+} from '../services/tutorialGate.js';
 
 const router = express.Router();
 
 const TUTORIAL_CATEGORIES = [
   'DOCUMENT_GRADING',
   'INTERVIEW_CONDUCT',
+  'COFFEE_CHATS',
+  'FIRST_ROUND',
+  'FINAL_ROUND',
   'GTKUC',
   'ATS_NAVIGATION',
   'NEW_FEATURES',
@@ -116,6 +124,35 @@ router.get('/tutorials', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[GET /api/member/help/tutorials]', error);
     res.status(500).json({ error: 'Failed to load tutorials' });
+  }
+});
+
+// GET /api/member/help/tutorial-gates/:category
+router.get('/tutorial-gates/:category', requireAdminOrMember, async (req, res) => {
+  const { category } = req.params;
+  if (!isGatedCategory(category)) {
+    return res.status(404).json({ error: 'No tutorial gate for this category' });
+  }
+  try {
+    res.json(await getTutorialGate(req, category));
+  } catch (error) {
+    console.error('[GET /api/member/help/tutorial-gates/:category]', error);
+    res.status(500).json({ error: 'Failed to load tutorial gate' });
+  }
+});
+
+// POST /api/member/help/tutorial-gates/:category/complete
+router.post('/tutorial-gates/:category/complete', requireAdminOrMember, async (req, res) => {
+  const { category } = req.params;
+  if (!isGatedCategory(category)) {
+    return res.status(404).json({ error: 'No tutorial gate for this category' });
+  }
+  try {
+    const completion = await completeTutorialGate(req, category);
+    res.json({ completed: true, completedAt: completion?.completedAt ?? null });
+  } catch (error) {
+    console.error('[POST /api/member/help/tutorial-gates/:category/complete]', error);
+    res.status(500).json({ error: 'Failed to record tutorial completion' });
   }
 });
 

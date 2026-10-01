@@ -1,0 +1,58 @@
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Dialog } from '@mui/material';
+import DocumentPreviewModal from './DocumentPreviewModal';
+
+vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ token: 't' }) }));
+
+describe('DocumentPreviewModal', () => {
+  it('renders on <body>, outside whatever card opened it', () => {
+    // A transformed ancestor (a card with a hover lift) would otherwise become the
+    // fixed overlay's containing block and pull the preview off-centre.
+    const { container } = render(
+      <div style={{ transform: 'translateY(-2px)' }}>
+        <DocumentPreviewModal kind="text" title="Taylor Kim – Short Answer" text="Hello" onClose={() => {}} />
+      </div>
+    );
+
+    expect(screen.getByText('Taylor Kim – Short Answer')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('Taylor Kim – Short Answer');
+  });
+
+  it('takes keyboard focus and Escape from an MUI dialog it opens over', async () => {
+    // Staging opens previews from inside a Dialog, whose focus trap would otherwise
+    // keep Tab and focus inside the dialog underneath, and whose Escape would close
+    // the dialog along with the preview.
+    const onPreviewClose = vi.fn();
+    const onDialogClose = vi.fn();
+    render(
+      <Dialog open onClose={onDialogClose}>
+        <button>Inside the dialog</button>
+        <DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onPreviewClose} />
+      </Dialog>
+    );
+
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+    await waitFor(() => expect(document.activeElement).toBe(close));
+
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(onPreviewClose).toHaveBeenCalledTimes(1);
+    expect(onDialogClose).not.toHaveBeenCalled();
+  });
+
+  it('sits above snackbars, as the overlay always did', () => {
+    // Staging keeps notifications (Snackbar, 1400) up while a preview opens.
+    render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={() => {}} />);
+    const root = document.querySelector('.MuiModal-root');
+    expect(Number(getComputedStyle(root).zIndex)).toBe(1500);
+  });
+
+  it('still closes from its button', () => {
+    const onClose = vi.fn();
+    render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+});

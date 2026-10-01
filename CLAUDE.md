@@ -421,6 +421,29 @@ The system follows a **recruiting cycle-based workflow**:
   [client/src/utils/documentRubrics.js](client/src/utils/documentRubrics.js), which shares one
   fetch across the page and falls back to the shipped maxima until it arrives.
 
+**Grading tutorial gate:**
+- The first document a member or admin opens to grade each cycle, on Document Grading or
+  Admin Document Grading, waits behind an unskippable popup of the Help page's
+  `DOCUMENT_GRADING` tutorials. There is no close button and Escape does nothing; ticking
+  "I watched the whole tutorial" and continuing records a `TutorialCompletion` (user,
+  cycle, category) and opens the document they clicked. Opening the page and flagging a
+  document are not gated.
+- The tutorials are whatever admins publish in Help Management with category Document
+  Grading. **No published tutorial means no gate**, so nothing blocks grading until one
+  exists.
+- The cycle is `resolveCycleForRequest`, so an admin's completion is for the admin cycle.
+- Rules live in [server/src/services/tutorialGate.js](server/src/services/tutorialGate.js)
+  (`GATED_CATEGORIES`); the client side is `useTutorialGate` in
+  [client/src/components/TutorialGate.jsx](client/src/components/TutorialGate.jsx). To gate
+  another kind of work, add its category to `GATED_CATEGORIES` and wrap the action in
+  `gate.run(...)`.
+- `gate.run` asks the server on every click instead of caching the answer, so a page
+  left open across a cycle change still gates the next document.
+- Only YouTube, Loom and Vimeo links are framed (`getKnownVideoEmbedUrl`); any other
+  tutorial link is a button that opens it in a new tab.
+- It fails open: no cycle, an unapplied migration or a failed status check lets the
+  grader through. Only a failed *save* keeps the popup up, with the error shown.
+
 **Live votes:**
 - An admin starts a session from any Staging tab. Admins and members join from anywhere in
   the app (`LiveVoteProvider` in [client/src/context/LiveVoteContext.jsx](client/src/context/LiveVoteContext.jsx)

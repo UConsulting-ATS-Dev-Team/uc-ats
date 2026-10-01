@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import { getVideoEmbedUrl } from '../utils/videoEmbed';
 import {
   Box,
   Typography,
@@ -34,24 +35,8 @@ import {
   ExpandMore as ExpandMoreIcon,
   NewReleases as NewReleasesIcon,
 } from '@mui/icons-material';
+import { CATEGORY_COLORS, CATEGORY_LABELS, TUTORIAL_CATEGORIES } from '../utils/tutorialCategories';
 
-const CATEGORY_LABELS = {
-  DOCUMENT_GRADING: 'Document Grading',
-  INTERVIEW_CONDUCT: 'Interviews',
-  GTKUC: 'Get to Know UC',
-  ATS_NAVIGATION: 'ATS Navigation',
-  NEW_FEATURES: 'New Features',
-};
-
-const CATEGORY_COLORS = {
-  DOCUMENT_GRADING: 'primary',
-  INTERVIEW_CONDUCT: 'secondary',
-  GTKUC: 'success',
-  ATS_NAVIGATION: 'info',
-  NEW_FEATURES: 'warning',
-};
-
-const TUTORIAL_CATEGORIES = Object.keys(CATEGORY_LABELS);
 
 function formatDate(dateString) {
   return new Date(dateString).toLocaleDateString(undefined, {
@@ -59,29 +44,6 @@ function formatDate(dateString) {
     month: 'long',
     day: 'numeric',
   });
-}
-
-function getVideoEmbedUrl(url) {
-  if (!url) return null;
-  try {
-    const youtubeMatch = url.match(
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/
-    );
-    if (youtubeMatch) {
-      return `https://www.youtube.com/embed/${youtubeMatch[1]}`;
-    }
-    const loomMatch = url.match(/loom\.com\/share\/([A-Za-z0-9_-]+)/);
-    if (loomMatch) {
-      return `https://www.loom.com/embed/${loomMatch[1]}`;
-    }
-    const vimeoMatch = url.match(/vimeo\.com\/(\d+)/);
-    if (vimeoMatch) {
-      return `https://player.vimeo.com/video/${vimeoMatch[1]}`;
-    }
-  } catch {
-    return null;
-  }
-  return url;
 }
 
 export default function MemberHelp() {
