@@ -357,6 +357,43 @@ export async function interviewsAssignedTo(userId, interviews, client = prisma) 
 }
 
 /**
+ * The interviews a member is on right now, for a decision that grants access (a case,
+ * say) rather than one that only lists things.
+ *
+ * interviewsAssignedTo is generous on purpose; this is not. Where an interview has
+ * sessions, a current session assignment is the only answer: an interview converted to
+ * sessions keeps its old member groups in the description, and a member removed from
+ * their session must not be let back in through them. An interview without sessions
+ * falls back to the older table or the description's member groups, as before.
+ */
+export async function interviewsStaffedBy(userId, interviews, client = prisma) {
+  if (!interviews?.length) return [];
+  const ids = interviews.map((interview) => interview.id);
+
+  const [slots, slotAssignments, legacyAssignments] = await Promise.all([
+    client.interviewSlot.findMany({ where: { interviewId: { in: ids } }, select: { interviewId: true } }),
+    client.interviewSlotAssignment.findMany({
+      where: { userId, removedAt: null, interviewId: { in: ids } },
+      select: { interviewId: true },
+    }),
+    client.interviewAssignment.findMany({
+      where: { userId, interviewId: { in: ids } },
+      select: { interviewId: true },
+    }),
+  ]);
+  const withSessions = new Set(slots.map((slot) => slot.interviewId));
+  const onSession = new Set(slotAssignments.map((row) => row.interviewId));
+  const onLegacyTable = new Set(legacyAssignments.map((row) => row.interviewId));
+
+  return interviews.filter((interview) => {
+    if (withSessions.has(interview.id)) return onSession.has(interview.id);
+    if (onLegacyTable.has(interview.id)) return true;
+    const config = parseLegacyConfig(interview);
+    return (config.memberGroups ?? []).some((group) => (group.memberIds ?? []).includes(userId));
+  });
+}
+
+/**
  * Everyone in an interview, however its roster is stored.
  *
  * Confirmed signups when it has sessions, the JSON config when it does not.
