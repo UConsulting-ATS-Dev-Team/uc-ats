@@ -36,22 +36,21 @@ export function useTutorialGate(category, continueLabel = 'Continue') {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const checkingRef = useRef(false);
+  const latestRunRef = useRef(0);
   const pendingActionRef = useRef(null);
 
   const run = useCallback(
     async (action) => {
-      // A double click must not open the document twice, or the popup twice.
-      if (checkingRef.current) return;
-      checkingRef.current = true;
+      // The latest click wins: clicking B while A is still being checked opens B, and
+      // a double click opens one document, not two.
+      const runId = ++latestRunRef.current;
       let status;
       try {
         status = await apiClient.get(`/member/help/tutorial-gates/${category}`);
       } catch {
         status = null;
-      } finally {
-        checkingRef.current = false;
       }
+      if (runId !== latestRunRef.current) return;
 
       if (!status?.required) {
         action();

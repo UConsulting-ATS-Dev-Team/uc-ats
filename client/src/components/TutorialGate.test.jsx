@@ -88,6 +88,34 @@ describe('useTutorialGate', () => {
     expect(apiClient.get).toHaveBeenCalledTimes(2);
   });
 
+  it('opens the latest document clicked when an earlier check is still pending', async () => {
+    let answerFirst;
+    apiClient.get
+      .mockImplementationOnce(() => new Promise((resolve) => { answerFirst = resolve; }))
+      .mockResolvedValueOnce({ required: false, cycleId: 'c1', tutorials: [] });
+    const openA = vi.fn();
+    const openB = vi.fn();
+    function TwoDocuments() {
+      const gate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
+      return (
+        <>
+          <button onClick={() => gate.run(openA)}>A</button>
+          <button onClick={() => gate.run(openB)}>B</button>
+          {gate.dialog}
+        </>
+      );
+    }
+    render(<TwoDocuments />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'B' }));
+    await waitFor(() => expect(openB).toHaveBeenCalledTimes(1));
+
+    answerFirst({ required: false, cycleId: 'c1', tutorials: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openA).not.toHaveBeenCalled();
+  });
+
   it('links to a tutorial that is not a known video host instead of framing it', async () => {
     apiClient.get.mockResolvedValue({
       required: true,
