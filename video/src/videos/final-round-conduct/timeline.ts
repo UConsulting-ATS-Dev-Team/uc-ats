@@ -87,47 +87,46 @@ export function buildWalkthrough(S: States): Walkthrough {
   page(1432, "d-done");
 
   // ---------- 7. Save All ----------
-  head(1440, 1600, "Step 7", "Save All before they leave", [0, 1]);
+  head(1440, 1560, "Step 7", "Save All before they leave", [0, 1]);
   scrollTo(1442, 1472, 0);
   camZoom(1488, box("d-done", "saveAll"), 1.35, 14);
   press(1506, box("d-done", "saveAll"), "hand", undefined, 18);
   chime(1512);
-  ring(1512, pad(box("d-done", "saveAll"), 6), 50);
-  camReset(1584, 14);
+  ring(1512, pad(box("d-done", "saveAll"), 6), 30);
+  camReset(1544, 14);
+  dialog(1548, "pop");
 
-  // ---------- 8. The decision ----------
-  head(1600, 2010, "Step 8", "Then record your decision in My Interviews", [5, 6]);
-  page(1600, "m", "/assigned-interviews");
-  scrollTo(1604, 1640, scrollFor("m", "row1", 260));
-  ring(1652, pad(box("m", "chip1"), 4), 34);
-  press(1690, box("m", "edit1"), "hand", () => dialog(1696, "m-edit"), 20);
-  ring(1716, pad(box("m-edit", "help"), 6), 30);
-  // The decision guide: a drawer over the dialog, captured as one viewport shot.
-  press(1744, box("m-edit", "help"), "hand", () => {
-    dialog(1750, null);
-    page(1750, "m-guide", "/assigned-interviews");
+  // ---------- 8. The decision, asked right away ----------
+  head(1560, 1860, "Step 8", "Then pick your decision when it asks", [2, 3]);
+  const p = S.pop as unknown as { x: number; y: number; w: number; h: number };
+  const popBox = { x: p.x, y: p.y, width: p.w, height: p.h };
+  camOn(1562, pad(popBox, 24), 1.6, 16);
+  ring(1584, pad(box("pop", "guideBtn"), 6), 26);
+  // The decision guide: a drawer over the pop-up, captured as one viewport shot.
+  press(1604, box("pop", "guideBtn"), "hand", () => {
+    dialog(1610, null);
+    page(1610, "pop-guide");
   }, 16);
-  camOn(1770, pad(box("m-guide", "drawer"), -20), 1.25, 20);
-  camReset(1820, 14);
-  page(1830, "m", "/assigned-interviews");
-  dialog(1830, "m-edit");
-  press(1850, box("m-edit", "yes"), "hand", () => dialog(1856, "m-yes", true), 18);
-  press(1890, box("m-yes", "save"), "hand", () => dialog(1896, null), 18);
-  page(1896, "m-done", "/assigned-interviews");
-  chime(1896);
-  const chip = box("m-done", "chip1");
-  ring(1912, pad(chip, 4), 40);
-  k.camTo(1926, mid(box("m-done", "row1")).x, mid(chip).y + 60, 1.35, 22);
-  camReset(1994, 14);
+  camOn(1630, pad(box("pop-guide", "drawer"), -20), 1.25, 20);
+  camReset(1690, 14);
+  page(1700, "d-done");
+  dialog(1700, "pop");
+  camOn(1712, pad(popBox, 24), 1.6, 14);
+  press(1730, box("pop", "yes1"), "hand", () => dialog(1736, "pop-1", true), 18);
+  press(1762, box("pop-1", "myes2"), "hand", () => dialog(1768, "pop-2", true), 18);
+  ring(1778, pad(box("pop-2", "save"), 6), 26);
+  press(1806, box("pop-2", "save"), "hand", () => dialog(1812, null), 18);
+  chime(1812);
+  camReset(1830, 14);
 
-  return done(2010);
+  return done(1860);
 }
 
 // ---------- the whole video ----------
 export const SCENES = [
   { name: "Intro", frames: 150 },
   { name: "Three tabs", frames: 210 },
-  { name: "Walkthrough", frames: 2010, walk: true },
+  { name: "Walkthrough", frames: 1860, walk: true },
   { name: "After", frames: 195 },
   { name: "Close", frames: 150 },
 ] as const;
