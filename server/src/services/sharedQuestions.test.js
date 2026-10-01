@@ -31,7 +31,8 @@ function fakeClient(rows) {
         return Promise.resolve();
       }),
       deleteMany: vi.fn(({ where }) => {
-        for (let i = rows.length - 1; i >= 0; i--) if (matches(rows[i], where)) rows.splice(i, 1);
+        const hit = (row) => (where.id ? where.id.in.includes(row.id) : matches(row, where));
+        for (let i = rows.length - 1; i >= 0; i--) if (hit(rows[i])) rows.splice(i, 1);
         return Promise.resolve();
       }),
     },
@@ -59,6 +60,24 @@ describe('saveSharedQuestions', () => {
     await saveSharedQuestions({ interviewId: 'iv1', groupId: 'slot-1', questions: ['Why consulting?'], userId: 'm1' }, client);
 
     expect(listed(client.rows).map((r) => [r.groupId, r.questionText])).toEqual([['old-g', 'Why consulting?']]);
+  });
+
+  it('keeps the id of a question it keeps, wherever it was stored', async () => {
+    // Notes are keyed by question id: a kept question with a new id loses them.
+    const client = fakeClient([q('q1', 'old-g', 0, 'Why consulting?'), q('q2', 'slot-1', 0, 'Keep me')]);
+
+    await saveSharedQuestions({ interviewId: 'iv1', groupId: 'slot-1', questions: ['Why consulting?', 'Keep me'], userId: 'm1' }, client);
+
+    expect(listed(client.rows).map((r) => [r.id, r.groupId, r.order])).toEqual([
+      ['q1', 'old-g', 0],
+      ['q2', 'old-g', 1],
+    ]);
+  });
+
+  it('keeps the id of a question whose text was edited', async () => {
+    const client = fakeClient([q('q1', 'old-g', 0, 'Why consulting?')]);
+    await saveSharedQuestions({ interviewId: 'iv1', groupId: 'slot-1', questions: ['Why consulting, and why us?'], userId: 'm1' }, client);
+    expect(listed(client.rows).map((r) => [r.id, r.questionText])).toEqual([['q1', 'Why consulting, and why us?']]);
   });
 
   it('leaves candidate-specific questions alone', async () => {

@@ -250,14 +250,12 @@ describe('shared question config leaves candidate questions alone', () => {
     const res = await shrinkSharedList(base, user);
 
     expect(res.status).toBe(200);
-    expect(prisma.behavioralQuestion.findMany.mock.calls[0][0].where).toEqual({
-      interviewId: 'int-1',
-      groupId: 'grp-1',
-      applicationId: null
-    });
-    expect(prisma.behavioralQuestion.deleteMany).toHaveBeenCalledWith({
-      where: { interviewId: 'int-1', groupId: 'grp-1', applicationId: null, order: { gte: 1 } }
-    });
+    // Only group-wide rows are read (applicationId null), under the group's id(s)...
+    const where = prisma.behavioralQuestion.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ interviewId: 'int-1', applicationId: null });
+    expect(where.groupId.in).toContain('grp-1');
+    // ...and only the one shared row dropped from the list is deleted.
+    expect(prisma.behavioralQuestion.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['bq-b'] } } });
   });
 
   it.each([
