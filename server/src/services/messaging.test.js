@@ -17,8 +17,11 @@ vi.mock('../services/realtime.js', () => ({
 vi.mock('../prismaClient.js', () => ({
   default: {
     interview: {
-      findUnique: vi.fn()
+      findUnique: vi.fn(),
+      findMany: vi.fn()
     },
+    interviewSlot: { findFirst: vi.fn(), findMany: vi.fn() },
+    interviewSlotAssignment: { findMany: vi.fn() },
     interviewAssignment: {
       findMany: vi.fn(),
       findUnique: vi.fn()
@@ -50,43 +53,70 @@ describe('messaging service', () => {
     vi.clearAllMocks();
   });
 
+  // Who staffs interview int-1: through sessions (how members are staffed now), or,
+  // for an interview without sessions, the older table and the description's groups.
+  const staff = ({ sessions = true, onSession = [], removed = [], legacy = [], groups = [] } = {}) => {
+    const description = groups.length ? JSON.stringify({ memberGroups: [{ id: 'mg', memberIds: groups }] }) : null;
+    prisma.interview.findUnique.mockResolvedValue({ id: 'int-1', title: 'Interview', description });
+    prisma.interview.findMany.mockResolvedValue([{ id: 'int-1', description }]);
+    prisma.interviewSlot.findFirst.mockResolvedValue(sessions ? { id: 'slot-1' } : null);
+    prisma.interviewSlot.findMany.mockResolvedValue(sessions ? [{ interviewId: 'int-1' }] : []);
+    prisma.interviewSlotAssignment.findMany.mockImplementation(({ where }) => {
+      const rows = [...onSession.map((userId) => ({ userId })), ...(where.removedAt === null ? [] : removed.map((userId) => ({ userId })))];
+      return Promise.resolve(
+        where.userId
+          ? rows.filter((r) => r.userId === where.userId).map(() => ({ interviewId: 'int-1' }))
+          : rows
+      );
+    });
+    prisma.interviewAssignment.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(
+        where.userId
+          ? legacy.filter((id) => id === where.userId).map(() => ({ interviewId: 'int-1' }))
+          : legacy.map((userId) => ({ userId }))
+      )
+    );
+  };
+
   describe('userCanAccessConversation', () => {
     const admin = { id: 'admin-1', role: 'ADMIN' };
     const member = { id: 'member-1', role: 'MEMBER' };
+    const conv = { id: 'conv-1', contextType: 'INTERVIEW', contextId: 'int-1' };
 
     it('allows ADMIN access to any conversation', async () => {
-      const conv = { id: 'conv-1', contextType: 'INTERVIEW', contextId: 'int-1' };
       const result = await userCanAccessConversation(conv, admin);
       expect(result).toBe(true);
-      expect(prisma.interviewAssignment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.interviewSlotAssignment.findMany).not.toHaveBeenCalled();
     });
 
-    it('allows MEMBER access when assigned to the interview', async () => {
-      const conv = { id: 'conv-1', contextType: 'INTERVIEW', contextId: 'int-1' };
-      prisma.interviewAssignment.findUnique.mockResolvedValue({ id: 'a-1' });
-
-      const result = await userCanAccessConversation(conv, member);
-
-      expect(result).toBe(true);
-      expect(prisma.interviewAssignment.findUnique).toHaveBeenCalledWith({
-        where: { interviewId_userId: { interviewId: 'int-1', userId: 'member-1' } }
-      });
+    it("allows a MEMBER on one of the interview's sessions", async () => {
+      // How members are staffed now; the old table is empty for them.
+      staff({ onSession: ['member-1'] });
+      expect(await userCanAccessConversation(conv, member)).toBe(true);
     });
 
-    it('denies MEMBER access when no longer assigned to the interview', async () => {
-      const conv = { id: 'conv-1', contextType: 'INTERVIEW', contextId: 'int-1' };
-      prisma.interviewAssignment.findUnique.mockResolvedValue(null);
+    it('denies a MEMBER taken off their session', async () => {
+      staff({ removed: ['member-1'] });
+      expect(await userCanAccessConversation(conv, member)).toBe(false);
+    });
 
-      const result = await userCanAccessConversation(conv, member);
+    it('ignores the old table once the interview has sessions', async () => {
+      staff({ legacy: ['member-1'] });
+      expect(await userCanAccessConversation(conv, member)).toBe(false);
+    });
 
-      expect(result).toBe(false);
+    it('still allows the old table or member groups for an interview without sessions', async () => {
+      staff({ sessions: false, legacy: ['member-1'] });
+      expect(await userCanAccessConversation(conv, member)).toBe(true);
+      staff({ sessions: false, groups: ['member-1'] });
+      expect(await userCanAccessConversation(conv, member)).toBe(true);
     });
 
     it('falls back to participant rows for non-interview conversations', async () => {
-      const conv = { id: 'conv-1', contextType: 'DIRECT_MESSAGE', contextId: null };
+      const dm = { id: 'conv-1', contextType: 'DIRECT_MESSAGE', contextId: null };
       prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p-1' });
 
-      const result = await userCanAccessConversation(conv, member);
+      const result = await userCanAccessConversation(dm, member);
 
       expect(result).toBe(true);
       expect(prisma.conversationParticipant.findUnique).toHaveBeenCalledWith({
@@ -96,9 +126,9 @@ describe('messaging service', () => {
   });
 
   describe('syncInterviewParticipants', () => {
-    it('adds missing and removes stale participants', async () => {
+    it("makes the participants the interview's current session staff", async () => {
       prisma.conversation.findUnique.mockResolvedValue({ id: 'conv-1' });
-      prisma.interviewAssignment.findMany.mockResolvedValue([{ userId: 'u-1' }, { userId: 'u-3' }]);
+      staff({ onSession: ['u-1', 'u-3'], removed: ['u-2'] });
       prisma.conversationParticipant.findMany.mockResolvedValue([
         { userId: 'u-1' },
         { userId: 'u-2' }
@@ -119,52 +149,57 @@ describe('messaging service', () => {
   describe('listConversationsForUser', () => {
     const member = { id: 'member-1', role: 'MEMBER' };
     const admin = { id: 'admin-1', role: 'ADMIN' };
+    const chat = {
+      id: 'conv-1',
+      contextType: 'INTERVIEW',
+      contextId: 'int-1',
+      title: 'Interview',
+      updatedAt: new Date(),
+      participants: [],
+      messages: []
+    };
+    const conversations = (rows) => prisma.conversation.findMany.mockResolvedValue(rows);
+    const interviewIdsListed = () =>
+      prisma.conversation.findMany.mock.calls.at(-1)[0].where.OR[1].contextId.in;
 
-    it('excludes interview conversations after the member is unassigned', async () => {
-      prisma.interviewAssignment.findMany.mockResolvedValue([]);
-      prisma.conversation.findMany.mockResolvedValue([]);
+    it('excludes interview conversations after the member is taken off', async () => {
+      staff({ removed: ['member-1'] });
+      conversations([]);
       prisma.message.count.mockResolvedValue(0);
 
       const result = await listConversationsForUser(member);
 
-      expect(prisma.conversation.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            OR: [
-              {
-                contextType: { in: ['APPLICATION', 'CYCLE', 'DIRECT_MESSAGE'] },
-                participants: { some: { userId: 'member-1' } }
-              },
-              {
-                contextType: 'INTERVIEW',
-                contextId: { in: [] }
-              }
-            ]
-          })
-        })
-      );
+      expect(interviewIdsListed()).toEqual([]);
       expect(result).toEqual([]);
     });
 
-    it('includes assigned interview conversations for a member', async () => {
-      prisma.interviewAssignment.findMany.mockResolvedValue([{ interviewId: 'int-1' }]);
-      prisma.conversation.findMany.mockResolvedValue([
-        {
-          id: 'conv-1',
-          contextType: 'INTERVIEW',
-          contextId: 'int-1',
-          title: 'Interview',
-          updatedAt: new Date(),
-          participants: [],
-          messages: []
-        }
-      ]);
+    it("looks only at the member's own interviews, not every interview with a chat", async () => {
+      staff({ onSession: ['member-1'] });
+      conversations([]);
+      prisma.message.count.mockResolvedValue(0);
+
+      await listConversationsForUser(member);
+
+      expect(prisma.interviewSlotAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'member-1', removedAt: null } })
+      );
+      // The only interview lookups are scoped: by the member's id in a legacy
+      // description, then the candidates found.
+      for (const [args] of prisma.interview.findMany.mock.calls) {
+        expect(args.where).toSatisfy((w) => Boolean(w.description?.contains === 'member-1' || w.id?.in));
+      }
+    });
+
+    it("includes the chat of an interview the member is on through a session", async () => {
+      staff({ onSession: ['member-1'] });
+      conversations([chat]);
       prisma.conversationParticipant.findUnique.mockResolvedValue(null);
       prisma.conversationParticipant.create.mockResolvedValue({});
       prisma.message.count.mockResolvedValue(0);
 
       const result = await listConversationsForUser(member);
 
+      expect(interviewIdsListed()).toEqual(['int-1']);
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('conv-1');
       expect(prisma.conversationParticipant.create).toHaveBeenCalledWith({

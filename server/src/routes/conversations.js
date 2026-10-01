@@ -1,4 +1,5 @@
 import express from 'express';
+import { interviewStaffIds } from '../services/interviewRoster.js';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import {
@@ -36,17 +37,15 @@ router.get('/interviews/:interviewId', requireAuth, requireAdminOrMember, async 
 
     const interview = await prisma.interview.findUnique({
       where: { id: interviewId },
-      select: {
-        id: true,
-        assignments: { where: { userId: req.user.id }, select: { id: true } }
-      }
+      select: { id: true }
     });
 
     if (!interview) {
       return res.status(404).json({ error: 'Interview not found' });
     }
 
-    if (req.user.role === 'MEMBER' && interview.assignments.length === 0) {
+    // Whoever staffs the interview now (interviewRoster.js), sessions included.
+    if (req.user.role === 'MEMBER' && !(await interviewStaffIds(interviewId)).includes(req.user.id)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
