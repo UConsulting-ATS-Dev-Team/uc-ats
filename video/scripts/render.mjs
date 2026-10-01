@@ -1,6 +1,7 @@
 // Renders one tutorial to out/<id>.mp4 and its thumbnail to out/<id>-thumb.png.
 // Usage: node scripts/render.mjs <id>
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
@@ -15,6 +16,10 @@ const pascal = (s) => s.replace(/(^|-)(\w)/g, (_, __, c) => c.toUpperCase());
 const comp = comps.find((c) => c.id === `${pascal(id ?? "")}Tutorial`);
 if (!comp) {
   console.error(`Usage: npm run render -- <id>   (compositions: ${comps.map((c) => c.id).join(", ")})`);
+  process.exit(1);
+}
+if (!existsSync(join(root, `public/shots/${id}/states.json`))) {
+  console.error(`No captures for ${id}: run \`npm run capture -- ${id}\` first.`);
   process.exit(1);
 }
 const { THUMB_FRAME } = await import(`../src/videos/${id}/timeline.ts`);

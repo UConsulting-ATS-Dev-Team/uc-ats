@@ -12,6 +12,11 @@ camera, a cursor and headlines. It does not rebuild the UI.
 
 ## Rebuild one
 
+Needs Node 22.18 or later: the scripts import the TypeScript timelines directly,
+which relies on Node's built-in type stripping. Capture drives Chromium through
+Playwright; on a machine without it, run `npx playwright@1.56.1 install chromium`
+or set `CHROME_PATH` to a Chrome or Chromium binary.
+
 ```bash
 cd video && npm install
 
@@ -51,7 +56,12 @@ npm run render -- grading      # out/grading.mp4 + out/grading-thumb.png
   recorded in `states.json`, not at hard-coded pixels, so most layout changes
   carry through on their own.
 - Everything under `public/shots/`, the music and `out/` is generated and
-  gitignored.
+  gitignored. `npm run render` refuses to run for a video with no captures, so a
+  fresh checkout cannot render a placeholder by mistake.
+- Copy the app owns (rubrics, the decision guide) is read from the server source by
+  `scripts/server-source.mjs`, which checks its shape and stops the capture if it
+  changed. Explainer scenes state shipped defaults; if an admin changes a rubric or
+  the guide, the video still shows the defaults until it is re-rendered.
 
 ## Adding a video
 

@@ -4,19 +4,18 @@ import { copyFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SAMPLE_APPS, SAMPLE_USER } from "../../src/videos/grading/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
+import { expect, readServerConstant } from "../server-source.mjs";
 
 const root = join(import.meta.dirname, "../..");
 // ---------- sample API ----------
-function defaultRubrics() {
-  // Read straight out of the server so the video can never show a rubric that
-  // differs from the shipped default. Only the object literal is evaluated.
-  const src = readFileSync(join(root, "..", "server/src/services/documentRubrics.js"), "utf8");
-  const head = "export const DEFAULT_RUBRICS = Object.freeze(";
-  const body = src.slice(src.indexOf(head) + head.length);
-  const literal = body.slice(0, body.indexOf("\n});") + 2);
-  return Function(`return (${literal});`)();
-}
-const RUBRICS = defaultRubrics();
+// The shipped default rubrics, read out of the server so the video can never show a
+// rubric that differs from them.
+const RUBRICS = readServerConstant("server/src/services/documentRubrics.js", "DEFAULT_RUBRICS", (r) => {
+  for (const type of ["resume", "coverLetter", "video"]) {
+    expect(Array.isArray(r?.[type]?.categories) && r[type].categories.length > 0, `DEFAULT_RUBRICS.${type}.categories`);
+    for (const c of r[type].categories) expect(Number.isFinite(c.min) && Number.isFinite(c.max), `${type} category min/max`);
+  }
+});
 const AGG = { resume: "sum", coverLetter: "average", video: "single" };
 const overall = (type, key) =>
   RUBRICS[type].categories.reduce((s, c) => s + c[key], 0) / (AGG[type] === "average" ? RUBRICS[type].categories.length : 1);

@@ -12,6 +12,9 @@
 //   participation: server/src/services/stagingSnapshot.js. Staging ranks by
 //   that total; no candidate-facing page or email reads a score.
 // Per-team deliberations are how UConsulting runs the cycle, not code.
+//
+// The maxima here (13, 3, 2, 21) are the shipped defaults. Admins can change rubric
+// ranges (Admin Document Grading -> Edit rubrics); if they do, re-render this video.
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { Card, Count, Icon, ICONS, Person, Pop } from "../../kit/Bits";
 import { clamp, Exit, Sub, Title } from "../../kit/Explainer";

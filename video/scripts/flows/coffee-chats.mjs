@@ -15,19 +15,19 @@ import {
   SLOTS,
 } from "../../src/videos/coffee-chats/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
+import { expect, readServerConstant } from "../server-source.mjs";
 
 const root = join(import.meta.dirname, "../..");
 
 /** The shipped decision guide, read out of the server so the video shows exactly it. */
-function defaultGuide() {
-  const src = readFileSync(join(root, "..", "server/src/services/decisionGuides.js"), "utf8");
-  const head = "export const DEFAULT_GUIDE = ";
-  const body = src.slice(src.indexOf(head) + head.length);
-  const literal = body.slice(0, body.indexOf("\n});") + 3);
-  return Function(`return (${literal});`)();
-}
-const GUIDE = defaultGuide();
-const LABELS = { YES: "Yes", MAYBE_YES: "Maybe-Yes", MAYBE_NO: "Maybe-No", NO: "No" };
+const DECISIONS_FILE = "server/src/services/decisionGuides.js";
+const LABELS = readServerConstant(DECISIONS_FILE, "DECISION_LABELS", (l) =>
+  expect(["YES", "MAYBE_YES", "MAYBE_NO", "NO"].every((k) => typeof l?.[k] === "string"), "DECISION_LABELS"),
+);
+const GUIDE = readServerConstant(DECISIONS_FILE, "DEFAULT_GUIDE", (g) => {
+  expect(typeof g?.intro === "string" && g.intro.length > 0, "DEFAULT_GUIDE.intro");
+  expect(Object.keys(LABELS).every((k) => typeof g.criteria?.[k] === "string"), "DEFAULT_GUIDE.criteria");
+});
 const guideResponse = {
   guide: {
     phase: "coffee",

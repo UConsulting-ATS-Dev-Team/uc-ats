@@ -29,16 +29,25 @@ mkdirSync(out, { recursive: true });
 const base = process.env.CLIENT_URL || "http://localhost:5199";
 const SCALE = 2;
 
+// CHROME_PATH if set; otherwise the newest Chromium in the macOS Playwright cache;
+// otherwise whatever `npx playwright install chromium` put where playwright-core looks.
 function chromePath() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
   const cache = join(homedir(), "Library/Caches/ms-playwright");
+  if (!existsSync(cache)) return undefined;
   const dir = readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort().pop();
+  if (!dir) return undefined;
   const p = join(cache, dir, "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-  if (!existsSync(p)) throw new Error(`No Chromium at ${p}; set CHROME_PATH`);
-  return p;
+  return existsSync(p) ? p : undefined;
 }
 
-const browser = await chromium.launch({ executablePath: chromePath() });
+let browser;
+try {
+  browser = await chromium.launch({ executablePath: chromePath() });
+} catch (e) {
+  console.error(`Could not start Chromium (${e.message.split("\n")[0]}).\nInstall it with \`npx playwright@1.56.1 install chromium\`, or point CHROME_PATH at a Chrome or Chromium binary.`);
+  process.exit(1);
+}
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: SCALE });
 await context.addInitScript(() => {
   localStorage.setItem("token", "sample-token");

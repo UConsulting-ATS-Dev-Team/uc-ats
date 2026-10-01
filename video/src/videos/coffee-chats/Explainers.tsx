@@ -177,7 +177,7 @@ export function After() {
             </div>
           ))}
         </div>
-        <Sub text="Changed your mind? Edit it any time from My Evaluations." accent={[6, 7]} at={132} exitAt={end} top={790} />
+        <Sub text="Changed your mind? Edit it from My Evaluations." accent={[6, 7]} at={132} exitAt={end} top={790} />
       </Exit>
     </Stage>
   );
