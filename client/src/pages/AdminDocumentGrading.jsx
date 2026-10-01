@@ -4,6 +4,7 @@ import apiClient from '../utils/api';
 import DocumentGradingModal from '../components/DocumentGradingModal';
 import FlagDocumentModal from '../components/FlagDocumentModal';
 import AccessControl from '../components/AccessControl';
+import { useTutorialGate } from '../components/TutorialGate';
 import MemberAvatar from '../components/MemberAvatar';
 import {
   Box,
@@ -100,6 +101,7 @@ export default function AdminDocumentGrading() {
   const [deadlineForm, setDeadlineForm] = useState({ resumeDeadline: '', coverLetterDeadline: '', videoDeadline: '' });
   const [deadlineSubmitting, setDeadlineSubmitting] = useState(false);
   const scrollPositionRef = useRef(0);
+  const tutorialGate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
 
   // Calculate progress data based on actual grading completion
   const calculateProgressData = () => {
@@ -421,9 +423,11 @@ export default function AdminDocumentGrading() {
   };
 
   const handleGradeDocument = (application, documentType) => {
-    setSelectedApplication(application);
-    setSelectedDocumentType(documentType);
-    setGradingModalOpen(true);
+    tutorialGate.run(() => {
+      setSelectedApplication(application);
+      setSelectedDocumentType(documentType);
+      setGradingModalOpen(true);
+    });
   };
 
   const handleCloseGradingModal = (shouldRefresh = false) => {
@@ -1328,6 +1332,8 @@ export default function AdminDocumentGrading() {
       </Paper>
 
       {/* Document Grading Modal */}
+      {tutorialGate.dialog}
+
       <DocumentGradingModal
         open={gradingModalOpen}
         onClose={handleCloseGradingModal}
