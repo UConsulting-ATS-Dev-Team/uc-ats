@@ -14,7 +14,7 @@ vi.mock('../prismaClient.js', () => ({
     recruitingCycle: { findFirst: vi.fn() },
     candidate: { findMany: vi.fn() },
     interview: { findUnique: vi.fn(), update: vi.fn() },
-    interviewSlot: { findFirst: vi.fn() },
+    interviewSlot: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     interviewSlotAssignment: { findMany: vi.fn() },
     interviewAssignment: { findMany: vi.fn() },
     behavioralQuestion: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },

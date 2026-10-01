@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import { saveSharedQuestions } from '../services/sharedQuestions.js';
 import { putResume, getResume, removeResume, storageErrorResponse } from '../services/resumeStorage.js';
 import {
   expandGroupIdsForQuestions,
@@ -943,81 +944,9 @@ router.patch('/interviews/:id/config', requireAuth, requireAdminOrMember, async 
     if (!groupId || !questions) {
       return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
     }
-    
-    console.log('Member - Attempting to save behavioral questions:', {
-      interviewId: id,
-      groupId,
-      questions: questions.filter(q => q.trim() !== ''),
-      userId
-    });
-    
-    // Note: For behavioral questions, we're working with application groups
-    // The access control is handled at the interview level, not the group level
-    console.log('Member - Using application group for behavioral questions:', groupId);
-    
-    // Get existing questions for this group and interview
-    const existingQuestions = await prisma.behavioralQuestion.findMany({
-      where: {
-        interviewId: id,
-        groupId: groupId,
-        applicationId: null
-      },
-      orderBy: { order: 'asc' }
-    });
-    
-    const filteredQuestions = questions.filter(q => q.trim() !== '');
-    
-    // Update existing questions and create new ones
-    for (let i = 0; i < filteredQuestions.length; i++) {
-      const questionText = filteredQuestions[i];
-      
-      if (existingQuestions[i]) {
-        // Update existing question if text has changed
-        if (existingQuestions[i].questionText !== questionText) {
-          await prisma.behavioralQuestion.update({
-            where: { id: existingQuestions[i].id },
-            data: {
-              questionText: questionText,
-              order: i,
-              updatedAt: new Date()
-            }
-          });
-        } else if (existingQuestions[i].order !== i) {
-          // Update order if it has changed
-          await prisma.behavioralQuestion.update({
-            where: { id: existingQuestions[i].id },
-            data: {
-              order: i,
-              updatedAt: new Date()
-            }
-          });
-        }
-      } else {
-        // Create new question
-        await prisma.behavioralQuestion.create({
-          data: {
-            interviewId: id,
-            groupId: groupId,
-            questionText: questionText,
-            order: i,
-            createdBy: userId
-          }
-        });
-      }
-    }
-    
-    // Delete any questions that are no longer in the list
-    if (filteredQuestions.length < existingQuestions.length) {
-      await prisma.behavioralQuestion.deleteMany({
-        where: {
-          interviewId: id,
-          groupId: groupId,
-          applicationId: null,
-          order: { gte: filteredQuestions.length }
-        }
-      });
-    }
-    
+
+    // Written under the group's one id, with its alias cleared: services/sharedQuestions.js.
+    await saveSharedQuestions({ interviewId: id, groupId, questions, userId });
     return res.json({ success: true, message: 'Behavioral questions updated successfully' });
     
   } catch (error) {
