@@ -13,6 +13,7 @@ export function buildWalkthrough(S: States): Walkthrough {
   const { box, page, camOn, camZoom, camReset, scrollTo, ring, head, press, typePage, chime, done } = k;
   const count = (name: string) => (S[name] as unknown as { count: number }).count;
   const grid = (S.gridScroll as unknown as { y: number }).y;
+  const guide = (S.guideScroll as unknown as { y: number }).y;
   /** Type into a field, one captured view per keystroke batch; returns the last state. */
   const typing = (f: number, prefix: string, step = 3) => {
     const n = count(`${prefix}count`);
@@ -90,18 +91,24 @@ export function buildWalkthrough(S: States): Walkthrough {
   camReset(1310, 10);
   scrollTo(1312, 1344, 0);
   press(1358, box("r2-done", "next"), "hand", () => page(1364, "r3"), 18);
-  scrollTo(1372, 1404, grid);
-  page(1405, "r3-grid");
-  ring(1410, pad(box("r3-grid", "notice"), 4), 34);
-  press(1432, box("r3-grid", "guideBtn"), "hand", () => page(1438, "guide"), 18);
-  camOn(1452, box("guide", "drawer"), 1.2, 16);
-  camReset(1512, 14);
-  page(1516, "r3-grid");
-  camZoom(1530, box("r3-grid", "myes"), 1.45, 14);
-  press(1542, box("r3-grid", "myes"), "hand", () => page(1548, "r3-decided"), 14);
-  camZoom(1560, box("r3-decided", "post"), 1.4, 12);
-  press(1566, box("r3-decided", "post"), "text", undefined, 12);
-  typing(1574, "r3-p", 3);
+  // The decision guide's button sits above the grid, under the top bar at the grid's
+  // scroll position; the page scrolls to where the capture clicked it (guideScroll),
+  // then on down to the grid for the decision.
+  scrollTo(1370, 1398, guide);
+  page(1399, "r3-guidebtn");
+  ring(1404, pad(box("r3-guidebtn", "notice"), 4), 34);
+  press(1426, box("r3-guidebtn", "guideBtn"), "hand", () => page(1432, "guide"), 18);
+  camOn(1446, box("guide", "drawer"), 1.2, 16);
+  camReset(1504, 14);
+  page(1508, "r3-guidebtn");
+  page(1510, "r3");
+  scrollTo(1512, 1536, grid);
+  page(1537, "r3-grid");
+  camZoom(1546, box("r3-grid", "myes"), 1.45, 12);
+  press(1556, box("r3-grid", "myes"), "hand", () => page(1562, "r3-decided"), 12);
+  camZoom(1572, box("r3-decided", "post"), 1.4, 10);
+  press(1578, box("r3-decided", "post"), "text", undefined, 10);
+  typing(1586, "r3-p", 3);
 
   // ---------- 8. Save All ----------
   head(1620, 1770, "Step 8", "Save All before you leave the room", [0, 1]);
@@ -142,7 +149,7 @@ export function music(): MusicPlan {
   return {
     slams: [0, 60, 75, 90],
     breaks: [
-      [W0 + 1438, W0 + 1516],
+      [W0 + 1432, W0 + 1508],
       [sceneStart("After"), sceneStart("Close")],
     ],
   };

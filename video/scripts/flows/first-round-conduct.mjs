@@ -221,9 +221,17 @@ export async function run({ page, base, states, settle, pageState, viewState }) 
   await pageState("r3", targets());
   await toGrid();
   await viewState("r3-grid", targets());
-  await page.getByRole("button", { name: "What the decisions mean" }).first().scrollIntoViewIfNeeded();
-  const guideScroll = await page.evaluate(() => Math.round(window.scrollY));
-  states.guideScroll = { y: guideScroll };
+  // Where the guide button is clicked from: the grid position if the button shows
+  // there, else scrolled until it clears the fixed top bar. The video clicks it from
+  // this exact view (r3-guidebtn).
+  const guideBtn = page.getByRole("button", { name: "What the decisions mean" }).first();
+  const top = await guideBtn.evaluate((el) => el.getBoundingClientRect().top);
+  if (top < 100 || top > 820) {
+    await guideBtn.evaluate((el) => window.scrollBy(0, el.getBoundingClientRect().top - 300));
+    await settle(250);
+  }
+  states.guideScroll = { y: await page.evaluate(() => Math.round(window.scrollY)) };
+  await viewState("r3-guidebtn", targets());
   await page.getByRole("button", { name: "What the decisions mean" }).first().click();
   const drawer = page.locator(".MuiDrawer-paper");
   await drawer.getByText("Decision guide").waitFor();
