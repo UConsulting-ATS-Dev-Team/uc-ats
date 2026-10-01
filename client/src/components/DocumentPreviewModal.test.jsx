@@ -42,6 +42,13 @@ describe('DocumentPreviewModal', () => {
     expect(onDialogClose).not.toHaveBeenCalled();
   });
 
+  it('sits above snackbars, as the overlay always did', () => {
+    // Staging keeps notifications (Snackbar, 1400) up while a preview opens.
+    render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={() => {}} />);
+    const root = document.querySelector('.MuiModal-root');
+    expect(Number(getComputedStyle(root).zIndex)).toBe(1500);
+  });
+
   it('still closes from its button', () => {
     const onClose = vi.fn();
     render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onClose} />);

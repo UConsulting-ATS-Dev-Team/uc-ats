@@ -85,7 +85,8 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
   // bar. The stack: opened from an MUI Dialog (Staging), this is the top modal, so it
   // holds keyboard focus and Escape closes it alone, not the dialog underneath too.
   return (
-    <Modal open onClose={onClose} hideBackdrop>
+    // 1500, as the overlay always was: above MUI dialogs (1300) and snackbars (1400).
+    <Modal open onClose={onClose} hideBackdrop sx={{ zIndex: 1500 }}>
       <div style={overlayStyle} onClick={onClose}>
         <div style={getModalStyle(isMobile)} onClick={(e) => e.stopPropagation()}>
           <div style={headerStyle}>
