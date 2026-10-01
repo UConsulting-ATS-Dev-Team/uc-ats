@@ -17,6 +17,8 @@ vi.mock('../prismaClient.js', () => ({
     casePage: { findFirst: vi.fn() },
     caseAssignment: { findMany: vi.fn() },
     caseVisibilitySetting: { findUnique: vi.fn(), upsert: vi.fn() },
+    interviewSlotAssignment: { findMany: vi.fn() },
+    interviewAssignment: { findMany: vi.fn() },
   },
 }));
 
@@ -54,10 +56,13 @@ const call = (path, { user, method = 'GET', body } = {}) =>
 
 const hoursFromNow = (h) => new Date(Date.now() + h * 60 * 60 * 1000);
 
-const assignedTo = (...startDates) =>
-  prisma.caseAssignment.findMany.mockResolvedValue(
-    startDates.map((startDate) => ({ interview: { startDate } }))
-  );
+// The member is on these interviews through a session, as members are staffed now.
+const assignedTo = (...startDates) => {
+  const interviews = startDates.map((startDate, i) => ({ id: `iv-${i}`, startDate, description: null }));
+  prisma.caseAssignment.findMany.mockResolvedValue(interviews.map((interview) => ({ interview })));
+  prisma.interviewSlotAssignment.findMany.mockResolvedValue(interviews.map((iv) => ({ interviewId: iv.id })));
+  prisma.interviewAssignment.findMany.mockResolvedValue([]);
+};
 
 beforeAll(async () => {
   const app = express();
