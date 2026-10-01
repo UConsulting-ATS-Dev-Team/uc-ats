@@ -186,13 +186,13 @@ describe('DocumentGradingModal', () => {
   });
 });
 
-// When the preview cannot load, the grader is told why and can still open the
+// When a preview cannot load, the grader is told why and can still open the
 // document in a new tab. A new tab sends no Authorization header, so the button
 // signs a link first; it used to be a bare link that answered 401 for everyone.
-describe('a video preview that fails', () => {
-  const withVideo = { ...application, videoUrl: '/api/files/abc/pdf' };
-  const renderWithVideo = () => render(
-    <DocumentGradingModal open onClose={vi.fn()} application={withVideo} documentType="video" />
+describe('a document preview that fails', () => {
+  const withResume = { ...application, resumeUrl: '/api/files/abc/pdf' };
+  const renderWithResume = () => render(
+    <DocumentGradingModal open onClose={vi.fn()} application={withResume} documentType="resume" />
   );
 
   const previewFails = (response) => {
@@ -212,27 +212,27 @@ describe('a video preview that fails', () => {
 
   it('says what the server answered', async () => {
     previewFails(notFound);
-    renderWithVideo();
+    renderWithResume();
     expect(await screen.findByText('Failed to load preview')).toBeInTheDocument();
     expect(screen.getByText('The server answered 404: Failed to serve PDF')).toBeInTheDocument();
   });
 
   it('says when the download stopped part way', async () => {
     previewFails({ ok: true, blob: () => Promise.reject(new TypeError('network error')) });
-    renderWithVideo();
+    renderWithResume();
     expect(
       await screen.findByText('The download stopped before the file finished (network error)')
     ).toBeInTheDocument();
   });
 
-  it('opens the video in a new tab through a signed link', async () => {
+  it('opens the document in a new tab through a signed link', async () => {
     previewFails(notFound);
     const tab = { location: { href: '' }, close: vi.fn(), opener: 'page' };
     vi.spyOn(window, 'open').mockReturnValue(tab);
     apiClient.post.mockResolvedValue({ access: 'tok.en' });
 
-    renderWithVideo();
-    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+    renderWithResume();
+    fireEvent.click(await screen.findByRole('button', { name: /open resume in new tab/i }));
 
     // The tab opens inside the click, before the await, or a popup blocker eats it.
     expect(window.open).toHaveBeenCalledWith('', '_blank');
@@ -247,8 +247,8 @@ describe('a video preview that fails', () => {
     vi.spyOn(window, 'open').mockReturnValue(tab);
     apiClient.post.mockRejectedValue(Object.assign(new Error('Forbidden (Status: 403)'), { serverMessage: 'Forbidden' }));
 
-    renderWithVideo();
-    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+    renderWithResume();
+    fireEvent.click(await screen.findByRole('button', { name: /open resume in new tab/i }));
 
     expect(await screen.findByText('Forbidden')).toBeInTheDocument();
     expect(tab.close).toHaveBeenCalled();
@@ -260,9 +260,67 @@ describe('a video preview that fails', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
     apiClient.post.mockResolvedValue({ access: 'tok.en' });
 
-    renderWithVideo();
-    fireEvent.click(await screen.findByRole('button', { name: /open video in new tab/i }));
+    renderWithResume();
+    fireEvent.click(await screen.findByRole('button', { name: /open resume in new tab/i }));
 
     expect(await screen.findByText(/allow pop-ups for this site/i)).toBeInTheDocument();
+  });
+});
+
+// A video is never downloaded whole: Vercel's proxy cut that off part way. The
+// <video> streams it in ranges from a signed link.
+describe('the video preview', () => {
+  const withVideo = { ...application, videoUrl: '/api/files/vid/pdf' };
+  const renderWithVideo = () => render(
+    <DocumentGradingModal open onClose={vi.fn()} application={withVideo} documentType="video" />
+  );
+  const videoElement = () => document.querySelector('video');
+
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    mockServer();
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('a video must not be fetched whole'))));
+  });
+
+  it('streams from a signed link instead of downloading the file', async () => {
+    apiClient.post.mockResolvedValue({ access: 'tok.en' });
+    renderWithVideo();
+
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+    expect(videoElement().getAttribute('src')).toBe('/api/files/vid/pdf?access=tok.en');
+    expect(apiClient.post).toHaveBeenCalledWith('/files/vid/link');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('says why when the link cannot be signed', async () => {
+    apiClient.post.mockRejectedValue(Object.assign(new Error('Forbidden (Status: 403)'), { serverMessage: 'Forbidden' }));
+    renderWithVideo();
+    expect(await screen.findByText('Could not open the video: Forbidden')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open video in new tab/i })).toBeInTheDocument();
+  });
+
+  it('re-signs an expired link once and resumes where it was', async () => {
+    apiClient.post.mockResolvedValueOnce({ access: 'first' }).mockResolvedValueOnce({ access: 'second' });
+    renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+
+    const video = videoElement();
+    Object.defineProperty(video, 'currentTime', { value: 42, writable: true });
+    fireEvent.error(video);
+
+    await waitFor(() => expect(video.src).toContain('/api/files/vid/pdf?access=second'));
+    expect(video.currentTime).toBe(42);
+  });
+
+  it('reports a video that still will not play', async () => {
+    apiClient.post.mockResolvedValue({ access: 'tok.en' });
+    renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+
+    fireEvent.error(videoElement());
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    fireEvent.error(videoElement());
+
+    expect(await screen.findByText(/could not be played here/i)).toBeInTheDocument();
   });
 });

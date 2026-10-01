@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
+import { getFileMetadata, getFileStream } from '../services/google/drive.js';
 import filesRoutes from './files.js';
 
 vi.mock('../prismaClient.js', () => ({
@@ -192,5 +193,52 @@ describe('signed links for opening a document in a new tab', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// A whole video in one response is cut off by Vercel's proxy part way through,
+// so a <video> asking for ranges gets bounded slices (services/byteRange.js).
+describe('range requests', () => {
+  const MB = 1024 * 1024;
+  const SIZE = 50 * MB;
+
+  const getRange = (range) =>
+    fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf`, {
+      headers: { Authorization: `Bearer ${tokenFor(admin)}`, ...(range ? { Range: range } : {}) },
+    });
+
+  beforeEach(() => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    getFileMetadata.mockResolvedValue({ name: 'video.mov', mimeType: 'video/quicktime', size: String(SIZE) });
+  });
+
+  it('answers an open-ended range with one bounded slice', async () => {
+    const res = await getRange('bytes=0-');
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe(`bytes 0-${4 * MB - 1}/${SIZE}`);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-type')).toBe('video/quicktime');
+    expect(getFileStream).toHaveBeenCalledWith(FILE_ID, { range: { start: 0, end: 4 * MB - 1 } });
+  });
+
+  it('reads only the slice asked for from Drive', async () => {
+    const res = await getRange(`bytes=${10 * MB}-${10 * MB + 99}`);
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-length')).toBe('100');
+    expect(getFileStream).toHaveBeenCalledWith(FILE_ID, { range: { start: 10 * MB, end: 10 * MB + 99 } });
+  });
+
+  it('refuses a range past the end of the file', async () => {
+    const res = await getRange(`bytes=${SIZE}-`);
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe(`bytes */${SIZE}`);
+    expect(getFileStream).not.toHaveBeenCalled();
+  });
+
+  it('serves the whole file, with its length, when no range is asked for', async () => {
+    const res = await getRange();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(getFileStream).toHaveBeenCalledWith(FILE_ID, {});
   });
 });
