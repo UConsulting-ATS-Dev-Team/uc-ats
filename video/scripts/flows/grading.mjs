@@ -95,6 +95,10 @@ export async function api({ path, req, route, json }) {
   return false;
 }
 
+// Errors the app logs on this path by design: a document with no score yet answers
+// 404, and the broken resume is served broken to show "Failed to load preview".
+export const EXPECTED_ERRORS = [/Error loading existing score: .*Not found \(Status: 404\)/, /Failed to load resume preview: .*File not found/];
+
 export async function run({ page, base, states, settle, pageState, viewState, elState: elStateRaw }) {
   const elState = (name, el, targets = {}) => elStateRaw(name, el, targets, litRows);
   // ---------- dashboard → Document Grading ----------

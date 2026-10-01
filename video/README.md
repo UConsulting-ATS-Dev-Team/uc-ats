@@ -11,6 +11,8 @@ camera, a cursor and headlines. It does not rebuild the UI.
 | `coffee-chats` | Running a Coffee Chat |
 | `first-round-setup` | Setting Up a First Round |
 | `first-round-conduct` | Running a First Round |
+| `final-round-setup` | Setting Up a Final Round |
+| `final-round-conduct` | Running a Final Round |
 
 ## Rebuild one
 
