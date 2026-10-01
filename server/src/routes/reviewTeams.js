@@ -15,6 +15,7 @@ import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { loadMemberGradingQueue } from '../services/documentGradingQueue.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
 import { scoreFromRubric } from '../services/documentRubrics.js';
+import { getCycleQuestionPrompt } from '../services/applicationFormPrompts.js';
 import {
   candidateParamGuard,
   guardCandidate,
@@ -41,6 +42,17 @@ router.get(['/member-applications/:memberId', '/member/:memberId/candidates'], (
     return res.status(403).json({ error: 'You can only view your own grading queue' });
   }
   next();
+});
+
+// What the cycle's form asked, shown above the answer a grader is scoring.
+router.get('/question-prompts/:cycleId', async (req, res) => {
+  try {
+    const shortAnswer = await getCycleQuestionPrompt(req.params.cycleId, 'shortAnswer');
+    res.json({ shortAnswer });
+  } catch (error) {
+    console.error('Error loading question prompts:', error);
+    res.status(500).json({ error: 'Failed to load question prompts' });
+  }
 });
 
 // Admin audit of each reviewer's grading contribution within their assigned team.

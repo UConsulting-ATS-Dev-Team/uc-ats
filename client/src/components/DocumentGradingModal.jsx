@@ -120,6 +120,23 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     ? application?.shortAnswer?.trim() || null
     : null;
 
+  // The question the short answer responds to, as the cycle's form words it.
+  // Null when the form could not be read; the answer still shows on its own.
+  const [shortAnswerPrompt, setShortAnswerPrompt] = useState(null);
+  const cycleId = application?.cycleId;
+  const showsShortAnswer = Boolean(shortAnswerText);
+  useEffect(() => {
+    setShortAnswerPrompt(null);
+    if (!open || !showsShortAnswer || !cycleId) return undefined;
+    let cancelled = false;
+    apiClient.get(`/review-teams/question-prompts/${cycleId}`)
+      .then((response) => {
+        if (!cancelled) setShortAnswerPrompt(response?.shortAnswer || null);
+      })
+      .catch((err) => console.error('Error loading short answer prompt:', err));
+    return () => { cancelled = true; };
+  }, [open, showsShortAnswer, cycleId]);
+
   // Get document-specific configuration
   const getDocumentConfig = () => {
     switch (documentType) {
@@ -460,6 +477,16 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
               
               {shortAnswerText ? (
                 <Paper variant="outlined" sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+                  {shortAnswerPrompt && (
+                    <Box sx={{ mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
+                      <Typography variant="overline" color="text.secondary" sx={{ display: 'block', lineHeight: 1.5 }}>
+                        Question
+                      </Typography>
+                      <Typography variant="subtitle2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {shortAnswerPrompt}
+                      </Typography>
+                    </Box>
+                  )}
                   <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
                     {shortAnswerText}
                   </Typography>
