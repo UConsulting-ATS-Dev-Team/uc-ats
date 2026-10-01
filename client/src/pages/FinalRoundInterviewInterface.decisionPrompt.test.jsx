@@ -119,6 +119,44 @@ describe('final round decision prompt', () => {
     expect(apiClient.post).toHaveBeenCalledWith('/member/evaluations', { interviewId: 'iv1', applicationId: 'a2', decision: 'NO' });
   });
 
+  describe('a note autosave pending when Save All is pressed', () => {
+    const typeNote = async () => {
+      await renderPage();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      fireEvent.change(screen.getAllByPlaceholderText('Your notes...')[0], { target: { value: 'Owned the call' } });
+    };
+    const notePosts = () =>
+      apiClient.post.mock.calls.filter(([, body]) => Object.values(body.behavioralNotes ?? {}).includes('Owned the call'));
+
+    it('does not fire after a Save All that saved it', async () => {
+      try {
+        await typeNote();
+        saveAll();
+        await screen.findByRole('dialog');
+        const sent = notePosts().length;
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(notePosts().length).toBe(sent);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('still saves the latest note when Save All fails', async () => {
+      try {
+        await typeNote();
+        apiClient.post.mockRejectedValueOnce(new Error('network'));
+        saveAll();
+        await waitFor(() => expect(window.alert).toHaveBeenCalledWith('Failed to save evaluations'));
+        apiClient.post.mockClear();
+        apiClient.post.mockResolvedValue({ success: true });
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(notePosts()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('never sends a decision with the notes, so a note save cannot clear one', async () => {
     await renderPage();
     saveAll();
