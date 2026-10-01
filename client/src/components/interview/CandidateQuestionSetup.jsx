@@ -7,7 +7,9 @@ import './CandidateQuestionList.css';
 
 // Pre-interview setup for round one: add questions for individual candidates in
 // the selected groups. Unlike the shared list above it, these save immediately.
-export default function CandidateQuestionSetup({ interviewId, groupIds, basePath }) {
+// `onCountChange` hears how many there are in total, so the setup step can tell an
+// interview with only candidate questions from one with none at all.
+export default function CandidateQuestionSetup({ interviewId, groupIds, basePath, onCountChange }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
@@ -41,6 +43,11 @@ export default function CandidateQuestionSetup({ interviewId, groupIds, basePath
 
   const applicationIds = useMemo(() => applications.map((a) => a.id), [applications]);
   const { byApplication, error, add, update, remove } = useCandidateQuestions(interviewId, applicationIds, basePath);
+
+  const total = applicationIds.reduce((sum, id) => sum + (byApplication[id]?.length || 0), 0);
+  useEffect(() => {
+    onCountChange?.(total);
+  }, [total, onCountChange]);
 
   return (
     <section className="candidate-question-setup">

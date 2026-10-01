@@ -103,14 +103,32 @@ describe('normalizeRubric', () => {
     expect(() => normalizeRubric('video', edited('video', { scoreOne: { min: -1 } }))).toThrow(/between 0/);
   });
 
-  it('refuses a rubric missing one of the type\'s categories', () => {
-    const rubric = { categories: DEFAULT_RUBRICS.coverLetter.categories.slice(0, 2) };
-    expect(() => normalizeRubric('coverLetter', rubric)).toThrow(/Category 3 is missing/);
+  it('keeps only the categories submitted, in the type\'s order', () => {
+    const [, uc] = DEFAULT_RUBRICS.coverLetter.categories;
+    expect(normalizeRubric('coverLetter', { categories: [uc] }).categories.map((category) => category.id))
+      .toEqual(['scoreTwo']);
+
+    const [one, , three] = DEFAULT_RUBRICS.coverLetter.categories;
+    expect(normalizeRubric('coverLetter', { categories: [three, one] }).categories.map((category) => category.id))
+      .toEqual(['scoreOne', 'scoreThree']);
   });
 
-  it('ignores categories the type does not have', () => {
-    const rubric = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Extra', min: 0, max: 5 }] };
-    expect(normalizeRubric('video', rubric).categories.map((category) => category.id)).toEqual(['scoreOne']);
+  it('refuses a rubric with no categories left', () => {
+    expect(() => normalizeRubric('coverLetter', { categories: [] })).toThrow(/at least one category/);
+  });
+
+  it('refuses a category the type does not have, rather than reading it as a removal', () => {
+    const extra = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Extra', min: 0, max: 5 }] };
+    expect(() => normalizeRubric('video', extra)).toThrow(/Unknown category: scoreTwo/);
+
+    const [one, two, three] = DEFAULT_RUBRICS.coverLetter.categories;
+    const typo = { categories: [one, two, { ...three, id: 'scoreThre' }] };
+    expect(() => normalizeRubric('coverLetter', typo)).toThrow(/Unknown category: scoreThre/);
+  });
+
+  it('refuses the same category twice', () => {
+    const [one] = DEFAULT_RUBRICS.coverLetter.categories;
+    expect(() => normalizeRubric('coverLetter', { categories: [one, { ...one, title: 'Again' }] })).toThrow(/appears twice/);
   });
 
   it('drops blank criteria rows but refuses half-filled ones', () => {
@@ -173,6 +191,24 @@ describe('scoreFromRubric', () => {
     await saveRubric({ client: db, type: 'video', rubric: edited('video', { scoreOne: { max: 5 } }), user });
     expect((await scoreFromRubric('video', { scoreOne: 4 }, { client: db })).overallScore).toBe(4);
     await expect(scoreFromRubric('video', { scoreOne: 6 }, { client: db })).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('a cover letter rubric cut down to UC Interest', () => {
+  const ucOnly = () => ({ categories: [DEFAULT_RUBRICS.coverLetter.categories[1]] });
+
+  it('keeps the same weight in Staging, since an average of one is that one', async () => {
+    const { rubrics, stagingMax } = await saveRubric({ client: db, type: 'coverLetter', rubric: ucOnly(), user });
+    expect(rubrics.coverLetter.rubric.categories.map((category) => category.title)).toEqual(['UC Interest']);
+    expect(rubrics.coverLetter.maxOverall).toBe(3);
+    expect(stagingMax).toBe(21);
+  });
+
+  it('scores a grader\'s save on the one category and stores the removed ones as null', async () => {
+    await saveRubric({ client: db, type: 'coverLetter', rubric: ucOnly(), user });
+    // A regrade prefilled from an older score still sends the removed columns.
+    const saved = await scoreFromRubric('coverLetter', { scoreOne: 1, scoreTwo: 3, scoreThree: 1 }, { client: db });
+    expect(saved).toMatchObject({ scoreOne: null, scoreTwo: 3, scoreThree: null, overallScore: 3 });
   });
 });
 

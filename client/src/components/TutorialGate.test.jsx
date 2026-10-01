@@ -42,6 +42,33 @@ beforeEach(() => {
 });
 
 describe('useTutorialGate', () => {
+  it('asks again instead of opening the document when the cycle moved while the popup was open', async () => {
+    apiClient.get.mockResolvedValueOnce({ required: true, cycleId: 'fall', token: 'tok-fall', tutorials: [TUTORIAL] });
+    apiClient.post.mockResolvedValueOnce({ completed: false, completedAt: null });
+    const onOpenDocument = renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await screen.findByText('How we grade resumes');
+    apiClient.get.mockResolvedValueOnce({
+      required: true,
+      cycleId: 'winter',
+      token: 'tok-winter',
+      tutorials: [{ ...TUTORIAL, id: 'tut-2', title: 'Grading in winter' }],
+    });
+    fireEvent.click(screen.getByLabelText('I watched the whole tutorial'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start grading' }));
+
+    expect(await screen.findByText('Grading in winter')).toBeInTheDocument();
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/DOCUMENT_GRADING/complete', { cycleId: 'fall', token: 'tok-fall' });
+    expect(onOpenDocument).not.toHaveBeenCalled();
+
+    apiClient.post.mockResolvedValueOnce({ completed: true });
+    fireEvent.click(screen.getByLabelText('I watched the whole tutorial'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start grading' }));
+    await waitFor(() => expect(onOpenDocument).toHaveBeenCalledTimes(1));
+    expect(apiClient.post).toHaveBeenLastCalledWith('/member/help/tutorial-gates/DOCUMENT_GRADING/complete', { cycleId: 'winter', token: 'tok-winter' });
+  });
+
   it('holds the first document behind the tutorial, then opens it once finished', async () => {
     apiClient.get.mockResolvedValue({ required: true, cycleId: 'c1', tutorials: [TUTORIAL] });
     const onOpenDocument = renderPage();
@@ -60,8 +87,10 @@ describe('useTutorialGate', () => {
     fireEvent.click(start);
 
     await waitFor(() => expect(onOpenDocument).toHaveBeenCalledTimes(1));
+    // Credited to the cycle the popup was opened for, not whatever is current later.
     expect(apiClient.post).toHaveBeenCalledWith(
-      '/member/help/tutorial-gates/DOCUMENT_GRADING/complete'
+      '/member/help/tutorial-gates/DOCUMENT_GRADING/complete',
+      { cycleId: 'c1', token: null }
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
@@ -207,7 +236,7 @@ describe('useTutorialGate with a category per click', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start the interview' }));
 
     await waitFor(() => expect(onStart).toHaveBeenCalledWith('coffee'));
-    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete');
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete', { cycleId: 'c1', token: null });
   });
 
   it('asks about the round that was clicked', async () => {

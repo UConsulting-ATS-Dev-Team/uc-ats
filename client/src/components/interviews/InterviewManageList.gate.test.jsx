@@ -57,7 +57,7 @@ describe('Run a session behind the round tutorial gate', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start the interview' }));
 
     expect(await screen.findByText('Which session are you running?')).toBeInTheDocument();
-    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete');
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete', { cycleId: 'c1', token: null });
   });
 
   it("asks the final round's gate for a final round", async () => {

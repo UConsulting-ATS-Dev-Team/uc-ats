@@ -5,12 +5,18 @@ import { resolveAdminCycle } from './activeCycle.js';
 // against, in words and ranges an admin can change.
 //
 // What an admin can change per category: title, description, the score range
-// (min..max, whole numbers) and the criteria rows that explain the range.
-// What they cannot: which categories exist, and how a document's overall
-// score is folded from them. Both are fixed by the storage - every score table
-// has exactly three Int columns (scoreOne/Two/Three) - and by the Staging
-// ranking, which adds the three documents' overall scores together. A type
-// with no row reads as DEFAULT_RUBRICS, so nothing moves until someone saves.
+// (min..max, whole numbers) and the criteria rows that explain the range. They
+// can also remove a category, as long as one is left, and add it back later.
+// What they cannot: add a category the type has no column for, or change how a
+// document's overall score is folded from its categories. Both are fixed by
+// the storage - every score table has exactly three Int columns
+// (scoreOne/Two/Three) - and by the Staging ranking, which adds the three
+// documents' overall scores together. A type with no row reads as
+// DEFAULT_RUBRICS, so nothing moves until someone saves.
+//
+// A removed category's column is simply not read: graders are not asked for
+// it, the overall is folded from the categories that remain, and a regrade
+// stores it as null.
 //
 // Changing a range does not rescale anything already graded. Existing scores
 // stay as they were entered; `previewRubric` counts how many of this cycle's
@@ -147,8 +153,11 @@ const categoryIds = (type) => DEFAULT_RUBRICS[type].categories.map((category) =>
 
 /**
  * Validates what an admin submitted for `type`. Categories are matched by id
- * and must be exactly the type's own; criteria rows that are entirely blank
- * are dropped rather than refused, so an editor's spare empty row saves.
+ * against the type's own and come back in the type's order; an id the type
+ * does not have, or one given twice, is refused, and a missing one means the
+ * admin removed it. At
+ * least one must be left. Criteria rows that are entirely blank are dropped
+ * rather than refused, so an editor's spare empty row saves.
  */
 export function normalizeRubric(type, input) {
   assertDocumentType(type);
@@ -156,12 +165,23 @@ export function normalizeRubric(type, input) {
     throw fail(400, 'A rubric needs a list of categories', 'INVALID_RUBRIC');
   }
 
-  const submitted = new Map(input.categories.filter(Boolean).map((category) => [category.id, category]));
+  // Leaving a category out removes it, so an id that is not one of this type's
+  // columns (a typo, say) is refused rather than read as a removal of the
+  // category it was meant to be.
+  const ids = categoryIds(type);
+  const submitted = new Map();
+  for (const category of input.categories.filter(Boolean)) {
+    if (!ids.includes(category.id)) throw fail(400, `Unknown category: ${category.id}`, 'INVALID_RUBRIC');
+    if (submitted.has(category.id)) throw fail(400, `Category ${category.id} appears twice`, 'INVALID_RUBRIC');
+    submitted.set(category.id, category);
+  }
 
-  const categories = categoryIds(type).map((id, index) => {
+  const kept = ids.filter((id) => submitted.has(id));
+  if (kept.length === 0) throw fail(400, 'A rubric needs at least one category', 'INVALID_RUBRIC');
+
+  const categories = kept.map((id, index) => {
     const category = submitted.get(id);
     const name = `Category ${index + 1}`;
-    if (!category) throw fail(400, `${name} is missing`, 'INVALID_RUBRIC');
 
     const title = trimmed(category.title);
     if (!title) throw fail(400, `${name} needs a title`, 'INVALID_RUBRIC');
@@ -357,6 +377,8 @@ const describe = (type, rubric, customized, row) => ({
   type,
   aggregation: AGGREGATION[type],
   rubric,
+  /** Every column this type can score, so the editor can offer a removed category back. */
+  slots: categoryIds(type),
   minOverall: minOverall(type, rubric),
   maxOverall: maxOverall(type, rubric),
   customized,
