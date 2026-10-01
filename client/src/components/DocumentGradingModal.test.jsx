@@ -366,6 +366,30 @@ describe('the video preview', () => {
     expect(video.currentTime).toBe(42);
   });
 
+  it('ignores a renewal for a video the grader has moved on from', async () => {
+    let failRenewal;
+    apiClient.post
+      .mockResolvedValueOnce({ access: 'first' })
+      .mockImplementationOnce(() => new Promise((_, reject) => { failRenewal = reject; }))
+      .mockResolvedValueOnce({ access: 'next' });
+
+    const { rerender } = renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+    fireEvent.error(videoElement());
+    await waitFor(() => expect(failRenewal).toBeDefined());
+
+    // The grader opens the next candidate's video while that renewal is pending.
+    rerender(
+      <DocumentGradingModal open onClose={vi.fn()} application={{ ...withVideo, candidateId: 'cand-2', videoUrl: '/api/files/next/pdf' }} documentType="video" />
+    );
+    await waitFor(() => expect(videoElement()?.getAttribute('src')).toBe('/api/files/next/pdf?access=next'));
+
+    await act(async () => { failRenewal(new Error('Forbidden')); });
+
+    expect(videoElement().getAttribute('src')).toBe('/api/files/next/pdf?access=next');
+    expect(screen.queryByText(/could not open the video/i)).not.toBeInTheDocument();
+  });
+
   it('reports a video that still will not play', async () => {
     apiClient.post.mockResolvedValue({ access: 'tok.en' });
     renderWithVideo();

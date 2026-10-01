@@ -31,6 +31,11 @@ describe('parseByteRange', () => {
     expect(parseByteRange('bytes=-1000', 100)).toEqual({ start: 0, end: 99 });
   });
 
+  it('caps a large suffix to the last bytes of the file, not the first of the suffix', () => {
+    // A player reading a video's index from the end must get the end.
+    expect(parseByteRange('bytes=-60', 100, 20)).toEqual({ start: 80, end: 99 });
+  });
+
   it('refuses a range that starts past the end, or a zero-length suffix', () => {
     expect(parseByteRange('bytes=100-', 100)).toBe('unsatisfiable');
     expect(parseByteRange('bytes=-0', 100)).toBe('unsatisfiable');

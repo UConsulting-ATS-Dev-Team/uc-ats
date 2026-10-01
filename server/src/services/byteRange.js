@@ -44,5 +44,10 @@ export function parseByteRange(header, size, maxBytes = MAX_RANGE_BYTES) {
     end = Math.min(end, size - 1);
   }
 
-  return { start, end: Math.min(end, start + maxBytes - 1) };
+  if (end - start + 1 <= maxBytes) return { start, end };
+  // A suffix asks for the end of the file (a video's index often sits there), so
+  // a capped suffix keeps the last bytes; any other range keeps its start.
+  return first === ''
+    ? { start: end - maxBytes + 1, end }
+    : { start, end: start + maxBytes - 1 };
 }

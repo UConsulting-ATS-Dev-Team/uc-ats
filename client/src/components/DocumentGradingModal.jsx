@@ -93,6 +93,9 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // it never clears, flags or closes the form that is open now.
   const sessionRef = useRef(0);
   const videoRetriesRef = useRef(0);
+  // Bumped each time the preview loads a document, so a link renewal still in
+  // flight for an earlier one cannot touch the preview shown now.
+  const previewGenRef = useRef(0);
   const closeTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(closeTimerRef.current), []);
 
@@ -251,6 +254,7 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     let localUrl;
     let cancelled = false;
     videoRetriesRef.current = 0;
+    previewGenRef.current += 1;
     const loadPreview = async () => {
       setPreviewError(null);
       setPreviewUrl(null);
@@ -342,11 +346,14 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     }
     videoRetriesRef.current += 1;
     const resumeAt = video.currentTime;
+    const generation = previewGenRef.current;
     try {
       const { access } = await apiClient.post(target.linkEndpoint);
+      if (generation !== previewGenRef.current) return;
       video.src = target.open(access);
       video.currentTime = resumeAt;
     } catch (e) {
+      if (generation !== previewGenRef.current) return;
       setPreviewUrl(null);
       setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
     }
