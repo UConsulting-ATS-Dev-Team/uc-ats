@@ -23,6 +23,8 @@ import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import RoundOneHistoryPanel from '../components/interview/RoundOneHistoryPanel';
 import CaseViewer from '../components/case/CaseViewer';
+import FinalDecisionDialog from '../components/interview/FinalDecisionDialog';
+import { DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import { usePreviewActive } from '../utils/previewMode';
 import '../styles/FinalRoundInterviewInterface.css';
 
@@ -185,8 +187,7 @@ export default function FinalRoundInterviewInterface() {
     const key = `${applicationId}_${currentUser?.id}`;
     return evaluations[key] || {
       behavioralNotes: '',
-      casingNotes: {},
-      finalDecision: null
+      casingNotes: {}
     };
   };
 
@@ -219,8 +220,32 @@ export default function FinalRoundInterviewInterface() {
   };
 
   const updateFinalDecision = (applicationId, decision) => {
-    updateEvaluation(applicationId, { finalDecision: decision });
+    updateEvaluation(applicationId, { decision });
     scheduleAutoSave(applicationId);
+  };
+
+  // The decision, only when this page holds one. A loaded evaluation carries the one
+  // recorded in My Evaluations; sending nothing leaves it as it is.
+  const decisionField = (evaluation) =>
+    evaluation.decision !== undefined ? { decision: evaluation.decision } : {};
+
+  // Save All ends with the decision pop-up (FinalDecisionDialog) while any candidate
+  // on the page still has none.
+  const [decisionPromptOpen, setDecisionPromptOpen] = useState(false);
+  const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide('final');
+
+  const saveDecisions = async (decisions) => {
+    const isAdmin = window.location.pathname.includes('/admin/');
+    const basePath = isAdmin ? '/admin' : '/member';
+    await Promise.all(
+      Object.entries(decisions).map(([applicationId, decision]) =>
+        isAdmin
+          ? apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, { applicationId, decision })
+          : apiClient.post(`${basePath}/evaluations`, { interviewId, applicationId, decision })
+      )
+    );
+    Object.entries(decisions).forEach(([applicationId, decision]) => updateEvaluation(applicationId, { decision }));
+    setDecisionPromptOpen(false);
   };
 
   const updateCandidateDetails = (applicationId, detailKey, value) => {
@@ -351,7 +376,7 @@ export default function FinalRoundInterviewInterface() {
       if (isAdmin) {
         await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
           applicationId,
-          decision: evaluation.finalDecision,
+          ...decisionField(evaluation),
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -360,7 +385,7 @@ export default function FinalRoundInterviewInterface() {
         await apiClient.post(`${basePath}/evaluations`, {
           interviewId,
           applicationId,
-          decision: evaluation.finalDecision,
+          ...decisionField(evaluation),
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -386,7 +411,7 @@ export default function FinalRoundInterviewInterface() {
       if (isAdmin) {
         await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
           applicationId,
-          decision: evaluation.finalDecision,
+          ...decisionField(evaluation),
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -395,7 +420,7 @@ export default function FinalRoundInterviewInterface() {
         await apiClient.post(`${basePath}/evaluations`, {
           interviewId,
           applicationId,
-          decision: evaluation.finalDecision,
+          ...decisionField(evaluation),
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -421,7 +446,7 @@ export default function FinalRoundInterviewInterface() {
         if (isAdmin) {
           return apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
             applicationId: app.id,
-            decision: evaluation.finalDecision,
+            ...decisionField(evaluation),
             behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
@@ -430,7 +455,7 @@ export default function FinalRoundInterviewInterface() {
           return apiClient.post(`${basePath}/evaluations`, {
             interviewId,
             applicationId: app.id,
-            decision: evaluation.finalDecision,
+            ...decisionField(evaluation),
             behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
@@ -439,7 +464,11 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      alert('All evaluations saved successfully!');
+      if (applications.some((app) => !getEvaluation(app.id).decision)) {
+        setDecisionPromptOpen(true);
+      } else {
+        alert('All evaluations saved successfully!');
+      }
     } catch (error) {
       console.error('Failed to save evaluations:', error);
       alert('Failed to save evaluations');
@@ -951,6 +980,15 @@ export default function FinalRoundInterviewInterface() {
           </>
         )}
       </div>
+      <FinalDecisionDialog
+        open={decisionPromptOpen}
+        candidates={applications.map((app) => ({ id: app.id, name: app.name, decision: getEvaluation(app.id).decision }))}
+        guide={guide}
+        onOpenGuide={openGuide}
+        onSave={saveDecisions}
+        onLater={() => setDecisionPromptOpen(false)}
+      />
+      <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} />
     </AccessControl>
   );
 }
