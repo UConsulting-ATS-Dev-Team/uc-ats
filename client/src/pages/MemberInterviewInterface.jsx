@@ -109,13 +109,15 @@ export default function MemberInterviewInterface() {
         // The groups for "Select Groups" and "Interview Another Group": the same
         // config, and the same filter, as the picker on My Interviews.
         let applicationGroups = [];
+        let groupsFailed = false;
         try {
           const config = await apiClient.get(`/member/interviews/${interviewId}/config`);
           applicationGroups = groupsForMember(config, userRes?.id);
         } catch (configError) {
           console.error('Failed to load interview groups:', configError);
+          groupsFailed = true;
         }
-        setInterviewData({ ...interviewRes, applicationGroups });
+        setInterviewData({ ...interviewRes, applicationGroups, groupsFailed });
         
       } catch (error) {
         console.error('Failed to load interview data:', error);
@@ -554,7 +556,9 @@ export default function MemberInterviewInterface() {
                   
                   return filteredGroups.length === 0 ? (
                     <div className="no-groups-message">
-                      {groupSearchTerm ? 'No groups match your search' : 'No application groups available'}
+                      {data.groupsFailed
+                        ? 'Could not load the groups. Close this and reload the page to try again.'
+                        : groupSearchTerm ? 'No groups match your search' : 'No application groups available'}
                     </div>
                   ) : (
                     filteredGroups.map(group => {

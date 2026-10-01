@@ -89,4 +89,18 @@ describe('MemberInterviewInterface', () => {
     expect(screen.queryByText('Evening Session · 2A')).not.toBeInTheDocument();
     expect(screen.queryByText('No application groups available')).not.toBeInTheDocument();
   });
+
+  it('says the groups failed to load rather than that there are none', async () => {
+    const answer = apiClient.get.getMockImplementation();
+    apiClient.get.mockImplementation((url) =>
+      url.startsWith('/member/interviews/iv1/config') ? Promise.reject(new Error('offline')) : answer(url)
+    );
+    renderPage();
+    await screen.findByText('Taylor Kim');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Groups' }));
+
+    expect(await screen.findByText(/Could not load the groups/)).toBeInTheDocument();
+    expect(screen.queryByText('No application groups available')).not.toBeInTheDocument();
+  });
 });
