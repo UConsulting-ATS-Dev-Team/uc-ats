@@ -1,4 +1,9 @@
 import express from 'express';
+import {
+  firstRoundEvaluationWrite,
+  interviewEvaluationWrite,
+  readFirstRoundEvaluation
+} from '../services/interviewEvaluations.js';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
@@ -3348,7 +3353,7 @@ router.get('/evaluations', async (req, res) => {
     
     if (interview.interviewType === 'ROUND_ONE') {
       // Get first round evaluations
-      evaluations = await prisma.firstRoundInterviewEvaluation.findMany({
+      evaluations = (await prisma.firstRoundInterviewEvaluation.findMany({
         where: {
           interviewId,
           evaluatorId: userId
@@ -3360,7 +3365,7 @@ router.get('/evaluations', async (req, res) => {
             }
           }
         }
-      });
+      })).map(readFirstRoundEvaluation);
     } else {
       // Get regular evaluations
       evaluations = await prisma.interviewEvaluation.findMany({
@@ -3443,7 +3448,7 @@ router.get('/interviews/:id/evaluations', async (req, res) => {
     
     if (interview.interviewType === 'ROUND_ONE') {
       // Get first round evaluations
-      evaluations = await prisma.firstRoundInterviewEvaluation.findMany({
+      evaluations = (await prisma.firstRoundInterviewEvaluation.findMany({
         where: { interviewId },
         include: {
           application: {
@@ -3452,7 +3457,7 @@ router.get('/interviews/:id/evaluations', async (req, res) => {
             }
           }
         }
-      });
+      })).map(readFirstRoundEvaluation);
     } else {
       // Get regular evaluations
       evaluations = await prisma.interviewEvaluation.findMany({
@@ -3542,27 +3547,8 @@ router.get('/applications/:id/final-round-interview-evaluations', async (req, re
 router.post('/interviews/:id/evaluations', async (req, res) => {
   try {
     const { id: interviewId } = req.params;
-    const { 
-      applicationId, 
-      notes, 
-      decision, 
-      rubricScores,
-      // First round interview specific fields
-      behavioralLeadership,
-      behavioralProblemSolving,
-      behavioralInterest,
-      behavioralTotal,
-      marketSizingTeamwork,
-      marketSizingLogic,
-      marketSizingCreativity,
-      marketSizingTotal,
-      behavioralNotes,
-      marketSizingNotes,
-      additionalNotes,
-      // Final round interview specific fields
-      casingNotes,
-      candidateDetails
-    } = req.body;
+    // The fields an evaluation saves are read in services/interviewEvaluations.js.
+    const { applicationId, decision, rubricScores } = req.body;
     const evaluatorId = req.user.id;
     
     console.log('Creating evaluation:', { interviewId, applicationId, evaluatorId, decision, rubricScores });
@@ -3592,22 +3578,9 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
         }
       });
       
+      // Only what this save sends: see services/interviewEvaluations.js.
       const firstRoundData = {
-        interviewId,
-        applicationId,
-        evaluatorId,
-        decision,
-        behavioralLeadership,
-        behavioralProblemSolving,
-        behavioralInterest,
-        behavioralTotal,
-        marketSizingTeamwork,
-        marketSizingLogic,
-        marketSizingCreativity,
-        marketSizingTotal,
-        behavioralNotes: behavioralNotes ? JSON.stringify(behavioralNotes) : null,
-        marketSizingNotes,
-        additionalNotes,
+        ...firstRoundEvaluationWrite(req.body),
         updatedAt: new Date()
       };
       
@@ -3621,7 +3594,7 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
       } else {
         // Create new first round evaluation
         evaluation = await prisma.firstRoundInterviewEvaluation.create({
-          data: firstRoundData
+          data: { interviewId, applicationId, evaluatorId, ...firstRoundData }
         });
       }
       
@@ -3643,13 +3616,8 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
         // Update existing evaluation
         const updatedEvaluation = await prisma.interviewEvaluation.update({
           where: { id: existingEvaluation.id },
-          data: {
-            notes,
-            decision,
-            behavioralNotes: behavioralNotes ? JSON.stringify(behavioralNotes) : null,
-            casingNotes: casingNotes ? JSON.stringify(casingNotes) : null,
-            candidateDetails: candidateDetails ? JSON.stringify(candidateDetails) : null
-          }
+          // Only what this save sends: see services/interviewEvaluations.js.
+          data: interviewEvaluationWrite(req.body)
         });
         
         // Update rubric scores
@@ -3680,11 +3648,7 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
             interviewId,
             applicationId,
             evaluatorId,
-            notes,
-            decision,
-            behavioralNotes: behavioralNotes ? JSON.stringify(behavioralNotes) : null,
-            casingNotes: casingNotes ? JSON.stringify(casingNotes) : null,
-            candidateDetails: candidateDetails ? JSON.stringify(candidateDetails) : null
+            ...interviewEvaluationWrite(req.body)
           }
         });
         

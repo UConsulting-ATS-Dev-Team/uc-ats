@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -41,7 +41,6 @@ export default function FirstRoundInterviewInterface() {
   const [evaluations, setEvaluations] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [autoSaveTimeouts, setAutoSaveTimeouts] = useState({});
   const [saveStatus, setSaveStatus] = useState({});
   const [currentRotation, setCurrentRotation] = useState(0); // 0 = behaviorals, 1 = market sizing, 2 = post grading
   const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
@@ -326,8 +325,16 @@ export default function FirstRoundInterviewInterface() {
     }
   }, [currentRotation, interviewStartTime]);
 
-  const getEvaluation = (applicationId) => {
-    const evaluation = evaluations[applicationId] || {};
+  // Autosave runs from a timer set during the edit, so its closure holds the
+  // evaluations from before that edit; it reads these refs instead, which are current
+  // by the time the timer fires. The pending timers live in a ref for the same reason:
+  // state would hand scheduleAutoSave a stale map, and an earlier timer went uncleared.
+  const evaluationsRef = useRef(evaluations);
+  evaluationsRef.current = evaluations;
+  const autoSaveTimersRef = useRef({});
+
+  const getEvaluation = (applicationId, from = evaluations) => {
+    const evaluation = from[applicationId] || {};
     
     return {
       notes: evaluation.notes || '',
@@ -349,7 +356,7 @@ export default function FirstRoundInterviewInterface() {
     setEvaluations(prev => ({
       ...prev,
       [applicationId]: {
-        ...getEvaluation(applicationId),
+        ...getEvaluation(applicationId, prev),
         ...updates
       }
     }));
@@ -399,23 +406,15 @@ export default function FirstRoundInterviewInterface() {
   };
 
   const scheduleAutoSave = (applicationId) => {
-    if (autoSaveTimeouts[applicationId]) {
-      clearTimeout(autoSaveTimeouts[applicationId]);
-    }
-
-    const timeoutId = setTimeout(() => {
+    clearTimeout(autoSaveTimersRef.current[applicationId]);
+    autoSaveTimersRef.current[applicationId] = setTimeout(() => {
       autoSaveEvaluation(applicationId);
     }, 2000);
-
-    setAutoSaveTimeouts(prev => ({
-      ...prev,
-      [applicationId]: timeoutId
-    }));
   };
 
   const autoSaveEvaluation = async (applicationId) => {
     try {
-      const evaluation = getEvaluation(applicationId);
+      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
       const isAdmin = currentUser?.role === 'ADMIN';
       const endpoint = isAdmin ? `/admin/interviews/${interviewId}/evaluations` : '/member/evaluations';
       
