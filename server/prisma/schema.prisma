@@ -99,6 +99,7 @@ model User {
   revokedClientResumes       ClientResumeAssignment[]        @relation("ClientAssignmentRevoker")
   clientAccessLogs           ClientResumeAccessLog[]         @relation("ClientAccessLogUser")
   announcementReads          MemberAnnouncementRead[]
+  tutorialCompletions        TutorialCompletion[]
   createdLiveVoteSessions    LiveVoteSession[]               @relation("LiveVoteSessionCreator")
   liveVoteParticipations     LiveVoteParticipant[]           @relation("LiveVoteParticipantUser")
   lumaGuests                 LumaGuest[]
@@ -418,6 +419,7 @@ model RecruitingCycle {
   scheduledMessages         MessageSchedule[]                @relation("ScheduleCycle")
   communicationLogs         CommunicationLog[]               @relation("CycleCommunicationLogs")
   helpAnnouncements         HelpAnnouncement[]
+  tutorialCompletions       TutorialCompletion[]
   liveVoteSessions          LiveVoteSession[]
 
   @@map("recruiting_cycles")
@@ -1585,6 +1587,22 @@ model Tutorial {
 
   @@index([category])
   @@map("tutorials")
+}
+
+// One row per person, cycle and tutorial category: they sat through that category's
+// tutorials this cycle. See services/tutorialGate.js.
+model TutorialCompletion {
+  id          String           @id @default(uuid())
+  userId      String
+  cycleId     String
+  category    TutorialCategory
+  completedAt DateTime         @default(now())
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cycle       RecruitingCycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, cycleId, category])
+  @@index([cycleId])
+  @@map("tutorial_completions")
 }
 
 model MemberAnnouncementRead {
