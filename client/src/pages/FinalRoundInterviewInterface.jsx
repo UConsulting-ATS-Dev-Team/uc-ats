@@ -232,6 +232,10 @@ export default function FinalRoundInterviewInterface() {
   };
 
   const addBehavioralQuestion = async (groupId) => {
+    // Ask for the question: an empty one is dropped by the server, so appending ''
+    // added nothing while still reporting success.
+    const text = window.prompt('New question for every candidate in this group:');
+    if (!text || !text.trim()) return;
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
@@ -241,8 +245,7 @@ export default function FinalRoundInterviewInterface() {
       const questionsByGroup = configRes.behavioralQuestions || {};
       const currentQuestions = questionsByGroup[groupId] || [];
       
-      // Add new empty question
-      const newQuestions = [...currentQuestions.map(q => q.text || q), ''];
+      const newQuestions = [...currentQuestions.map(q => q.text || q), text.trim()];
       
       // Update configuration for this specific group
       await apiClient.patch(`${basePath}/interviews/${interviewId}/config`, {

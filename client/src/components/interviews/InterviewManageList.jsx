@@ -137,7 +137,7 @@ export default function InterviewManageList({ round, onChanged }) {
       setQuestions(
         Object.values(config.behavioralQuestions || {})
           .flat()
-          .map((q) => q.questionText ?? q)
+          .map((q) => q.text ?? q.questionText ?? q)
       );
     } catch {
       setQuestions([]);
@@ -157,8 +157,11 @@ export default function InterviewManageList({ round, onChanged }) {
     try {
       await apiClient.patch(`/admin/interviews/${questionsFor.id}/config`, {
         type: 'behavioral_questions',
-        config: { groupId: questionSession, questions: questions.filter((q) => q.trim() !== '') },
-        behavioralQuestions: true,
+        config: {
+          behavioralQuestions: true,
+          groupId: questionSession,
+          questions: questions.filter((q) => q.trim() !== ''),
+        },
       });
       setQuestionsFor(null);
     } catch (e) {

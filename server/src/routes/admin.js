@@ -2464,9 +2464,13 @@ router.patch('/interviews/:id/config', async (req, res) => {
     }
     
     // Handle behavioral questions update
-    if (type === 'behavioral_questions' && config.behavioralQuestions) {
+    // A questions update, whether or not its config carries the old
+    // `behavioralQuestions: true` flag. Without the flag it used to fall through to the
+    // legacy write below and replace Interview.description - the roster, on interviews
+    // that keep it there - with the questions payload.
+    if (type === 'behavioral_questions') {
       try {
-        const { groupId: requestedGroupId, questions } = config;
+        const { groupId: requestedGroupId, questions } = config || {};
 
         if (!requestedGroupId || !questions) {
           return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });

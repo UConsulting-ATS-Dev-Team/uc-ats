@@ -912,7 +912,7 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
 });
 
 // Update interview configuration (member version)
-router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
+router.patch('/interviews/:id/config', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const { type, config } = req.body;
@@ -926,103 +926,100 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Handle behavioral questions update
-    if (type === 'behavioral_questions' && config.behavioralQuestions) {
-      const { groupId, questions } = config;
-      
-      if (!groupId || !questions) {
-        return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
-      }
-      
-      console.log('Member - Attempting to save behavioral questions:', {
+    // Members only ever set behavioral questions here, and only on an interview they are
+    // on. The legacy branch that rewrote Interview.description with any JSON sent is
+    // admin-only (routes/admin.js); here it let any signed-in user replace an
+    // interview's roster.
+    if (type !== 'behavioral_questions') {
+      return res.status(400).json({ error: 'Only behavioral questions can be configured here' });
+    }
+    if (req.user.role !== 'ADMIN') {
+      const [mine] = await interviewsAssignedTo(userId, [interview]);
+      if (!mine) return res.status(403).json({ error: 'You are not on this interview' });
+    }
+
+    const { groupId, questions } = config || {};
+    
+    if (!groupId || !questions) {
+      return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
+    }
+    
+    console.log('Member - Attempting to save behavioral questions:', {
+      interviewId: id,
+      groupId,
+      questions: questions.filter(q => q.trim() !== ''),
+      userId
+    });
+    
+    // Note: For behavioral questions, we're working with application groups
+    // The access control is handled at the interview level, not the group level
+    console.log('Member - Using application group for behavioral questions:', groupId);
+    
+    // Get existing questions for this group and interview
+    const existingQuestions = await prisma.behavioralQuestion.findMany({
+      where: {
         interviewId: id,
-        groupId,
-        questions: questions.filter(q => q.trim() !== ''),
-        userId
-      });
+        groupId: groupId,
+        applicationId: null
+      },
+      orderBy: { order: 'asc' }
+    });
+    
+    const filteredQuestions = questions.filter(q => q.trim() !== '');
+    
+    // Update existing questions and create new ones
+    for (let i = 0; i < filteredQuestions.length; i++) {
+      const questionText = filteredQuestions[i];
       
-      // Note: For behavioral questions, we're working with application groups
-      // The access control is handled at the interview level, not the group level
-      console.log('Member - Using application group for behavioral questions:', groupId);
-      
-      // Get existing questions for this group and interview
-      const existingQuestions = await prisma.behavioralQuestion.findMany({
-        where: {
-          interviewId: id,
-          groupId: groupId,
-          applicationId: null
-        },
-        orderBy: { order: 'asc' }
-      });
-      
-      const filteredQuestions = questions.filter(q => q.trim() !== '');
-      
-      // Update existing questions and create new ones
-      for (let i = 0; i < filteredQuestions.length; i++) {
-        const questionText = filteredQuestions[i];
-        
-        if (existingQuestions[i]) {
-          // Update existing question if text has changed
-          if (existingQuestions[i].questionText !== questionText) {
-            await prisma.behavioralQuestion.update({
-              where: { id: existingQuestions[i].id },
-              data: {
-                questionText: questionText,
-                order: i,
-                updatedAt: new Date()
-              }
-            });
-          } else if (existingQuestions[i].order !== i) {
-            // Update order if it has changed
-            await prisma.behavioralQuestion.update({
-              where: { id: existingQuestions[i].id },
-              data: {
-                order: i,
-                updatedAt: new Date()
-              }
-            });
-          }
-        } else {
-          // Create new question
-          await prisma.behavioralQuestion.create({
+      if (existingQuestions[i]) {
+        // Update existing question if text has changed
+        if (existingQuestions[i].questionText !== questionText) {
+          await prisma.behavioralQuestion.update({
+            where: { id: existingQuestions[i].id },
             data: {
-              interviewId: id,
-              groupId: groupId,
               questionText: questionText,
               order: i,
-              createdBy: userId
+              updatedAt: new Date()
+            }
+          });
+        } else if (existingQuestions[i].order !== i) {
+          // Update order if it has changed
+          await prisma.behavioralQuestion.update({
+            where: { id: existingQuestions[i].id },
+            data: {
+              order: i,
+              updatedAt: new Date()
             }
           });
         }
-      }
-      
-      // Delete any questions that are no longer in the list
-      if (filteredQuestions.length < existingQuestions.length) {
-        await prisma.behavioralQuestion.deleteMany({
-          where: {
+      } else {
+        // Create new question
+        await prisma.behavioralQuestion.create({
+          data: {
             interviewId: id,
             groupId: groupId,
-            applicationId: null,
-            order: { gte: filteredQuestions.length }
+            questionText: questionText,
+            order: i,
+            createdBy: userId
           }
         });
       }
-      
-      return res.json({ success: true, message: 'Behavioral questions updated successfully' });
     }
     
-    // Handle other configuration updates (legacy support)
-    const updatedInterview = await prisma.interview.update({
-      where: { id },
-      data: {
-        description: JSON.stringify(config) // Store config as JSON in description field
-      },
-      include: {
-        cycle: true
-      }
-    });
+    // Delete any questions that are no longer in the list
+    if (filteredQuestions.length < existingQuestions.length) {
+      await prisma.behavioralQuestion.deleteMany({
+        where: {
+          interviewId: id,
+          groupId: groupId,
+          applicationId: null,
+          order: { gte: filteredQuestions.length }
+        }
+      });
+    }
     
-    res.json(updatedInterview);
+    return res.json({ success: true, message: 'Behavioral questions updated successfully' });
+    
   } catch (error) {
     console.error('[PATCH /api/member/interviews/:id/config]', error);
     res.status(500).json({ error: 'Failed to update interview configuration' });

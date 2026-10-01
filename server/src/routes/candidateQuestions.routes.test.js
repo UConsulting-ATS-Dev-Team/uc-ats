@@ -24,6 +24,10 @@ vi.mock('../prismaClient.js', () => ({
     // roster service falls through to the JSON config these tests are built on -
     // which is the pre-sessions path, and still has to work.
     interviewSlotSignup: { findFirst: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
+    // Who is on an interview (interviewsAssignedTo). Empty, so membership comes from
+    // the JSON config's member groups, like the rest of these tests.
+    interviewSlotAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+    interviewAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     behavioralQuestion: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -43,7 +47,13 @@ const candidateUser = { id: 'user-1', role: 'USER', isActive: true, email: 'cand
 const roundOne = {
   id: 'int-1',
   interviewType: 'ROUND_ONE',
-  description: JSON.stringify({ applicationGroups: [{ id: 'grp-1', applicationIds: ['app-1', 'app-2'] }] })
+  // The member is on this interview through a member group, so they may edit its
+  // shared questions.
+  description: JSON.stringify({
+    memberGroups: [{ id: 'mg-1', memberIds: ['member-1'] }],
+    applicationGroups: [{ id: 'grp-1', applicationIds: ['app-1', 'app-2'] }],
+    groupAssignments: { 'mg-1': ['grp-1'] }
+  })
 };
 
 const tokenFor = (user) => jwt.sign({ userId: user.id }, process.env.JWT_SECRET);
