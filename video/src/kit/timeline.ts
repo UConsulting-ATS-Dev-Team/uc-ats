@@ -17,6 +17,10 @@ export type State = {
   w: number;
   h: number;
   boxes: Record<string, Box>;
+  /** Page states: viewport widgets drawn from the chrome shot, not the scrolled page. */
+  fixed?: Box[];
+  /** Page states: targets inside those widgets, whose boxes are viewport coordinates. */
+  fixedKeys?: string[];
 };
 export type States = Record<string, State>;
 
@@ -93,7 +97,7 @@ export function walkBuilder(S: States, defaultUrl = "/dashboard") {
     const s = st(name);
     const b = s.boxes[key];
     if (!b) throw new Error(`state "${name}" has no box "${key}"`);
-    if (s.kind === "page") return { ...b, y: b.y - scroll };
+    if (s.kind === "page") return s.fixedKeys?.includes(key) ? b : { ...b, y: b.y - scroll };
     if (s.kind === "el") return { ...b, x: b.x + (s.x ?? 0), y: b.y + (s.y ?? 0) };
     return b;
   };

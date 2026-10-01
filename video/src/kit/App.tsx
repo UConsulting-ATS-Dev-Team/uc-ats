@@ -92,6 +92,21 @@ function PageImage({ states, name, scroll }: { states: States; name: string; scr
           clipPath: `polygon(0 0, ${APP_W}px 0, ${APP_W}px ${TOPBAR_H}px, ${SIDEBAR_W}px ${TOPBAR_H}px, ${SIDEBAR_W}px ${APP_H}px, 0 ${APP_H}px)`,
         }}
       />
+      {/* Widgets pinned to the viewport (chat launcher, Questions tab), likewise. */}
+      {(s.fixed ?? []).map((b, i) => (
+        <Img
+          key={i}
+          src={shot(s.chrome!)}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: APP_W,
+            height: APP_H,
+            clipPath: `inset(${b.y}px ${APP_W - b.x - b.width}px ${APP_H - b.y - b.height}px ${b.x}px round 12px)`,
+          }}
+        />
+      ))}
     </>
   );
 }

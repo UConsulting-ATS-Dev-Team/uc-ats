@@ -82,20 +82,40 @@ const shotPath = (name) => join(out, `${name}.png`);
  * viewport shot at the top for the fixed top bar and sidebar. Boxes are in
  * page coordinates. Targets that are not on the page are skipped.
  */
+// Widgets pinned to the viewport (position: fixed) other than the top bar and
+// sidebar: the chat launcher and the interview Questions tab. A full-page screenshot
+// paints them where they sit at scroll 0, which is the wrong place once the video
+// scrolls, so they are left out of it and drawn from the unscrolled shot instead.
+const FIXED_WIDGETS = ".chat-widget-launcher, .question-panel-tab";
+
 async function pageState(name, targets = {}) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await settle(250);
+  const fixed = await page.evaluate((sel) => {
+    const els = [...document.querySelectorAll(sel)].filter((el) => getComputedStyle(el).position === "fixed");
+    const rects = els.map((el) => el.getBoundingClientRect().toJSON());
+    els.forEach((el) => (el.style.visibility = "hidden"));
+    return rects.map(({ x, y, width, height }) => ({ x, y, width, height }));
+  }, FIXED_WIDGETS);
   await page.screenshot({ path: shotPath(name), fullPage: true });
+  await page.evaluate((sel) => document.querySelectorAll(sel).forEach((el) => (el.style.visibility = "")), FIXED_WIDGETS);
   await page.screenshot({ path: shotPath(`${name}-chrome`) });
   const height = await page.evaluate(() => document.documentElement.scrollHeight);
   const boxes = {};
+  // Targets pinned to the viewport keep viewport coordinates; the video does not
+  // scroll them (see box() in src/kit/timeline.ts).
+  const fixedKeys = [];
   for (const [k, loc] of Object.entries(targets)) {
     if ((await loc.count()) === 0) continue;
     const r = await rect(loc.first());
-    const sy = await page.evaluate(() => window.scrollY);
-    boxes[k] = { ...r, y: r.y + sy };
+    const pinned = await loc.first().evaluate((el) => {
+      for (let n = el; n; n = n.parentElement) if (getComputedStyle(n).position === "fixed") return true;
+      return false;
+    });
+    if (pinned) fixedKeys.push(k);
+    boxes[k] = r;
   }
-  states[name] = { kind: "page", file: file(name), chrome: file(`${name}-chrome`), w: 1440, h: height, boxes };
+  states[name] = { kind: "page", file: file(name), chrome: file(`${name}-chrome`), w: 1440, h: height, boxes, fixed, fixedKeys };
   console.log("page", name, height);
 }
 

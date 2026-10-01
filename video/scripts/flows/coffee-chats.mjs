@@ -14,10 +14,19 @@ import {
   SLOTS,
 } from "../../src/videos/coffee-chats/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
-import { decisionGuideResponse, emptyInterviewChat } from "../stubs.mjs";
+import { decisionGuideResponse, interviewChat } from "../stubs.mjs";
 
 
 const guideResponse = decisionGuideResponse("coffee", "Coffee Chat");
+
+/** The interview chat: Priya, on the same sitting, has already written. */
+export const CHAT_REPLY = "No problem, starting 1A now!";
+const chat = interviewChat({
+  interview: INTERVIEW,
+  me: SAMPLE_USER,
+  colleague: { id: "m-priya", fullName: "Priya Shah", email: "priya.shah@g.ucla.edu" },
+  opening: "Grabbing water for the table. Can you start 1A without me? Back in 5.",
+});
 
 let slots = structuredClone(SLOTS);
 /** Saved evaluations, keyed by application id. */
@@ -80,7 +89,7 @@ export async function api({ path, req, route, json, url }) {
   }
   if (path === "/decision-guides/coffee") return json(guideResponse);
 
-  if (emptyInterviewChat(path, json, INTERVIEW)) return;
+  if (chat.handle(path, json, req)) return;
 
   if (path.startsWith("/files/")) {
     return route.fulfill({ status: 200, contentType: "application/pdf", body: readFileSync(docs.resume) });
@@ -216,6 +225,36 @@ export async function run({ page, base, states, settle, pageState, viewState, el
   await cardFor("Taylor Kim").locator(".decision-option", { hasText: /^Yes$/ }).click();
   await page.mouse.move(0, 0);
   await viewState("face-yes", faceTargets());
+
+  // The interview chat: everyone staffing this interview, in one conversation.
+  await page.getByRole("button", { name: "Open chat" }).click();
+  const panel = page.locator(".chat-widget-panel");
+  await panel.getByText("Grabbing water").waitFor();
+  await settle(500);
+  const chatTargets = () => ({
+    ...faceTargets(),
+    panel,
+    incoming: panel.locator(".chat-message-row").first(),
+    input: panel.getByPlaceholder("Write a reply..."),
+    send: panel.getByRole("button", { name: "Send" }),
+    close: panel.getByRole("button", { name: "Close chat" }),
+    sent: panel.getByText(CHAT_REPLY),
+  });
+  await viewState("chat-open", chatTargets());
+  await panel.getByPlaceholder("Write a reply...").click();
+  let c = 0;
+  for (let at = 0; at < CHAT_REPLY.length; at += 4) {
+    await panel.getByPlaceholder("Write a reply...").type(CHAT_REPLY.slice(at, at + 4));
+    await viewState(`chat-t${c++}`, chatTargets());
+  }
+  states["chat-count"] = { count: c };
+  await panel.getByRole("button", { name: "Send" }).click();
+  await panel.getByText(CHAT_REPLY).waitFor();
+  await page.mouse.move(0, 0);
+  await settle(300);
+  await viewState("chat-sent", chatTargets());
+  await panel.getByRole("button", { name: "Close chat" }).click();
+  await settle(300);
   await cardFor("Sam Okafor").locator("textarea").fill(NOTES.a2);
   await cardFor("Sam Okafor").locator(".decision-option", { hasText: "Maybe-Yes" }).click();
   await cardFor("Avery Chen").locator("textarea").fill(NOTES.a3);
@@ -249,6 +288,7 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     edit1: evalRow("Taylor Kim").getByRole("button").first(),
   });
 
+  if (chat.messages.at(-1)?.body !== CHAT_REPLY) throw new Error("the chat reply was not sent");
   if (Object.keys(DECISIONS).some((id) => saved[id]?.decision !== DECISIONS[id])) {
     throw new Error(`the evaluations did not save as scripted: ${JSON.stringify(saved)}`);
   }

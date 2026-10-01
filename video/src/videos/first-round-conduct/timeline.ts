@@ -68,67 +68,82 @@ export function buildWalkthrough(S: States): Walkthrough {
   camReset(1020, 16);
   press(1040, box("panel-added", "close"), "hand", () => page(1046, "r1-done"), 18);
 
-  // ---------- 6. Market Sizing ----------
-  head(1060, 1310, "Step 6", "Next Rotation: Market Sizing", [0, 1, 2, 3]);
-  scrollTo(1062, 1094, 0);
-  camZoom(1100, box("r1-done", "next"), 1.5, 12);
-  press(1110, box("r1-done", "next"), "hand", () => page(1116, "r2"), 16);
-  camReset(1124, 10);
-  scrollTo(1130, 1162, grid);
-  page(1163, "r2-m0");
-  camZoom(1172, box("r2-m0", "market"), 1.25, 14);
-  const m = typing(1180, "r2-m");
+  // ---------- 6. The interview chat ----------
+  head(1060, 1270, "Step 6 · Interview chat", "Message everyone running this interview", [0]);
+  ring(1066, pad(box("r1-done", "launcher"), 6), 30);
+  press(1090, box("r1-done", "launcher"), "hand", () => page(1096, "chat-open"), 22);
+  camZoom(1112, box("chat-open", "chatPanel"), 1.4, 18);
+  ring(1122, pad(box("chat-open", "incoming"), 6), 40);
+  press(1168, box("chat-open", "input"), "text", undefined, 16);
+  const ct = typing(1176, "chat-t");
+  press(ct.end + 8, box(ct.last, "send"), "hand", () => page(ct.end + 14, "chat-sent"), 12);
+  chime(ct.end + 14);
+  ring(ct.end + 18, pad(box("chat-sent", "sent"), 6), 30);
+  camReset(1250, 12);
+  page(1264, "r1-done");
+
+  // ---------- 7. Market Sizing ----------
+  head(1270, 1520, "Step 7", "Next Rotation: Market Sizing", [0, 1, 2, 3]);
+  scrollTo(1272, 1304, 0);
+  camZoom(1310, box("r1-done", "next"), 1.5, 12);
+  press(1320, box("r1-done", "next"), "hand", () => page(1326, "r2"), 16);
+  camReset(1334, 10);
+  scrollTo(1340, 1372, grid);
+  page(1373, "r2-m0");
+  camZoom(1382, box("r2-m0", "market"), 1.25, 14);
+  const m = typing(1390, "r2-m");
   page(m.end + 8, "r2-scores");
   camZoom(m.end + 18, box("r2-scores", "s2"), 1.4, 14);
   press(m.end + 30, box("r2-scores", "s1"), "hand", () => page(m.end + 36, "r2-s1"), 14);
   press(m.end + 52, box("r2-s1", "s2"), "hand", () => page(m.end + 58, "r2-s2"), 14);
   press(m.end + 74, box("r2-s2", "s3"), "hand", () => page(m.end + 80, "r2-s3"), 14);
   ring(m.end + 84, pad(box("r2-s3", "total"), 6), 30);
-  page(1302, "r2-done");
+  page(1512, "r2-done");
 
-  // ---------- 7. Post Grading ----------
-  head(1310, 1620, "Step 7", "Post Grading: decide, then say why", [2, 5]);
-  camReset(1310, 10);
-  scrollTo(1312, 1344, 0);
-  press(1358, box("r2-done", "next"), "hand", () => page(1364, "r3"), 18);
+  // ---------- 8. Post Grading ----------
+  head(1520, 1830, "Step 8", "Post Grading: decide, then say why", [2, 5]);
+  camReset(1520, 10);
+  scrollTo(1522, 1554, 0);
+  press(1568, box("r2-done", "next"), "hand", () => page(1574, "r3"), 18);
   // The decision guide's button sits above the grid, under the top bar at the grid's
   // scroll position; the page scrolls to where the capture clicked it (guideScroll),
   // then on down to the grid for the decision.
-  scrollTo(1370, 1398, guide);
-  page(1399, "r3-guidebtn");
-  ring(1404, pad(box("r3-guidebtn", "notice"), 4), 34);
-  press(1426, box("r3-guidebtn", "guideBtn"), "hand", () => page(1432, "guide"), 18);
-  camOn(1446, box("guide", "drawer"), 1.2, 16);
-  camReset(1504, 14);
-  page(1508, "r3-guidebtn");
-  page(1510, "r3");
-  scrollTo(1512, 1536, grid);
-  page(1537, "r3-grid");
-  camZoom(1546, box("r3-grid", "myes"), 1.45, 12);
-  press(1556, box("r3-grid", "myes"), "hand", () => page(1562, "r3-decided"), 12);
-  camZoom(1572, box("r3-decided", "post"), 1.4, 10);
-  press(1578, box("r3-decided", "post"), "text", undefined, 10);
-  typing(1586, "r3-p", 3);
+  scrollTo(1580, 1608, guide);
+  page(1609, "r3-guidebtn");
+  ring(1614, pad(box("r3-guidebtn", "notice"), 4), 34);
+  press(1636, box("r3-guidebtn", "guideBtn"), "hand", () => page(1642, "guide"), 18);
+  camOn(1656, box("guide", "drawer"), 1.2, 16);
+  camReset(1714, 14);
+  // Back to the full page while nothing moves, then scroll once its fade has settled:
+  // a view shot fading into a page that is already scrolling shows both at once.
+  page(1718, "r3");
+  scrollTo(1726, 1750, grid);
+  page(1751, "r3-grid");
+  camZoom(1760, box("r3-grid", "myes"), 1.45, 12);
+  press(1770, box("r3-grid", "myes"), "hand", () => page(1776, "r3-decided"), 12);
+  camZoom(1786, box("r3-decided", "post"), 1.4, 10);
+  press(1792, box("r3-decided", "post"), "text", undefined, 10);
+  typing(1800, "r3-p", 3);
 
-  // ---------- 8. Save All ----------
-  head(1620, 1770, "Step 8", "Save All before you leave the room", [0, 1]);
-  page(1620, "r3-done");
-  camReset(1622, 12);
-  scrollTo(1626, 1660, 0);
-  camZoom(1672, box("r3-done", "saveAll"), 1.35, 16);
-  press(1688, box("r3-done", "saveAll"), "hand", undefined, 20);
-  chime(1694);
-  ring(1694, pad(box("r3-done", "saveAll"), 6), 50);
-  camReset(1756, 14);
+  // ---------- 9. Save All ----------
+  head(1830, 1980, "Step 9", "Save All before you leave the room", [0, 1]);
+  page(1830, "r3-done");
+  camReset(1832, 12);
+  scrollTo(1836, 1870, 0);
+  camZoom(1882, box("r3-done", "saveAll"), 1.35, 16);
+  press(1898, box("r3-done", "saveAll"), "hand", undefined, 20);
+  chime(1904);
+  ring(1904, pad(box("r3-done", "saveAll"), 6), 50);
+  camReset(1966, 14);
 
-  return done(1770);
+  return done(1980);
 }
 
 // ---------- the whole video ----------
 export const SCENES = [
   { name: "Intro", frames: 150 },
   { name: "The hour", frames: 210 },
-  { name: "Walkthrough", frames: 1770, walk: true },
+  { name: "Walkthrough", frames: 1980, walk: true },
   { name: "After", frames: 195 },
   { name: "Close", frames: 150 },
 ] as const;
@@ -149,7 +164,7 @@ export function music(): MusicPlan {
   return {
     slams: [0, 60, 75, 90],
     breaks: [
-      [W0 + 1432, W0 + 1508],
+      [W0 + 1642, W0 + 1718],
       [sceneStart("After"), sceneStart("Close")],
     ],
   };

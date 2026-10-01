@@ -9,9 +9,18 @@
 import { readFileSync } from "node:fs";
 import { APPS, CONFIG, FOR_TAYLOR, INTERVIEW, SAMPLE_USER, SHARED } from "../../src/videos/first-round-setup/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
-import { decisionGuideResponse, emptyInterviewChat } from "../stubs.mjs";
+import { decisionGuideResponse, interviewChat } from "../stubs.mjs";
 
 const guideResponse = decisionGuideResponse("firstRound", "First Round");
+
+/** The interview chat: Priya, in the same room, splits the note-taking. */
+export const CHAT_REPLY = "Deal, I've got Taylor's.";
+const chat = interviewChat({
+  interview: INTERVIEW,
+  me: SAMPLE_USER,
+  colleague: { id: "m-priya", fullName: "Priya Shah", email: "priya.shah@g.ucla.edu" },
+  opening: "I'll take Market Sizing notes for Sam and Avery. Can you take Taylor's?",
+});
 
 const BANK = [
   {
@@ -90,7 +99,7 @@ export async function api({ path, req, route, json }) {
   if (path.startsWith(`${base}/session-questions`)) return json(sessionQuestions);
   if (path === `${base}/question-bank/facets`) return json({ categories: ["Influence", "Judgment"], rounds: ["ROUND_ONE"] });
   if (path.startsWith(`${base}/question-bank`)) return json(BANK);
-  if (emptyInterviewChat(path, json, INTERVIEW)) return;
+  if (chat.handle(path, json, req)) return;
 
   if (path.startsWith("/files/")) {
     return route.fulfill({ status: 200, contentType: "application/pdf", body: readFileSync(docs.resume) });
@@ -127,6 +136,7 @@ export async function run({ page, base, states, settle, pageState, viewState }) 
     yes: taylor().locator(".decision-option", { hasText: /^Yes$/ }),
     post: taylor().getByPlaceholder("Post Grading Notes"),
     qtab: page.getByRole("button", { name: "Interview questions" }),
+    launcher: page.getByRole("button", { name: "Open chat" }),
   });
 
   // Where the grid sits for every edit: its header just under the top bar.
@@ -147,11 +157,11 @@ export async function run({ page, base, states, settle, pageState, viewState }) 
     });
     await settle(250);
   };
-  const typeStates = async (prefix, locator, text, step) => {
+  const typeStates = async (prefix, locator, text, step, targetsFor = targets) => {
     let n = 0;
     for (let at = 0; at < text.length; at += step) {
       await locator.type(text.slice(at, at + step));
-      await viewState(`${prefix}${n++}`, targets());
+      await viewState(`${prefix}${n++}`, targetsFor());
     }
     states[`${prefix}count`] = { count: n };
   };
@@ -196,6 +206,31 @@ export async function run({ page, base, states, settle, pageState, viewState }) 
   await viewState("panel-added", panelTargets());
   await panel.getByRole("button", { name: "Close questions" }).click();
   await settle(400);
+
+  // The interview chat: everyone staffing this interview, in one conversation.
+  await page.getByRole("button", { name: "Open chat" }).click();
+  const chatPanel = page.locator(".chat-widget-panel");
+  await chatPanel.getByText("Market Sizing notes for Sam").waitFor();
+  await settle(500);
+  const chatTargets = () => ({
+    ...targets(),
+    launcher: page.getByRole("button", { name: "Open chat" }),
+    chatPanel,
+    incoming: chatPanel.locator(".chat-message-row").first(),
+    input: chatPanel.getByPlaceholder("Write a reply..."),
+    send: chatPanel.getByRole("button", { name: "Send" }),
+    sent: chatPanel.getByText(CHAT_REPLY),
+  });
+  await viewState("chat-open", chatTargets());
+  await chatPanel.getByPlaceholder("Write a reply...").click();
+  await typeStates("chat-t", chatPanel.getByPlaceholder("Write a reply..."), CHAT_REPLY, 4, chatTargets);
+  await chatPanel.getByRole("button", { name: "Send" }).click();
+  await chatPanel.getByText(CHAT_REPLY).waitFor();
+  await page.mouse.move(0, 0);
+  await settle(300);
+  await viewState("chat-sent", chatTargets());
+  await chatPanel.getByRole("button", { name: "Close chat" }).click();
+  await settle(300);
   await pageState("r1-done", targets());
 
   // ---------- Rotation 2: Market Sizing ----------
@@ -251,6 +286,7 @@ export async function run({ page, base, states, settle, pageState, viewState }) 
   await page.getByRole("button", { name: /Save All/ }).click();
   await settle(800);
 
+  if (chat.messages.at(-1)?.body !== CHAT_REPLY) throw new Error("the chat reply was not sent");
   const last = saves.filter((s) => s.applicationId === "a1").at(-1);
   const ok =
     last &&
