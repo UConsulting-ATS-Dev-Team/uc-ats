@@ -62,7 +62,7 @@ function labelCovers(label, score) {
 const outOfRange = (category, value) =>
   value !== '' && (Number(value) < category.min || Number(value) > category.max);
 
-const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
+const DocumentGradingModal = ({ open, onClose, onSaved, application, documentType }) => {
   const { user, token } = useAuth();
   const isMobile = useIsMobile();
   const {
@@ -86,26 +86,21 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 62);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef(null);
-  // The save this modal is about to report, and the timer that will report it.
-  // A grader can close the modal by hand during the success message, then open
-  // another application; the save still has to be reported, once, as the one
-  // that was graded, and the timer must not then close the modal they opened.
-  const pendingSaveRef = useRef(null);
+  // One modal instance serves every row, and a save can outlive the opening
+  // that made it: the grader may close the modal while the request is in
+  // flight, or during the success message, and open another row. Each close
+  // starts a new session, and a save answers only the session it began in, so
+  // it never clears, flags or closes the form that is open now.
+  const sessionRef = useRef(0);
   const closeTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(closeTimerRef.current), []);
 
-  // onClose(saved, { application, documentType }): the second argument is set
-  // only when saved, and names what was graded rather than what is open now.
   const close = () => {
+    sessionRef.current += 1;
     clearTimeout(closeTimerRef.current);
-    const saved = pendingSaveRef.current;
-    pendingSaveRef.current = null;
-    if (saved) {
-      setSuccess(false);
-      setScores(EMPTY_SCORES);
-      setNotes('');
-    }
-    onClose(Boolean(saved), saved || undefined);
+    setSuccess(false);
+    setSaving(false);
+    onClose();
   };
   // The timer calls whichever close is current when it fires, not the one from
   // the render that saved, so it reaches the parent's current handler.
@@ -305,6 +300,8 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   };
 
   const handleSave = async () => {
+    const session = sessionRef.current;
+    const isCurrent = () => session === sessionRef.current;
     try {
       setSaving(true);
       setError(null);
@@ -322,20 +319,27 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       };
 
       await apiClient.post(config.apiEndpoint, scoreData);
-      setSuccess(true);
-      pendingSaveRef.current = { application, documentType };
+      // The grade is saved whether or not this modal is still showing it.
+      onSaved?.({ application, documentType });
+      if (!isCurrent()) return;
 
+      setSuccess(true);
       // Close modal after a short delay
       clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = setTimeout(() => closeRef.current(), 1500);
+      closeTimerRef.current = setTimeout(() => {
+        setScores(EMPTY_SCORES);
+        setNotes('');
+        closeRef.current();
+      }, 1500);
 
     } catch (err) {
       console.error('Error saving score:', err);
+      if (!isCurrent()) return;
       setError(err?.message?.replace(/ \(Status: \d+\)$/, '') || 'Failed to save score. Please try again.');
       // The range changed under this grader: show them the one the server holds.
       if (err?.code === 'SCORE_OUT_OF_RANGE') reloadRubrics();
     } finally {
-      setSaving(false);
+      if (isCurrent()) setSaving(false);
     }
   };
 

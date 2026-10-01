@@ -14,11 +14,11 @@ vi.mock('../components/TutorialGate', () => ({
 vi.mock('../components/FlagDocumentModal', () => ({ default: () => null }));
 // The modal's own save is not under test: these buttons stand in for it.
 vi.mock('../components/DocumentGradingModal', () => ({
-  default: ({ open, onClose, application, documentType }) =>
+  default: ({ open, onClose, onSaved, application, documentType }) =>
     open ? (
       <div>
-        <button onClick={() => onClose(true, { application, documentType })}>modal-saved</button>
-        <button onClick={() => onClose(false)}>modal-cancelled</button>
+        <button onClick={() => { onSaved({ application, documentType }); onClose(); }}>modal-saved</button>
+        <button onClick={() => onClose()}>modal-cancelled</button>
       </div>
     ) : null
 }));

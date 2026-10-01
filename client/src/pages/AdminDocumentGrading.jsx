@@ -419,15 +419,15 @@ export default function AdminDocumentGrading() {
     });
   };
 
-  // `graded` names what was saved, which need not be what is open now: the
-  // modal can report a save after the grader has moved on to another row.
-  const handleCloseGradingModal = (saved = false, graded = null) => {
-    if (!graded || graded.application.id === selectedApplication?.id) {
-      setGradingModalOpen(false);
-      setSelectedApplication(null);
-    }
-    if (!saved || !graded) return;
+  const handleCloseGradingModal = () => {
+    setGradingModalOpen(false);
+    setSelectedApplication(null);
+  };
 
+  // `graded` names what was saved, which need not be the row open now: a save
+  // can land after the grader has closed the modal and moved on.
+  const handleGradeSaved = (graded) => {
+    if (!user?.id) return;
     // Show the grade now and confirm it with a refetch behind the table, rather
     // than swapping the table for a spinner until the whole list reloads.
     setApplications(apps => apps.map(app =>
@@ -1350,6 +1350,7 @@ export default function AdminDocumentGrading() {
       <DocumentGradingModal
         open={gradingModalOpen}
         onClose={handleCloseGradingModal}
+        onSaved={handleGradeSaved}
         application={selectedApplication}
         documentType={selectedDocumentType}
       />

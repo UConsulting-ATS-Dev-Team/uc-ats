@@ -107,51 +107,81 @@ describe('DocumentGradingModal', () => {
     await waitFor(() => expect(screen.getByLabelText('Presence on camera')).toHaveValue('0'));
   });
 
-  describe('closing', () => {
-    const renderWith = (onClose) => render(
-      <DocumentGradingModal open onClose={onClose} application={application} documentType="video" />
+  describe('saving and closing', () => {
+    const renderWith = (props) => render(
+      <DocumentGradingModal open application={application} documentType="video" {...props} />
     );
-    const saveFour = async () => {
+    const typeFour = async () => {
       fireEvent.change(await screen.findByLabelText('Presence on camera'), { target: { value: '4' } });
+    };
+    const saveFour = async () => {
+      await typeFour();
       fireEvent.click(screen.getByRole('button', { name: /save score/i }));
       await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
       await act(async () => {});
     };
+    const closeButton = () => screen.getByRole('button', { name: /^close$/i });
 
-    it('reports a save by itself, naming what was graded', async () => {
+    it('reports the save at once, naming what was graded, then closes itself', async () => {
       mockServer();
       const onClose = vi.fn();
-      renderWith(onClose);
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
       await saveFour();
 
-      await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: 3000 });
-      expect(onClose).toHaveBeenCalledTimes(1);
-      expect(onClose).toHaveBeenCalledWith(true, { application, documentType: 'video' });
+      expect(onSaved).toHaveBeenCalledWith({ application, documentType: 'video' });
+      expect(onClose).not.toHaveBeenCalled();
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(onSaved).toHaveBeenCalledTimes(1);
     });
 
-    it('closed by hand during the success message, reports the save once and never again', async () => {
+    it('closed by hand during the success message, does not close again later', async () => {
       mockServer();
       const onClose = vi.fn();
-      renderWith(onClose);
+      renderWith({ onClose, onSaved: vi.fn() });
       await saveFour();
 
-      fireEvent.click(screen.getByRole('button', { name: /^close$/i }));
+      fireEvent.click(closeButton());
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(onClose).toHaveBeenCalledWith(true, { application, documentType: 'video' });
 
-      // The timer must not fire a second close: by now the grader may have opened another row.
+      // By now the grader may have opened another row; a second close would shut it.
       await act(() => new Promise((resolve) => setTimeout(resolve, 1700)));
       expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('closed while the save is in flight, still reports it but leaves the next form alone', async () => {
+      mockServer();
+      let answer;
+      apiClient.post.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+      const onClose = vi.fn();
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
+      await typeFour();
+      fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+      await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
+
+      fireEvent.click(closeButton());
+      // The grader starts on the next row in the same modal before the first save answers.
+      fireEvent.change(screen.getByLabelText('Presence on camera'), { target: { value: '2' } });
+      await act(async () => answer({}));
+
+      expect(onSaved).toHaveBeenCalledWith({ application, documentType: 'video' });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 1700)));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText('Presence on camera')).toHaveValue('2');
+      expect(screen.queryByText(/saved successfully/i)).not.toBeInTheDocument();
     });
 
     it('closed without a save, reports none', async () => {
       mockServer();
       const onClose = vi.fn();
-      renderWith(onClose);
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
       await screen.findByLabelText('Presence on camera');
 
-      fireEvent.click(screen.getByRole('button', { name: /^close$/i }));
-      expect(onClose).toHaveBeenCalledWith(false, undefined);
+      fireEvent.click(closeButton());
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onSaved).not.toHaveBeenCalled();
     });
   });
 });
