@@ -1,9 +1,15 @@
 import express from 'express';
+import {
+  firstRoundEvaluationWrite,
+  interviewEvaluationWrite,
+  readFirstRoundEvaluation
+} from '../services/interviewEvaluations.js';
 import multer from 'multer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireAuth, requireAdminOrMember } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import { saveSharedQuestions } from '../services/sharedQuestions.js';
 import { putResume, getResume, removeResume, storageErrorResponse } from '../services/resumeStorage.js';
 import {
   expandGroupIdsForQuestions,
@@ -912,7 +918,7 @@ router.get('/interviews/:id/config', requireAuth, async (req, res) => {
 });
 
 // Update interview configuration (member version)
-router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
+router.patch('/interviews/:id/config', requireAuth, requireAdminOrMember, async (req, res) => {
   try {
     const { id } = req.params;
     const { type, config } = req.body;
@@ -926,103 +932,28 @@ router.patch('/interviews/:id/config', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Handle behavioral questions update
-    if (type === 'behavioral_questions' && config.behavioralQuestions) {
-      const { groupId, questions } = config;
-      
-      if (!groupId || !questions) {
-        return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
-      }
-      
-      console.log('Member - Attempting to save behavioral questions:', {
-        interviewId: id,
-        groupId,
-        questions: questions.filter(q => q.trim() !== ''),
-        userId
-      });
-      
-      // Note: For behavioral questions, we're working with application groups
-      // The access control is handled at the interview level, not the group level
-      console.log('Member - Using application group for behavioral questions:', groupId);
-      
-      // Get existing questions for this group and interview
-      const existingQuestions = await prisma.behavioralQuestion.findMany({
-        where: {
-          interviewId: id,
-          groupId: groupId,
-          applicationId: null
-        },
-        orderBy: { order: 'asc' }
-      });
-      
-      const filteredQuestions = questions.filter(q => q.trim() !== '');
-      
-      // Update existing questions and create new ones
-      for (let i = 0; i < filteredQuestions.length; i++) {
-        const questionText = filteredQuestions[i];
-        
-        if (existingQuestions[i]) {
-          // Update existing question if text has changed
-          if (existingQuestions[i].questionText !== questionText) {
-            await prisma.behavioralQuestion.update({
-              where: { id: existingQuestions[i].id },
-              data: {
-                questionText: questionText,
-                order: i,
-                updatedAt: new Date()
-              }
-            });
-          } else if (existingQuestions[i].order !== i) {
-            // Update order if it has changed
-            await prisma.behavioralQuestion.update({
-              where: { id: existingQuestions[i].id },
-              data: {
-                order: i,
-                updatedAt: new Date()
-              }
-            });
-          }
-        } else {
-          // Create new question
-          await prisma.behavioralQuestion.create({
-            data: {
-              interviewId: id,
-              groupId: groupId,
-              questionText: questionText,
-              order: i,
-              createdBy: userId
-            }
-          });
-        }
-      }
-      
-      // Delete any questions that are no longer in the list
-      if (filteredQuestions.length < existingQuestions.length) {
-        await prisma.behavioralQuestion.deleteMany({
-          where: {
-            interviewId: id,
-            groupId: groupId,
-            applicationId: null,
-            order: { gte: filteredQuestions.length }
-          }
-        });
-      }
-      
-      return res.json({ success: true, message: 'Behavioral questions updated successfully' });
+    // Members only ever set behavioral questions here, and only on an interview they are
+    // on. The legacy branch that rewrote Interview.description with any JSON sent is
+    // admin-only (routes/admin.js); here it let any signed-in user replace an
+    // interview's roster.
+    if (type !== 'behavioral_questions') {
+      return res.status(400).json({ error: 'Only behavioral questions can be configured here' });
     }
+    if (req.user.role !== 'ADMIN') {
+      const [mine] = await interviewsAssignedTo(userId, [interview]);
+      if (!mine) return res.status(403).json({ error: 'You are not on this interview' });
+    }
+
+    const { groupId, questions } = config || {};
     
-    // Handle other configuration updates (legacy support)
-    const updatedInterview = await prisma.interview.update({
-      where: { id },
-      data: {
-        description: JSON.stringify(config) // Store config as JSON in description field
-      },
-      include: {
-        cycle: true
-      }
-    });
+    if (!groupId || !questions) {
+      return res.status(400).json({ error: 'groupId and questions are required for behavioral questions update' });
+    }
+
+    // Written under the group's one id, with its alias cleared: services/sharedQuestions.js.
+    await saveSharedQuestions({ interviewId: id, groupId, questions, userId });
+    return res.json({ success: true, message: 'Behavioral questions updated successfully' });
     
-    res.json(updatedInterview);
   } catch (error) {
     console.error('[PATCH /api/member/interviews/:id/config]', error);
     res.status(500).json({ error: 'Failed to update interview configuration' });
@@ -1642,7 +1573,7 @@ router.get('/evaluations', requireAuth, async (req, res) => {
     
     if (interview.interviewType === 'ROUND_ONE') {
       // Get first round evaluations
-      evaluations = await prisma.firstRoundInterviewEvaluation.findMany({
+      evaluations = (await prisma.firstRoundInterviewEvaluation.findMany({
         where: {
           interviewId,
           evaluatorId: userId
@@ -1654,7 +1585,7 @@ router.get('/evaluations', requireAuth, async (req, res) => {
             }
           }
         }
-      });
+      })).map(readFirstRoundEvaluation);
     } else {
       // Get regular evaluations
       evaluations = await prisma.interviewEvaluation.findMany({
@@ -1731,27 +1662,8 @@ router.get('/evaluations', requireAuth, async (req, res) => {
 // Save or update evaluation
 router.post('/evaluations', requireAuth, async (req, res) => {
   try {
-    const { 
-      interviewId, 
-      applicationId, 
-      decision, 
-      notes,
-      // First round interview specific fields
-      behavioralLeadership,
-      behavioralProblemSolving,
-      behavioralInterest,
-      behavioralTotal,
-      marketSizingTeamwork,
-      marketSizingLogic,
-      marketSizingCreativity,
-      marketSizingTotal,
-      behavioralNotes,
-      marketSizingNotes,
-      additionalNotes,
-      // Final round interview specific fields
-      casingNotes,
-      candidateDetails
-    } = req.body;
+    // The fields an evaluation saves are read in services/interviewEvaluations.js.
+    const { interviewId, applicationId } = req.body;
     const evaluatorId = req.user.id;
     
     if (!interviewId || !applicationId) {
@@ -1778,22 +1690,9 @@ router.post('/evaluations', requireAuth, async (req, res) => {
         }
       });
       
+      // Only what this save sends: see services/interviewEvaluations.js.
       const firstRoundData = {
-        interviewId,
-        applicationId,
-        evaluatorId,
-        decision,
-        behavioralLeadership,
-        behavioralProblemSolving,
-        behavioralInterest,
-        behavioralTotal,
-        marketSizingTeamwork,
-        marketSizingLogic,
-        marketSizingCreativity,
-        marketSizingTotal,
-        behavioralNotes: behavioralNotes ? JSON.stringify(behavioralNotes) : null,
-        marketSizingNotes,
-        additionalNotes,
+        ...firstRoundEvaluationWrite(req.body),
         updatedAt: new Date()
       };
       
@@ -1807,7 +1706,7 @@ router.post('/evaluations', requireAuth, async (req, res) => {
       } else {
         // Create new first round evaluation
         evaluation = await prisma.firstRoundInterviewEvaluation.create({
-          data: firstRoundData
+          data: { interviewId, applicationId, evaluatorId, ...firstRoundData }
         });
       }
       
@@ -1822,12 +1721,9 @@ router.post('/evaluations', requireAuth, async (req, res) => {
         }
       });
       
+      // Only what this save sends: see services/interviewEvaluations.js.
       const evaluationData = {
-        decision,
-        notes,
-        behavioralNotes: behavioralNotes ? JSON.stringify(behavioralNotes) : null,
-        casingNotes: casingNotes ? JSON.stringify(casingNotes) : null,
-        candidateDetails: candidateDetails ? JSON.stringify(candidateDetails) : null,
+        ...interviewEvaluationWrite(req.body),
         updatedAt: new Date()
       };
       

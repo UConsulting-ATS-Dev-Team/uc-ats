@@ -1622,6 +1622,11 @@ model MemberAnnouncementRead {
 enum TutorialCategory {
   DOCUMENT_GRADING
   INTERVIEW_CONDUCT
+  // One per interview round, so each round's tutorials can gate that round
+  // (services/tutorialGate.js). INTERVIEW_CONDUCT stays for general interview help.
+  COFFEE_CHATS
+  FIRST_ROUND
+  FINAL_ROUND
   GTKUC
   ATS_NAVIGATION
   NEW_FEATURES

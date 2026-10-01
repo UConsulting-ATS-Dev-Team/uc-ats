@@ -29,6 +29,8 @@ import apiClient from '../../utils/api';
 import InterviewEditDialog from './InterviewEditDialog';
 import InterviewSlotSetup from './InterviewSlotSetup';
 import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
+import { useTutorialGate } from '../TutorialGate';
+import { tutorialCategoryForInterviewType } from '../../utils/tutorialCategories';
 
 /**
  * The interviews in one round, and everything you do to set one up or run it.
@@ -57,6 +59,8 @@ export default function InterviewManageList({ round, onChanged }) {
   const [details, setDetails] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // The round's tutorials, once a cycle, before an admin runs their first session of it.
+  const tutorialGate = useTutorialGate();
 
   const [setupFor, setSetupFor] = useState(null);
   const [menu, setMenu] = useState(null);
@@ -133,7 +137,9 @@ export default function InterviewManageList({ round, onChanged }) {
       setQuestions(
         Object.values(config.behavioralQuestions || {})
           .flat()
-          .map((q) => q.questionText ?? q)
+          // Each keeps its id, which is how the server keeps its row and its notes
+          // through an edit (services/sharedQuestions.js).
+          .map((q) => (typeof q === 'string' ? { id: null, text: q } : { id: q.id ?? null, text: q.text ?? q.questionText ?? '' }))
       );
     } catch {
       setQuestions([]);
@@ -153,8 +159,11 @@ export default function InterviewManageList({ round, onChanged }) {
     try {
       await apiClient.patch(`/admin/interviews/${questionsFor.id}/config`, {
         type: 'behavioral_questions',
-        config: { groupId: questionSession, questions: questions.filter((q) => q.trim() !== '') },
-        behavioralQuestions: true,
+        config: {
+          behavioralQuestions: true,
+          groupId: questionSession,
+          questions: questions.filter((q) => q.text.trim() !== ''),
+        },
       });
       setQuestionsFor(null);
     } catch (e) {
@@ -234,10 +243,14 @@ export default function InterviewManageList({ round, onChanged }) {
                     variant="contained"
                     startIcon={<PlayIcon />}
                     disabled={sessions.length === 0}
-                    onClick={() => {
-                      setStartFor(interview);
-                      setChosenSessions([]);
-                    }}
+                    onClick={() =>
+                      // The overview rows carry no type until the full list loads; the
+                      // round's own type is the same and always there.
+                      tutorialGate.run(() => {
+                        setStartFor(interview);
+                        setChosenSessions([]);
+                      }, tutorialCategoryForInterviewType(interview.interviewType ?? round?.interviewType))
+                    }
                   >
                     Run a session
                   </Button>
@@ -368,12 +381,12 @@ export default function InterviewManageList({ round, onChanged }) {
               <TextField
                 key={index}
                 size="small"
-                value={q}
-                onChange={(e) => setQuestions((current) => current.map((item, i) => (i === index ? e.target.value : item)))}
+                value={q.text}
+                onChange={(e) => setQuestions((current) => current.map((item, i) => (i === index ? { ...item, text: e.target.value } : item)))}
                 fullWidth
               />
             ))}
-            <Button size="small" onClick={() => setQuestions((current) => [...current, ''])}>
+            <Button size="small" onClick={() => setQuestions((current) => [...current, { id: null, text: '' }])}>
               Add a question
             </Button>
           </Stack>
@@ -385,6 +398,8 @@ export default function InterviewManageList({ round, onChanged }) {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {tutorialGate.dialog}
     </Box>
   );
 }

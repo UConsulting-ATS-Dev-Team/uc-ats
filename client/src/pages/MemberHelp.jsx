@@ -35,24 +35,8 @@ import {
   ExpandMore as ExpandMoreIcon,
   NewReleases as NewReleasesIcon,
 } from '@mui/icons-material';
+import { CATEGORY_COLORS, CATEGORY_LABELS, TUTORIAL_CATEGORIES } from '../utils/tutorialCategories';
 
-const CATEGORY_LABELS = {
-  DOCUMENT_GRADING: 'Document Grading',
-  INTERVIEW_CONDUCT: 'Interviews',
-  GTKUC: 'Get to Know UC',
-  ATS_NAVIGATION: 'ATS Navigation',
-  NEW_FEATURES: 'New Features',
-};
-
-const CATEGORY_COLORS = {
-  DOCUMENT_GRADING: 'primary',
-  INTERVIEW_CONDUCT: 'secondary',
-  GTKUC: 'success',
-  ATS_NAVIGATION: 'info',
-  NEW_FEATURES: 'warning',
-};
-
-const TUTORIAL_CATEGORIES = Object.keys(CATEGORY_LABELS);
 
 function formatDate(dateString) {
   return new Date(dateString).toLocaleDateString(undefined, {

@@ -12,6 +12,9 @@ const router = express.Router();
 const TUTORIAL_CATEGORIES = [
   'DOCUMENT_GRADING',
   'INTERVIEW_CONDUCT',
+  'COFFEE_CHATS',
+  'FIRST_ROUND',
+  'FINAL_ROUND',
   'GTKUC',
   'ATS_NAVIGATION',
   'NEW_FEATURES',

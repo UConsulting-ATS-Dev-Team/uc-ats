@@ -18,6 +18,9 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     caseAssignment: { findMany: vi.fn() },
     caseVisibilitySetting: { findUnique: vi.fn(), upsert: vi.fn() },
+    interviewSlot: { findMany: vi.fn() },
+    interviewSlotAssignment: { findMany: vi.fn() },
+    interviewAssignment: { findMany: vi.fn() },
   },
 }));
 
@@ -28,11 +31,13 @@ const CANDIDATE = { id: 'user-1', role: 'USER' };
 const NOW = new Date('2026-09-18T12:00:00.000Z');
 const hoursFromNow = (h) => new Date(NOW.getTime() + h * 60 * 60 * 1000);
 
-// The member is assigned to interviews starting at these times.
+// The member is assigned (through a session) to interviews starting at these times.
 const assignedTo = (...startDates) => {
-  prisma.caseAssignment.findMany.mockResolvedValue(
-    startDates.map((startDate) => ({ interview: { startDate } }))
-  );
+  const interviews = startDates.map((startDate, i) => ({ id: `iv-${i}`, startDate, description: null }));
+  prisma.caseAssignment.findMany.mockResolvedValue(interviews.map((interview) => ({ interview })));
+  prisma.interviewSlot.findMany.mockResolvedValue(interviews.map((iv) => ({ interviewId: iv.id })));
+  prisma.interviewSlotAssignment.findMany.mockResolvedValue(interviews.map((iv) => ({ interviewId: iv.id })));
+  prisma.interviewAssignment.findMany.mockResolvedValue([]);
 };
 
 const leadTimeIs = (hours) => {
@@ -177,22 +182,107 @@ describe('authorizeCaseRead', () => {
     expect(where.interview.status.in).toBeUndefined();
   });
 
-  it('scopes the assignment lookup to this case and this member', async () => {
+  it('scopes the lookup to this case, and the roster check to this member', async () => {
     assignedTo(hoursFromNow(1));
 
     await authorizeCaseRead('case-42', MEMBER, NOW);
 
     expect(prisma.caseAssignment.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          caseId: 'case-42',
-          interview: {
-            status: { not: 'CANCELLED' },
-            assignments: { some: { userId: 'member-1' } },
-          },
-        },
-      })
+      expect.objectContaining({ where: { caseId: 'case-42', interview: { status: { not: 'CANCELLED' } } } })
     );
+    expect(prisma.interviewSlotAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'member-1', removedAt: null }) })
+    );
+  });
+});
+
+// Against a fake database that applies every filter it is given, the way Postgres
+// would: which interviews use the case, which are cancelled, which have sessions, and
+// who is on which interview, decide whether the case opens.
+describe('authorizeCaseRead, by how the member is staffed', () => {
+  const OPEN = hoursFromNow(1); // inside the 2-hour window
+  let db;
+
+  const interview = (id, over = {}) => ({ id, startDate: OPEN, status: 'UPCOMING', description: null, ...over });
+
+  beforeEach(() => {
+    db = {
+      interviews: [interview('iv-final'), interview('iv-other')],
+      caseLinks: [{ caseId: 'case-1', interviewId: 'iv-final' }],
+      slots: [{ interviewId: 'iv-final' }, { interviewId: 'iv-other' }],
+      slotAssignments: [],
+      legacyAssignments: [],
+    };
+    const byId = (id) => db.interviews.find((iv) => iv.id === id);
+    prisma.caseAssignment.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(
+        db.caseLinks
+          .filter((link) => link.caseId === where.caseId)
+          .map((link) => byId(link.interviewId))
+          .filter((iv) => !(where.interview?.status?.not && iv.status === where.interview.status.not))
+          .map((iv) => ({ interview: { id: iv.id, startDate: iv.startDate, description: iv.description } }))
+      )
+    );
+    const inIds = (where, row) => !where.interviewId?.in || where.interviewId.in.includes(row.interviewId);
+    prisma.interviewSlot.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(db.slots.filter((row) => inIds(where, row)).map((row) => ({ interviewId: row.interviewId })))
+    );
+    prisma.interviewSlotAssignment.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(
+        db.slotAssignments
+          .filter((row) => row.userId === where.userId && inIds(where, row) && (where.removedAt !== null || !row.removedAt))
+          .map((row) => ({ interviewId: row.interviewId }))
+      )
+    );
+    prisma.interviewAssignment.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(
+        db.legacyAssignments.filter((row) => row.userId === where.userId && inIds(where, row)).map((row) => ({ interviewId: row.interviewId }))
+      )
+    );
+  });
+
+  const read = () => authorizeCaseRead('case-1', MEMBER, NOW);
+
+  it('opens the case for a member on one of its interview sessions', async () => {
+    // How members are staffed now. Nothing writes InterviewAssignment any more, so
+    // requiring it locked every member out.
+    db.slotAssignments.push({ userId: 'member-1', interviewId: 'iv-final' });
+    await expect(read()).resolves.toEqual({ allowed: true });
+  });
+
+  it('refuses a member on a session of a different interview', async () => {
+    db.slotAssignments.push({ userId: 'member-1', interviewId: 'iv-other' });
+    await expect(read()).resolves.toEqual({ allowed: false, reason: 'FORBIDDEN' });
+  });
+
+  it('refuses a member removed from the session', async () => {
+    db.slotAssignments.push({ userId: 'member-1', interviewId: 'iv-final', removedAt: new Date() });
+    await expect(read()).resolves.toEqual({ allowed: false, reason: 'FORBIDDEN' });
+  });
+
+  it('does not let old member groups in once the interview has sessions', async () => {
+    // Converted to sessions, the description still lists the old groups.
+    db.interviews[0].description = JSON.stringify({ memberGroups: [{ id: 'mg', memberIds: ['member-1'] }] });
+    db.slotAssignments.push({ userId: 'member-1', interviewId: 'iv-final', removedAt: new Date() });
+    await expect(read()).resolves.toEqual({ allowed: false, reason: 'FORBIDDEN' });
+  });
+
+  it('still reads member groups for an interview without sessions', async () => {
+    db.slots = [];
+    db.interviews[0].description = JSON.stringify({ memberGroups: [{ id: 'mg', memberIds: ['member-1'] }] });
+    await expect(read()).resolves.toEqual({ allowed: true });
+  });
+
+  it('still opens it for a member on the older table, for an interview without sessions', async () => {
+    db.slots = [];
+    db.legacyAssignments.push({ userId: 'member-1', interviewId: 'iv-final' });
+    await expect(read()).resolves.toEqual({ allowed: true });
+  });
+
+  it('ignores a cancelled interview that uses the case', async () => {
+    db.interviews[0].status = 'CANCELLED';
+    db.slotAssignments.push({ userId: 'member-1', interviewId: 'iv-final' });
+    await expect(read()).resolves.toEqual({ allowed: false, reason: 'FORBIDDEN' });
   });
 });
 

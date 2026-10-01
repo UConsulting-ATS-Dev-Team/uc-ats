@@ -33,6 +33,21 @@ const fakeClient = ({ slots = [], description = null, interviewType = 'ROUND_ONE
       );
     }),
   },
+  interviewSlotSignup: {
+    // Every slot here belongs to interview iv1; a signup row carries its own
+    // interviewId, so a query scoped to another interview finds nothing.
+    findMany: vi.fn(({ where }) =>
+      Promise.resolve(
+        where.interviewId !== undefined && where.interviewId !== 'iv1'
+          ? []
+          : slots
+              .filter((s) => s.id === where.slotId)
+              .flatMap((s) => s.signups)
+              .filter((signup) => (signup.groupLabel ?? null) === where.groupLabel)
+              .map(({ applicationId }) => ({ applicationId }))
+      )
+    ),
+  },
   interview: {
     findUnique: vi.fn(() => Promise.resolve({ id: 'iv1', description, slots, interviewType })),
   },
@@ -112,6 +127,14 @@ describe('resolveGroupIds', () => {
       ],
     });
     await expect(resolveGroupIds('iv1', 'slot-1,slot-2', client)).resolves.toEqual(['app1']);
+  });
+
+  it('resolves a rotation group within its own interview only', async () => {
+    const client = fakeClient({
+      slots: [slot({ id: 'slot-1', signups: [{ applicationId: 'app1', groupLabel: '1A' }] })],
+    });
+    await expect(resolveGroupIds('iv1', 'slot-1:1A', client)).resolves.toEqual(['app1']);
+    await expect(resolveGroupIds('other-interview', 'slot-1:1A', client)).resolves.toEqual([]);
   });
 
   it('accepts an array, a string, and tolerates whitespace and blanks', async () => {
@@ -319,6 +342,20 @@ describe('getRosterForInterview — rotation groups', () => {
     const roster = await getRosterForInterview('iv1', client);
     const leftover = roster.applicationGroups.find((g) => g.name.includes('not in a group'));
     expect(leftover.applicationIds).toEqual(['late']);
+  });
+
+  it('gives the not-in-a-group option an id that resolves to only those people', async () => {
+    // The plain session id means the whole session, so offering it here loaded
+    // every labelled group along with the leftovers.
+    const client = withSignups([
+      { applicationId: 'a1', groupLabel: '1A' },
+      { applicationId: 'late', groupLabel: null },
+    ]);
+    const roster = await getRosterForInterview('iv1', client);
+    const leftover = roster.applicationGroups.find((g) => g.name.includes('not in a group'));
+
+    expect(leftover.id).toBe('morning:');
+    await expect(resolveGroupIds('iv1', leftover.id, client)).resolves.toEqual(['late']);
   });
 
   it('lets an interviewer on the session reach every group in it', async () => {

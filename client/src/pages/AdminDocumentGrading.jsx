@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import DocumentGradingModal from '../components/DocumentGradingModal';
+import { withOwnGrade } from '../utils/documentGradingRows';
 import FlagDocumentModal from '../components/FlagDocumentModal';
 import AccessControl from '../components/AccessControl';
 import { useTutorialGate } from '../components/TutorialGate';
@@ -100,7 +101,7 @@ export default function AdminDocumentGrading() {
   const [editingDeadline, setEditingDeadline] = useState(null);
   const [deadlineForm, setDeadlineForm] = useState({ resumeDeadline: '', coverLetterDeadline: '', videoDeadline: '' });
   const [deadlineSubmitting, setDeadlineSubmitting] = useState(false);
-  const scrollPositionRef = useRef(0);
+  const latestFetchRef = useRef(0);
   const tutorialGate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
 
   // Calculate progress data based on actual grading completion
@@ -266,18 +267,6 @@ export default function AdminDocumentGrading() {
     }
   }, [gradeOnlyAssigned]);
 
-  // Restore scroll position after loading completes
-  useEffect(() => {
-    if (!loading && scrollPositionRef.current > 0) {
-      // Use setTimeout to ensure DOM has updated
-      const timer = setTimeout(() => {
-        window.scrollTo(0, scrollPositionRef.current);
-        scrollPositionRef.current = 0; // Reset after restoring
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [loading]);
-
   // Get unique years from applications for filter dropdown
   const availableYears = [...new Set(
     (Array.isArray(applications) ? applications : [])
@@ -430,18 +419,26 @@ export default function AdminDocumentGrading() {
     });
   };
 
-  const handleCloseGradingModal = (shouldRefresh = false) => {
-    // Store current scroll position before closing modal
-    scrollPositionRef.current = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
+  const handleCloseGradingModal = () => {
     setGradingModalOpen(false);
     setSelectedApplication(null);
-    // Only refresh applications if a grade was saved
-    if (shouldRefresh) {
-      if (gradeOnlyAssigned) {
-        fetchMemberApplications();
-      } else {
-        fetchAllApplications();
-      }
+  };
+
+  // `graded` names what was saved, which need not be the row open now: a save
+  // can land after the grader has closed the modal and moved on.
+  const handleGradeSaved = (graded) => {
+    if (!user?.id) return;
+    // Show the grade now and confirm it with a refetch behind the table, rather
+    // than swapping the table for a spinner until the whole list reloads.
+    setApplications(apps => apps.map(app =>
+      app.id === graded.application.id
+        ? withOwnGrade(app, graded.documentType, user.id, { teamWide: !gradeOnlyAssigned })
+        : app
+    ));
+    if (gradeOnlyAssigned) {
+      fetchMemberApplications({ silent: true });
+    } else {
+      fetchAllApplications({ silent: true });
     }
   };
 
@@ -581,11 +578,18 @@ export default function AdminDocumentGrading() {
     }
   };
 
-  const fetchAllApplications = async () => {
+  // A silent fetch refreshes the table in place: no spinner, and a failure keeps
+  // the rows already shown. Only the latest request's answer is applied, so an
+  // earlier refetch landing late cannot undo a grade saved after it started, and
+  // switching "grade only assigned" cannot be overwritten by the other list.
+  const fetchAllApplications = async ({ silent = false } = {}) => {
+    const request = ++latestFetchRef.current;
+    const isStale = () => request !== latestFetchRef.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await apiClient.get('/admin/applications');
-      
+      if (isStale()) return;
+
       // Handle paginated response structure
       const applicationsData = response.applications || response;
       
@@ -599,20 +603,26 @@ export default function AdminDocumentGrading() {
       }
     } catch (err) {
       console.error('Error fetching all applications:', err);
+      if (silent || isStale()) return;
       setApplications([]);
       setError('Failed to load applications. Please try again.');
     } finally {
-      setLoading(false);
+      // Whichever request is latest settles the spinner, silent or not; an
+      // older one finishing must not hide the loading of a newer one.
+      if (!isStale()) setLoading(false);
     }
   };
 
-  const fetchMemberApplications = async () => {
+  const fetchMemberApplications = async ({ silent = false } = {}) => {
     if (!user?.id) return;
-    
+    const request = ++latestFetchRef.current;
+    const isStale = () => request !== latestFetchRef.current;
+
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await apiClient.get(`/review-teams/member-applications/${user.id}`);
-      
+      if (isStale()) return;
+
       // Check if response is an array, if not, log the issue and set empty array
       if (Array.isArray(response)) {
         setApplications(response);
@@ -624,10 +634,13 @@ export default function AdminDocumentGrading() {
       }
     } catch (err) {
       console.error('Error fetching member applications:', err);
+      if (silent || isStale()) return;
       setApplications([]);
       setError('Failed to load applications. Please try again.');
     } finally {
-      setLoading(false);
+      // Whichever request is latest settles the spinner, silent or not; an
+      // older one finishing must not hide the loading of a newer one.
+      if (!isStale()) setLoading(false);
     }
   };
 
@@ -1337,6 +1350,7 @@ export default function AdminDocumentGrading() {
       <DocumentGradingModal
         open={gradingModalOpen}
         onClose={handleCloseGradingModal}
+        onSaved={handleGradeSaved}
         application={selectedApplication}
         documentType={selectedDocumentType}
       />

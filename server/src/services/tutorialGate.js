@@ -1,7 +1,8 @@
 // A tutorial gate makes someone sit through a category's tutorials before they do that
-// kind of work for the first time in a cycle. Document grading is the only gated
-// category today: the first document a member or admin opens to grade each cycle is
-// preceded by the Help page's DOCUMENT_GRADING tutorials.
+// kind of work for the first time in a cycle. Document grading gates the first document
+// a member or admin opens to grade each cycle; each interview round gates the first
+// interview of that round they start (COFFEE_CHATS, FIRST_ROUND, FINAL_ROUND - see
+// tutorialCategoryForInterviewType in client/src/utils/tutorialCategories.js).
 //
 // The tutorials are whatever admins have published in Help Management, so the gate has
 // nothing hard-coded to show. A category with no tutorials does not gate at all - an
@@ -12,7 +13,12 @@
 import prisma from '../prismaClient.js';
 import { resolveCycleForRequest } from './activeCycle.js';
 
-export const GATED_CATEGORIES = Object.freeze(['DOCUMENT_GRADING']);
+export const GATED_CATEGORIES = Object.freeze([
+  'DOCUMENT_GRADING',
+  'COFFEE_CHATS',
+  'FIRST_ROUND',
+  'FINAL_ROUND',
+]);
 
 export const isGatedCategory = (category) => GATED_CATEGORIES.includes(category);
 
