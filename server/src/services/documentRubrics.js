@@ -154,7 +154,8 @@ const categoryIds = (type) => DEFAULT_RUBRICS[type].categories.map((category) =>
 /**
  * Validates what an admin submitted for `type`. Categories are matched by id
  * against the type's own and come back in the type's order; an id the type
- * does not have is ignored, and a missing one means the admin removed it. At
+ * does not have, or one given twice, is refused, and a missing one means the
+ * admin removed it. At
  * least one must be left. Criteria rows that are entirely blank are dropped
  * rather than refused, so an editor's spare empty row saves.
  */
@@ -164,9 +165,18 @@ export function normalizeRubric(type, input) {
     throw fail(400, 'A rubric needs a list of categories', 'INVALID_RUBRIC');
   }
 
-  const submitted = new Map(input.categories.filter(Boolean).map((category) => [category.id, category]));
+  // Leaving a category out removes it, so an id that is not one of this type's
+  // columns (a typo, say) is refused rather than read as a removal of the
+  // category it was meant to be.
+  const ids = categoryIds(type);
+  const submitted = new Map();
+  for (const category of input.categories.filter(Boolean)) {
+    if (!ids.includes(category.id)) throw fail(400, `Unknown category: ${category.id}`, 'INVALID_RUBRIC');
+    if (submitted.has(category.id)) throw fail(400, `Category ${category.id} appears twice`, 'INVALID_RUBRIC');
+    submitted.set(category.id, category);
+  }
 
-  const kept = categoryIds(type).filter((id) => submitted.has(id));
+  const kept = ids.filter((id) => submitted.has(id));
   if (kept.length === 0) throw fail(400, 'A rubric needs at least one category', 'INVALID_RUBRIC');
 
   const categories = kept.map((id, index) => {

@@ -115,13 +115,20 @@ describe('normalizeRubric', () => {
 
   it('refuses a rubric with no categories left', () => {
     expect(() => normalizeRubric('coverLetter', { categories: [] })).toThrow(/at least one category/);
-    const onlyUnknown = { categories: [{ id: 'scoreFour', title: 'Extra', min: 0, max: 5 }] };
-    expect(() => normalizeRubric('coverLetter', onlyUnknown)).toThrow(/at least one category/);
   });
 
-  it('ignores categories the type does not have', () => {
-    const rubric = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Extra', min: 0, max: 5 }] };
-    expect(normalizeRubric('video', rubric).categories.map((category) => category.id)).toEqual(['scoreOne']);
+  it('refuses a category the type does not have, rather than reading it as a removal', () => {
+    const extra = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Extra', min: 0, max: 5 }] };
+    expect(() => normalizeRubric('video', extra)).toThrow(/Unknown category: scoreTwo/);
+
+    const [one, two, three] = DEFAULT_RUBRICS.coverLetter.categories;
+    const typo = { categories: [one, two, { ...three, id: 'scoreThre' }] };
+    expect(() => normalizeRubric('coverLetter', typo)).toThrow(/Unknown category: scoreThre/);
+  });
+
+  it('refuses the same category twice', () => {
+    const [one] = DEFAULT_RUBRICS.coverLetter.categories;
+    expect(() => normalizeRubric('coverLetter', { categories: [one, { ...one, title: 'Again' }] })).toThrow(/appears twice/);
   });
 
   it('drops blank criteria rows but refuses half-filled ones', () => {
