@@ -92,6 +92,7 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // starts a new session, and a save answers only the session it began in, so
   // it never clears, flags or closes the form that is open now.
   const sessionRef = useRef(0);
+  const videoRetriesRef = useRef(0);
   const closeTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(closeTimerRef.current), []);
 
@@ -248,6 +249,8 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // Build authenticated preview URL for document
   useEffect(() => {
     let localUrl;
+    let cancelled = false;
+    videoRetriesRef.current = 0;
     const loadPreview = async () => {
       setPreviewError(null);
       setPreviewUrl(null);
@@ -264,6 +267,24 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
       setPreviewLoading(true);
 
       const fileUrl = toSameOriginDocumentUrl(documentUrl);
+
+      // A video streams from a signed link instead of arriving whole. /api goes
+      // through Vercel's proxy, which cuts a long response off part way; that was
+      // "The download stopped before the file finished". <video> asks for the
+      // file in ranges, each one a short response.
+      const signed = documentType === 'video' ? signedDocumentTarget(documentUrl) : null;
+      if (signed) {
+        try {
+          const { access } = await apiClient.post(signed.linkEndpoint);
+          if (!cancelled) setPreviewUrl(signed.open(access));
+        } catch (e) {
+          console.error('Failed to sign video preview link:', e);
+          if (!cancelled) setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
+        } finally {
+          if (!cancelled) setPreviewLoading(false);
+        }
+        return;
+      }
 
       try {
         const resp = await fetch(fileUrl, {
@@ -301,9 +322,35 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
 
     loadPreview();
     return () => {
+      cancelled = true;
       if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [open, application?.resumeUrl, application?.coverLetterUrl, application?.videoUrl, token, documentType]);
+
+  // A streamed video re-requests its link with every range, and the link lasts
+  // 15 minutes, so a grader who leaves the modal open can see it stop. The first
+  // error re-signs and resumes where it was; a second one is reported.
+  const handleVideoError = async (event) => {
+    const video = event.currentTarget;
+    const target = signedDocumentTarget(application?.videoUrl);
+    if (!target || videoRetriesRef.current >= 1) {
+      setPreviewUrl(null);
+      setPreviewError(
+        'The video could not be played here. The browser may not support its format; try opening it in a new tab.'
+      );
+      return;
+    }
+    videoRetriesRef.current += 1;
+    const resumeAt = video.currentTime;
+    try {
+      const { access } = await apiClient.post(target.linkEndpoint);
+      video.src = target.open(access);
+      video.currentTime = resumeAt;
+    } catch (e) {
+      setPreviewUrl(null);
+      setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
+    }
+  };
 
   const [openTabError, setOpenTabError] = useState(null);
   useEffect(() => { setOpenTabError(null); }, [open, documentType, application?.id]);
@@ -548,6 +595,9 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
                     <video
                       src={previewUrl}
                       controls
+                      preload="metadata"
+                      onError={handleVideoError}
+                      onLoadedData={() => { videoRetriesRef.current = 0; }}
                       style={{
                         width: '100%',
                         height: '100%',

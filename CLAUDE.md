@@ -237,6 +237,19 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/analytics/events` - Public: browsers post page views, clicks, errors and web vitals
 - `/api` (public) - Public endpoints (event RSVPs, meeting signups)
 
+**Opening documents (signed links and ranges):**
+- Sign-in is a bearer header, which a new tab or a `<video src>` never sends. Those open a
+  document through a 15-minute link from `POST /api/files/:fileId/link` or
+  `POST /api/resume-uploads/:uploadId/link`, used as `?access=`
+  ([server/src/services/documentLinks.js](server/src/services/documentLinks.js)). A link names
+  one document, is signed with a key derived from `JWT_SECRET` (never a sign-in token), and
+  the route still runs its own access check. A new route serving a document that opens in a
+  tab needs `acceptDocumentLink` before `requireAuth` and its own `/link`.
+- `/api` reaches Render through Vercel's rewrite proxy, which cuts long responses off. A
+  grading video is therefore never downloaded whole: the preview streams it, and
+  `/api/files/:id/pdf` answers `Range` with slices of at most 4 MB
+  ([server/src/services/byteRange.js](server/src/services/byteRange.js)).
+
 **Sealed recruiting records:**
 - `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and
   application. Set automatically when final-round processing makes them a member (they
