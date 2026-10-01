@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import reviewTeamsRoutes from './reviewTeams.js';
 import prisma from '../prismaClient.js';
 import { sendReviewerReminder } from '../services/emailNotifications.js';
+import { getCycleQuestionPrompt } from '../services/applicationFormPrompts.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -33,6 +34,10 @@ vi.mock('../prismaClient.js', () => ({
 
 vi.mock('../services/emailNotifications.js', () => ({
   sendReviewerReminder: vi.fn().mockResolvedValue({ success: true })
+}));
+
+vi.mock('../services/applicationFormPrompts.js', () => ({
+  getCycleQuestionPrompt: vi.fn()
 }));
 
 const adminUser = { id: 'admin-1', role: 'ADMIN', email: 'admin@example.com', fullName: 'Admin User' };
@@ -393,6 +398,50 @@ describe('review-teams routes', () => {
       const res = await del('group-1', 'not-a-member');
       expect(res.status).toBe(404);
       expect(prisma.groups.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/review-teams/question-prompts', () => {
+    async function get(path, token = tokenFor(memberUser)) {
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      return fetch(`http://localhost:${port}/api/review-teams${path}`, { headers });
+    }
+
+    it("returns the named cycle's short answer question", async () => {
+      getCycleQuestionPrompt.mockResolvedValue('Why UConsulting?');
+
+      const res = await get('/question-prompts/cycle-9');
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ shortAnswer: 'Why UConsulting?' });
+      expect(getCycleQuestionPrompt).toHaveBeenCalledWith('cycle-9', 'shortAnswer');
+    });
+
+    // The admin grading queue's rows carry no cycleId.
+    it("answers for the requester's current cycle when none is named", async () => {
+      getCycleQuestionPrompt.mockResolvedValue('Why UConsulting?');
+
+      const res = await get('/question-prompts', tokenFor(adminUser));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ shortAnswer: 'Why UConsulting?' });
+      expect(getCycleQuestionPrompt).toHaveBeenCalledWith(activeCycle.id, 'shortAnswer');
+    });
+
+    it('answers null when the form has no readable question', async () => {
+      getCycleQuestionPrompt.mockResolvedValue(null);
+
+      const res = await get('/question-prompts/cycle-9');
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ shortAnswer: null });
+    });
+
+    it('is closed to signed-out callers', async () => {
+      const res = await get('/question-prompts/cycle-9', null);
+
+      expect(res.status).toBe(401);
+      expect(getCycleQuestionPrompt).not.toHaveBeenCalled();
     });
   });
 });

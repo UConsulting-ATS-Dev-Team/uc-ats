@@ -127,9 +127,10 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   const showsShortAnswer = Boolean(shortAnswerText);
   useEffect(() => {
     setShortAnswerPrompt(null);
-    if (!open || !showsShortAnswer || !cycleId) return undefined;
+    if (!open || !showsShortAnswer) return undefined;
     let cancelled = false;
-    apiClient.get(`/review-teams/question-prompts/${cycleId}`)
+    // Admin queue rows have no cycleId; the server then uses the admin's cycle.
+    apiClient.get(cycleId ? `/review-teams/question-prompts/${cycleId}` : '/review-teams/question-prompts')
       .then((response) => {
         if (!cancelled) setShortAnswerPrompt(response?.shortAnswer || null);
       })

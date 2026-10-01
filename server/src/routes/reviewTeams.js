@@ -45,9 +45,12 @@ router.get(['/member-applications/:memberId', '/member/:memberId/candidates'], (
 });
 
 // What the cycle's form asked, shown above the answer a grader is scoring.
-router.get('/question-prompts/:cycleId', async (req, res) => {
+// Without a cycle id it answers for the requester's current cycle: the admin
+// grading queue's rows carry no cycleId, since they all come from that cycle.
+router.get(['/question-prompts', '/question-prompts/:cycleId'], async (req, res) => {
   try {
-    const shortAnswer = await getCycleQuestionPrompt(req.params.cycleId, 'shortAnswer');
+    const cycleId = req.params.cycleId || (await resolveCycleForRequest(prisma, req))?.id;
+    const shortAnswer = await getCycleQuestionPrompt(cycleId, 'shortAnswer');
     res.json({ shortAnswer });
   } catch (error) {
     console.error('Error loading question prompts:', error);
