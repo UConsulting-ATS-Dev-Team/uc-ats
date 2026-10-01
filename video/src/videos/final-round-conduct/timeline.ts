@@ -10,7 +10,7 @@ const ROOM = "/member/final-round-interview?interviewId=…&groupIds=…";
 
 export function buildWalkthrough(S: States): Walkthrough {
   const k = walkBuilder(S, ROOM);
-  const { box, page, dialog, camZoom, camReset, scrollTo, scrollFor, ring, head, press, typePage, chime, done } = k;
+  const { box, page, dialog, camOn, camZoom, camReset, scrollTo, scrollFor, ring, head, press, typePage, chime, done } = k;
   const y = (name: string) => (S[name] as unknown as { y: number }).y;
   const typing = (f: number, prefix: string, step = 3) => {
     const n = (S[`${prefix}count`] as unknown as { count: number }).count;
@@ -96,29 +96,38 @@ export function buildWalkthrough(S: States): Walkthrough {
   camReset(1584, 14);
 
   // ---------- 8. The decision ----------
-  head(1600, 1950, "Step 8", "Then record your decision in My Interviews", [5, 6]);
+  head(1600, 2010, "Step 8", "Then record your decision in My Interviews", [5, 6]);
   page(1600, "m", "/assigned-interviews");
   scrollTo(1604, 1640, scrollFor("m", "row1", 260));
   ring(1652, pad(box("m", "chip1"), 4), 34);
   press(1690, box("m", "edit1"), "hand", () => dialog(1696, "m-edit"), 20);
-  ring(1720, pad(box("m-edit", "help"), 6), 40);
-  press(1770, box("m-edit", "yes"), "hand", () => dialog(1776, "m-yes", true), 18);
-  press(1820, box("m-yes", "save"), "hand", () => dialog(1826, null), 18);
-  page(1826, "m-done", "/assigned-interviews");
-  chime(1826);
+  ring(1716, pad(box("m-edit", "help"), 6), 30);
+  // The decision guide: a drawer over the dialog, captured as one viewport shot.
+  press(1744, box("m-edit", "help"), "hand", () => {
+    dialog(1750, null);
+    page(1750, "m-guide", "/assigned-interviews");
+  }, 16);
+  camOn(1770, pad(box("m-guide", "drawer"), -20), 1.25, 20);
+  camReset(1820, 14);
+  page(1830, "m", "/assigned-interviews");
+  dialog(1830, "m-edit");
+  press(1850, box("m-edit", "yes"), "hand", () => dialog(1856, "m-yes", true), 18);
+  press(1890, box("m-yes", "save"), "hand", () => dialog(1896, null), 18);
+  page(1896, "m-done", "/assigned-interviews");
+  chime(1896);
   const chip = box("m-done", "chip1");
-  ring(1846, pad(chip, 4), 40);
-  k.camTo(1860, mid(box("m-done", "row1")).x, mid(chip).y + 60, 1.35, 22);
-  camReset(1934, 14);
+  ring(1912, pad(chip, 4), 40);
+  k.camTo(1926, mid(box("m-done", "row1")).x, mid(chip).y + 60, 1.35, 22);
+  camReset(1994, 14);
 
-  return done(1950);
+  return done(2010);
 }
 
 // ---------- the whole video ----------
 export const SCENES = [
   { name: "Intro", frames: 150 },
   { name: "Three tabs", frames: 210 },
-  { name: "Walkthrough", frames: 1950, walk: true },
+  { name: "Walkthrough", frames: 2010, walk: true },
   { name: "After", frames: 195 },
   { name: "Close", frames: 150 },
 ] as const;

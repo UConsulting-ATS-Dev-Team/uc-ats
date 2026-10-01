@@ -49,7 +49,9 @@ try {
   process.exit(1);
 }
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: SCALE });
+// Runs in every frame, including blank and PDF frames that have no storage.
 await context.addInitScript(() => {
+  if (!window.localStorage) return;
   localStorage.setItem("token", "sample-token");
   localStorage.setItem("theme", "light");
 });
@@ -66,16 +68,26 @@ function common(path, json) {
 }
 
 const page = await context.newPage();
+// Errors the page threw while being recorded. Any of them fails the capture before
+// states.json is written: footage of a broken page must not pass for a rebuild.
+// ALLOW_PAGE_ERRORS=1 records anyway, to look at what broke.
+const pageErrors = [];
 // A stub with the wrong shape usually shows as a page error, not a failed request.
-page.on("pageerror", (e) => console.warn("page error:", e.message.split("\n")[0]));
-// React render errors are caught by the app's error boundary and only logged.
+page.on("pageerror", (e) => {
+  const line = e.message.split("\n")[0];
+  pageErrors.push(`page error: ${line}`);
+  console.warn("page error:", line);
+});
+// React render errors are caught by the app's error boundary and only logged. Only a
+// logged Error counts; React's dev warnings also go through console.error.
 page.on("console", async (msg) => {
   if (msg.type() !== "error") return;
   const parts = await Promise.all(
-    msg.args().map((a) => a.evaluate((v) => (v instanceof Error ? v.stack : String(v))).catch(() => "?"))
+    msg.args().map((a) => a.evaluate((v) => (v instanceof Error ? `ERROR ${v.stack}` : String(v))).catch(() => "?"))
   );
-  const shown = parts[0]?.includes("%") ? parts.slice(1) : parts;
-  console.warn("console error:", shown.join(" ").split("\n").slice(0, 4).join(" | ").slice(0, 500));
+  const shown = (parts[0]?.includes("%") ? parts.slice(1) : parts).join(" ").split("\n").slice(0, 4).join(" | ").slice(0, 500);
+  if (parts.some((p) => p.startsWith("ERROR "))) pageErrors.push(`console error: ${shown}`);
+  console.warn("console error:", shown);
 });
 // Native alert/confirm/prompt never show in screenshots; accept them so the flow runs.
 page.on("dialog", (d) => d.accept(d.type() === "prompt" ? d.defaultValue() : undefined).catch(() => {}));
@@ -195,6 +207,15 @@ await context.route("**/api/**", async (route) => {
 
 await flow.run(kit);
 
+// A flow can name errors it causes on purpose (EXPECTED_ERRORS: regexes), e.g. a
+// file it serves broken to show the failed-preview state.
+const unexpected = pageErrors.filter((e) => !(flow.EXPECTED_ERRORS ?? []).some((re) => re.test(e)));
+if (unexpected.length > 0 && process.env.ALLOW_PAGE_ERRORS !== "1") {
+  console.error(`\n${unexpected.length} error(s) on the page while recording; states.json not written:`);
+  for (const e of unexpected) console.error(`  ${e}`);
+  await browser.close();
+  process.exit(1);
+}
 writeFileSync(join(out, "states.json"), JSON.stringify({ scale: SCALE, states }, null, 1));
 await browser.close();
 console.log(`wrote ${Object.keys(states).length} states to ${out}`);

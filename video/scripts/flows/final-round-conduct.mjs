@@ -166,10 +166,14 @@ export async function run({ page, base, states, settle, pageState, viewState, el
   // ---------- Save All ----------
   await page.getByRole("button", { name: /Save All/ }).click();
   await settle(800);
+  // Everything the video shows being entered must be in the save it shows.
   const saved = state.saves.filter((s) => s.applicationId === "a1").at(-1);
-  if (!saved?.casingNotes?.framework || !saved?.candidateDetails?.phoneConfirmed) {
-    throw new Error(`Save All did not send the scripted evaluation: ${JSON.stringify(saved)}`);
-  }
+  const details = saved?.candidateDetails ?? {};
+  const savedAll =
+    Object.values(saved?.behavioralNotes ?? {}).includes(SCRIPT.q1) &&
+    saved?.casingNotes?.framework === SCRIPT.framework &&
+    details.phoneConfirmed && details.decisionCallTonight && details.weeklyMeetings;
+  if (!savedAll) throw new Error(`Save All did not send the scripted evaluation: ${JSON.stringify(saved)}`);
 
   // ---------- The decision, from My Interviews ----------
   const app1 = APPS[0];
