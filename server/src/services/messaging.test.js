@@ -158,11 +158,7 @@ describe('messaging service', () => {
       participants: [],
       messages: []
     };
-    // The first query finds which interviews have chats; the second lists them.
-    const conversations = (rows) =>
-      prisma.conversation.findMany.mockImplementation(({ where }) =>
-        Promise.resolve(where?.contextType === 'INTERVIEW' && !where.OR ? [{ contextId: 'int-1' }] : rows)
-      );
+    const conversations = (rows) => prisma.conversation.findMany.mockResolvedValue(rows);
     const interviewIdsListed = () =>
       prisma.conversation.findMany.mock.calls.at(-1)[0].where.OR[1].contextId.in;
 
@@ -175,6 +171,23 @@ describe('messaging service', () => {
 
       expect(interviewIdsListed()).toEqual([]);
       expect(result).toEqual([]);
+    });
+
+    it("looks only at the member's own interviews, not every interview with a chat", async () => {
+      staff({ onSession: ['member-1'] });
+      conversations([]);
+      prisma.message.count.mockResolvedValue(0);
+
+      await listConversationsForUser(member);
+
+      expect(prisma.interviewSlotAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'member-1', removedAt: null } })
+      );
+      // The only interview lookups are scoped: by the member's id in a legacy
+      // description, then the candidates found.
+      for (const [args] of prisma.interview.findMany.mock.calls) {
+        expect(args.where).toSatisfy((w) => Boolean(w.description?.contains === 'member-1' || w.id?.in));
+      }
     });
 
     it("includes the chat of an interview the member is on through a session", async () => {

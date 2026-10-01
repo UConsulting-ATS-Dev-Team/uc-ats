@@ -218,15 +218,22 @@ export async function getConversationForUser(conversationId, user) {
   };
 }
 
-// The interviews with a conversation that this member staffs now.
+// The interviews this member staffs now, found from their own rows rather than by
+// scanning every interview: their session assignments, the older table, and
+// interviews whose description names them (a legacy member group). Only those few
+// candidates then go through the strict check.
 async function interviewIdsWithChatsFor(user) {
-  const chats = await prisma.conversation.findMany({
-    where: { contextType: 'INTERVIEW' },
-    select: { contextId: true }
-  });
-  if (chats.length === 0) return [];
+  const [onSessions, onOldTable, inDescriptions] = await Promise.all([
+    prisma.interviewSlotAssignment.findMany({ where: { userId: user.id, removedAt: null }, select: { interviewId: true } }),
+    prisma.interviewAssignment.findMany({ where: { userId: user.id }, select: { interviewId: true } }),
+    prisma.interview.findMany({ where: { description: { contains: user.id } }, select: { id: true } })
+  ]);
+  const candidateIds = [
+    ...new Set([...onSessions, ...onOldTable].map((row) => row.interviewId).concat(inDescriptions.map((row) => row.id)))
+  ];
+  if (candidateIds.length === 0) return [];
   const interviews = await prisma.interview.findMany({
-    where: { id: { in: chats.map((c) => c.contextId) } },
+    where: { id: { in: candidateIds } },
     select: { id: true, description: true }
   });
   return (await interviewsStaffedBy(user.id, interviews)).map((interview) => interview.id);
