@@ -337,16 +337,19 @@ export default function DocumentGrading() {
     });
   };
 
-  const handleCloseGradingModal = (saved = false) => {
-    const graded = selectedApplication;
-    setGradingModalOpen(false);
-    setSelectedApplication(null);
+  // `graded` names what was saved, which need not be what is open now: the
+  // modal can report a save after the grader has moved on to another row.
+  const handleCloseGradingModal = (saved = false, graded = null) => {
+    if (!graded || graded.application.id === selectedApplication?.id) {
+      setGradingModalOpen(false);
+      setSelectedApplication(null);
+    }
     if (!saved || !graded || !user?.id) return;
 
     // Show the grade now and confirm it with a refetch behind the table, rather
     // than swapping the table for a spinner until the whole list reloads.
     setApplications(apps => apps.map(app =>
-      app.id === graded.id ? withOwnGrade(app, selectedDocumentType, user.id) : app
+      app.id === graded.application.id ? withOwnGrade(app, graded.documentType, user.id) : app
     ));
     fetchMemberApplications({ silent: true });
   };
@@ -397,7 +400,9 @@ export default function DocumentGrading() {
       setApplications([]);
       setError('Failed to load applications. Please try again.');
     } finally {
-      if (!silent) setLoading(false);
+      // Whichever request is latest settles the spinner, silent or not; an
+      // older one finishing must not hide the loading of a newer one.
+      if (!isStale()) setLoading(false);
     }
   };
 

@@ -86,6 +86,31 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 62);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef(null);
+  // The save this modal is about to report, and the timer that will report it.
+  // A grader can close the modal by hand during the success message, then open
+  // another application; the save still has to be reported, once, as the one
+  // that was graded, and the timer must not then close the modal they opened.
+  const pendingSaveRef = useRef(null);
+  const closeTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(closeTimerRef.current), []);
+
+  // onClose(saved, { application, documentType }): the second argument is set
+  // only when saved, and names what was graded rather than what is open now.
+  const close = () => {
+    clearTimeout(closeTimerRef.current);
+    const saved = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    if (saved) {
+      setSuccess(false);
+      setScores(EMPTY_SCORES);
+      setNotes('');
+    }
+    onClose(Boolean(saved), saved || undefined);
+  };
+  // The timer calls whichever close is current when it fires, not the one from
+  // the render that saved, so it reaches the parent's current handler.
+  const closeRef = useRef(close);
+  closeRef.current = close;
 
   // Grading form state, keyed by score column
   const [scores, setScores] = useState(EMPTY_SCORES);
@@ -298,14 +323,11 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
 
       await apiClient.post(config.apiEndpoint, scoreData);
       setSuccess(true);
+      pendingSaveRef.current = { application, documentType };
 
       // Close modal after a short delay
-      setTimeout(() => {
-        onClose(true); // Pass true to indicate data was saved and refresh is needed
-        setSuccess(false);
-        setScores(EMPTY_SCORES);
-        setNotes('');
-      }, 1500);
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => closeRef.current(), 1500);
 
     } catch (err) {
       console.error('Error saving score:', err);
@@ -345,7 +367,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   return (
     <Dialog
       open={open}
-      onClose={() => onClose(false)}
+      onClose={close}
       maxWidth="xl"
       fullWidth
       fullScreen={isMobile}
@@ -374,12 +396,12 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           </Typography>
         </Box>
         {isMobile ? (
-          <IconButton onClick={() => onClose(false)} aria-label="close">
+          <IconButton onClick={close} aria-label="close">
             <CloseIcon />
           </IconButton>
         ) : (
           <Button
-            onClick={() => onClose(false)}
+            onClick={close}
             startIcon={<CloseIcon />}
             variant="outlined"
             size="small"
