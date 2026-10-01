@@ -52,8 +52,9 @@ export async function resolveGroupIds(interviewId, groupIds, client = prisma) {
   if (ids.length === 0) return [];
 
   // "<slotId>:<label>" addresses one rotation group inside a session - the 1A
-  // an interviewer is handed at their table. The plain form addresses the whole
-  // session. Both are legal because this contract has always been opaque.
+  // an interviewer is handed at their table - and "<slotId>:" with no label the
+  // people in it nobody has grouped yet. The plain form addresses the whole
+  // session. All are legal because this contract has always been opaque.
   const applicationIds = new Set();
   const matched = new Set();
   const rotationIds = ids.filter((id) => id.includes(':'));
@@ -61,7 +62,8 @@ export async function resolveGroupIds(interviewId, groupIds, client = prisma) {
   for (const id of rotationIds) {
     const [slotId, label] = id.split(':');
     const rows = await client.interviewSlotSignup.findMany({
-      where: { slotId, groupLabel: label, status: 'CONFIRMED' },
+      // Scoped to this interview: the slot id arrives from the URL.
+      where: { interviewId, slotId, groupLabel: label || null, status: 'CONFIRMED' },
       select: { applicationId: true },
     });
     if (rows.length > 0) {
@@ -260,11 +262,13 @@ export async function getRosterForInterview(interviewId, client = prisma) {
       }
       // Anybody in the session without a label yet still has to be reachable,
       // or they simply could not be interviewed. An empty session contributes
-      // nothing at all - there is no group there to pick.
+      // nothing at all - there is no group there to pick. Not the plain session
+      // id: that resolves to the whole session, labelled groups included.
       if (ungrouped.length > 0) {
-        groupIdsForSlot.push(groupId);
+        const leftoverId = `${slot.id}:`;
+        groupIdsForSlot.push(leftoverId);
         applicationGroups.push({
-          id: groupId,
+          id: leftoverId,
           name: `${sessionName} · not in a group`,
           notes: slot.notes ?? '',
           applicationIds: ungrouped.map((signup) => signup.applicationId),

@@ -21,6 +21,7 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import { groupsForMember } from '../utils/interviewGroups';
 import { DecisionGuideButton, DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import '../styles/AdminAssignedInterviews.css';
 
@@ -727,27 +728,8 @@ export default function AssignedInterviews() {
                   const interview = interviews.find(i => i.id === selectedInterviewForStart);
                   const data = interviewData[selectedInterviewForStart] || { applicationGroups: [] };
                   
-                  // Filter to only show groups assigned to member groups that include the current user
-                  const userAssignedGroups = currentUser ? 
-                    data.applicationGroups.filter(group => {
-                      const groupAssignments = data.groupAssignments || {};
-                      
-                      // Find all member groups that include the current user
-                      const userId = String(currentUser.id);
-                      const userMemberGroups = data.memberGroups?.filter(memberGroup => {
-                        if (!memberGroup.memberIds || !Array.isArray(memberGroup.memberIds)) {
-                          return false;
-                        }
-                        return memberGroup.memberIds.some(id => 
-                          String(id) === userId || id === currentUser.id
-                        );
-                      }) || [];
-                      
-                      // Check if this application group is assigned to any of the user's member groups
-                      return userMemberGroups.some(memberGroup => 
-                        groupAssignments[memberGroup.id]?.includes(group.id)
-                      );
-                    }) : [];
+                  // Only the groups assigned to a member group that includes the current user
+                  const userAssignedGroups = groupsForMember(data, currentUser?.id);
                   
                   const filteredGroups = userAssignedGroups.filter(group =>
                     group.name.toLowerCase().includes(groupSearchTerm.toLowerCase())
