@@ -84,15 +84,22 @@ page.on("pageerror", (e) => {
 });
 // React render errors are caught by the app's error boundary and only logged. Only a
 // logged Error counts; React's dev warnings also go through console.error.
-page.on("console", async (msg) => {
+// Each handler awaits the page to read its arguments; the check after the flow waits
+// for all of them, so an error logged by the last step still counts.
+const pendingConsole = new Set();
+page.on("console", (msg) => {
   if (msg.type() !== "error") return;
+  const p = recordConsoleError(msg).finally(() => pendingConsole.delete(p));
+  pendingConsole.add(p);
+});
+async function recordConsoleError(msg) {
   const parts = await Promise.all(
     msg.args().map((a) => a.evaluate((v) => (v instanceof Error ? `ERROR ${v.stack}` : String(v))).catch(() => "?"))
   );
   const shown = (parts[0]?.includes("%") ? parts.slice(1) : parts).join(" ").split("\n").slice(0, 4).join(" | ").slice(0, 500);
   if (parts.some((p) => p.startsWith("ERROR "))) pageErrors.push(`console error: ${shown}`);
   console.warn("console error:", shown);
-});
+}
 // Native alert/confirm/prompt never show in screenshots; accept them so the flow runs.
 page.on("dialog", (d) => d.accept(d.type() === "prompt" ? d.defaultValue() : undefined).catch(() => {}));
 
@@ -210,6 +217,8 @@ await context.route("**/api/**", async (route) => {
 });
 
 await flow.run(kit);
+await settle(300); // a last error logged just as the flow ends
+await Promise.all([...pendingConsole]);
 
 // A flow can name errors it causes on purpose (EXPECTED_ERRORS: regexes), e.g. a
 // file it serves broken to show the failed-preview state.
