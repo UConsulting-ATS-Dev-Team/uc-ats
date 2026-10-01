@@ -232,6 +232,8 @@ export default function AssignedInterviews() {
   const [groupApplications, setGroupApplications] = useState({});
   const [behavioralQuestionsConfig, setBehavioralQuestionsConfig] = useState([]);
   const [showBehavioralQuestionsConfig, setShowBehavioralQuestionsConfig] = useState(false);
+  // Reported by CandidateQuestionSetup: questions already saved for single candidates.
+  const [candidateQuestionCount, setCandidateQuestionCount] = useState(0);
 
   // The decision here is edited after the fact, in a modal, so the guide is the
   // help icon beside the field rather than a standing note. Null until a row is
@@ -352,6 +354,7 @@ export default function AssignedInterviews() {
       setGroupSearchTerm('');
       setSelectedGroups([]);
       setShowBehavioralQuestionsConfig(false);
+      setCandidateQuestionCount(0);
 
       // Don't load questions here - we'll load them when groups are selected
       setBehavioralQuestionsConfig([]);
@@ -727,6 +730,7 @@ export default function AssignedInterviews() {
                       interviewId={selectedInterviewForStart}
                       groupIds={selectedGroups}
                       basePath="/member"
+                      onCountChange={setCandidateQuestionCount}
                     />
                   )}
                 </div>
@@ -805,7 +809,14 @@ export default function AssignedInterviews() {
               <button 
                 className="btn-primary" 
                 onClick={handleStartWithSelectedGroups}
-                disabled={showBehavioralQuestionsConfig ? behavioralQuestionsConfig.length === 0 : selectedGroups.length === 0}
+                disabled={
+                  showBehavioralQuestionsConfig
+                    ? // Shared questions or questions for one candidate: either is something
+                      // to ask. Blank inputs are neither; the interview page would open on
+                      // "No Behavioral Questions Configured".
+                      !behavioralQuestionsConfig.some((q) => q.trim()) && candidateQuestionCount === 0
+                    : selectedGroups.length === 0
+                }
               >
                 {showBehavioralQuestionsConfig 
                   ? 'Configure Questions' 
