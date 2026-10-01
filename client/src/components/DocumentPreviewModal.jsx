@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import { toSameOriginDocumentUrl } from '../utils/documentUrl';
@@ -84,7 +85,12 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
     };
   }, [src, token, kind]);
 
-  return (
+  // Portalled to <body>: the overlay is position: fixed, and fixed positions against
+  // the nearest transformed ancestor rather than the window. Rendered in place, a
+  // card with a hover transform (My Interviews' .interview-card:hover) became that
+  // ancestor the moment someone clicked Resume, and the preview opened shifted up
+  // under the top bar.
+  return createPortal(
     <div style={overlayStyle} onClick={onClose}>
       <div style={getModalStyle(isMobile)} onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle}>
@@ -163,8 +169,7 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
-
-
