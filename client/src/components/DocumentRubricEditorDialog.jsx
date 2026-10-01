@@ -31,7 +31,8 @@ import {
 // the server (normalizeRubric in server/src/services/documentRubrics.js).
 //
 // Each tab keeps its own draft, so switching tabs loses nothing; Save saves the
-// tab in view. A save that would leave this cycle's scores outside the new
+// tab in view. A category can be removed while one is left, and added back
+// into any column (scoreOne/Two/Three) the type has free. A save that would leave this cycle's scores outside the new
 // range asks once, then saves - existing scores are never rescaled.
 
 const TYPES = ['resume', 'coverLetter', 'video'];
@@ -44,7 +45,7 @@ const SCORE_CEILING = 100;
 
 const AGGREGATION_NOTE = {
   resume: 'The overall resume score is the sum of these categories.',
-  coverLetter: 'The overall score is the average of these three categories.',
+  coverLetter: 'The overall score is the average of these categories.',
   video: 'The overall video score is this one category.'
 };
 
@@ -126,7 +127,14 @@ export function labelsOutsideRange(category) {
 
 const sameRubric = (a, b) => JSON.stringify(fromDraft(a)) === JSON.stringify(fromDraft(b));
 
-function CategoryEditor({ category, index, onChange }) {
+/** A type's score columns from the server, or failing that the ones its saved rubric and draft use. */
+const SLOT_ORDER = ['scoreOne', 'scoreTwo', 'scoreThree'];
+const slotsFor = (info, draft) => info?.slots
+  || SLOT_ORDER.filter((id) => [...(info?.rubric?.categories || []), ...draft.categories].some((c) => c.id === id));
+
+const blankCategory = (id) => ({ id, title: '', description: '', min: '1', max: '3', criteria: [] });
+
+function CategoryEditor({ category, index, onChange, onRemove }) {
   const set = (field) => (event) => onChange({ ...category, [field]: event.target.value });
   const setRow = (key, field, value) => onChange({
     ...category,
@@ -141,7 +149,21 @@ function CategoryEditor({ category, index, onChange }) {
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography variant="overline" color="text.secondary">Category {index + 1}</Typography>
+      <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Typography variant="overline" color="text.secondary">Category {index + 1}</Typography>
+        <Tooltip title={onRemove ? 'Remove category' : 'A rubric needs at least one category'}>
+          <span>
+            <IconButton
+              aria-label={`Remove ${category.title.trim() || `category ${index + 1}`}`}
+              onClick={onRemove}
+              disabled={!onRemove}
+              size="small"
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
       <Stack spacing={2} sx={{ mt: 0.5 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
@@ -299,14 +321,32 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
     return { draftMax, total: draftMax + others + data.participationMax };
   }, [data, draft, type, problem, current]);
 
-  const updateCategory = (index, next) => {
+  const editCategories = (change) => {
     if (saving) return;
     setSaved(null);
     setPendingWarning(null);
-    setDrafts((prev) => ({
-      ...prev,
-      [type]: { categories: prev[type].categories.map((category, i) => (i === index ? next : category)) }
-    }));
+    setDrafts((prev) => ({ ...prev, [type]: { categories: change(prev[type].categories) } }));
+  };
+
+  const updateCategory = (index, next) =>
+    editCategories((categories) => categories.map((category, i) => (i === index ? next : category)));
+
+  const removeCategory = (index) => editCategories((categories) => categories.filter((_, i) => i !== index));
+
+  // Saved categories this draft leaves out: what a save would remove.
+  const removedTitles = draft && current
+    ? current.rubric.categories.filter((saved) => !draft.categories.some((c) => c.id === saved.id)).map((c) => c.title)
+    : [];
+
+  // A category removed but not yet saved comes back as it was; otherwise blank.
+  const freeSlots = draft ? slotsFor(current, draft).filter((id) => !draft.categories.some((c) => c.id === id)) : [];
+  const addCategory = () => {
+    const [id] = freeSlots;
+    const savedCategory = current.rubric.categories.find((category) => category.id === id);
+    const added = savedCategory ? toDraft({ categories: [savedCategory] }).categories[0] : blankCategory(id);
+    const order = slotsFor(current, draft);
+    editCategories((categories) => [...categories, added]
+      .sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)));
   };
 
   /**
@@ -393,14 +433,30 @@ export default function DocumentRubricEditorDialog({ open, onClose }) {
               </Alert>
             )}
 
+            {removedTitles.length > 0 && (
+              <Alert severity="warning">
+                Removing {removedTitles.join(' and ')}: graders stop seeing it, and new grades leave it out of the
+                overall. Documents already graded keep the overall they were given until someone re-saves them.
+              </Alert>
+            )}
+
             {draft.categories.map((category, index) => (
               <CategoryEditor
                 key={category.id}
                 category={category}
                 index={index}
                 onChange={(next) => updateCategory(index, next)}
+                onRemove={draft.categories.length > 1 ? () => removeCategory(index) : undefined}
               />
             ))}
+
+            {freeSlots.length > 0 && (
+              <Box>
+                <Button startIcon={<AddIcon />} onClick={addCategory} disabled={saving}>
+                  Add category
+                </Button>
+              </Box>
+            )}
           </Stack>
         )}
       </DialogContent>

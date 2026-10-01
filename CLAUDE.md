@@ -397,15 +397,21 @@ The system follows a **recruiting cycle-based workflow**:
 **Document grading rubrics:**
 - What a grader scores a resume, cover letter / short answer or video against. Admins edit
   them from Admin Document Grading → "Edit rubrics": per category, the title, description,
-  whole-number range (min..max) and the criteria rows. Nothing about them is hard-coded in
-  the pages any more.
+  whole-number range (min..max) and the criteria rows, and they can remove a category (one
+  must be left) or add a removed one back. Nothing about them is hard-coded in the pages
+  any more.
 - [server/src/services/documentRubrics.js](server/src/services/documentRubrics.js) owns the
   defaults, validation, the overall-score rules and every range check. A type with no
   `document_rubrics` row (or no table yet) reads as the shipped default.
-- **Not editable:** which categories exist and how they fold into the overall - resume
-  sums, cover letter averages, video is its one category. Every score table has exactly
-  three `Int` columns (`scoreOne/Two/Three`), and Staging reads `overallScore` with those
-  meanings.
+- **Not editable:** which columns a type can use and how its categories fold into the
+  overall - resume sums, cover letter averages, video is its one category. Every score
+  table has exactly three `Int` columns (`scoreOne/Two/Three`), and Staging reads
+  `overallScore` with those meanings. A category can only live in one of its type's own
+  columns; a save naming any other column is refused, never read as a removal.
+- **A removed category's column is not read.** Graders are not asked for it, new overalls
+  are folded from what remains, and a re-saved grade stores it as null. Already-graded
+  documents keep their stored overall until re-saved. Removing from an average keeps the
+  type's max (one 1–3 category is still worth 3); removing from a sum lowers it.
 - **A range is a weight.** Staging's Resume Review ranking adds the three documents' raw
   overall scores plus up to `PARTICIPATION_MAX` (3). Raising one type's max gives it more
   say in the ranking; the editor says so as the range changes.

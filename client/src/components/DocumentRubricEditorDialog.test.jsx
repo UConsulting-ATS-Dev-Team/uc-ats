@@ -139,6 +139,30 @@ describe('DocumentRubricEditorDialog', () => {
     await openEditor();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
+
+  it('removes a category, keeps the last one, and can add it back', async () => {
+    apiClient.post.mockResolvedValue({ outOfRange: { count: 0, cycleName: 'Fall 2026' } });
+    apiClient.put.mockResolvedValue(response());
+    await openEditor();
+    fireEvent.click(screen.getByRole('tab', { name: 'Cover letter / short answer' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove scoreOne' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove scoreThree' }));
+    expect(screen.getByRole('button', { name: 'Remove scoreTwo' })).toBeDisabled();
+    expect(screen.getByText(/Removing scoreOne and scoreThree/)).toBeInTheDocument();
+    // An average of one 1-3 category is still worth 3 in Staging.
+    expect(screen.getByText(/counts for up to/)).toHaveTextContent('up to 3 of the 21-point overall');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }));
+    expect(screen.getByRole('button', { name: 'Remove scoreOne' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove scoreOne' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.put).toHaveBeenCalledWith(
+      '/document-rubrics/coverLetter',
+      { rubric: { categories: [expect.objectContaining({ id: 'scoreTwo' })] } }
+    ));
+  });
 });
 
 describe('labelsOutsideRange', () => {
