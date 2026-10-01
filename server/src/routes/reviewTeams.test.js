@@ -14,6 +14,12 @@ vi.mock('../prismaClient.js', () => ({
       update: vi.fn(),
       create: vi.fn(),
       createMany: vi.fn(),
+      findMany: vi.fn(),
+    },
+    candidate: {
+      findMany: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
     },
     groupMember: {
       createMany: vi.fn(),
@@ -393,6 +399,95 @@ describe('review-teams routes', () => {
       const res = await del('group-1', 'not-a-member');
       expect(res.status).toBe(404);
       expect(prisma.groups.update).not.toHaveBeenCalled();
+    });
+  });
+  describe('POST /api/review-teams/auto-distribute', () => {
+    const teams = [
+      { id: 'team-big', name: 'Big' },
+      { id: 'team-small', name: 'Small' },
+    ];
+
+    function candidate(id, groupId = null, groupCycleId = activeCycle.id, submittedAt = '2026-09-01') {
+      return {
+        id,
+        assignedGroupId: groupId,
+        assignedGroup: groupId ? { id: groupId, cycleId: groupCycleId } : null,
+        applications: [{ id: `app-${id}`, submittedAt: new Date(submittedAt) }],
+      };
+    }
+
+    function post(token) {
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      return fetch(`http://localhost:${port}/api/review-teams/auto-distribute`, { method: 'POST', headers });
+    }
+
+    beforeEach(() => {
+      prisma.groups.findMany.mockResolvedValue(teams);
+      prisma.candidate.updateMany.mockImplementation(({ where }) => ({ count: where.id.in.length }));
+    });
+
+    it('refuses a member', async () => {
+      const res = await post(tokenFor(memberUser));
+      expect(res.status).toBe(403);
+      expect(prisma.candidate.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('gives new applications to the team with fewer, not one each', async () => {
+      const existing = [
+        ...Array.from({ length: 14 }, (_, i) => candidate(`big-${i}`, 'team-big')),
+        ...Array.from({ length: 5 }, (_, i) => candidate(`small-${i}`, 'team-small')),
+      ];
+      const fresh = Array.from({ length: 6 }, (_, i) => candidate(`new-${i}`));
+      prisma.candidate.findMany.mockResolvedValue([...existing, ...fresh]);
+
+      const res = await post(tokenFor(adminUser));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+
+      expect(prisma.groups.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }));
+      expect(prisma.candidate.updateMany).toHaveBeenCalledOnce();
+      expect(prisma.candidate.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: fresh.map((c) => c.id) } },
+        data: { assignedGroupId: 'team-small' },
+      });
+      expect(body.applicationsDistributed).toBe(6);
+      expect(body.teams).toEqual([
+        { id: 'team-big', name: 'Big', before: 14, after: 14 },
+        { id: 'team-small', name: 'Small', before: 5, after: 11 },
+      ]);
+    });
+
+    it('does not count a candidate left on a team from an older cycle, and reassigns them', async () => {
+      prisma.candidate.findMany.mockResolvedValue([
+        candidate('big-1', 'team-big'),
+        candidate('stale', 'old-team', 'cycle-0'),
+      ]);
+
+      const res = await post(tokenFor(adminUser));
+      const body = await res.json();
+
+      expect(prisma.candidate.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['stale'] } },
+        data: { assignedGroupId: 'team-small' },
+      });
+      expect(body.teams.map((t) => t.after)).toEqual([1, 1]);
+    });
+
+    it('moves nobody who is already on a team this cycle', async () => {
+      prisma.candidate.findMany.mockResolvedValue([candidate('big-1', 'team-big')]);
+
+      const res = await post(tokenFor(adminUser));
+      const body = await res.json();
+
+      expect(body.message).toMatch(/no applications available/i);
+      expect(prisma.candidate.updateMany).not.toHaveBeenCalled();
+      expect(body.teams).toEqual([
+        { id: 'team-big', name: 'Big', before: 1, after: 1 },
+        { id: 'team-small', name: 'Small', before: 0, after: 0 },
+      ]);
     });
   });
 });

@@ -15,6 +15,7 @@ import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { loadMemberGradingQueue } from '../services/documentGradingQueue.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
 import { scoreFromRubric } from '../services/documentRubrics.js';
+import { planBalancedAssignments, countsAfter } from '../services/reviewTeamDistribution.js';
 import {
   candidateParamGuard,
   guardCandidate,
@@ -1076,8 +1077,8 @@ router.get('/member/:memberId/candidates', requireAuth, async (req, res) => {
   }
 });
 
-// Auto-distribute applications evenly among all teams
-router.post('/auto-distribute', requireAuth, async (req, res) => {
+// Auto-distribute unassigned applications, least-loaded team first
+router.post('/auto-distribute', requireAuth, requireAdmin, async (req, res) => {
   try {
     // Get the active cycle
     const activeCycle = await resolveCycleForRequest(prisma, req);
@@ -1089,7 +1090,8 @@ router.post('/auto-distribute', requireAuth, async (req, res) => {
     // Get all teams for the active cycle
     const teams = await prisma.groups.findMany({
       where: { cycleId: activeCycle.id },
-      select: { id: true }
+      select: { id: true, name: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
     });
 
     if (teams.length === 0) {
@@ -1153,32 +1155,56 @@ router.post('/auto-distribute', requireAuth, async (req, res) => {
       .filter(item => item.application) // Remove any candidates without applications
       .sort((a, b) => new Date(a.application.submittedAt) - new Date(b.application.submittedAt)); // Sort by oldest first
 
+    // What each team already holds this cycle, so new applications fill the
+    // smallest teams first instead of landing evenly on top of an uneven start.
+    const currentCounts = new Map();
+    for (const candidate of allCandidatesWithApplications) {
+      if (candidate.assignedGroup?.cycleId === activeCycle.id) {
+        currentCounts.set(candidate.assignedGroupId, (currentCounts.get(candidate.assignedGroupId) ?? 0) + 1);
+      }
+    }
+    const teamCounts = (finalCounts) => teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      before: currentCounts.get(team.id) ?? 0,
+      after: finalCounts.get(team.id) ?? 0
+    }));
+
     if (availableApplications.length === 0) {
-      return res.json({ message: 'No applications available to distribute' });
-    }
-
-    // Distribute applications evenly among teams
-    const applicationsPerTeam = Math.ceil(availableApplications.length / teams.length);
-    let currentTeamIndex = 0;
-
-    for (let i = 0; i < availableApplications.length; i++) {
-      const { candidateId } = availableApplications[i];
-      const teamId = teams[currentTeamIndex].id;
-
-      // Assign the candidate to the team
-      await prisma.candidate.update({
-        where: { id: candidateId },
-        data: { assignedGroupId: teamId }
+      return res.json({
+        message: 'No applications available to distribute',
+        applicationsDistributed: 0,
+        teamsUsed: teams.length,
+        teams: teamCounts(currentCounts)
       });
-
-      // Move to next team in round-robin fashion
-      currentTeamIndex = (currentTeamIndex + 1) % teams.length;
     }
 
-    res.json({ 
-      message: `Successfully distributed ${availableApplications.length} applications among ${teams.length} teams`,
-      applicationsDistributed: availableApplications.length,
-      teamsUsed: teams.length
+    const assignments = planBalancedAssignments(
+      teams,
+      currentCounts,
+      availableApplications.map(({ candidateId }) => candidateId)
+    );
+
+    const candidateIdsByTeam = new Map();
+    for (const { candidateId, teamId } of assignments) {
+      if (!candidateIdsByTeam.has(teamId)) candidateIdsByTeam.set(teamId, []);
+      candidateIdsByTeam.get(teamId).push(candidateId);
+    }
+    await prisma.$transaction(
+      [...candidateIdsByTeam].map(([teamId, candidateIds]) =>
+        prisma.candidate.updateMany({
+          where: { id: { in: candidateIds } },
+          data: { assignedGroupId: teamId }
+        })
+      )
+    );
+
+    const finalCounts = countsAfter(teams, currentCounts, assignments);
+    res.json({
+      message: `Distributed ${assignments.length} applications among ${teams.length} teams, smallest teams first`,
+      applicationsDistributed: assignments.length,
+      teamsUsed: teams.length,
+      teams: teamCounts(finalCounts)
     });
 
   } catch (error) {
