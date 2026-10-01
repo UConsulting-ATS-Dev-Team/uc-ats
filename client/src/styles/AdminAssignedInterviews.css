@@ -2037,6 +2037,17 @@
 .group-selection-modal {
   max-width: 500px;
   width: 90vw;
+  /* Never taller than the window: the body scrolls, the header and its buttons stay.
+     Round One adds a per-candidate question section that can grow without bound. */
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.group-selection-modal > .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-header {

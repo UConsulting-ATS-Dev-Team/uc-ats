@@ -21,8 +21,9 @@ import { DECISION_OPTIONS } from '../../utils/decisionOptions';
 // "Later" closes it with nothing changed; the decision can still be set from My
 // Evaluations, exactly as before. Only the candidates whose pick changed are saved.
 
-// The interview pages' decision colours (DECISION_OPTIONS), as MUI palette names.
-const PALETTE = { green: 'success', 'light-green': 'success', orange: 'warning', red: 'error' };
+// The interview pages' decision colours (DECISION_OPTIONS -> .decision-label in
+// InterviewInterface.css), as MUI palette names: Yes is info, Maybe-Yes success.
+const PALETTE = { green: 'info', 'light-green': 'success', orange: 'warning', red: 'error' };
 export default function FinalDecisionDialog({ open, candidates, guide, onOpenGuide, onSave, onLater }) {
   const [picks, setPicks] = useState({});
   const [saving, setSaving] = useState(false);
@@ -75,7 +76,12 @@ export default function FinalDecisionDialog({ open, candidates, guide, onOpenGui
                 exclusive
                 size="small"
                 value={picks[c.id] ?? null}
-                onChange={(_, value) => setPicks((prev) => ({ ...prev, [c.id]: value }))}
+                // Clicking the selected choice again keeps it: a click must never clear a
+                // recorded decision. Locked while saving, so what shows is what saves.
+                onChange={(_, value) => {
+                  if (value !== null) setPicks((prev) => ({ ...prev, [c.id]: value }));
+                }}
+                disabled={saving}
                 aria-label={`Decision for ${c.name}`}
               >
                 {DECISION_OPTIONS.map((option) => (

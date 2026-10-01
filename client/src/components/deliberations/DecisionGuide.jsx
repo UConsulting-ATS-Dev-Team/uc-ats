@@ -113,7 +113,7 @@ export function DecisionGuideButton({ onClick, guide }) {
  * They are hand-rolled CSS grids that a sticky sidebar would have to fight, and
  * a drawer already works on a phone.
  */
-export function DecisionGuidePanel({ open, guide, onClose }) {
+export function DecisionGuidePanel({ open, guide, onClose, aboveDialogs = false }) {
   if (!guide) return null;
 
   const byValue = new Map((guide.decisions || []).map((entry) => [entry.value, entry]));
@@ -125,6 +125,8 @@ export function DecisionGuidePanel({ open, guide, onClose }) {
       onClose={onClose}
       aria-label="Decision guide"
       PaperProps={{ sx: { width: 'min(420px, 92vw)' } }}
+      // A Drawer sits below a Dialog by default; opened from one, it would open behind it.
+      sx={aboveDialogs ? { zIndex: (theme) => theme.zIndex.modal + 1 } : undefined}
       data-testid="decision-guide-panel"
     >
       <Box sx={{ p: 2.5 }}>

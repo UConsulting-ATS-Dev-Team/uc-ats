@@ -85,7 +85,41 @@ describe('final round decision prompt', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('never sends a decision the page does not have, so Save All cannot clear one', async () => {
+  it('keeps a choice when it is clicked again, so a click cannot clear a decision', async () => {
+    await renderPage();
+    saveAll();
+    const dialog = await screen.findByRole('dialog');
+    const yes = () => within(within(dialog).getByRole('group', { name: 'Decision for Taylor Kim' })).getByRole('button', { name: 'Yes' });
+    fireEvent.click(yes());
+    fireEvent.click(yes());
+    expect(yes()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('applies the decisions that saved when another fails, and retries only the failed one', async () => {
+    await renderPage();
+    saveAll();
+    const dialog = await screen.findByRole('dialog');
+    const pick = (name, label) =>
+      fireEvent.click(within(within(dialog).getByRole('group', { name: `Decision for ${name}` })).getByRole('button', { name: label }));
+    pick('Taylor Kim', 'Yes');
+    pick('Sam Okafor', 'No');
+    apiClient.post.mockClear();
+    apiClient.post.mockImplementation((url, body) =>
+      body.applicationId === 'a2' ? Promise.reject(new Error('network')) : Promise.resolve({ success: true })
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save decisions' }));
+
+    expect(await within(dialog).findByText('Could not save the decision for Sam Okafor. Try again.')).toBeInTheDocument();
+    apiClient.post.mockClear();
+    apiClient.post.mockResolvedValue({ success: true });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save decisions' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(apiClient.post).toHaveBeenCalledWith('/member/evaluations', { interviewId: 'iv1', applicationId: 'a2', decision: 'NO' });
+  });
+
+  it('never sends a decision with the notes, so a note save cannot clear one', async () => {
     await renderPage();
     saveAll();
     await screen.findByRole('dialog');
