@@ -184,4 +184,58 @@ describe('DocumentGradingModal', () => {
       expect(onSaved).not.toHaveBeenCalled();
     });
   });
+
+  // A grader reading a short answer needs the question it answers.
+  describe('short answer question', () => {
+    const shortAnswerApp = { ...application, coverLetterUrl: null, shortAnswer: 'Because the people are great.' };
+
+    function mockPrompt(prompt) {
+      apiClient.get.mockImplementation((url) => {
+        if (url === '/document-rubrics') return Promise.resolve(rubricsResponse);
+        if (url.startsWith('/review-teams/question-prompts')) return Promise.resolve({ shortAnswer: prompt });
+        return Promise.resolve(null);
+      });
+    }
+
+    const renderShortAnswer = (app) => render(
+      <DocumentGradingModal open onClose={vi.fn()} application={app} documentType="coverLetter" />
+    );
+
+    it("shows the cycle's question above a member's answer", async () => {
+      mockPrompt('Why do you want to join UConsulting?');
+      renderShortAnswer(shortAnswerApp);
+
+      expect(await screen.findByText('Why do you want to join UConsulting?')).toBeInTheDocument();
+      expect(screen.getByText('Question')).toBeInTheDocument();
+      expect(screen.getByText('Because the people are great.')).toBeInTheDocument();
+      expect(apiClient.get).toHaveBeenCalledWith('/review-teams/question-prompts/cycle-1');
+    });
+
+    // Admin queue rows carry no cycleId; the server picks the admin's cycle.
+    it('asks for the current cycle when the row has no cycleId', async () => {
+      mockPrompt('Why do you want to join UConsulting?');
+      renderShortAnswer({ ...shortAnswerApp, cycleId: undefined });
+
+      expect(await screen.findByText('Why do you want to join UConsulting?')).toBeInTheDocument();
+      expect(apiClient.get).toHaveBeenCalledWith('/review-teams/question-prompts');
+    });
+
+    it('shows the answer alone when the question cannot be read', async () => {
+      mockPrompt(null);
+      renderShortAnswer(shortAnswerApp);
+
+      expect(await screen.findByText('Because the people are great.')).toBeInTheDocument();
+      await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith('/review-teams/question-prompts/cycle-1'));
+      expect(screen.queryByText('Question')).not.toBeInTheDocument();
+    });
+
+    it('does not ask for a question when grading a cover letter file', async () => {
+      mockPrompt('Why do you want to join UConsulting?');
+      renderShortAnswer({ ...shortAnswerApp, coverLetterUrl: 'https://example.com/cl.pdf' });
+
+      await screen.findByText('Presence on camera');
+      expect(apiClient.get.mock.calls.map(([url]) => url))
+        .not.toContainEqual(expect.stringContaining('question-prompts'));
+    });
+  });
 });

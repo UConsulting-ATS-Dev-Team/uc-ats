@@ -423,6 +423,12 @@ The system follows a **recruiting cycle-based workflow**:
   outside it.
 - A blank category is `null`, not 0: 0 can be a real score, and a blank must not pull a
   cover letter average down.
+- The grading dialog shows the short answer's question above the answer. Nothing stores
+  it. `GET /api/review-teams/question-prompts/:cycleId` reads it from the cycle's Google
+  Form (the question `form-config.json` maps to `shortAnswer`), cached 10 minutes
+  ([applicationFormPrompts.js](server/src/services/applicationFormPrompts.js)). A cycle
+  whose form cannot be read answers null and the answer shows alone. Without `:cycleId`
+  it answers for the requester's cycle, because admin queue rows have no `cycleId`.
 - Every denominator on the client (`/13`, `/21`, the Staging bar) reads
   [client/src/utils/documentRubrics.js](client/src/utils/documentRubrics.js), which shares one
   fetch across the page and falls back to the shipped maxima until it arrives.

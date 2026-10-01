@@ -15,6 +15,7 @@ import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { loadMemberGradingQueue } from '../services/documentGradingQueue.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
 import { scoreFromRubric } from '../services/documentRubrics.js';
+import { getCycleQuestionPrompt } from '../services/applicationFormPrompts.js';
 import { planBalancedAssignments, countsAfter } from '../services/reviewTeamDistribution.js';
 import {
   candidateParamGuard,
@@ -42,6 +43,20 @@ router.get(['/member-applications/:memberId', '/member/:memberId/candidates'], (
     return res.status(403).json({ error: 'You can only view your own grading queue' });
   }
   next();
+});
+
+// What the cycle's form asked, shown above the answer a grader is scoring.
+// Without a cycle id it answers for the requester's current cycle: the admin
+// grading queue's rows carry no cycleId, since they all come from that cycle.
+router.get(['/question-prompts', '/question-prompts/:cycleId'], async (req, res) => {
+  try {
+    const cycleId = req.params.cycleId || (await resolveCycleForRequest(prisma, req))?.id;
+    const shortAnswer = await getCycleQuestionPrompt(cycleId, 'shortAnswer');
+    res.json({ shortAnswer });
+  } catch (error) {
+    console.error('Error loading question prompts:', error);
+    res.status(500).json({ error: 'Failed to load question prompts' });
+  }
 });
 
 // Admin audit of each reviewer's grading contribution within their assigned team.
