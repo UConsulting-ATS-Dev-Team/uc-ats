@@ -1091,7 +1091,7 @@ router.post('/auto-distribute', requireAuth, requireAdmin, async (req, res) => {
     const teams = await prisma.groups.findMany({
       where: { cycleId: activeCycle.id },
       select: { id: true, name: true },
-      orderBy: { createdAt: 'asc' }
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
     });
 
     if (teams.length === 0) {
@@ -1155,10 +1155,6 @@ router.post('/auto-distribute', requireAuth, requireAdmin, async (req, res) => {
       .filter(item => item.application) // Remove any candidates without applications
       .sort((a, b) => new Date(a.application.submittedAt) - new Date(b.application.submittedAt)); // Sort by oldest first
 
-    if (availableApplications.length === 0) {
-      return res.json({ message: 'No applications available to distribute' });
-    }
-
     // What each team already holds this cycle, so new applications fill the
     // smallest teams first instead of landing evenly on top of an uneven start.
     const currentCounts = new Map();
@@ -1166,6 +1162,21 @@ router.post('/auto-distribute', requireAuth, requireAdmin, async (req, res) => {
       if (candidate.assignedGroup?.cycleId === activeCycle.id) {
         currentCounts.set(candidate.assignedGroupId, (currentCounts.get(candidate.assignedGroupId) ?? 0) + 1);
       }
+    }
+    const teamCounts = (finalCounts) => teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      before: currentCounts.get(team.id) ?? 0,
+      after: finalCounts.get(team.id) ?? 0
+    }));
+
+    if (availableApplications.length === 0) {
+      return res.json({
+        message: 'No applications available to distribute',
+        applicationsDistributed: 0,
+        teamsUsed: teams.length,
+        teams: teamCounts(currentCounts)
+      });
     }
 
     const assignments = planBalancedAssignments(
@@ -1193,12 +1204,7 @@ router.post('/auto-distribute', requireAuth, requireAdmin, async (req, res) => {
       message: `Distributed ${assignments.length} applications among ${teams.length} teams, smallest teams first`,
       applicationsDistributed: assignments.length,
       teamsUsed: teams.length,
-      teams: teams.map((team) => ({
-        id: team.id,
-        name: team.name,
-        before: currentCounts.get(team.id) ?? 0,
-        after: finalCounts.get(team.id)
-      }))
+      teams: teamCounts(finalCounts)
     });
 
   } catch (error) {

@@ -445,6 +445,9 @@ describe('review-teams routes', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
 
+      expect(prisma.groups.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }));
       expect(prisma.candidate.updateMany).toHaveBeenCalledOnce();
       expect(prisma.candidate.updateMany).toHaveBeenCalledWith({
         where: { id: { in: fresh.map((c) => c.id) } },
@@ -481,6 +484,10 @@ describe('review-teams routes', () => {
 
       expect(body.message).toMatch(/no applications available/i);
       expect(prisma.candidate.updateMany).not.toHaveBeenCalled();
+      expect(body.teams).toEqual([
+        { id: 'team-big', name: 'Big', before: 1, after: 1 },
+        { id: 'team-small', name: 'Small', before: 0, after: 0 },
+      ]);
     });
   });
 });
