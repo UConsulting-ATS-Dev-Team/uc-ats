@@ -1,0 +1,28 @@
+{
+  "name": "uc-ats-tutorials",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The ATS tutorial videos, built with Remotion over real UI captures.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "capture": "node scripts/capture.mjs",
+    "music": "node scripts/make-music.mjs",
+    "stills": "node scripts/stills.mjs",
+    "render": "node scripts/render.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.530",
+    "@remotion/google-fonts": "4.0.530",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.530"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "^4.0.530",
+    "@remotion/renderer": "^4.0.530",
+    "@types/react": "^19",
+    "playwright-core": "1.56.1",
+    "typescript": "^5"
+  }
+}
