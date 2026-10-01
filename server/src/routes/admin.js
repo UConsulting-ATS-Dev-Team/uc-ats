@@ -3280,7 +3280,7 @@ router.get('/interviews/:id/applications', async (req, res) => {
     // Slots first, then the legacy JSON blob for anything they do not claim.
     // A group id here may be a slot id, the group id a slot was backfilled from,
     // or a blob-only group - bookmarked URLs and past cycles contain all three.
-    const applicationIds = await resolveGroupIds(id, groupIdArray);
+    const applicationIds = await resolveGroupIds(interviewId, groupIdArray);
 
     if (applicationIds.length === 0) {
       return res.json([]);
