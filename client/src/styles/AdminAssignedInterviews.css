@@ -2037,6 +2037,17 @@
 .group-selection-modal {
   max-width: 500px;
   width: 90vw;
+  /* Never taller than the window: the body scrolls, the header and its buttons stay.
+     Round One adds a per-candidate question section that can grow without bound. */
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.group-selection-modal > .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-header {
@@ -2785,12 +2796,21 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  max-height: 300px;
-  overflow-y: auto;
   border: 1px solid var(--border-light);
   border-radius: var(--border-radius);
   padding: 1rem;
   background-color: var(--bg-gray-light);
+}
+
+/* Only the questions scroll. When the whole box scrolled, the instructions and the
+   empty message filled it and pushed "Add First Question" out of sight, with no
+   scrollbar on a Mac to say it was there. */
+.behavioral-questions-config .questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .question-config-row {
@@ -2878,6 +2898,6 @@
 
 .no-questions-message {
   text-align: center;
-  padding: 2rem;
+  padding: 1rem;
   color: var(--text-tertiary);  font-style: italic;
 }
