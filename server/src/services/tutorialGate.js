@@ -62,25 +62,44 @@ export async function getTutorialGate(req, category) {
 
 /**
  * Records that `req.user` finished `category`'s tutorials. Idempotent: finishing twice
- * is one row. Returns null when there is no cycle to record against.
+ * is one row. Returns the completion for the *current* cycle, or null when there is
+ * none - no current cycle, or it is not the one they were shown.
  *
  * `shownCycleId` is the cycleId getTutorialGate answered when the popup opened. The
- * current cycle can move while someone watches; crediting the new one would let them
- * skip its tutorials. So a completion is only ever recorded for the current cycle, and
- * only when that is the cycle they were shown. Otherwise nothing is recorded and the
- * next gated click asks about the new cycle. Accepting any cycle the client named
- * instead would let someone pre-complete a cycle that is not open yet.
+ * current cycle can move while someone watches:
+ * - The current cycle is credited only when it is the one they were shown. Crediting a
+ *   cycle that moved in under the popup would let them skip its tutorials; instead
+ *   they get null, and the popup asks the gate again.
+ * - The shown cycle is still credited when it is older than the current one, so the
+ *   tutorial they did watch counts if that cycle comes back. A newer one is refused: a
+ *   client could otherwise name a cycle that is not open yet and pre-complete it.
  */
 export async function completeTutorialGate(req, category, shownCycleId = null) {
   const cycle = await resolveCycleForRequest(prisma, req);
   if (!cycle) return null;
-  if (shownCycleId && shownCycleId !== cycle.id) return null;
+  if (!shownCycleId || shownCycleId === cycle.id) return record(req.user.id, cycle.id, category);
 
-  return prisma.tutorialCompletion.upsert({
-    where: {
-      userId_cycleId_category: { userId: req.user.id, cycleId: cycle.id, category },
-    },
-    update: {},
-    create: { userId: req.user.id, cycleId: cycle.id, category },
+  const shown = await prisma.recruitingCycle.findUnique({
+    where: { id: shownCycleId },
+    select: { id: true, createdAt: true },
   });
+  if (shown && shown.createdAt <= cycle.createdAt) {
+    try {
+      await record(req.user.id, shown.id, category);
+    } catch (error) {
+      // Deleted since the lookup: there is nothing left to credit.
+      if (!isMissingCycle(error)) throw error;
+    }
+  }
+  return null;
 }
+
+// P2003: foreign key - the cycle no longer exists.
+const isMissingCycle = (error) => error?.code === 'P2003';
+
+const record = (userId, cycleId, category) =>
+  prisma.tutorialCompletion.upsert({
+    where: { userId_cycleId_category: { userId, cycleId, category } },
+    update: {},
+    create: { userId, cycleId, category },
+  });
