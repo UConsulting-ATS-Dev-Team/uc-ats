@@ -1,5 +1,11 @@
 import prisma from '../prismaClient.js';
 import { broadcastToConversation, channelNameFor } from './realtime.js';
+import { interviewStaffIds, interviewsStaffedBy } from './interviewRoster.js';
+
+// An interview conversation's members are whoever staffs the interview now
+// (interviewRoster.js): session assignments where it has sessions. Reading only the
+// old InterviewAssignment table, which nothing writes any more, shut every member
+// staffed through a session out of the chat with a 403.
 
 const MESSAGE_PAGE_SIZE = 50;
 
@@ -26,7 +32,7 @@ function serializeMessage(msg) {
 export async function getOrCreateInterviewConversation(interviewId) {
   const interview = await prisma.interview.findUnique({
     where: { id: interviewId },
-    select: { id: true, title: true, assignments: { select: { userId: true } } }
+    select: { id: true, title: true }
   });
   if (!interview) {
     const err = new Error('Interview not found');
@@ -47,7 +53,7 @@ export async function getOrCreateInterviewConversation(interviewId) {
     }
   });
 
-  const userIds = [...new Set(interview.assignments.map((a) => a.userId))];
+  const userIds = await interviewStaffIds(interviewId);
   if (userIds.length > 0) {
     await prisma.conversationParticipant.createMany({
       data: userIds.map((userId) => ({ conversationId: conversation.id, userId })),
@@ -65,11 +71,7 @@ export async function syncInterviewParticipants(interviewId) {
   });
   if (!conversation) return;
 
-  const assignments = await prisma.interviewAssignment.findMany({
-    where: { interviewId },
-    select: { userId: true }
-  });
-  const desired = new Set(assignments.map((a) => a.userId));
+  const desired = new Set(await interviewStaffIds(interviewId));
 
   const current = await prisma.conversationParticipant.findMany({
     where: { conversationId: conversation.id },
@@ -112,13 +114,10 @@ export async function userCanAccessConversation(conversation, user) {
   if (!conversation || !user) return false;
   if (user.role === 'ADMIN') return true;
 
-  // Interview conversations are authorized by current assignment, not stale
-  // participant rows, so unassigned interviewers lose access immediately.
+  // Interview conversations are authorized by who staffs the interview now, not stale
+  // participant rows, so an interviewer taken off it loses access immediately.
   if (conversation.contextType === 'INTERVIEW') {
-    const assigned = await prisma.interviewAssignment.findUnique({
-      where: { interviewId_userId: { interviewId: conversation.contextId, userId: user.id } }
-    });
-    return !!assigned;
+    return (await interviewStaffIds(conversation.contextId)).includes(user.id);
   }
 
   const row = await prisma.conversationParticipant.findUnique({
@@ -219,13 +218,22 @@ export async function getConversationForUser(conversationId, user) {
   };
 }
 
+// The interviews with a conversation that this member staffs now.
+async function interviewIdsWithChatsFor(user) {
+  const chats = await prisma.conversation.findMany({
+    where: { contextType: 'INTERVIEW' },
+    select: { contextId: true }
+  });
+  if (chats.length === 0) return [];
+  const interviews = await prisma.interview.findMany({
+    where: { id: { in: chats.map((c) => c.contextId) } },
+    select: { id: true, description: true }
+  });
+  return (await interviewsStaffedBy(user.id, interviews)).map((interview) => interview.id);
+}
+
 export async function listConversationsForUser(user) {
-  const assignedInterviewIds = user.role === 'ADMIN'
-    ? []
-    : (await prisma.interviewAssignment.findMany({
-        where: { userId: user.id },
-        select: { interviewId: true }
-      })).map((a) => a.interviewId);
+  const assignedInterviewIds = user.role === 'ADMIN' ? [] : await interviewIdsWithChatsFor(user);
 
   const where = user.role === 'ADMIN'
     ? {}

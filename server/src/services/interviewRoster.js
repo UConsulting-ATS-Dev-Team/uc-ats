@@ -394,6 +394,32 @@ export async function interviewsStaffedBy(userId, interviews, client = prisma) {
 }
 
 /**
+ * Everyone staffing an interview right now, by the same rule as interviewsStaffedBy:
+ * the current session assignments where the interview has sessions, otherwise the
+ * older InterviewAssignment table and the description's member groups.
+ */
+export async function interviewStaffIds(interviewId, client = prisma) {
+  const [interview, session] = await Promise.all([
+    client.interview.findUnique({ where: { id: interviewId }, select: { id: true, description: true } }),
+    client.interviewSlot.findFirst({ where: { interviewId }, select: { id: true } }),
+  ]);
+  if (!interview) return [];
+
+  if (session) {
+    const rows = await client.interviewSlotAssignment.findMany({
+      where: { interviewId, removedAt: null },
+      select: { userId: true },
+    });
+    return [...new Set(rows.map((row) => row.userId))];
+  }
+
+  const rows = await client.interviewAssignment.findMany({ where: { interviewId }, select: { userId: true } });
+  const config = parseLegacyConfig(interview);
+  const fromGroups = (config.memberGroups ?? []).flatMap((group) => group.memberIds ?? []);
+  return [...new Set([...rows.map((row) => row.userId), ...fromGroups])];
+}
+
+/**
  * Everyone in an interview, however its roster is stored.
  *
  * Confirmed signups when it has sessions, the JSON config when it does not.

@@ -15,6 +15,11 @@ const mockSyncInterviewParticipants = vi.fn();
 vi.mock('../prismaClient.js', () => ({
   default: {
     interview: { findUnique: vi.fn() },
+    // Who staffs the interview (interviewRoster.js): it has sessions, and the member
+    // is on one of them or not.
+    interviewSlot: { findFirst: vi.fn().mockResolvedValue({ id: 'slot-1' }) },
+    interviewSlotAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+    interviewAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     conversation: { findUnique: vi.fn() },
     user: { findUnique: vi.fn() },
     $transaction: vi.fn((ops) => Promise.all(ops))
@@ -107,8 +112,9 @@ describe('Conversations routes', () => {
       expect(mockSyncInterviewParticipants).toHaveBeenCalledWith('interview-1');
     });
 
-    it('rejects a member who is not assigned to the interview', async () => {
-      prisma.interview.findUnique.mockResolvedValue({ id: 'interview-1', assignments: [] });
+    it('rejects a member who is not on the interview', async () => {
+      prisma.interview.findUnique.mockResolvedValue({ id: 'interview-1', description: null });
+      prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'someone-else' }]);
 
       const res = await get(tokenFor(memberUser), '/api/conversations/interviews/interview-1');
 
@@ -116,8 +122,10 @@ describe('Conversations routes', () => {
       expect(mockGetOrCreateInterviewConversation).not.toHaveBeenCalled();
     });
 
-    it('allows an assigned member to access the interview conversation', async () => {
-      prisma.interview.findUnique.mockResolvedValue({ id: 'interview-1', assignments: [{ id: 'a-1' }] });
+    it('allows a member on one of its sessions into the interview conversation', async () => {
+      // Staffed the way members are now: a session, nothing in the old table.
+      prisma.interview.findUnique.mockResolvedValue({ id: 'interview-1', description: null });
+      prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: memberUser.id }]);
       mockGetOrCreateInterviewConversation.mockResolvedValue({ id: 'conv-1' });
       mockGetConversationForUser.mockResolvedValue({ id: 'conv-1', title: 'Test' });
 
