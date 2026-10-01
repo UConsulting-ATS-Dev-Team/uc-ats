@@ -49,6 +49,7 @@ import {
   Celebration as CelebrationIcon
 } from '@mui/icons-material';
 import { hasCoverLetter } from '../utils/coverLetter';
+import { withOwnGrade } from '../utils/documentGradingRows';
 
 // Confetti Component
 const Confetti = ({ active }) => {
@@ -129,7 +130,7 @@ export default function DocumentGrading() {
   const [flagModalOpen, setFlagModalOpen] = useState(false);
   const [flaggingApplication, setFlaggingApplication] = useState(null);
   const [flaggingDocumentType, setFlaggingDocumentType] = useState('resume');
-  const scrollPositionRef = useRef(0);
+  const latestFetchRef = useRef(0);
   const tutorialGate = useTutorialGate('DOCUMENT_GRADING', 'Start grading');
 
   // Calculate progress data based on actual grading completion
@@ -219,18 +220,6 @@ export default function DocumentGrading() {
   useEffect(() => {
     fetchMemberApplications();
   }, [user?.id]);
-
-  // Restore scroll position after loading completes
-  useEffect(() => {
-    if (!loading && scrollPositionRef.current > 0) {
-      // Use setTimeout to ensure DOM has updated
-      const timer = setTimeout(() => {
-        window.scrollTo(0, scrollPositionRef.current);
-        scrollPositionRef.current = 0; // Reset after restoring
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [loading]);
 
   // Get unique years from applications for filter dropdown
   const availableYears = [...new Set(
@@ -348,15 +337,18 @@ export default function DocumentGrading() {
     });
   };
 
-  const handleCloseGradingModal = () => {
-    // Store current scroll position before closing modal
-    scrollPositionRef.current = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
+  const handleCloseGradingModal = (saved = false) => {
+    const graded = selectedApplication;
     setGradingModalOpen(false);
     setSelectedApplication(null);
-    // Refresh applications to update grading status
-    if (user?.id) {
-      fetchMemberApplications();
-    }
+    if (!saved || !graded || !user?.id) return;
+
+    // Show the grade now and confirm it with a refetch behind the table, rather
+    // than swapping the table for a spinner until the whole list reloads.
+    setApplications(apps => apps.map(app =>
+      app.id === graded.id ? withOwnGrade(app, selectedDocumentType, user.id) : app
+    ));
+    fetchMemberApplications({ silent: true });
   };
 
   const handleCloseCelebration = () => {
@@ -377,13 +369,19 @@ export default function DocumentGrading() {
     setFlaggingDocumentType('resume');
   };
 
-  const fetchMemberApplications = async () => {
+  // A silent fetch refreshes the table in place: no spinner, and a failure keeps
+  // the rows already shown. Only the latest request's answer is applied, so an
+  // earlier refetch landing late cannot undo a grade saved after it started.
+  const fetchMemberApplications = async ({ silent = false } = {}) => {
     if (!user?.id) return;
-    
+    const request = ++latestFetchRef.current;
+    const isStale = () => request !== latestFetchRef.current;
+
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await apiClient.get(`/review-teams/member-applications/${user.id}`);
-      
+      if (isStale()) return;
+
       // Check if response is an array, if not, log the issue and set empty array
       if (Array.isArray(response)) {
         setApplications(response);
@@ -395,10 +393,11 @@ export default function DocumentGrading() {
       }
     } catch (err) {
       console.error('Error fetching member applications:', err);
+      if (silent || isStale()) return;
       setApplications([]);
       setError('Failed to load applications. Please try again.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 

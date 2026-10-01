@@ -4,6 +4,13 @@ import { readSnapshotVersion } from '../utils/snapshotVersion.js';
 // Staging is an admin console surface, so it follows the admin cycle pointer.
 import { resolveAdminCycle } from './activeCycle.js';
 import { PARTICIPATION_MAX } from './documentRubrics.js';
+import {
+  GRADING_APPLICATION_SELECT,
+  GROUP_WITH_MEMBERS_SELECT,
+  findFlag,
+  loadGradingRecords,
+  teamCompletion
+} from './documentGradingQueue.js';
 
 // The Staging console renders six resources as a single screen, so each of them has
 // to be readable through the same database transaction: that is what makes one
@@ -472,12 +479,12 @@ export async function loadAdminApplications(client, { page, limit, cycle } = {})
     });
   }
 
-  // Get applications for the active cycle
   const queryOptions = {
     where: {
       cycleId: activeCycle.id
     },
-    include: {
+    select: {
+      ...GRADING_APPLICATION_SELECT,
       candidate: {
         select: {
           id: true,
@@ -496,163 +503,32 @@ export async function loadAdminApplications(client, { page, limit, cycle } = {})
     queryOptions.take = limit;
   }
 
-  const applications = await client.application.findMany(queryOptions);
+  const [applications, groups] = await Promise.all([
+    client.application.findMany(queryOptions),
+    client.groups.findMany({
+      where: { cycleId: activeCycle.id },
+      select: GROUP_WITH_MEMBERS_SELECT
+    })
+  ]);
 
-  // Get all groups and their members for the active cycle
-  const groups = await client.groups.findMany({
-    where: {
-      cycleId: activeCycle.id
-    },
-    select: {
-      id: true,
-      name: true,
-      memberOne: true,
-      memberTwo: true,
-      memberThree: true,
-      memberOneUser: {
-        select: {
-          id: true,
-          fullName: true,
-          email: true, profileImage: true }
-      },
-      memberTwoUser: {
-        select: {
-          id: true,
-          fullName: true,
-          email: true, profileImage: true }
-      },
-      memberThreeUser: {
-        select: {
-          id: true,
-          fullName: true,
-          email: true, profileImage: true }
-      },
-      groupMembers: {
-        select: {
-          userId: true,
-          user: { select: { id: true, fullName: true, email: true, profileImage: true } }
-        }
-      }
-    }
+  const { scores, flags: flaggedDocuments } = await loadGradingRecords(client, {
+    cycleId: activeCycle.id,
+    candidateIds: applications.map(app => app.candidateId),
+    applicationIds: applications.map(app => app.id)
   });
-
-  // Get all grading records for these candidates
-  const resumeScores = await client.resumeScore.findMany({
-    where: {
-      candidateId: {
-        in: applications.map(app => app.candidateId)
-      },
-      cycleId: activeCycle.id
-    },
-    select: {
-      candidateId: true,
-      evaluatorId: true,
-      assignedGroupId: true
-    }
-  });
-
-  // Get flagged documents for these applications
-  const flaggedDocuments = await client.flaggedDocument.findMany({
-    where: {
-      applicationId: {
-        in: applications.map(app => app.id)
-      },
-      isResolved: false
-    },
-    select: {
-      applicationId: true,
-      documentType: true,
-      reason: true,
-      message: true,
-      flaggedBy: true,
-      createdAt: true
-    }
-  });
-
-  const coverLetterScores = await client.coverLetterScore.findMany({
-    where: {
-      candidateId: {
-        in: applications.map(app => app.candidateId)
-      },
-      cycle: {
-        id: activeCycle.id
-      }
-    },
-    select: {
-      candidateId: true,
-      evaluatorId: true,
-      assignedGroupId: true
-    }
-  });
-
-  const videoScores = await client.videoScore.findMany({
-    where: {
-      candidateId: {
-        in: applications.map(app => app.candidateId)
-      },
-      cycle: {
-        id: activeCycle.id
-      }
-    },
-    select: {
-      candidateId: true,
-      evaluatorId: true,
-      assignedGroupId: true
-    }
-  });
-
-  // Helper function to check team completion and get missing grades count
-  const checkTeamCompletion = (candidateId, groupId, scores, scoreType) => {
-    if (!groupId) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-    
-    const group = groups.find(g => g.id === groupId);
-    if (!group) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-    
-    // Get all assigned team members with user info (filter out null/undefined)
-    const teamMembers = getGroupMemberUsers(group);
-    
-    if (teamMembers.length === 0) return { completed: false, missingGrades: 0, totalMembers: 0, teamMembers: [], completedEvaluators: [] };
-    
-    // Get scores for this candidate and group
-    const candidateScores = scores.filter(score => 
-      score.candidateId === candidateId && score.assignedGroupId === groupId
-    );
-    
-    // Check if all team members have completed their scores
-    const completedEvaluators = candidateScores.map(score => score.evaluatorId);
-    const allMembersCompleted = teamMembers.every(member => 
-      completedEvaluators.includes(member.id)
-    );
-    
-    const missingGrades = teamMembers.length - completedEvaluators.length;
-    
-    return {
-      completed: allMembersCompleted,
-      missingGrades,
-      totalMembers: teamMembers.length,
-      teamMembers: teamMembers,
-      completedEvaluators: completedEvaluators
-    };
-  };
-
-  // Helper function to get flag info for a document type
-  const getFlagInfo = (applicationId, documentType) => {
-    return flaggedDocuments.find(flag => 
-      flag.applicationId === applicationId && flag.documentType === documentType
-    );
-  };
+  const groupOf = (groupId) => (groupId ? groups.find(g => g.id === groupId) : null);
+  const checkTeamCompletion = (candidateId, groupId, list) => teamCompletion(candidateId, groupOf(groupId), list);
+  const getFlagInfo = (applicationId, documentType) => findFlag(flaggedDocuments, applicationId, documentType);
 
   // Transform the data
   const transformedApplications = [];
   
   applications.forEach(app => {
-    const resumeStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, resumeScores, 'resume');
-    const coverLetterStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, coverLetterScores, 'coverLetter');
-    const videoStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, videoScores, 'video');
+    const resumeStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, scores.resume);
+    const coverLetterStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, scores.coverLetter);
+    const videoStatus = checkTeamCompletion(app.candidateId, app.candidate.assignedGroupId, scores.video);
     
-    const assignedGroup = app.candidate.assignedGroupId
-      ? groups.find(g => g.id === app.candidate.assignedGroupId)
-      : null;
+    const assignedGroup = groupOf(app.candidate.assignedGroupId);
     
     transformedApplications.push({
       id: app.id,
