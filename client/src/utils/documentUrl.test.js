@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toSameOriginDocumentUrl } from './documentUrl';
+import { signedDocumentTarget, toSameOriginDocumentUrl } from './documentUrl';
 
 describe('toSameOriginDocumentUrl', () => {
   it('strips the production origin from a stored document URL', () => {
@@ -51,5 +51,25 @@ describe('toSameOriginDocumentUrl', () => {
     expect(toSameOriginDocumentUrl('')).toBe('');
     expect(toSameOriginDocumentUrl(null)).toBe(null);
     expect(toSameOriginDocumentUrl(undefined)).toBe(undefined);
+  });
+});
+
+// A new tab sends no Authorization header, so our documents open through a link
+// the server signs for one file.
+describe('signedDocumentTarget', () => {
+  it('signs our Drive documents, however the URL was stored', () => {
+    const target = signedDocumentTarget('https://uconsultingats.com/api/files/1_ww9Vj/pdf');
+    expect(target.linkEndpoint).toBe('/files/1_ww9Vj/link');
+    expect(target.open('a.b+c')).toBe('/api/files/1_ww9Vj/pdf?access=a.b%2Bc');
+  });
+
+  it('keeps the kind of document, image or pdf', () => {
+    expect(signedDocumentTarget('/api/files/abc/image').open('t')).toBe('/api/files/abc/image?access=t');
+  });
+
+  it('leaves anything else to a plain link', () => {
+    expect(signedDocumentTarget('https://drive.google.com/file/d/abc/view')).toBeNull();
+    expect(signedDocumentTarget('/api/applications/abc')).toBeNull();
+    expect(signedDocumentTarget(null)).toBeNull();
   });
 });

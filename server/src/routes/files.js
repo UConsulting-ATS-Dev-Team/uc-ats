@@ -1,11 +1,64 @@
+import crypto from 'node:crypto';
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { getFileStream, getFileMetadata } from '../services/google/drive.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveUserById } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
+import config from '../config.js';
 
 const router = express.Router();
 
-router.use(requireAuth);
+/**
+ * Signed links: opening a document in a new tab.
+ *
+ * Sign-in is a bearer token the page sends as a header, and a plain link in a
+ * new tab sends no header, so "Open in new tab" always answered 401. Instead
+ * the page asks POST /:fileId/link for a token naming that one file, and opens
+ * the file URL with it as `?access=`. The browser then streams the file itself,
+ * which also covers a video too large for the preview's whole-file download.
+ *
+ * The key is derived from JWT_SECRET rather than being JWT_SECRET, so a link
+ * token is never accepted as a sign-in token and a sign-in token is never
+ * accepted here. A link opens only the file it names, for LINK_TTL, and the
+ * route still runs authorizeFileAccess against the user who asked for it.
+ */
+const LINK_TTL = '15m';
+const LINK_PATH = /^\/([^/]+)\/(pdf|image)$/;
+
+const linkKey = () =>
+  crypto.createHmac('sha256', config.jwtSecret).update('file-link').digest();
+
+export const signFileLink = (fileId, userId) =>
+  jwt.sign({ fileId, userId }, linkKey(), { expiresIn: LINK_TTL });
+
+const acceptFileLink = async (req, res, next) => {
+  const access = req.query.access;
+  if (req.headers.authorization || typeof access !== 'string') return next();
+
+  const match = LINK_PATH.exec(req.path);
+  if (!match) return next();
+
+  let claims;
+  try {
+    claims = jwt.verify(access, linkKey());
+  } catch {
+    return res.status(401).json({ error: 'This link has expired. Open the document again from the ATS.' });
+  }
+  if (claims.fileId !== decodeURIComponent(match[1])) {
+    return res.status(401).json({ error: 'Invalid link' });
+  }
+
+  try {
+    const result = await resolveUserById(claims.userId);
+    if (!result.user) return res.status(401).json({ error: 'Invalid link' });
+    req.user = result.user;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
+router.use(acceptFileLink, requireAuth);
 
 // Verify the caller may view this Google Drive fileId. Staff (ADMIN/MEMBER) may
 // view any file referenced by an application; USER role may only view files
@@ -88,6 +141,20 @@ async function authorizeFileAccess(fileId, user) {
   // applications this person owns.
   return referencedByVersionHistory(fileId, { OR: ownerFilters });
 }
+
+router.post('/:fileId/link', async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const allowed = await authorizeFileAccess(fileId, req.user);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    res.json({ access: signFileLink(fileId, req.user.id) });
+  } catch (error) {
+    console.error('Error signing file link:', error);
+    res.status(500).json({ error: 'Failed to create link' });
+  }
+});
 
 router.get('/:fileId/image', async (req, res) => {
   try {

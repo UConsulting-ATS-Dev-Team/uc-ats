@@ -33,4 +33,26 @@ export function toSameOriginDocumentUrl(url) {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
+const FILE_PATH = /^\/api(\/files\/[^/?#]+)\/(?:pdf|image)$/;
+
+/**
+ * For one of our Drive documents, the endpoint that signs a link to it (relative
+ * to apiClient's `/api` base) and the path to open with that link. Null for
+ * anything else, which a plain link already opens.
+ *
+ * Sign-in travels as a header, which a new tab never sends, so a bare
+ * `/api/files/<id>/pdf` in a new tab answers "Authentication required".
+ */
+export function signedDocumentTarget(url) {
+  const local = toSameOriginDocumentUrl(url);
+  if (typeof local !== 'string') return null;
+  const path = local.split(/[?#]/)[0];
+  const match = FILE_PATH.exec(path);
+  if (!match) return null;
+  return {
+    linkEndpoint: `${match[1]}/link`,
+    open: (access) => `${path}?access=${encodeURIComponent(access)}`,
+  };
+}
+
 export default toSameOriginDocumentUrl;
