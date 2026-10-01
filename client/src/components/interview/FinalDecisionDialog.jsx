@@ -13,7 +13,6 @@ import {
   Typography,
 } from '@mui/material';
 import { DECISION_OPTIONS } from '../../utils/decisionOptions';
-import { DecisionGuideButton } from '../deliberations/DecisionGuide';
 
 // Asked when an interviewer presses Save All at the end of a final round: their
 // decision on each candidate they just interviewed. The decision used to live only
@@ -21,6 +20,9 @@ import { DecisionGuideButton } from '../deliberations/DecisionGuide';
 //
 // "Later" closes it with nothing changed; the decision can still be set from My
 // Evaluations, exactly as before. Only the candidates whose pick changed are saved.
+
+// The interview pages' decision colours (DECISION_OPTIONS), as MUI palette names.
+const PALETTE = { green: 'success', 'light-green': 'success', orange: 'warning', red: 'error' };
 export default function FinalDecisionDialog({ open, candidates, guide, onOpenGuide, onSave, onLater }) {
   const [picks, setPicks] = useState({});
   const [saving, setSaving] = useState(false);
@@ -57,7 +59,11 @@ export default function FinalDecisionDialog({ open, candidates, guide, onOpenGui
           <Typography variant="body2" color="text.secondary">
             Your notes are saved. Record where you landed while it is fresh.
           </Typography>
-          <DecisionGuideButton guide={guide} onClick={onOpenGuide} />
+          {guide && (
+            <Button size="small" onClick={onOpenGuide} sx={{ flexShrink: 0, textTransform: 'none' }}>
+              What the decisions mean
+            </Button>
+          )}
         </Stack>
         <Stack spacing={2}>
           {candidates.map((c) => (
@@ -73,7 +79,12 @@ export default function FinalDecisionDialog({ open, candidates, guide, onOpenGui
                 aria-label={`Decision for ${c.name}`}
               >
                 {DECISION_OPTIONS.map((option) => (
-                  <ToggleButton key={option.value} value={option.value} sx={{ px: 2, textTransform: 'none' }}>
+                  <ToggleButton
+                    key={option.value}
+                    value={option.value}
+                    color={PALETTE[option.color] || 'primary'}
+                    sx={{ px: 2, textTransform: 'none', '&.Mui-selected': { fontWeight: 700 } }}
+                  >
                     {option.label}
                   </ToggleButton>
                 ))}
