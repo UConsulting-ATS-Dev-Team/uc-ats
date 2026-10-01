@@ -60,8 +60,10 @@ describe('useTutorialGate', () => {
     fireEvent.click(start);
 
     await waitFor(() => expect(onOpenDocument).toHaveBeenCalledTimes(1));
+    // Credited to the cycle the popup was opened for, not whatever is current later.
     expect(apiClient.post).toHaveBeenCalledWith(
-      '/member/help/tutorial-gates/DOCUMENT_GRADING/complete'
+      '/member/help/tutorial-gates/DOCUMENT_GRADING/complete',
+      { cycleId: 'c1' }
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
@@ -207,7 +209,7 @@ describe('useTutorialGate with a category per click', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start the interview' }));
 
     await waitFor(() => expect(onStart).toHaveBeenCalledWith('coffee'));
-    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete');
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete', { cycleId: 'c1' });
   });
 
   it('asks about the round that was clicked', async () => {

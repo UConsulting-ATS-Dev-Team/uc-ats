@@ -10,6 +10,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     tutorial: { findMany: vi.fn() },
     tutorialCompletion: { findUnique: vi.fn(), upsert: vi.fn() },
+    recruitingCycle: { findUnique: vi.fn() },
   },
 }));
 
@@ -134,5 +135,22 @@ describe('completeTutorialGate', () => {
     resolveCycleForRequest.mockResolvedValue(null);
     expect(await completeTutorialGate(asRole('MEMBER'), 'DOCUMENT_GRADING')).toBeNull();
     expect(prisma.tutorialCompletion.upsert).not.toHaveBeenCalled();
+  });
+
+  it('credits the cycle the popup was shown for, even if the current cycle moved since', async () => {
+    // Shown in the fall cycle; an admin switched to winter before "Continue" was pressed.
+    resolveCycleForRequest.mockResolvedValue({ id: 'cycle-winter' });
+    prisma.recruitingCycle.findUnique.mockResolvedValue({ id: 'cycle-fall' });
+
+    await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', 'cycle-fall');
+
+    expect(prisma.recruitingCycle.findUnique).toHaveBeenCalledWith({ where: { id: 'cycle-fall' }, select: { id: true } });
+    expect(prisma.tutorialCompletion.upsert.mock.calls[0][0].create.cycleId).toBe('cycle-fall');
+  });
+
+  it('falls back to the current cycle when the shown cycle does not exist', async () => {
+    prisma.recruitingCycle.findUnique.mockResolvedValue(null);
+    await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', 'no-such-cycle');
+    expect(prisma.tutorialCompletion.upsert.mock.calls[0][0].create.cycleId).toBe(CYCLE.id);
   });
 });

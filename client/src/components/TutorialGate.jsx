@@ -41,6 +41,7 @@ export function useTutorialGate(category = null, continueLabel) {
   const [tutorials, setTutorials] = useState([]);
   const [shownCategory, setShownCategory] = useState(category);
   const categoryRef = useRef(category);
+  const cycleRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -70,6 +71,7 @@ export function useTutorialGate(category = null, continueLabel) {
       }
       pendingActionRef.current = action;
       categoryRef.current = forCategory;
+      cycleRef.current = status.cycleId ?? null;
       setShownCategory(forCategory);
       setTutorials(status.tutorials || []);
       setError(null);
@@ -82,7 +84,11 @@ export function useTutorialGate(category = null, continueLabel) {
     setSubmitting(true);
     setError(null);
     try {
-      await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`);
+      // The cycle this popup was opened for, so a cycle switch while it was open does
+      // not credit the new one.
+      await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`, {
+        cycleId: cycleRef.current,
+      });
       setOpen(false);
       const action = pendingActionRef.current;
       pendingActionRef.current = null;

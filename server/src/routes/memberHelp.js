@@ -148,7 +148,8 @@ router.post('/tutorial-gates/:category/complete', requireAdminOrMember, async (r
     return res.status(404).json({ error: 'No tutorial gate for this category' });
   }
   try {
-    const completion = await completeTutorialGate(req, category);
+    const shownCycleId = typeof req.body?.cycleId === 'string' ? req.body.cycleId : null;
+    const completion = await completeTutorialGate(req, category, shownCycleId);
     res.json({ completed: true, completedAt: completion?.completedAt ?? null });
   } catch (error) {
     console.error('[POST /api/member/help/tutorial-gates/:category/complete]', error);

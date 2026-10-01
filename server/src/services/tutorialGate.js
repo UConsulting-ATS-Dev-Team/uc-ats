@@ -61,12 +61,19 @@ export async function getTutorialGate(req, category) {
 }
 
 /**
- * Records that `req.user` finished `category`'s tutorials in the current cycle.
- * Idempotent: finishing twice is one row. Returns null when there is no cycle to
- * record against.
+ * Records that `req.user` finished `category`'s tutorials. Idempotent: finishing twice
+ * is one row. Returns null when there is no cycle to record against.
+ *
+ * `shownCycleId` is the cycleId getTutorialGate answered when the popup opened. The
+ * current cycle can move while someone watches, and crediting the new one would let
+ * them skip its tutorials and leave the old one asking again. An id that is no longer
+ * a cycle falls back to the current one.
  */
-export async function completeTutorialGate(req, category) {
-  const cycle = await resolveCycleForRequest(prisma, req);
+export async function completeTutorialGate(req, category, shownCycleId = null) {
+  const shown = shownCycleId
+    ? await prisma.recruitingCycle.findUnique({ where: { id: shownCycleId }, select: { id: true } })
+    : null;
+  const cycle = shown ?? (await resolveCycleForRequest(prisma, req));
   if (!cycle) return null;
 
   return prisma.tutorialCompletion.upsert({
