@@ -124,6 +124,11 @@ export function walkBuilder(S: States, defaultUrl = "/dashboard") {
     const c = mid(b);
     camTo(f, c.x, c.y, z, dur);
   };
+  /** Centre the camera on a box at a set zoom, for things too wide for camOn to zoom into. */
+  const camZoom = (f: number, b: Box, z: number, dur = 20) => {
+    const c = mid(b);
+    camTo(f, c.x, c.y, z, dur);
+  };
   const camReset = (f: number, dur = 16) => camTo(f, APP_W / 2, APP_H / 2, 1, dur);
   const scrollTo = (f0: number, f1: number, y: number) => {
     w.scroll.push({ f: f0, y: scroll }, { f: f1, y });
@@ -172,6 +177,7 @@ export function walkBuilder(S: States, defaultUrl = "/dashboard") {
     dialog,
     camTo,
     camOn,
+    camZoom,
     camReset,
     scrollTo,
     move,

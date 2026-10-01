@@ -14,33 +14,9 @@
 // Per-team deliberations are how UConsulting runs the cycle, not code.
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { Card, Count, Icon, ICONS, Person, Pop } from "../../kit/Bits";
+import { clamp, Exit, Sub, Title } from "../../kit/Explainer";
 import { Headline, Kicker, Stage } from "../../kit/Light";
 import { C, DISPLAY, LIGHT } from "../../kit/theme";
-
-const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
-
-function Title({ kicker, text, accent, exitAt, top = 110 }: { kicker: string; text: string; accent: number[]; exitAt: number; top?: number }) {
-  return (
-    <div style={{ position: "absolute", left: 0, right: 0, top, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-      <Kicker delay={2} exitAt={exitAt}>{kicker}</Kicker>
-      <Headline text={text} accent={accent} size={64} delay={5} exitAt={exitAt} />
-    </div>
-  );
-}
-
-function Sub({ text, accent = [], at, exitAt, top }: { text: string; accent?: number[]; at: number; exitAt: number; top: number }) {
-  return (
-    <div style={{ position: "absolute", left: 160, right: 160, top }}>
-      <Headline text={text} accent={accent} size={34} weight={500} color={LIGHT.muted} delay={at} stagger={1} exitAt={exitAt} />
-    </div>
-  );
-}
-
-function Exit({ at, children }: { at: number; children: React.ReactNode }) {
-  const frame = useCurrentFrame();
-  const o = interpolate(frame, [at, at + 10], [1, 0], clamp);
-  return <div style={{ position: "absolute", inset: 0, opacity: o, filter: `blur(${(1 - o) * 8}px)` }}>{children}</div>;
-}
 
 // ---------- 1. What gets graded ----------
 

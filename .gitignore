@@ -28,3 +28,4 @@ video/public/shots/
 video/public/sample-video.mp4
 video/public/music*.mp3
 video/public/music-cues*.json
+video/**/.DS_Store

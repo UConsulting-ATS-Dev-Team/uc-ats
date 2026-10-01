@@ -8,6 +8,7 @@ camera, a cursor and headlines. It does not rebuild the UI.
 | id | Video |
 |---|---|
 | `grading` | Document Grading 101 |
+| `coffee-chats` | Running a Coffee Chat |
 
 ## Rebuild one
 
