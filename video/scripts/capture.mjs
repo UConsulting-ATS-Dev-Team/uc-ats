@@ -106,9 +106,19 @@ async function pageState(name, targets = {}) {
   await settle(250);
   const fixed = await page.evaluate((sel) => {
     const els = [...document.querySelectorAll(sel)].filter((el) => getComputedStyle(el).position === "fixed");
-    const rects = els.map((el) => el.getBoundingClientRect().toJSON());
+    // The widget and everything inside it: the launcher's unread badge sits past the
+    // button's edge, and the video cuts the widget out of the chrome shot by this box.
+    const PAD = 3;
+    const rects = els.map((el) => {
+      const all = [el, ...el.querySelectorAll("*")].map((n) => n.getBoundingClientRect()).filter((r) => r.width && r.height);
+      const x = Math.min(...all.map((r) => r.left)) - PAD;
+      const y = Math.min(...all.map((r) => r.top)) - PAD;
+      const right = Math.max(...all.map((r) => r.right)) + PAD;
+      const bottom = Math.max(...all.map((r) => r.bottom)) + PAD;
+      return { x, y, width: right - x, height: bottom - y };
+    });
     els.forEach((el) => (el.style.visibility = "hidden"));
-    return rects.map(({ x, y, width, height }) => ({ x, y, width, height }));
+    return rects;
   }, FIXED_WIDGETS);
   await page.screenshot({ path: shotPath(name), fullPage: true });
   await page.evaluate((sel) => document.querySelectorAll(sel).forEach((el) => (el.style.visibility = "")), FIXED_WIDGETS);
