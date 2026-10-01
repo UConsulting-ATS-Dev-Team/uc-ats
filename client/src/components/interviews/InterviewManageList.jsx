@@ -137,7 +137,9 @@ export default function InterviewManageList({ round, onChanged }) {
       setQuestions(
         Object.values(config.behavioralQuestions || {})
           .flat()
-          .map((q) => q.questionText ?? q)
+          // Each keeps its id, which is how the server keeps its row and its notes
+          // through an edit (services/sharedQuestions.js).
+          .map((q) => (typeof q === 'string' ? { id: null, text: q } : { id: q.id ?? null, text: q.text ?? q.questionText ?? '' }))
       );
     } catch {
       setQuestions([]);
@@ -157,8 +159,11 @@ export default function InterviewManageList({ round, onChanged }) {
     try {
       await apiClient.patch(`/admin/interviews/${questionsFor.id}/config`, {
         type: 'behavioral_questions',
-        config: { groupId: questionSession, questions: questions.filter((q) => q.trim() !== '') },
-        behavioralQuestions: true,
+        config: {
+          behavioralQuestions: true,
+          groupId: questionSession,
+          questions: questions.filter((q) => q.text.trim() !== ''),
+        },
       });
       setQuestionsFor(null);
     } catch (e) {
@@ -376,12 +381,12 @@ export default function InterviewManageList({ round, onChanged }) {
               <TextField
                 key={index}
                 size="small"
-                value={q}
-                onChange={(e) => setQuestions((current) => current.map((item, i) => (i === index ? e.target.value : item)))}
+                value={q.text}
+                onChange={(e) => setQuestions((current) => current.map((item, i) => (i === index ? { ...item, text: e.target.value } : item)))}
                 fullWidth
               />
             ))}
-            <Button size="small" onClick={() => setQuestions((current) => [...current, ''])}>
+            <Button size="small" onClick={() => setQuestions((current) => [...current, { id: null, text: '' }])}>
               Add a question
             </Button>
           </Stack>
