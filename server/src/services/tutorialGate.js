@@ -65,16 +65,16 @@ export async function getTutorialGate(req, category) {
  * is one row. Returns null when there is no cycle to record against.
  *
  * `shownCycleId` is the cycleId getTutorialGate answered when the popup opened. The
- * current cycle can move while someone watches, and crediting the new one would let
- * them skip its tutorials and leave the old one asking again. An id that is no longer
- * a cycle falls back to the current one.
+ * current cycle can move while someone watches; crediting the new one would let them
+ * skip its tutorials. So a completion is only ever recorded for the current cycle, and
+ * only when that is the cycle they were shown. Otherwise nothing is recorded and the
+ * next gated click asks about the new cycle. Accepting any cycle the client named
+ * instead would let someone pre-complete a cycle that is not open yet.
  */
 export async function completeTutorialGate(req, category, shownCycleId = null) {
-  const shown = shownCycleId
-    ? await prisma.recruitingCycle.findUnique({ where: { id: shownCycleId }, select: { id: true } })
-    : null;
-  const cycle = shown ?? (await resolveCycleForRequest(prisma, req));
+  const cycle = await resolveCycleForRequest(prisma, req);
   if (!cycle) return null;
+  if (shownCycleId && shownCycleId !== cycle.id) return null;
 
   return prisma.tutorialCompletion.upsert({
     where: {

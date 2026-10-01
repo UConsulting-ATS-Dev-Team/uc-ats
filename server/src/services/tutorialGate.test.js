@@ -10,7 +10,6 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     tutorial: { findMany: vi.fn() },
     tutorialCompletion: { findUnique: vi.fn(), upsert: vi.fn() },
-    recruitingCycle: { findUnique: vi.fn() },
   },
 }));
 
@@ -137,20 +136,22 @@ describe('completeTutorialGate', () => {
     expect(prisma.tutorialCompletion.upsert).not.toHaveBeenCalled();
   });
 
-  it('credits the cycle the popup was shown for, even if the current cycle moved since', async () => {
+  it('records nothing when the current cycle moved while the popup was open', async () => {
     // Shown in the fall cycle; an admin switched to winter before "Continue" was pressed.
+    // Crediting winter would skip its tutorial; the next click asks about winter instead.
     resolveCycleForRequest.mockResolvedValue({ id: 'cycle-winter' });
-    prisma.recruitingCycle.findUnique.mockResolvedValue({ id: 'cycle-fall' });
 
-    await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', 'cycle-fall');
-
-    expect(prisma.recruitingCycle.findUnique).toHaveBeenCalledWith({ where: { id: 'cycle-fall' }, select: { id: true } });
-    expect(prisma.tutorialCompletion.upsert.mock.calls[0][0].create.cycleId).toBe('cycle-fall');
+    expect(await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', 'cycle-fall')).toBeNull();
+    expect(prisma.tutorialCompletion.upsert).not.toHaveBeenCalled();
   });
 
-  it('falls back to the current cycle when the shown cycle does not exist', async () => {
-    prisma.recruitingCycle.findUnique.mockResolvedValue(null);
-    await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', 'no-such-cycle');
+  it('never records a cycle that is not the current one, such as one not open yet', async () => {
+    expect(await completeTutorialGate(asRole('ADMIN', 'a-1'), 'DOCUMENT_GRADING', 'cycle-next-spring')).toBeNull();
+    expect(prisma.tutorialCompletion.upsert).not.toHaveBeenCalled();
+  });
+
+  it('records the current cycle when it is the one the popup was shown for', async () => {
+    await completeTutorialGate(asRole('MEMBER', 'm-7'), 'DOCUMENT_GRADING', CYCLE.id);
     expect(prisma.tutorialCompletion.upsert.mock.calls[0][0].create.cycleId).toBe(CYCLE.id);
   });
 });

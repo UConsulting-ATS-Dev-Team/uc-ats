@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -73,7 +73,7 @@ export function useTutorialGate(category = null, continueLabel) {
       categoryRef.current = forCategory;
       cycleRef.current = status.cycleId ?? null;
       setShownCategory(forCategory);
-      setTutorials(status.tutorials || []);
+      setTutorials([...(status.tutorials || [])]);
       setError(null);
       setOpen(true);
     },
@@ -84,15 +84,17 @@ export function useTutorialGate(category = null, continueLabel) {
     setSubmitting(true);
     setError(null);
     try {
-      // The cycle this popup was opened for, so a cycle switch while it was open does
-      // not credit the new one.
-      await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`, {
+      // The cycle this popup was opened for. If the current cycle moved while it was
+      // open, the server records nothing and says so, and the gate is asked again: the
+      // new cycle's tutorials may still be owed.
+      const result = await apiClient.post(`/member/help/tutorial-gates/${categoryRef.current}/complete`, {
         cycleId: cycleRef.current,
       });
       setOpen(false);
       const action = pendingActionRef.current;
       pendingActionRef.current = null;
-      action?.();
+      if (result?.completed === false && action) run(action, categoryRef.current);
+      else action?.();
     } catch (e) {
       setError(e.message || 'Could not save that you finished the tutorial. Try again.');
     } finally {
@@ -127,11 +129,12 @@ export function TutorialGateDialog({
   error,
   onComplete,
 }) {
-  const [confirmed, setConfirmed] = useState(false);
-
-  useEffect(() => {
-    if (open) setConfirmed(false);
-  }, [open]);
+  // Confirmed for exactly the list on screen. Each opening hands over a new list (see
+  // run), so a new opening starts unticked - also when the popup never closed between
+  // two lists, as when the cycle changes while it is open and it asks again at once.
+  // Derived during render rather than reset in an effect, which ran a frame late.
+  const [confirmedFor, setConfirmedFor] = useState(null);
+  const confirmed = open && confirmedFor === tutorials;
 
   return (
     <Dialog
@@ -175,7 +178,7 @@ export function TutorialGateDialog({
           control={
             <Checkbox
               checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
+              onChange={(e) => setConfirmedFor(e.target.checked ? tutorials : null)}
               disabled={submitting}
             />
           }

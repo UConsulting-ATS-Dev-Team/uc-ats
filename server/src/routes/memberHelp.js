@@ -150,7 +150,9 @@ router.post('/tutorial-gates/:category/complete', requireAdminOrMember, async (r
   try {
     const shownCycleId = typeof req.body?.cycleId === 'string' ? req.body.cycleId : null;
     const completion = await completeTutorialGate(req, category, shownCycleId);
-    res.json({ completed: true, completedAt: completion?.completedAt ?? null });
+    // false when nothing was recorded: no current cycle, or it moved since the popup
+    // opened. The popup then asks the gate again rather than letting the work through.
+    res.json({ completed: Boolean(completion), completedAt: completion?.completedAt ?? null });
   } catch (error) {
     console.error('[POST /api/member/help/tutorial-gates/:category/complete]', error);
     res.status(500).json({ error: 'Failed to record tutorial completion' });
