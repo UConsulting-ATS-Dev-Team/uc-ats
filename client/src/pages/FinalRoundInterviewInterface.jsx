@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -23,6 +23,8 @@ import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import RoundOneHistoryPanel from '../components/interview/RoundOneHistoryPanel';
 import CaseViewer from '../components/case/CaseViewer';
+import FinalDecisionDialog from '../components/interview/FinalDecisionDialog';
+import { DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import { usePreviewActive } from '../utils/previewMode';
 import '../styles/FinalRoundInterviewInterface.css';
 
@@ -181,12 +183,18 @@ export default function FinalRoundInterviewInterface() {
     }
   }, [interviewId, groupIds.join(',')]);
 
+  // The autosave timer fires seconds after the render that scheduled it; reading
+  // `evaluations` from that render would send notes missing the latest edits.
+  const evaluationsRef = useRef(evaluations);
+  evaluationsRef.current = evaluations;
+  const latestEvaluation = (applicationId) =>
+    evaluationsRef.current[`${applicationId}_${currentUser?.id}`] || { behavioralNotes: '', casingNotes: {} };
+
   const getEvaluation = (applicationId) => {
     const key = `${applicationId}_${currentUser?.id}`;
     return evaluations[key] || {
       behavioralNotes: '',
-      casingNotes: {},
-      finalDecision: null
+      casingNotes: {}
     };
   };
 
@@ -218,9 +226,34 @@ export default function FinalRoundInterviewInterface() {
     scheduleAutoSave(applicationId);
   };
 
-  const updateFinalDecision = (applicationId, decision) => {
-    updateEvaluation(applicationId, { finalDecision: decision });
-    scheduleAutoSave(applicationId);
+  // Save All ends with the decision pop-up (FinalDecisionDialog) while any candidate
+  // on the page still has none.
+  const [decisionPromptOpen, setDecisionPromptOpen] = useState(false);
+  const { guide, open: guideOpen, openGuide, closeGuide } = useDecisionGuide('final');
+
+  // The only write of a decision on this page: note saves never send one, so a
+  // pending autosave cannot overwrite what was just picked here. Each decision that
+  // lands is applied at once, so after a partial failure the dialog shows only the
+  // ones still unsaved.
+  const saveDecisions = async (decisions) => {
+    const isAdmin = window.location.pathname.includes('/admin/');
+    const basePath = isAdmin ? '/admin' : '/member';
+    const entries = Object.entries(decisions);
+    const results = await Promise.allSettled(
+      entries.map(([applicationId, decision]) =>
+        isAdmin
+          ? apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, { applicationId, decision })
+          : apiClient.post(`${basePath}/evaluations`, { interviewId, applicationId, decision })
+      )
+    );
+    const failed = [];
+    results.forEach((result, i) => {
+      const [applicationId, decision] = entries[i];
+      if (result.status === 'fulfilled') updateEvaluation(applicationId, { decision });
+      else failed.push(applications.find((app) => app.id === applicationId)?.name || 'a candidate');
+    });
+    if (failed.length > 0) throw new Error(`Could not save the decision for ${failed.join(' and ')}. Try again.`);
+    setDecisionPromptOpen(false);
   };
 
   const updateCandidateDetails = (applicationId, detailKey, value) => {
@@ -346,12 +379,11 @@ export default function FinalRoundInterviewInterface() {
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
-      const evaluation = getEvaluation(applicationId);
+      const evaluation = latestEvaluation(applicationId);
       
       if (isAdmin) {
         await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
           applicationId,
-          decision: evaluation.finalDecision,
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -360,7 +392,6 @@ export default function FinalRoundInterviewInterface() {
         await apiClient.post(`${basePath}/evaluations`, {
           interviewId,
           applicationId,
-          decision: evaluation.finalDecision,
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -386,7 +417,6 @@ export default function FinalRoundInterviewInterface() {
       if (isAdmin) {
         await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
           applicationId,
-          decision: evaluation.finalDecision,
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -395,7 +425,6 @@ export default function FinalRoundInterviewInterface() {
         await apiClient.post(`${basePath}/evaluations`, {
           interviewId,
           applicationId,
-          decision: evaluation.finalDecision,
           behavioralNotes: evaluation.behavioralNotes,
           casingNotes: evaluation.casingNotes,
           candidateDetails: evaluation.candidateDetails
@@ -412,6 +441,12 @@ export default function FinalRoundInterviewInterface() {
   };
 
   const saveAllEvaluations = async () => {
+    // Pending autosaves would race these requests (two first saves of one evaluation
+    // collide on its unique key) or land after them, so they are cancelled now and
+    // rescheduled if Save All fails: then they are still the retry.
+    const pending = Object.keys(autoSaveTimeouts);
+    Object.values(autoSaveTimeouts).forEach(clearTimeout);
+    setAutoSaveTimeouts({});
     try {
       const isAdmin = window.location.pathname.includes('/admin/');
       const basePath = isAdmin ? '/admin' : '/member';
@@ -421,7 +456,6 @@ export default function FinalRoundInterviewInterface() {
         if (isAdmin) {
           return apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
             applicationId: app.id,
-            decision: evaluation.finalDecision,
             behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
@@ -430,7 +464,6 @@ export default function FinalRoundInterviewInterface() {
           return apiClient.post(`${basePath}/evaluations`, {
             interviewId,
             applicationId: app.id,
-            decision: evaluation.finalDecision,
             behavioralNotes: evaluation.behavioralNotes,
             casingNotes: evaluation.casingNotes,
             candidateDetails: evaluation.candidateDetails
@@ -439,9 +472,14 @@ export default function FinalRoundInterviewInterface() {
       });
       
       await Promise.all(promises);
-      alert('All evaluations saved successfully!');
+      if (applications.some((app) => !getEvaluation(app.id).decision)) {
+        setDecisionPromptOpen(true);
+      } else {
+        alert('All evaluations saved successfully!');
+      }
     } catch (error) {
       console.error('Failed to save evaluations:', error);
+      pending.forEach(scheduleAutoSave);
       alert('Failed to save evaluations');
     } finally {
       setSaving(false);
@@ -951,6 +989,16 @@ export default function FinalRoundInterviewInterface() {
           </>
         )}
       </div>
+      <FinalDecisionDialog
+        open={decisionPromptOpen}
+        candidates={applications.map((app) => ({ id: app.id, name: app.name, decision: getEvaluation(app.id).decision }))}
+        guide={guide}
+        onOpenGuide={openGuide}
+        onSave={saveDecisions}
+        onLater={() => setDecisionPromptOpen(false)}
+      />
+      {/* Opened from inside the decision dialog, so it has to sit above it. */}
+      <DecisionGuidePanel open={guideOpen} guide={guide} onClose={closeGuide} aboveDialogs />
     </AccessControl>
   );
 }
