@@ -2,7 +2,7 @@
 // rubric the server sends, not one baked into the page, holds a score to that
 // rubric's range, and never turns a blank into a zero or a zero into a blank.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import DocumentGradingModal from './DocumentGradingModal';
 import apiClient from '../utils/api';
 
@@ -105,5 +105,83 @@ describe('DocumentGradingModal', () => {
     mockServer({ existing: { scoreOne: 0, scoreTwo: null, scoreThree: null, notes: '' } });
     renderModal();
     await waitFor(() => expect(screen.getByLabelText('Presence on camera')).toHaveValue('0'));
+  });
+
+  describe('saving and closing', () => {
+    const renderWith = (props) => render(
+      <DocumentGradingModal open application={application} documentType="video" {...props} />
+    );
+    const typeFour = async () => {
+      fireEvent.change(await screen.findByLabelText('Presence on camera'), { target: { value: '4' } });
+    };
+    const saveFour = async () => {
+      await typeFour();
+      fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+      await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
+      await act(async () => {});
+    };
+    const closeButton = () => screen.getByRole('button', { name: /^close$/i });
+
+    it('reports the save at once, naming what was graded, then closes itself', async () => {
+      mockServer();
+      const onClose = vi.fn();
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
+      await saveFour();
+
+      expect(onSaved).toHaveBeenCalledWith({ application, documentType: 'video' });
+      expect(onClose).not.toHaveBeenCalled();
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+
+    it('closed by hand during the success message, does not close again later', async () => {
+      mockServer();
+      const onClose = vi.fn();
+      renderWith({ onClose, onSaved: vi.fn() });
+      await saveFour();
+
+      fireEvent.click(closeButton());
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      // By now the grader may have opened another row; a second close would shut it.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 1700)));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('closed while the save is in flight, still reports it but leaves the next form alone', async () => {
+      mockServer();
+      let answer;
+      apiClient.post.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+      const onClose = vi.fn();
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
+      await typeFour();
+      fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+      await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
+
+      fireEvent.click(closeButton());
+      // The grader starts on the next row in the same modal before the first save answers.
+      fireEvent.change(screen.getByLabelText('Presence on camera'), { target: { value: '2' } });
+      await act(async () => answer({}));
+
+      expect(onSaved).toHaveBeenCalledWith({ application, documentType: 'video' });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 1700)));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText('Presence on camera')).toHaveValue('2');
+      expect(screen.queryByText(/saved successfully/i)).not.toBeInTheDocument();
+    });
+
+    it('closed without a save, reports none', async () => {
+      mockServer();
+      const onClose = vi.fn();
+      const onSaved = vi.fn();
+      renderWith({ onClose, onSaved });
+      await screen.findByLabelText('Presence on camera');
+
+      fireEvent.click(closeButton());
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onSaved).not.toHaveBeenCalled();
+    });
   });
 });

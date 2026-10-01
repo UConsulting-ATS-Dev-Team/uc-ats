@@ -797,6 +797,7 @@ The system follows a **recruiting cycle-based workflow**:
 
 **Key Services:**
 - [server/src/services/referrals.js](server/src/services/referrals.js) - Referral name matching and claiming
+- [server/src/services/documentGradingQueue.js](server/src/services/documentGradingQueue.js) - The Document Grading lists (member queue and admin view): who has graded what, read in parallel
 - [server/src/services/syncResponses.js](server/src/services/syncResponses.js) - Syncs Google Forms → Applications table
 - [server/src/services/syncEventResponses.js](server/src/services/syncEventResponses.js) - Syncs event RSVP/attendance forms
 - [server/src/services/luma/ingestGuests.js](server/src/services/luma/ingestGuests.js) - Turns Luma guests into event rows; owns all Luma matching

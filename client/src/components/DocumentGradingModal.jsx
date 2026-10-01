@@ -62,7 +62,7 @@ function labelCovers(label, score) {
 const outOfRange = (category, value) =>
   value !== '' && (Number(value) < category.min || Number(value) > category.max);
 
-const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
+const DocumentGradingModal = ({ open, onClose, onSaved, application, documentType }) => {
   const { user, token } = useAuth();
   const isMobile = useIsMobile();
   const {
@@ -86,6 +86,26 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   const [leftWidth, setLeftWidth] = useState(documentType === 'video' ? 50 : 62);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef(null);
+  // One modal instance serves every row, and a save can outlive the opening
+  // that made it: the grader may close the modal while the request is in
+  // flight, or during the success message, and open another row. Each close
+  // starts a new session, and a save answers only the session it began in, so
+  // it never clears, flags or closes the form that is open now.
+  const sessionRef = useRef(0);
+  const closeTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(closeTimerRef.current), []);
+
+  const close = () => {
+    sessionRef.current += 1;
+    clearTimeout(closeTimerRef.current);
+    setSuccess(false);
+    setSaving(false);
+    onClose();
+  };
+  // The timer calls whichever close is current when it fires, not the one from
+  // the render that saved, so it reaches the parent's current handler.
+  const closeRef = useRef(close);
+  closeRef.current = close;
 
   // Grading form state, keyed by score column
   const [scores, setScores] = useState(EMPTY_SCORES);
@@ -280,6 +300,8 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   };
 
   const handleSave = async () => {
+    const session = sessionRef.current;
+    const isCurrent = () => session === sessionRef.current;
     try {
       setSaving(true);
       setError(null);
@@ -297,23 +319,27 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
       };
 
       await apiClient.post(config.apiEndpoint, scoreData);
-      setSuccess(true);
+      // The grade is saved whether or not this modal is still showing it.
+      onSaved?.({ application, documentType });
+      if (!isCurrent()) return;
 
+      setSuccess(true);
       // Close modal after a short delay
-      setTimeout(() => {
-        onClose(true); // Pass true to indicate data was saved and refresh is needed
-        setSuccess(false);
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => {
         setScores(EMPTY_SCORES);
         setNotes('');
+        closeRef.current();
       }, 1500);
 
     } catch (err) {
       console.error('Error saving score:', err);
+      if (!isCurrent()) return;
       setError(err?.message?.replace(/ \(Status: \d+\)$/, '') || 'Failed to save score. Please try again.');
       // The range changed under this grader: show them the one the server holds.
       if (err?.code === 'SCORE_OUT_OF_RANGE') reloadRubrics();
     } finally {
-      setSaving(false);
+      if (isCurrent()) setSaving(false);
     }
   };
 
@@ -345,7 +371,7 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
   return (
     <Dialog
       open={open}
-      onClose={() => onClose(false)}
+      onClose={close}
       maxWidth="xl"
       fullWidth
       fullScreen={isMobile}
@@ -374,12 +400,12 @@ const DocumentGradingModal = ({ open, onClose, application, documentType }) => {
           </Typography>
         </Box>
         {isMobile ? (
-          <IconButton onClick={() => onClose(false)} aria-label="close">
+          <IconButton onClick={close} aria-label="close">
             <CloseIcon />
           </IconButton>
         ) : (
           <Button
-            onClick={() => onClose(false)}
+            onClick={close}
             startIcon={<CloseIcon />}
             variant="outlined"
             size="small"
