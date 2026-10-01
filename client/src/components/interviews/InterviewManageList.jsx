@@ -239,10 +239,12 @@ export default function InterviewManageList({ round, onChanged }) {
                     startIcon={<PlayIcon />}
                     disabled={sessions.length === 0}
                     onClick={() =>
+                      // The overview rows carry no type until the full list loads; the
+                      // round's own type is the same and always there.
                       tutorialGate.run(() => {
                         setStartFor(interview);
                         setChosenSessions([]);
-                      }, tutorialCategoryForInterviewType(interview.interviewType))
+                      }, tutorialCategoryForInterviewType(interview.interviewType ?? round?.interviewType))
                     }
                   >
                     Run a session

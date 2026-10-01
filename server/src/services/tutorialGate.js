@@ -2,7 +2,7 @@
 // kind of work for the first time in a cycle. Document grading gates the first document
 // a member or admin opens to grade each cycle; each interview round gates the first
 // interview of that round they start (COFFEE_CHATS, FIRST_ROUND, FINAL_ROUND - see
-// tutorialCategoryForInterviewType in client/src/utils/tutorialGates.js).
+// tutorialCategoryForInterviewType in client/src/utils/tutorialCategories.js).
 //
 // The tutorials are whatever admins have published in Help Management, so the gate has
 // nothing hard-coded to show. A category with no tutorials does not gate at all - an
