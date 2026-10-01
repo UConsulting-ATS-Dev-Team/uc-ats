@@ -101,7 +101,7 @@ const addressesOf = (to) => {
  */
 const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
   const hasAttachments = Boolean(attachments && attachments.length > 0);
-  const { recipientName = null, attemptKey = null, listUnsubscribeUrl = null, ...context } = meta || {};
+  const { recipientName = null, attemptKey = null, listUnsubscribeUrl = null, replyTo = null, ...context } = meta || {};
 
   // Never rejects. recordCommunication already swallows its own write failures,
   // but the mail is gone by the time this runs: if logging could throw here, a
@@ -134,7 +134,7 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
 
     const mailOptions = {
       from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
-      replyTo: process.env.EMAIL_REPLY_TO,
+      replyTo: replyTo || process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,
       // Credential links (reset, verify, invite, unsubscribe) are kept out of
@@ -1140,6 +1140,56 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
     return result;
   } catch (error) {
     console.error('Error in sendEmailVerification:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Message an Admin
+// ---------------------------------------------------------------------------
+
+// The shared exec inbox that "Message an Admin" writes to.
+export const ADMIN_INBOX_EMAIL = process.env.ADMIN_INBOX_EMAIL || 'uconsultingla@gmail.com';
+
+// Staff-only and written by the sender, so it has no editable copy: the
+// message itself is the body, escaped line by line.
+export const sendAdminMessageEmail = async ({ fromName, fromEmail, role, message, triggeredById }) => {
+  try {
+    const subject = `Message from ${fromName || fromEmail}`;
+    const emailContent = await composeEmail('admin-message', {
+      subject,
+      parts: [
+        part.heading('New message from the ATS'),
+        part.card({
+          tone: 'info',
+          rows: [
+            { label: 'From', value: fromName },
+            { label: 'Email', value: fromEmail },
+            { label: 'Role', value: role },
+          ],
+        }),
+        part.card({
+          title: 'Message',
+          lines: message.split('\n').map((line) => escapeHtml(line) || '&nbsp;'),
+        }),
+        part.copy('Reply to this email to answer them directly.'),
+      ],
+    });
+
+    const result = await sendEmail(ADMIN_INBOX_EMAIL, emailContent.subject, emailContent.html, [], {
+      category: 'OTHER',
+      trigger: 'MANUAL',
+      triggeredById,
+      recipientName: 'UConsulting admins',
+      replyTo: fromEmail,
+    });
+
+    if (!result.success) {
+      console.error(`Failed to send admin message to ${ADMIN_INBOX_EMAIL}:`, result.error);
+    }
+    return result;
+  } catch (error) {
+    console.error('Error in sendAdminMessageEmail:', error);
     return { success: false, error: error.message };
   }
 };

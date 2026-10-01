@@ -18,7 +18,7 @@ import {
   getRosterForInterview
 } from '../services/interviewRoster.js';
 import { sendSlackMessage } from '../services/slackService.js';
-import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate } from '../services/emailNotifications.js';
+import { sendMeetingCancellationEmail, sendRSVPConfirmation, formatEventDate, sendAdminMessageEmail } from '../services/emailNotifications.js';
 import { sendAndLogMeetingCommunication, MEETING_COMM_SUBJECTS, notifyHostSlotCreated } from '../services/meetingComms.js';
 import { candidateMeetingInvite } from '../services/meetingInvites.js';
 import { updateMeetingSlot, SlotUpdateError } from '../services/meetingSlotUpdates.js';
@@ -1839,6 +1839,19 @@ router.post('/message-admin', requireAuth, async (req, res) => {
       console.error('[POST /api/member/message-admin] Slack error:', slackError);
       // Don't fail the request if Slack is down, but log the error
       console.warn('Slack message failed, but continuing with success response');
+    }
+
+    // The email is the copy that has to land: Slack is optional and says
+    // nothing when its webhook is unset.
+    const emailResult = await sendAdminMessageEmail({
+      fromName: user.fullName,
+      fromEmail: user.email,
+      role: user.role,
+      message: message.trim(),
+      triggeredById: req.user.id,
+    });
+    if (!emailResult.success) {
+      return res.status(502).json({ error: 'Your message could not be sent. Please try again.' });
     }
 
     res.json({ success: true, message: 'Message sent successfully' });
