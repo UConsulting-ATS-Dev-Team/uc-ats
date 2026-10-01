@@ -14,9 +14,10 @@
 //   Staging (DEFAULT_GUIDE in server/src/services/decisionGuides.js).
 // - It can be changed afterwards from My Evaluations (Edit Evaluation in
 //   AssignedInterviews.jsx).
-import { interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import { spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { Card, Person, Pop } from "../../kit/Bits";
-import { clamp, Exit, Sub, Title } from "../../kit/Explainer";
+import { Exit, Sub, Title } from "../../kit/Explainer";
+import { Recommendation } from "../../kit/Recommendation";
 import { Stage } from "../../kit/Light";
 import { C, LIGHT } from "../../kit/theme";
 
@@ -128,57 +129,12 @@ export function Sittings() {
 
 // ---------- 2. After the chat ----------
 
-const DECISION_CHIPS = [
-  { label: "Yes", color: "#15803d", bg: "#dcfce7" },
-  { label: "Maybe-Yes", color: "#166534", bg: "#ecfdf5" },
-  { label: "Maybe-No", color: "#c2410c", bg: "#ffedd5" },
-  { label: "No", color: "#b91c1c", bg: "#fee2e2" },
-];
-
-const STEPS = [
-  { head: "You", body: "pick a decision for each candidate", at: 26 },
-  { head: "It's a recommendation", body: "stored against the candidate", at: 62 },
-  { head: "Staging", body: "is where admins advance or reject", at: 98 },
-];
-
 export function After() {
-  const frame = useCurrentFrame();
-  const end = 185;
-  const flow = (i: number) => interpolate(frame, [STEPS[i].at + 18, STEPS[i].at + 34], [0, 1], clamp);
   return (
-    <Stage>
-      <Title kicker="What happens next" text="Your decision is a recommendation" accent={[4]} exitAt={end} />
-      <Exit at={end}>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 360, display: "flex", justifyContent: "center", alignItems: "center", gap: 30 }}>
-          {STEPS.map((s, i) => (
-            <div key={s.head} style={{ display: "flex", alignItems: "center", gap: 30 }}>
-              <Pop at={s.at} y={80}>
-                <Card style={{ width: 430, height: 330, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, padding: 30 }}>
-                  {i === 0 ? (
-                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 10, width: 330 }}>
-                      {DECISION_CHIPS.map((d, j) => (
-                        <Pop key={d.label} at={s.at + 8 + j * 4} y={10}>
-                          <span style={{ fontSize: 22, fontWeight: 800, color: d.color, background: d.bg, borderRadius: 999, padding: "6px 16px", display: "inline-block" }}>
-                            {d.label}
-                          </span>
-                        </Pop>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 64, fontWeight: 800, color: C.blue, lineHeight: 1 }}>{i === 1 ? "→" : "✓"}</div>
-                  )}
-                  <div style={{ fontSize: 34, fontWeight: 800, textAlign: "center" }}>{s.head}</div>
-                  <div style={{ fontSize: 24, fontWeight: 600, color: LIGHT.muted, textAlign: "center", lineHeight: 1.3 }}>{s.body}</div>
-                </Card>
-              </Pop>
-              {i < STEPS.length - 1 && (
-                <div style={{ width: 60, height: 6, borderRadius: 3, background: C.blue, opacity: flow(i), transform: `scaleX(${flow(i)})`, transformOrigin: "0 50%" }} />
-              )}
-            </div>
-          ))}
-        </div>
-        <Sub text="Changed your mind? Edit it from My Evaluations." accent={[6, 7]} at={132} exitAt={end} top={790} />
-      </Exit>
-    </Stage>
+    <Recommendation
+      youBody="pick a decision for each candidate"
+      sub="Changed your mind? Edit it from My Evaluations."
+      subAccent={[6, 7]}
+    />
   );
 }
