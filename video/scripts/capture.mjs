@@ -59,11 +59,24 @@ function common(path, json) {
   if (path === "/member/events") return json([]);
   if (path === "/member/accountability") return json({ cycle: null, standing: null });
   if (path === "/live-votes/active") return json({ session: null });
+  // The tutorial gates: the sample member has watched every tutorial already.
+  if (path.startsWith("/member/help/tutorial-gates/")) return json({ required: false, cycleId: "cycle-fall", tutorials: [] });
   if (path.startsWith("/analytics")) return true;
   return false;
 }
 
 const page = await context.newPage();
+// A stub with the wrong shape usually shows as a page error, not a failed request.
+page.on("pageerror", (e) => console.warn("page error:", e.message.split("\n")[0]));
+// React render errors are caught by the app's error boundary and only logged.
+page.on("console", async (msg) => {
+  if (msg.type() !== "error") return;
+  const parts = await Promise.all(
+    msg.args().map((a) => a.evaluate((v) => (v instanceof Error ? v.stack : String(v))).catch(() => "?"))
+  );
+  const shown = parts[0]?.includes("%") ? parts.slice(1) : parts;
+  console.warn("console error:", shown.join(" ").split("\n").slice(0, 4).join(" | ").slice(0, 500));
+});
 // Native alert/confirm/prompt never show in screenshots; accept them so the flow runs.
 page.on("dialog", (d) => d.accept(d.type() === "prompt" ? d.defaultValue() : undefined).catch(() => {}));
 
