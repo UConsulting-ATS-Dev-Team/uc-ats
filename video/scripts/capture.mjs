@@ -49,11 +49,15 @@ try {
   process.exit(1);
 }
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: SCALE });
-// Runs in every frame, including blank and PDF frames that have no storage.
+// Runs in every frame, including blank and PDF frames, where storage is null or
+// reading it throws.
 await context.addInitScript(() => {
-  if (!window.localStorage) return;
-  localStorage.setItem("token", "sample-token");
-  localStorage.setItem("theme", "light");
+  try {
+    localStorage.setItem("token", "sample-token");
+    localStorage.setItem("theme", "light");
+  } catch {
+    // a frame without storage: nothing to sign in
+  }
 });
 
 // Calls the app makes on every page, whatever the flow.

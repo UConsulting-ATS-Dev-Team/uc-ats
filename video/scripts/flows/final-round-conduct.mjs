@@ -204,6 +204,9 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     edit1: evalRow().getByRole("button", { name: /Edit evaluation/ }),
   });
   await pageState("m", mineTargets());
+  // Where the video scrolls to before opening the dialog (scrollFor("m", "row1", 260)),
+  // so the decision guide's viewport shot sits on the same page behind it.
+  await scrollTo(evalRow(), 260);
   await evalRow().getByRole("button", { name: /Edit evaluation/ }).click();
   await page.getByText("Edit Evaluation").waitFor();
   await settle(500);
