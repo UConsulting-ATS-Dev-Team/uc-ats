@@ -116,6 +116,43 @@ describe('a first round evaluation', () => {
     expect(data).not.toHaveProperty('behavioralNotes');
   });
 
+  it.each([
+    ['member', () => member, '/member/evaluations', { interviewId: 'iv-r1' }],
+    ['admin', () => admin, '/admin/interviews/iv-r1/evaluations', {}],
+  ])("creates a first one through the %s route with its keys and post-grading notes", async (_, who, path, extra) => {
+    actingAs = who();
+    prisma.firstRoundInterviewEvaluation.findFirst.mockResolvedValue(null);
+
+    const res = await call(actingAs, 'POST', path, { ...extra, applicationId: 'app1', decision: 'YES', notes: 'First impressions', behavioralTotal: 13 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.firstRoundInterviewEvaluation.update).not.toHaveBeenCalled();
+    const { data } = prisma.firstRoundInterviewEvaluation.create.mock.calls[0][0];
+    expect(data).toMatchObject({
+      interviewId: 'iv-r1',
+      applicationId: 'app1',
+      evaluatorId: actingAs.id,
+      decision: 'YES',
+      additionalNotes: 'First impressions',
+      behavioralTotal: 13,
+    });
+  });
+
+  it.each([
+    ['their own', '/admin/evaluations?interviewId=iv-r1'],
+    ["every interviewer's", '/admin/interviews/iv-r1/evaluations'],
+  ])("reads %s post-grading notes back as notes through the admin route", async (_, path) => {
+    actingAs = admin;
+    prisma.firstRoundInterviewEvaluation.findMany.mockResolvedValue([
+      { id: 'f1', interviewId: 'iv-r1', applicationId: 'app1', evaluatorId: 'a1', additionalNotes: 'Admin notes', behavioralNotes: null, application: { id: 'app1', candidate: { id: 'cand1' } } },
+    ]);
+
+    const res = await call(admin, 'GET', path);
+    expect(res.status).toBe(200);
+    const [row] = await res.json();
+    expect(row.notes).toBe('Admin notes');
+  });
+
   it('reads the post-grading notes back as notes', async () => {
     prisma.firstRoundInterviewEvaluation.findMany.mockResolvedValue([
       { id: 'f1', interviewId: 'iv-r1', applicationId: 'app1', evaluatorId: 'm1', additionalNotes: 'Saved earlier', behavioralNotes: null, application: { id: 'app1', candidate: { id: 'cand1' } } },
