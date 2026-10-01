@@ -191,10 +191,17 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     q1Head: page.getByText(SHARED[0]).first(),
     candHead: page.getByText("Candidate-Specific").first(),
     taylorQ: page.getByText(FOR_TAYLOR).first(),
-    row1: page.locator("tr", { hasText: "Taylor Kim" }).first(),
+    row1: page.locator(".grid-row", { hasText: "Taylor Kim" }).first(),
   });
 
   if (!shared.room2 || shared.room2.length !== SHARED.length || (forCandidate.a1 || []).length !== 1) {
     throw new Error(`setup did not save as scripted: ${JSON.stringify({ shared, forCandidate })}`);
+  }
+  // And the page shows them: both shared questions and Taylor's own, on Taylor's row.
+  const taylorRow = page.locator(".grid-row", { hasText: "Taylor Kim" }).first();
+  for (const text of [...SHARED, FOR_TAYLOR]) {
+    if (!(await taylorRow.getByText(text).first().isVisible())) {
+      throw new Error(`Taylor's row on the first round page does not show "${text}"`);
+    }
   }
 }
