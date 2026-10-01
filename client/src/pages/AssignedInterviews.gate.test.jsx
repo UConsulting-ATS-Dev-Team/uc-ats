@@ -63,7 +63,7 @@ describe('Start Interview behind the round tutorial gate', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start the interview' }));
 
     expect(await screen.findByText('Select Application Groups to Evaluate')).toBeInTheDocument();
-    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/FIRST_ROUND/complete');
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/FIRST_ROUND/complete', { cycleId: 'c1', token: null });
   });
 
   it("asks the coffee chat gate for a coffee chat", async () => {
