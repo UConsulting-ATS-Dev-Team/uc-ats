@@ -33,6 +33,29 @@ describe('getTutorialGate', () => {
     expect(gate).toEqual({ required: true, cycleId: CYCLE.id, tutorials: [TUTORIAL] });
   });
 
+  it.each(['COFFEE_CHATS', 'FIRST_ROUND', 'FINAL_ROUND'])(
+    'gates the %s interview round on its own tutorials and completion',
+    async (category) => {
+      const roundTutorial = { ...TUTORIAL, category };
+      prisma.tutorial.findMany.mockResolvedValue([roundTutorial]);
+
+      const gate = await getTutorialGate(asRole('MEMBER', 'm-7'), category);
+
+      expect(gate).toEqual({ required: true, cycleId: CYCLE.id, tutorials: [roundTutorial] });
+      expect(prisma.tutorial.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { category } }));
+      expect(prisma.tutorialCompletion.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId_cycleId_category: { userId: 'm-7', cycleId: CYCLE.id, category } },
+        })
+      );
+    }
+  );
+
+  it('does not gate the general interview category', async () => {
+    const gate = await getTutorialGate(asRole('MEMBER'), 'INTERVIEW_CONDUCT');
+    expect(gate.required).toBe(false);
+  });
+
   it('looks the completion up for this person, this cycle and this category', async () => {
     await getTutorialGate(asRole('MEMBER', 'm-42'), 'DOCUMENT_GRADING');
     expect(prisma.tutorialCompletion.findUnique).toHaveBeenCalledWith(

@@ -174,3 +174,58 @@ describe('useTutorialGate', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
+
+// My Interviews and Run a session start interviews of every round from one page, so
+// the category arrives with each click rather than with the hook.
+function InterviewsPage({ onStart }) {
+  const gate = useTutorialGate();
+  return (
+    <>
+      <button onClick={() => gate.run(() => onStart('coffee'), 'COFFEE_CHATS')}>Coffee chat</button>
+      <button onClick={() => gate.run(() => onStart('final'), 'FINAL_ROUND')}>Final round</button>
+      <button onClick={() => gate.run(() => onStart('delibs'), null)}>Deliberations</button>
+      {gate.dialog}
+    </>
+  );
+}
+
+describe('useTutorialGate with a category per click', () => {
+  it("gates each round on that round's tutorials and records that round", async () => {
+    apiClient.get.mockResolvedValue({
+      required: true,
+      cycleId: 'c1',
+      tutorials: [{ ...TUTORIAL, title: 'Running a Coffee Chat' }],
+    });
+    const onStart = vi.fn();
+    render(<InterviewsPage onStart={onStart} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Coffee chat' }));
+    expect(await screen.findByText(/before you run a coffee chat/)).toBeInTheDocument();
+    expect(apiClient.get).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS');
+
+    fireEvent.click(screen.getByLabelText('I watched the whole tutorial'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start the interview' }));
+
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith('coffee'));
+    expect(apiClient.post).toHaveBeenCalledWith('/member/help/tutorial-gates/COFFEE_CHATS/complete');
+  });
+
+  it('asks about the round that was clicked', async () => {
+    apiClient.get.mockResolvedValue({ required: false, cycleId: 'c1', tutorials: [] });
+    const onStart = vi.fn();
+    render(<InterviewsPage onStart={onStart} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Final round' }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith('final'));
+    expect(apiClient.get).toHaveBeenLastCalledWith('/member/help/tutorial-gates/FINAL_ROUND');
+  });
+
+  it('lets an interview with no tutorial category straight through, without asking', async () => {
+    const onStart = vi.fn();
+    render(<InterviewsPage onStart={onStart} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deliberations' }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith('delibs'));
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+});
