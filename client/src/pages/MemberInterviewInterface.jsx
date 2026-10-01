@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -11,6 +11,7 @@ import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import { groupsForMember } from '../utils/interviewGroups';
 import {
   DecisionGuideButton,
   DecisionGuidePanel,
@@ -76,20 +77,7 @@ export default function MemberInterviewInterface() {
         const interviewRes = await apiClient.get(`/member/interviews/${interviewId}`);
         console.log('Interview data loaded:', interviewRes);
         setInterview(interviewRes);
-        
-        // Parse interview description to get application groups
-        let parsedDescription = {};
-        try {
-          parsedDescription = typeof interviewRes.description === 'string' 
-            ? JSON.parse(interviewRes.description) 
-            : interviewRes.description || {};
-        } catch (e) {
-          console.warn('Failed to parse interview description:', e);
-        }
-        
-        console.log('Parsed interview description:', parsedDescription);
-        console.log('Application groups:', parsedDescription.applicationGroups);
-        
+
         // Load applications for selected groups
         console.log('Loading applications for groups:', groupIds);
         try {
@@ -118,13 +106,16 @@ export default function MemberInterviewInterface() {
           setEvaluations({});
         }
 
-        // Set interview data with parsed description for group selection
-        console.log('Setting interview data with parsed description...');
-        const interviewDataWithGroups = {
-          ...interviewRes,
-          applicationGroups: parsedDescription.applicationGroups || []
-        };
-        setInterviewData(interviewDataWithGroups);
+        // The groups for "Select Groups" and "Interview Another Group": the same
+        // config, and the same filter, as the picker on My Interviews.
+        let applicationGroups = [];
+        try {
+          const config = await apiClient.get(`/member/interviews/${interviewId}/config`);
+          applicationGroups = groupsForMember(config, userRes?.id);
+        } catch (configError) {
+          console.error('Failed to load interview groups:', configError);
+        }
+        setInterviewData({ ...interviewRes, applicationGroups });
         
       } catch (error) {
         console.error('Failed to load interview data:', error);
@@ -143,9 +134,15 @@ export default function MemberInterviewInterface() {
     }
   }, [interviewId, groupIds.join(','), navigate]);
 
-  const getEvaluation = (applicationId) => {
+  // Autosave runs from a timer set during the edit, so its closure holds the
+  // evaluations from before that edit. It reads this ref instead, which is
+  // current by the time the timer fires.
+  const evaluationsRef = useRef(evaluations);
+  evaluationsRef.current = evaluations;
+
+  const getEvaluation = (applicationId, from = evaluations) => {
     const key = `${applicationId}_${currentUser?.id}`;
-    return evaluations[key] || {
+    return from[key] || {
       notes: '',
       decision: null
     };
@@ -156,7 +153,7 @@ export default function MemberInterviewInterface() {
     setEvaluations(prev => ({
       ...prev,
       [key]: {
-        ...getEvaluation(applicationId),
+        ...getEvaluation(applicationId, prev),
         ...updates
       }
     }));
@@ -191,7 +188,7 @@ export default function MemberInterviewInterface() {
 
   const autoSaveEvaluation = async (applicationId) => {
     try {
-      const evaluation = getEvaluation(applicationId);
+      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
       
       await apiClient.post('/member/evaluations', {
         interviewId,
