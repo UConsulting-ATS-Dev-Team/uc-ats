@@ -1,13 +1,13 @@
 // Running a Final Round: coordinate in the interview chat, take behavioral notes, run
 // the case (exhibits, the interviewer-only guide, Candidate View, the casing rubric),
-// confirm the candidate's details, Save All, then record the decision from My
-// Interviews with the decision guide open.
+// confirm the candidate's details, Save All, then record each decision in the
+// pop-up Save All opens, with the decision guide open.
 //
 // Edits are captured as viewport shots at recorded scroll positions; each tab is
 // also captured as a full page, so the camera can scroll back to the tabs.
 import { makeSampleDocs } from "../sample-docs.mjs";
 import { makeSampleCase } from "../sample-case.mjs";
-import { APPS, finalRoundApi, INTERVIEW, SAMPLE_USER, SHARED } from "../final-round-stubs.mjs";
+import { APPS, finalRoundApi, INTERVIEW, SHARED } from "../final-round-stubs.mjs";
 
 const state = { as: "member", shared: [...SHARED], caseLocked: false, assignments: { a1: "case-1", a2: "case-1" } };
 let handler;
@@ -175,64 +175,38 @@ export async function run({ page, base, states, settle, pageState, viewState, el
     details.phoneConfirmed && details.decisionCallTonight && details.weeklyMeetings;
   if (!savedAll) throw new Error(`Save All did not send the scripted evaluation: ${JSON.stringify(saved)}`);
 
-  // ---------- The decision, from My Interviews ----------
-  const app1 = APPS[0];
-  state.evaluations = APPS.map((a) => {
-    const s = state.saves.filter((x) => x.applicationId === a.id).at(-1) || {};
-    return {
-      id: `ev-${a.id}`,
-      interviewId: INTERVIEW.id,
-      applicationId: a.id,
-      evaluatorId: SAMPLE_USER.id,
-      notes: "",
-      decision: null,
-      behavioralNotes: s.behavioralNotes ?? {},
-      casingNotes: s.casingNotes ?? null,
-      candidateDetails: s.candidateDetails ?? null,
-      updatedAt: "2026-10-28T22:05:00.000Z",
-      application: { ...a, candidate: { id: a.candidateId } },
-    };
-  });
-  await page.goto(`${base}/assigned-interviews`, { waitUntil: "networkidle" });
-  await page.getByText("My Evaluations").first().waitFor();
-  await settle(900);
-  const evalRow = () => page.locator(".evaluation-item", { hasText: app1.name }).first();
-  const mineTargets = () => ({
-    evals: page.getByText("My Evaluations").first(),
-    row1: evalRow(),
-    chip1: evalRow().getByText(/Not evaluated|^Yes$/).first(),
-    edit1: evalRow().getByRole("button", { name: /Edit evaluation/ }),
-  });
-  await pageState("m", mineTargets());
-  // Where the video scrolls to before opening the dialog (scrollFor("m", "row1", 260)),
-  // so the decision guide's viewport shot sits on the same page behind it.
-  await scrollTo(evalRow(), 260);
-  await evalRow().getByRole("button", { name: /Edit evaluation/ }).click();
-  await page.getByText("Edit Evaluation").waitFor();
+  // ---------- The decision, asked as Save All finishes ----------
+  const pop = () => page.locator(".MuiDialog-paper", { hasText: "Your decision on each candidate" });
+  await pop().waitFor();
   await settle(500);
-  const modal = () => page.locator(".modal-content").last();
-  const modalTargets = () => ({
-    yes: modal().locator("label", { hasText: /^Yes$/ }).first(),
-    help: modal().getByRole("button", { name: /What the decisions mean/ }).first(),
-    save: modal().getByRole("button", { name: /Save Changes/ }),
+  const choice = (name, label) => pop().getByRole("group", { name: `Decision for ${name}` }).getByRole("button", { name: label, exact: true });
+  const popTargets = () => ({
+    guideBtn: pop().getByRole("button", { name: /What the decisions mean/ }),
+    yes1: choice(APPS[0].name, "Yes"),
+    myes2: choice(APPS[1].name, "Maybe-Yes"),
+    save: pop().getByRole("button", { name: "Save decisions" }),
   });
-  await elState("m-edit", modal(), modalTargets());
-  await modal().getByRole("button", { name: /What the decisions mean/ }).first().click();
+  await elState("pop", pop(), popTargets());
+  await pop().getByRole("button", { name: /What the decisions mean/ }).click();
   const drawer = page.locator(".MuiDrawer-paper");
   await drawer.getByText("Decision guide").waitFor();
   await settle(600);
-  await viewState("m-guide", { drawer });
+  await viewState("pop-guide", { drawer });
   await page.keyboard.press("Escape");
-  await settle(500);
-  await modal().locator("label", { hasText: /^Yes$/ }).first().click();
+  await drawer.waitFor({ state: "detached" });
+  await settle(400);
+  await choice(APPS[0].name, "Yes").click();
   await page.mouse.move(0, 0);
-  await elState("m-yes", modal(), modalTargets());
-  await modal().getByRole("button", { name: /Save Changes/ }).click();
-  await page.getByText("Edit Evaluation").waitFor({ state: "detached" });
-  await settle(700);
-  await pageState("m-done", mineTargets());
+  await elState("pop-1", pop(), popTargets());
+  await choice(APPS[1].name, "Maybe-Yes").click();
+  await page.mouse.move(0, 0);
+  await elState("pop-2", pop(), popTargets());
+  const before = state.saves.length;
+  await pop().getByRole("button", { name: "Save decisions" }).click();
+  await pop().waitFor({ state: "detached" });
+  await settle(500);
 
-  const decided = state.saves.at(-1);
-  if (decided?.decision !== "YES" || decided.applicationId !== "a1") throw new Error(`decision not saved: ${JSON.stringify(decided)}`);
+  const decided = Object.fromEntries(state.saves.slice(before).map((x) => [x.applicationId, x.decision]));
+  if (decided.a1 !== "YES" || decided.a2 !== "MAYBE_YES") throw new Error(`decisions not saved: ${JSON.stringify(decided)}`);
   if (state.chat.messages.at(-1)?.body !== SCRIPT.reply) throw new Error("the chat reply was not sent");
 }
