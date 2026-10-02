@@ -107,6 +107,27 @@ describe('DocumentGradingModal', () => {
     await waitFor(() => expect(screen.getByLabelText('Presence on camera')).toHaveValue('0'));
   });
 
+  it('counts a category an admin added to the video rubric toward the overall', async () => {
+    const energy = { id: 'scoreTwo', title: 'Energy', description: '', min: 0, max: 3, criteria: [] };
+    const twoCategories = { ...video, aggregation: 'sum', maxOverall: 8, rubric: { categories: [...video.rubric.categories, energy] } };
+    mockServer();
+    apiClient.get.mockImplementation((url) => Promise.resolve(
+      url === '/document-rubrics' ? { ...rubricsResponse, rubrics: { ...rubricsResponse.rubrics, video: twoCategories } } : null
+    ));
+    renderModal();
+
+    fireEvent.change(await screen.findByLabelText('Presence on camera'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText('Energy'), { target: { value: '2' } });
+    expect(screen.getByText('Overall 6 / 8')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/review-teams/video-score', expect.objectContaining({
+      scoreOne: 4,
+      scoreTwo: 2,
+      scoreThree: null
+    })));
+  });
+
   describe('saving and closing', () => {
     const renderWith = (props) => render(
       <DocumentGradingModal open application={application} documentType="video" {...props} />

@@ -6,13 +6,13 @@ import { resolveAdminCycle } from './activeCycle.js';
 //
 // What an admin can change per category: title, description, the score range
 // (min..max, whole numbers) and the criteria rows that explain the range. They
-// can also remove a category, as long as one is left, and add it back later.
-// What they cannot: add a category the type has no column for, or change how a
-// document's overall score is folded from its categories. Both are fixed by
-// the storage - every score table has exactly three Int columns
-// (scoreOne/Two/Three) - and by the Staging ranking, which adds the three
-// documents' overall scores together. A type with no row reads as
-// DEFAULT_RUBRICS, so nothing moves until someone saves.
+// can also remove a category, as long as one is left, and add one into any of
+// the three score columns the type is not using. What they cannot: have more
+// than three categories, or change how a document's overall score is folded
+// from its categories. Both are fixed by the storage - every score table has
+// exactly three Int columns (scoreOne/Two/Three) - and by the Staging ranking,
+// which adds the three documents' overall scores together. A type with no row
+// reads as DEFAULT_RUBRICS, so nothing moves until someone saves.
 //
 // A removed category's column is simply not read: graders are not asked for
 // it, the overall is folded from the categories that remain, and a regrade
@@ -28,12 +28,14 @@ export const SCORE_FIELDS = Object.freeze(['scoreOne', 'scoreTwo', 'scoreThree']
 
 /**
  * How each type's overall score is built from its categories. Fixed per type:
- * Staging and every score list read overallScore with these meanings.
+ * Staging and every score list read overallScore with these meanings. Video
+ * ships with one category, where a sum is that score as it always was; a
+ * category added to it counts toward the overall instead of being ignored.
  */
 export const AGGREGATION = Object.freeze({
   resume: 'sum',
   coverLetter: 'average',
-  video: 'single'
+  video: 'sum'
 });
 
 /** Staging adds up to this many participation points (events + GTKUC) to the document total. */
@@ -149,14 +151,11 @@ export const assertDocumentType = (type) => {
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
-const categoryIds = (type) => DEFAULT_RUBRICS[type].categories.map((category) => category.id);
-
 /**
  * Validates what an admin submitted for `type`. Categories are matched by id
- * against the type's own and come back in the type's order; an id the type
- * does not have, or one given twice, is refused, and a missing one means the
- * admin removed it. At
- * least one must be left. Criteria rows that are entirely blank are dropped
+ * against the score columns and come back in column order; an id that is not
+ * a column, or one given twice, is refused, and a missing one means the admin
+ * removed it (or never added it). At least one must be left. Criteria rows that are entirely blank are dropped
  * rather than refused, so an editor's spare empty row saves.
  */
 export function normalizeRubric(type, input) {
@@ -165,10 +164,10 @@ export function normalizeRubric(type, input) {
     throw fail(400, 'A rubric needs a list of categories', 'INVALID_RUBRIC');
   }
 
-  // Leaving a category out removes it, so an id that is not one of this type's
-  // columns (a typo, say) is refused rather than read as a removal of the
-  // category it was meant to be.
-  const ids = categoryIds(type);
+  // Leaving a category out removes it, so an id that is not a score column
+  // (a typo, say) is refused rather than read as a removal of the category it
+  // was meant to be.
+  const ids = SCORE_FIELDS;
   const submitted = new Map();
   for (const category of input.categories.filter(Boolean)) {
     if (!ids.includes(category.id)) throw fail(400, `Unknown category: ${category.id}`, 'INVALID_RUBRIC');
@@ -248,16 +247,14 @@ function storedOrDefault(type, row) {
 export function maxOverall(type, rubric) {
   const maxes = rubric.categories.map((category) => category.max);
   if (AGGREGATION[type] === 'sum') return maxes.reduce((sum, max) => sum + max, 0);
-  if (AGGREGATION[type] === 'average') return maxes.reduce((sum, max) => sum + max, 0) / maxes.length;
-  return maxes[0];
+  return maxes.reduce((sum, max) => sum + max, 0) / maxes.length;
 }
 
 /** The lowest overall score, for range labels. */
 export function minOverall(type, rubric) {
   const mins = rubric.categories.map((category) => category.min);
   if (AGGREGATION[type] === 'sum') return mins.reduce((sum, min) => sum + min, 0);
-  if (AGGREGATION[type] === 'average') return mins.reduce((sum, min) => sum + min, 0) / mins.length;
-  return mins[0];
+  return mins.reduce((sum, min) => sum + min, 0) / mins.length;
 }
 
 const presentScore = (value) => value !== null && value !== undefined && value !== '';
@@ -273,8 +270,7 @@ export function computeOverall(type, rubric, scores) {
     .map(Number);
   if (values.length === 0) return 0;
   if (AGGREGATION[type] === 'sum') return values.reduce((sum, value) => sum + value, 0);
-  if (AGGREGATION[type] === 'average') return values.reduce((sum, value) => sum + value, 0) / values.length;
-  return values[0];
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 /**
@@ -377,8 +373,8 @@ const describe = (type, rubric, customized, row) => ({
   type,
   aggregation: AGGREGATION[type],
   rubric,
-  /** Every column this type can score, so the editor can offer a removed category back. */
-  slots: categoryIds(type),
+  /** Every column a category can live in, so the editor can offer the free ones as new categories. */
+  slots: SCORE_FIELDS,
   minOverall: minOverall(type, rubric),
   maxOverall: maxOverall(type, rubric),
   customized,
