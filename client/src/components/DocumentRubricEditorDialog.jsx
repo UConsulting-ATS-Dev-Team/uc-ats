@@ -31,9 +31,10 @@ import {
 // the server (normalizeRubric in server/src/services/documentRubrics.js).
 //
 // Each tab keeps its own draft, so switching tabs loses nothing; Save saves the
-// tab in view. A category can be removed while one is left, and added back
-// into any column (scoreOne/Two/Three) the type has free. A save that would leave this cycle's scores outside the new
-// range asks once, then saves - existing scores are never rescaled.
+// tab in view. A category can be removed while one is left, and a new one
+// added into any column (scoreOne/Two/Three) the type has free, so up to three
+// per type. A save that would leave this cycle's scores outside the new range
+// asks once, then saves - existing scores are never rescaled.
 
 const TYPES = ['resume', 'coverLetter', 'video'];
 const TITLE_MAX = 120;
@@ -46,7 +47,7 @@ const SCORE_CEILING = 100;
 const AGGREGATION_NOTE = {
   resume: 'The overall resume score is the sum of these categories.',
   coverLetter: 'The overall score is the average of these categories.',
-  video: 'The overall video score is this one category.'
+  video: 'The overall video score is the sum of these categories.'
 };
 
 let rowSeq = 0;

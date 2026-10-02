@@ -2,7 +2,7 @@
 // the copy an earlier page cached.
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { setDocumentRubrics, useDocumentRubrics } from './documentRubrics';
+import { aggregationText, draftMaxOverall, setDocumentRubrics, useDocumentRubrics } from './documentRubrics';
 import apiClient from './api';
 
 vi.mock('./api', () => ({ default: { get: vi.fn() } }));
@@ -53,5 +53,22 @@ describe('useDocumentRubrics', () => {
 
     await act(async () => { answer(body(5)); });
     expect(screen.getByText('video max 9')).toBeInTheDocument();
+  });
+});
+
+describe('a video rubric with an added category', () => {
+  const rubric = {
+    categories: [
+      { id: 'scoreOne', title: 'Video', min: 0, max: 2 },
+      { id: 'scoreTwo', title: 'Presence', min: 0, max: 3 }
+    ]
+  };
+
+  it('is worth the sum of its categories, as the server scores it', () => {
+    expect(draftMaxOverall('video', rubric)).toBe(5);
+  });
+
+  it('says so', () => {
+    expect(aggregationText('video', rubric)).toBe('Sum of Video (0–2) and Presence (0–3)');
   });
 });

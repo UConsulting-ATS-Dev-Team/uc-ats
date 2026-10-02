@@ -455,17 +455,16 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     }
   };
 
-  // Mirrors computeOverall in server/src/services/documentRubrics.js: resume
-  // sums, cover letter averages, video is its one category. Blanks are skipped.
-  // A score still out of range is left out until it is fixed.
+  // Mirrors computeOverall in server/src/services/documentRubrics.js: cover
+  // letter averages, resume and video sum. Blanks are skipped. A score still
+  // out of range is left out until it is fixed.
   const calculateOverallScore = () => {
     const values = categories
       .filter((category) => scores[category.id] !== '' && !outOfRange(category, scores[category.id]))
       .map((category) => Number(scores[category.id]));
     if (values.length === 0) return 0;
-    if (documentType === 'resume') return values.reduce((sum, value) => sum + value, 0);
-    if (documentType === 'coverLetter') return values.reduce((sum, value) => sum + value, 0) / values.length;
-    return values[0];
+    const total = values.reduce((sum, value) => sum + value, 0);
+    return documentType === 'coverLetter' ? total / values.length : total;
   };
 
   // Whole numbers only. Anything else is ignored as it is typed; a number

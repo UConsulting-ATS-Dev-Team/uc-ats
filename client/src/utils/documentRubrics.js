@@ -135,7 +135,7 @@ export function aggregationText(type, rubric) {
   const categories = rubric?.categories || [];
   const parts = categories.map((category) => `${category.title} (${rangeLabel(category)})`);
   if (categories.length <= 1) return 'Single category score';
-  if (type === 'resume') return `Sum of ${parts.join(' and ')}`;
+  if (type === 'resume' || type === 'video') return `Sum of ${parts.join(' and ')}`;
   return `Average of ${categories.length === 3 ? 'all three' : 'the'} category scores`;
 }
 
@@ -143,7 +143,6 @@ export function aggregationText(type, rubric) {
 export function draftMaxOverall(type, rubric) {
   const maxes = (rubric?.categories || []).map((category) => Number(category.max) || 0);
   if (maxes.length === 0) return 0;
-  if (type === 'resume') return maxes.reduce((sum, max) => sum + max, 0);
   if (type === 'coverLetter') return maxes.reduce((sum, max) => sum + max, 0) / maxes.length;
-  return maxes[0];
+  return maxes.reduce((sum, max) => sum + max, 0);
 }

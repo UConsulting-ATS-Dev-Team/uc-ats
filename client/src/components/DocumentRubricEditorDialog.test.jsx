@@ -163,6 +163,37 @@ describe('DocumentRubricEditorDialog', () => {
       { rubric: { categories: [expect.objectContaining({ id: 'scoreTwo' })] } }
     ));
   });
+
+  it('adds a new, blank category to a resume rubric and saves it into the free column', async () => {
+    apiClient.post.mockResolvedValue({ outOfRange: { count: 0, cycleName: 'Fall 2026' } });
+    apiClient.put.mockResolvedValue(response());
+    apiClient.get.mockResolvedValue({
+      ...response(),
+      rubrics: Object.fromEntries(Object.entries(response().rubrics)
+        .map(([key, info]) => [key, { ...info, slots: ['scoreOne', 'scoreTwo', 'scoreThree'] }]))
+    });
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }));
+    expect(screen.getByText('Category 3')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add category' })).not.toBeInTheDocument();
+
+    const titles = screen.getAllByLabelText('Title');
+    fireEvent.change(titles[2], { target: { value: 'Leadership' } });
+    fireEvent.change(screen.getAllByLabelText('Max')[2], { target: { value: '5' } });
+    // 10 + 3 + 5 for the resume, then cover letter 3, video 2, participation 3.
+    expect(screen.getByText(/counts for up to/)).toHaveTextContent('up to 18 of the 26-point overall');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.put).toHaveBeenCalledWith(
+      '/document-rubrics/resume',
+      { rubric: { categories: [
+        expect.objectContaining({ id: 'scoreOne' }),
+        expect.objectContaining({ id: 'scoreTwo' }),
+        expect.objectContaining({ id: 'scoreThree', title: 'Leadership', min: 1, max: 5 })
+      ] } }
+    ));
+  });
 });
 
 describe('labelsOutsideRange', () => {

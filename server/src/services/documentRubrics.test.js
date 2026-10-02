@@ -70,6 +70,13 @@ describe('reading', () => {
     expect(stagingMax).toBe(21);
   });
 
+  it('offers every score column to every type, so a category can be added', async () => {
+    const { rubrics } = await getRubrics({ client: db });
+    for (const type of ['resume', 'coverLetter', 'video']) {
+      expect(rubrics[type].slots).toEqual(['scoreOne', 'scoreTwo', 'scoreThree']);
+    }
+  });
+
   it('falls back to the shipped rubric while the table does not exist yet', async () => {
     db.documentRubric.findMany = async () => { throw Object.assign(new Error('missing'), { code: 'P2021' }); };
     expect(await getRubric({ client: db, type: 'video' })).toEqual(DEFAULT_RUBRICS.video);
@@ -117,13 +124,24 @@ describe('normalizeRubric', () => {
     expect(() => normalizeRubric('coverLetter', { categories: [] })).toThrow(/at least one category/);
   });
 
-  it('refuses a category the type does not have, rather than reading it as a removal', () => {
-    const extra = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Extra', min: 0, max: 5 }] };
-    expect(() => normalizeRubric('video', extra)).toThrow(/Unknown category: scoreTwo/);
+  it('refuses a category with no score column, rather than reading it as a removal', () => {
+    const extra = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreFour', title: 'Extra', min: 0, max: 5 }] };
+    expect(() => normalizeRubric('video', extra)).toThrow(/Unknown category: scoreFour/);
 
     const [one, two, three] = DEFAULT_RUBRICS.coverLetter.categories;
     const typo = { categories: [one, two, { ...three, id: 'scoreThre' }] };
     expect(() => normalizeRubric('coverLetter', typo)).toThrow(/Unknown category: scoreThre/);
+  });
+
+  it('adds a category into a column the default rubric leaves free', () => {
+    const impact = { id: 'scoreThree', title: 'Leadership', description: '', min: 1, max: 5, criteria: [] };
+    const resume = normalizeRubric('resume', { categories: [impact, ...DEFAULT_RUBRICS.resume.categories] });
+    expect(resume.categories.map((category) => category.id)).toEqual(['scoreOne', 'scoreTwo', 'scoreThree']);
+    expect(maxOverall('resume', resume)).toBe(18);
+
+    const presence = { id: 'scoreTwo', title: 'Presence', description: '', min: 0, max: 3, criteria: [] };
+    const video = normalizeRubric('video', { categories: [...DEFAULT_RUBRICS.video.categories, presence] });
+    expect(video.categories.map((category) => category.id)).toEqual(['scoreOne', 'scoreTwo']);
   });
 
   it('refuses the same category twice', () => {
@@ -158,6 +176,13 @@ describe('overall score', () => {
   it('counts a real zero', () => {
     const rubric = edited('coverLetter', { scoreOne: { min: 0 }, scoreTwo: { min: 0 }, scoreThree: { min: 0 } });
     expect(computeOverall('coverLetter', rubric, { scoreOne: 3, scoreTwo: 0, scoreThree: 3 })).toBe(2);
+  });
+
+  it('sums a video rubric with an added category, so the new one counts', () => {
+    const rubric = { categories: [...DEFAULT_RUBRICS.video.categories, { id: 'scoreTwo', title: 'Presence', min: 0, max: 3 }] };
+    expect(computeOverall('video', rubric, { scoreOne: 2, scoreTwo: 3 })).toBe(5);
+    expect(maxOverall('video', rubric)).toBe(5);
+    expect(computeOverall('video', DEFAULT_RUBRICS.video, { scoreOne: 1 })).toBe(1);
   });
 
   it('gives the average of the maxima for an average type', () => {
