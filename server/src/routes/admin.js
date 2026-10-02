@@ -1146,12 +1146,24 @@ const FORM_URL_ERROR =
   "Use the form's editor link (docs.google.com/forms/d/.../edit). The application sync cannot read forms.gle shortlinks or published /d/e/ links.";
 const formUrlProblem = (formUrl) => (formUrl && !syncableFormId(formUrl) ? FORM_URL_ERROR : null);
 
+// Earlier versions of the form, still synced. Same rule as formUrl, for each
+// one; blanks are dropped. Returns { value } or { error }.
+const parsePreviousFormUrls = (input) => {
+  if (input === undefined) return { value: undefined };
+  if (!Array.isArray(input)) return { error: 'previousFormUrls must be a list of form links' };
+  const urls = input.map((u) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean);
+  if (urls.some((u) => !syncableFormId(u))) return { error: `Earlier form versions: ${FORM_URL_ERROR}` };
+  return { value: [...new Set(urls)] };
+};
+
 // Create a new cycle
 router.post('/cycles', async (req, res) => {
   try {
     const { name, formUrl, startDate, endDate, isActive, resumeDeadline, coverLetterDeadline, videoDeadline } = req.body;
     const formUrlError = formUrlProblem(formUrl);
     if (formUrlError) return res.status(400).json({ error: formUrlError });
+    const previousFormUrls = parsePreviousFormUrls(req.body.previousFormUrls);
+    if (previousFormUrls.error) return res.status(400).json({ error: previousFormUrls.error });
     const applicationDeadline = parseApplicationDeadline(req.body.applicationDeadline);
     if (applicationDeadline.error) return res.status(400).json({ error: applicationDeadline.error });
     const activate = Boolean(isActive);
@@ -1162,6 +1174,7 @@ router.post('/cycles', async (req, res) => {
         data: {
           name,
           formUrl: formUrl || null,
+          previousFormUrls: previousFormUrls.value || [],
           startDate: startDate ? new Date(startDate) : null,
           endDate: endDate ? new Date(endDate) : null,
           applicationDeadline: applicationDeadline.value,
@@ -1290,11 +1303,14 @@ router.patch('/cycles/:id', async (req, res) => {
       if (existing?.formUrl !== formUrl) return res.status(400).json({ error: FORM_URL_ERROR });
       skipFormUrl = true;
     }
+    const previousFormUrls = parsePreviousFormUrls(req.body.previousFormUrls);
+    if (previousFormUrls.error) return res.status(400).json({ error: previousFormUrls.error });
     console.log('[PATCH /api/admin/cycles/:id] Updating cycle:', id, 'with data:', req.body);
     
     const updateData = {
       ...(name !== undefined ? { name } : {}),
       ...(formUrl !== undefined && !skipFormUrl ? { formUrl } : {}),
+      ...(previousFormUrls.value !== undefined ? { previousFormUrls: previousFormUrls.value } : {}),
       ...(startDate !== undefined ? { startDate: startDate ? new Date(startDate) : null } : {}),
       ...(endDate !== undefined ? { endDate: endDate ? new Date(endDate) : null } : {}),
       // Activation is applied separately below so it goes through the ordered

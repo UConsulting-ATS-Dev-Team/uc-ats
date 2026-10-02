@@ -70,8 +70,21 @@ function applicantFormLink(formUrl) {
     return formId ? `https://docs.google.com/forms/d/${formId}/viewform` : null;
 }
 
+/**
+ * Every form id a cycle's applications arrive through: the current form
+ * first, then its earlier versions, without repeats. Links sync cannot read
+ * are left out.
+ * @param {{ formUrl?: string|null, previousFormUrls?: string[]|null }} cycle
+ * @returns {string[]}
+ */
+function cycleFormIds(cycle) {
+    const urls = [cycle?.formUrl, ...(cycle?.previousFormUrls || [])];
+    return [...new Set(urls.map(syncableFormId).filter(Boolean))];
+}
+
 export {
     extractFormIdFromUrl,
     syncableFormId,
-    applicantFormLink
+    applicantFormLink,
+    cycleFormIds
 }; 

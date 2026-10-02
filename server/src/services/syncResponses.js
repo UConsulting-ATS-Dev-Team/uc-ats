@@ -2,7 +2,7 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { getResponses } from './google/forms.js'
 import { transformFormResponse } from '../utils/dataMapper.js'
-import { extractFormIdFromUrl } from '../utils/formUtils.js'
+import { cycleFormIds } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
@@ -96,21 +96,29 @@ export default async function syncFormResponses() {
     console.log('Active cycle found:', {
       id: activeCycle.id,
       name: activeCycle.name,
-      formUrl: activeCycle.formUrl
+      formUrl: activeCycle.formUrl,
+      previousFormUrls: activeCycle.previousFormUrls
     });
-    
-    const formIdToUse = extractFormIdFromUrl(activeCycle.formUrl || '');
-    console.log('Extracted form ID:', formIdToUse);
-    
-    if (!formIdToUse) {
+
+    // The current form and every earlier version of it. Each is read on its
+    // own, so one the service account cannot open does not stop the others.
+    const formIds = cycleFormIds(activeCycle);
+    if (formIds.length === 0) {
       console.warn('Active cycle has no valid Google Form URL. Skipping sync.');
       console.warn('Form URL was:', activeCycle.formUrl);
       return;
     }
 
-    console.log('Using form ID for API call:', formIdToUse);
-    const responses = await getResponses(formIdToUse)
-    
+    const responses = [];
+    for (const formId of formIds) {
+      try {
+        console.log('Using form ID for API call:', formId);
+        responses.push(...await getResponses(formId));
+      } catch (error) {
+        console.error(`Could not read responses for form ${formId}:`, error.message);
+      }
+    }
+
     // Get existing response IDs
     const existingResponseIds = new Set(
       (await prisma.application.findMany({
@@ -133,6 +141,15 @@ export default async function syncFormResponses() {
         // Extract candidate information from the application data
         const studentId = dbRecord.studentId;
         const emailFromForm = (dbRecord.email || '').trim();
+
+        // Neither identifier mapped means the response came from a form whose
+        // question ids form-config.json does not know yet, typically a new
+        // version of the form. Nothing is written, so it syncs in full once
+        // the mappings are added instead of being stored as a nameless row.
+        if (!studentId && !emailFromForm) {
+          console.warn(`Skipping response ${response.responseId}: no mapped email or UID. Add the form's question ids to form-config.json.`);
+          continue;
+        }
 
         // Two lookups rather than one OR, and the UID asked first.
         //

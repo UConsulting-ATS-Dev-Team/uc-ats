@@ -12,7 +12,7 @@
 import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { getFormQuestions } from './google/forms.js';
-import { syncableFormId } from '../utils/formUtils.js';
+import { cycleFormIds } from '../utils/formUtils.js';
 
 // Forms are rarely edited mid-cycle and every open grading dialog asks, so a
 // form is read at most once per window. A failure is cached for less time so
@@ -66,11 +66,15 @@ export async function getCycleQuestionPrompt(cycleId, field) {
   if (!cycleId) return null;
   const cycle = await prisma.recruitingCycle.findUnique({
     where: { id: cycleId },
-    select: { formUrl: true }
+    select: { formUrl: true, previousFormUrls: true }
   });
-  const formId = syncableFormId(cycle?.formUrl);
-  if (!formId) return null;
-  return promptFromItems(await loadFormItems(formId), field);
+  // The current form first; an earlier version answers for a question the
+  // current one no longer asks.
+  for (const formId of cycleFormIds(cycle)) {
+    const prompt = promptFromItems(await loadFormItems(formId), field);
+    if (prompt) return prompt;
+  }
+  return null;
 }
 
 export function clearFormPromptCache() {

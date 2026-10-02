@@ -103,4 +103,24 @@ describe('cycle form links', () => {
     expect((await request('/cycles', 'POST', { name: 'Fall 2026' })).status).toBe(201);
     expect((await request('/cycles/cycle-1', 'PATCH', { formUrl: '' })).status).not.toBe(400);
   });
+
+  it('saves earlier form versions, dropping blanks', async () => {
+    const res = await request('/cycles/cycle-1', 'PATCH', {
+      previousFormUrls: ['https://docs.google.com/forms/d/old/edit', '', '  ']
+    });
+
+    expect(res.status).not.toBe(400);
+    const writes = prisma.recruitingCycle.update.mock.calls.map(([args]) => args.data);
+    expect(writes.some((data) => JSON.stringify(data.previousFormUrls) === JSON.stringify(['https://docs.google.com/forms/d/old/edit']))).toBe(true);
+  });
+
+  it.each(UNSYNCABLE)('refuses %s as an earlier form version', async (url) => {
+    const created = await request('/cycles', 'POST', { name: 'Fall 2026', previousFormUrls: [url] });
+    const patched = await request('/cycles/cycle-1', 'PATCH', { previousFormUrls: [url] });
+
+    expect(created.status).toBe(400);
+    expect(patched.status).toBe(400);
+    expect(prisma.recruitingCycle.create).not.toHaveBeenCalled();
+    expect(prisma.recruitingCycle.update).not.toHaveBeenCalled();
+  });
 });

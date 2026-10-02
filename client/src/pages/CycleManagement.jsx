@@ -34,7 +34,7 @@ import CycleTimelineBootstrapDialog from '../components/CycleTimelineBootstrapDi
 import { formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Los_Angeles';
-const EMPTY_FORM = { name: '', formUrl: '', startDate: '', endDate: '', applicationDeadline: '', isActive: false };
+const EMPTY_FORM = { name: '', formUrl: '', previousFormUrls: [], startDate: '', endDate: '', applicationDeadline: '', isActive: false };
 
 // The deadline input is Pacific wall time (`YYYY-MM-DDTHH:mm`), the same shape the
 // server converts back, so an admin outside LA still edits it in Pacific.
@@ -145,6 +145,7 @@ export default function CycleManagement() {
     setForm({
       name: cycle.name,
       formUrl: cycle.formUrl || '',
+      previousFormUrls: cycle.previousFormUrls || [],
       startDate: cycle.startDate ? new Date(cycle.startDate).toISOString().split('T')[0] : '',
       endDate: cycle.endDate ? new Date(cycle.endDate).toISOString().split('T')[0] : '',
       applicationDeadline: toPacificInput(cycle.applicationDeadline),
@@ -349,6 +350,16 @@ export default function CycleManagement() {
               fullWidth 
               placeholder="https://example.com/form"
             />
+            <TextField
+              label="Earlier form versions"
+              value={form.previousFormUrls.join('\n')}
+              onChange={(e) => setForm({ ...form, previousFormUrls: e.target.value.split('\n') })}
+              fullWidth
+              multiline
+              minRows={2}
+              placeholder="https://docs.google.com/forms/d/.../edit"
+              helperText="One editor link per line. Still synced into this cycle; applicants are only sent to the Form URL above."
+            />
             <TextField 
               label="Start Date" 
               type="date" 
@@ -414,6 +425,16 @@ export default function CycleManagement() {
               onChange={(e) => setForm({ ...form, formUrl: e.target.value })} 
               fullWidth 
               placeholder="https://example.com/form"
+            />
+            <TextField
+              label="Earlier form versions"
+              value={form.previousFormUrls.join('\n')}
+              onChange={(e) => setForm({ ...form, previousFormUrls: e.target.value.split('\n') })}
+              fullWidth
+              multiline
+              minRows={2}
+              placeholder="https://docs.google.com/forms/d/.../edit"
+              helperText="One editor link per line. Still synced into this cycle; applicants are only sent to the Form URL above."
             />
             <TextField 
               label="Start Date" 

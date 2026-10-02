@@ -389,6 +389,10 @@ model RecruitingCycle {
   applicationDeadline       DateTime?
   createdAt                 DateTime                         @default(now())
   formUrl                   String?
+  // Earlier versions of this cycle's application form (editor links). Each one is
+  // still synced, so applications sent before a form was replaced keep arriving;
+  // formUrl is the current version and the only one applicants are sent to.
+  previousFormUrls          String[]                         @default([])
   resumeDeadline            String?
   coverLetterDeadline       String?
   videoDeadline             String?

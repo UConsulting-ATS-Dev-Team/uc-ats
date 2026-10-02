@@ -29,7 +29,7 @@ vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
 vi.mock('../utils/formUtils.js', () => ({
-  extractFormIdFromUrl: vi.fn(() => 'form-1')
+  cycleFormIds: vi.fn(() => ['form-1'])
 }));
 
 const activeCycle = { id: 'cycle-1', name: 'Fall 2026', formUrl: 'https://docs.google.com/forms/d/form-1/edit' };

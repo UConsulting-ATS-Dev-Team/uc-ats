@@ -919,6 +919,19 @@ When the application form changes:
 4. Update frontend application detail/edit forms if needed
 5. Test by triggering form sync: restart server or wait for cron
 
+### Replacing a Cycle's Application Form
+
+A cycle can take applications through more than one version of its form (e.g. the
+first one ran out of space). Put the new form's editor link in **Form URL** and move
+the old one to **Earlier form versions** in Cycle Management. `formUrl` is the
+current version and the only one "Apply Here" links to; sync reads every link in
+`previousFormUrls` too, so late submissions to the old form still arrive.
+
+1. Share the new form with the service account as an **Editor**, or sync cannot read it.
+2. Run `node scripts/inspect-form.js <editor link>`. Any question id not already in
+   `form-config.json` needs a mapping there. Until both email and UID are mapped,
+   sync skips that form's responses without storing them, so nothing is lost.
+
 ### Creating a New Interview Round
 
 1. Admin creates `Interview` via Staging page or EventManagement

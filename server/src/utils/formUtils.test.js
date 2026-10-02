@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applicantFormLink, syncableFormId } from './formUtils.js';
+import { applicantFormLink, cycleFormIds, syncableFormId } from './formUtils.js';
 
 describe('syncableFormId', () => {
   it('reads the id from an editor, responder or bare form link', () => {
@@ -41,5 +41,24 @@ describe('applicantFormLink', () => {
     expect(applicantFormLink('https://forms.gle/AbC123xyz')).toBeNull();
     expect(applicantFormLink('https://docs.google.com/forms/d/e/1FAIpQLSd-pub/viewform')).toBeNull();
     expect(applicantFormLink('https://example.com/forms/d/abc/edit')).toBeNull();
+  });
+});
+
+describe('cycleFormIds', () => {
+  it('lists the current form first, then earlier versions, once each', () => {
+    expect(cycleFormIds({
+      formUrl: 'https://docs.google.com/forms/d/new/edit',
+      previousFormUrls: [
+        'https://docs.google.com/forms/d/old/edit',
+        'https://docs.google.com/forms/d/new/viewform'
+      ]
+    })).toEqual(['new', 'old']);
+  });
+
+  it('skips links sync cannot read and copes with a missing list', () => {
+    expect(cycleFormIds({ formUrl: 'https://forms.gle/AbC123xyz', previousFormUrls: ['https://docs.google.com/forms/d/old/edit'] }))
+      .toEqual(['old']);
+    expect(cycleFormIds({ formUrl: 'https://docs.google.com/forms/d/new/edit' })).toEqual(['new']);
+    expect(cycleFormIds(null)).toEqual([]);
   });
 });
