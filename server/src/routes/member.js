@@ -1786,7 +1786,21 @@ router.post('/message-admin', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Send message to Slack
+    // The email goes first and is the copy that has to land: Slack is optional
+    // and says nothing when its webhook is unset. Posting to Slack only after the
+    // email succeeds means a retry after a failed email never posts twice.
+    const emailResult = await sendAdminMessageEmail({
+      fromName: user.fullName,
+      fromEmail: user.email,
+      role: user.role,
+      message: message.trim(),
+      triggeredById: req.user.id,
+    });
+    if (!emailResult.success) {
+      return res.status(502).json({ error: 'Your message could not be sent. Please try again.' });
+    }
+
+    // Also post to Slack
     const slackMessage = {
       text: `New message from UC Member`,
       blocks: [
@@ -1839,19 +1853,6 @@ router.post('/message-admin', requireAuth, async (req, res) => {
       console.error('[POST /api/member/message-admin] Slack error:', slackError);
       // Don't fail the request if Slack is down, but log the error
       console.warn('Slack message failed, but continuing with success response');
-    }
-
-    // The email is the copy that has to land: Slack is optional and says
-    // nothing when its webhook is unset.
-    const emailResult = await sendAdminMessageEmail({
-      fromName: user.fullName,
-      fromEmail: user.email,
-      role: user.role,
-      message: message.trim(),
-      triggeredById: req.user.id,
-    });
-    if (!emailResult.success) {
-      return res.status(502).json({ error: 'Your message could not be sent. Please try again.' });
     }
 
     res.json({ success: true, message: 'Message sent successfully' });

@@ -21,11 +21,15 @@ vi.mock('../prismaClient.js', () => ({
   }),
 }));
 
-vi.mock('./communicationLog.js', () => ({ recordCommunication: vi.fn() }));
+const recordCommunication = vi.fn();
+vi.mock('./communicationLog.js', () => ({
+  recordCommunication: (...args) => recordCommunication(...args),
+}));
 
 const { sendAdminMessageEmail } = await import('./emailNotifications.js');
 
 const sent = () => sendMail.mock.calls[0][0];
+const logged = () => recordCommunication.mock.calls[0][0];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -52,6 +56,20 @@ describe('sendAdminMessageEmail', () => {
     expect(sent().subject).toBe('Message from Pam Beesly');
   });
 
+  it('is recorded in the communications log as sent by the member', async () => {
+    await sendAdminMessageEmail(input);
+
+    expect(recordCommunication).toHaveBeenCalledTimes(1);
+    expect(logged()).toMatchObject({
+      channel: 'email',
+      recipient: 'uconsultingla@gmail.com',
+      status: 'SENT',
+      category: 'OTHER',
+      trigger: 'MANUAL',
+      triggeredById: 'member-1',
+    });
+  });
+
   it('carries who sent it and what they wrote, escaped', async () => {
     await sendAdminMessageEmail(input);
 
@@ -70,5 +88,10 @@ describe('sendAdminMessageEmail', () => {
     const result = await sendAdminMessageEmail(input);
 
     expect(result).toEqual({ success: false, error: 'SES down' });
+    expect(logged()).toMatchObject({
+      recipient: 'uconsultingla@gmail.com',
+      status: 'FAILED',
+      error: 'SES down',
+    });
   });
 });

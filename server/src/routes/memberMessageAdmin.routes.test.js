@@ -6,6 +6,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import memberRoutes from './member.js';
+import { sendSlackMessage } from '../services/slackService.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: { user: { findUnique: vi.fn() } },
@@ -70,12 +71,22 @@ describe('POST /api/member/message-admin', () => {
     });
   });
 
-  it('says so when the email fails', async () => {
+  it('says so when the email fails, and posts nothing to Slack', async () => {
     sendAdminMessageEmail.mockResolvedValue({ success: false, error: 'SES down' });
 
     const res = await post({ message: 'Hello' });
 
+    // The sender will retry; a Slack copy here would be posted again each time.
     expect(res.status).toBe(502);
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('posts to Slack once the email has gone', async () => {
+    sendAdminMessageEmail.mockResolvedValue({ success: true });
+
+    await post({ message: 'Hello' });
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an empty message without sending', async () => {
