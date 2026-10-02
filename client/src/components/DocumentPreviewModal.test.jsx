@@ -49,6 +49,24 @@ describe('DocumentPreviewModal', () => {
     expect(Number(getComputedStyle(root).zIndex)).toBe(1500);
   });
 
+  it('colours the short answer from the theme, never a fixed colour', () => {
+    // The text inherits the theme's colour, so a fixed background goes unreadable
+    // in the other theme: a candidate saw dark mode's near-white text on white.
+    // jsdom cannot resolve var(), so check that every colour the modal sets
+    // between the answer and the dimmed overlay is a theme token.
+    render(<DocumentPreviewModal kind="text" title="Preview" text="My short answer" onClose={() => {}} />);
+
+    let set = 0;
+    for (let el = screen.getByText('My short answer'); el.style.position !== 'fixed'; el = el.parentElement) {
+      for (const value of [el.style.color, el.style.backgroundColor]) {
+        if (!value) continue;
+        set += 1;
+        expect(value).toMatch(/^var\(--/);
+      }
+    }
+    expect(set).toBeGreaterThanOrEqual(2);
+  });
+
   it('still closes from its button', () => {
     const onClose = vi.fn();
     render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onClose} />);
