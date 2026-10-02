@@ -32,6 +32,12 @@ export default function ApplyHereButton({ href, closesAt }) {
   if (!href || closed) return null;
   return (
     <span className="apply-here">
+      {/* Fall 2026: the first form broke and was replaced mid-cycle. Remove once
+          applications close. */}
+      <span className="apply-here-notice" role="note">
+        We apologize for the outages with the Google Form. Please use the updated form below.
+        If you have previously submitted and did not get an error, you do not need to resubmit.
+      </span>
       <a
         className="apply-here-button"
         href={href}

@@ -49,3 +49,15 @@
   width: 1.125rem;
   height: 1.125rem;
 }
+
+.apply-here-notice {
+  max-width: 28rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--status-warning-border);
+  border-radius: var(--border-radius);
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning-text);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: left;
+}

@@ -13,7 +13,13 @@ describe('ApplyHereButton', () => {
     expect(link).toHaveAttribute('href', href);
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(screen.getByText(/Google Form/)).toBeInTheDocument();
+    expect(screen.getByText(/Opens the application Google Form/)).toBeInTheDocument();
+  });
+
+  it('tells candidates who already submitted that they need not resubmit', () => {
+    render(<ApplyHereButton href={href} />);
+    expect(screen.getByRole('note')).toHaveTextContent(/apologize for the outages/i);
+    expect(screen.getByRole('note')).toHaveTextContent(/do not need to resubmit/i);
   });
 
   it('renders nothing without a link', () => {

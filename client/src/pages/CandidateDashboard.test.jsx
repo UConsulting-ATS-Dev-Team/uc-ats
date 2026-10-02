@@ -163,7 +163,7 @@ describe('which deadline the card shows', () => {
     const link = await screen.findByRole('link', { name: /apply here/i });
     expect(link).toHaveAttribute('href', 'https://docs.google.com/forms/d/abc123/viewform');
     expect(link).toHaveAttribute('target', '_blank');
-    expect(screen.getByText(/Google Form/)).toBeInTheDocument();
+    expect(screen.getByText(/Opens the application Google Form/)).toBeInTheDocument();
   });
 
   it('hides "Apply Here" from a candidate who already applied this cycle', async () => {
