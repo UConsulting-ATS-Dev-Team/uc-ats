@@ -11,6 +11,8 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import { getFileMetadata, getFileStream } from '../services/google/drive.js';
 import filesRoutes from './files.js';
+import { clearDocumentStreamCache } from '../services/documentStreamCache.js';
+import { invalidateUserCache } from '../middleware/auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -65,6 +67,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearDocumentStreamCache();
   prisma.user.findUnique.mockImplementation(({ where: { id } }) => ALL.find((u) => u.id === id) || null);
   prisma.application.findFirst.mockResolvedValue(null);
   prisma.resumeUpload.findFirst.mockResolvedValue(null);
@@ -259,5 +262,65 @@ describe('range requests', () => {
     expect(res.headers.get('accept-ranges')).toBe('bytes');
     expect(res.headers.get('content-length')).toBe(String(SIZE));
     expect((await bytesOf(res)).equals(FILE)).toBe(true);
+  });
+});
+
+// Every range of a video used to repeat the access check and the Drive metadata
+// call, ~0.65 s before Drive sent a byte (services/documentStreamCache.js).
+describe('the ranges of one viewing', () => {
+  const getAs = (user, range = 'bytes=0-') =>
+    fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf`, {
+      headers: { Authorization: `Bearer ${tokenFor(user)}`, Range: range },
+    });
+
+  beforeEach(() => {
+    getFileMetadata.mockResolvedValue({ name: 'video.mov', mimeType: 'video/quicktime', size: String(8 * 1024 * 1024) });
+  });
+
+  it('check access and read metadata once, not once per range', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    for (const range of ['bytes=0-', 'bytes=4194304-', 'bytes=-1000']) {
+      expect((await getAs(admin, range)).status).toBe(206);
+    }
+    expect(prisma.application.findFirst).toHaveBeenCalledTimes(1);
+    expect(getFileMetadata).toHaveBeenCalledTimes(1);
+    expect(getFileStream).toHaveBeenCalledTimes(3);
+  });
+
+  it("do not lend one person's access to another", async () => {
+    prisma.application.findFirst.mockResolvedValueOnce({ id: 'app-1' });
+    expect((await getAs(admin)).status).toBe(206);
+    expect((await getAs(candidate)).status).toBe(403);
+  });
+
+  it('do not remember a refusal, so a newly attached file opens at once', async () => {
+    expect((await getAs(candidate)).status).toBe(403);
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    expect((await getAs(candidate)).status).toBe(206);
+  });
+
+  it('do not outlive a demotion', async () => {
+    const staff = { id: 'member-9', role: 'MEMBER', isActive: true, email: 'm@uc.org' };
+    prisma.user.findUnique.mockImplementation(({ where: { id } }) => (id === staff.id ? staff : null));
+    prisma.application.findFirst.mockResolvedValueOnce({ id: 'app-1' });
+    expect((await getAs(staff)).status).toBe(206);
+
+    // An admin demotes them; the role change drops auth.js's user cache.
+    staff.role = 'USER';
+    invalidateUserCache(staff.id);
+    expect((await getAs(staff)).status).toBe(403);
+  });
+
+  it('never ask Drive about a file the caller may not open', async () => {
+    expect((await getAs(candidate)).status).toBe(403);
+    expect(getFileMetadata).not.toHaveBeenCalled();
+    expect(getFileStream).not.toHaveBeenCalled();
+  });
+
+  it('do not keep a failed metadata read', async () => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    getFileMetadata.mockRejectedValueOnce(new Error('Drive hiccup'));
+    expect((await getAs(admin)).status).toBe(500);
+    expect((await getAs(admin)).status).toBe(206);
   });
 });
