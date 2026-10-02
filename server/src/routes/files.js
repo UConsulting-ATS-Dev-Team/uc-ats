@@ -3,6 +3,7 @@ import { getFileStream, getFileMetadata } from '../services/google/drive.js';
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { parseByteRange } from '../services/byteRange.js';
+import { rememberFileAccess, rememberFileMetadata } from '../services/documentStreamCache.js';
 import prisma from '../prismaClient.js';
 
 const router = express.Router();
@@ -148,12 +149,18 @@ router.get('/:fileId/pdf', async (req, res) => {
       return res.status(400).json({ error: 'Invalid file ID' });
     }
 
-    const allowed = await authorizeFileAccess(fileId, req.user);
-    if (!allowed) {
+    // A video asks for this route once per range, so both answers are remembered
+    // for the viewing (services/documentStreamCache.js) and, the first time, read
+    // side by side. The access answer is awaited first: a refused caller must get
+    // 403 even when Drive would have said the file does not exist.
+    const allowedP = rememberFileAccess(req.user.id, fileId, () => authorizeFileAccess(fileId, req.user));
+    const metaP = rememberFileMetadata(fileId, () => getFileMetadata(fileId));
+    if (!(await allowedP)) {
+      metaP.catch(() => {});
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const meta = await getFileMetadata(fileId);
+    const meta = await metaP;
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
     // Videos (stored behind this route too) arrive as a series of ranges; see

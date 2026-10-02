@@ -601,7 +601,10 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
                     <video
                       src={previewUrl}
                       controls
-                      preload="metadata"
+                      // Buffer while the grader reads the rubric: most videos are
+                      // .mov files with their index at the end, so even the first
+                      // frame takes several ranges to reach.
+                      preload="auto"
                       onError={handleVideoError}
                       onLoadedData={() => { videoRetriesRef.current = 0; }}
                       style={{
