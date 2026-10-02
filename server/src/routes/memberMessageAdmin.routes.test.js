@@ -53,6 +53,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   prisma.user.findUnique.mockResolvedValue(memberUser);
+  sendSlackMessage.mockResolvedValue(undefined);
 });
 
 describe('POST /api/member/message-admin', () => {
@@ -87,6 +88,24 @@ describe('POST /api/member/message-admin', () => {
     await post({ message: 'Hello' });
 
     expect(sendSlackMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers without waiting on a stalled Slack webhook', async () => {
+    sendAdminMessageEmail.mockResolvedValue({ success: true });
+    sendSlackMessage.mockReturnValue(new Promise(() => {}));
+
+    const res = await post({ message: 'Hello' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('still answers success when Slack rejects', async () => {
+    sendAdminMessageEmail.mockResolvedValue({ success: true });
+    sendSlackMessage.mockRejectedValue(new Error('Slack down'));
+
+    const res = await post({ message: 'Hello' });
+
+    expect(res.status).toBe(200);
   });
 
   it('refuses an empty message without sending', async () => {

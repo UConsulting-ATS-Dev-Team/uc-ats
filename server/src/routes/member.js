@@ -1842,18 +1842,17 @@ router.post('/message-admin', requireAuth, async (req, res) => {
       ]
     };
 
-    try {
-      await sendSlackMessage(slackMessage, {
-        category: 'OTHER',
-        trigger: 'MANUAL',
-        subject: 'Message to the admins',
-        triggeredById: req.user.id,
-      });
-    } catch (slackError) {
+    // Not awaited: the email has gone, and a stalled webhook (fetch has no
+    // timeout) would leave the sender waiting until they retried and sent the
+    // email twice.
+    sendSlackMessage(slackMessage, {
+      category: 'OTHER',
+      trigger: 'MANUAL',
+      subject: 'Message to the admins',
+      triggeredById: req.user.id,
+    }).catch((slackError) => {
       console.error('[POST /api/member/message-admin] Slack error:', slackError);
-      // Don't fail the request if Slack is down, but log the error
-      console.warn('Slack message failed, but continuing with success response');
-    }
+    });
 
     res.json({ success: true, message: 'Message sent successfully' });
   } catch (error) {
