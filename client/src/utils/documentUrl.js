@@ -53,9 +53,15 @@ export function signedDocumentTarget(url) {
   const path = local.split(/[?#]/)[0];
   const match = SIGNED_PATHS.map((pattern) => pattern.exec(path)).find(Boolean);
   if (!match) return null;
+  const open = (access) => `${path}?access=${encodeURIComponent(access)}`;
   return {
     linkEndpoint: `${match[1]}/link`,
-    open: (access) => `${path}?access=${encodeURIComponent(access)}`,
+    open,
+    // For a <video>: read straight from the API server at `origin` (the link's
+    // `streamOrigin`) rather than through Vercel's proxy, which only lets the
+    // server answer in 4 MB slices. `direct=1` is what lifts that cap. Without
+    // an origin this is the same as `open`.
+    stream: (access, origin) => (origin ? `${origin}${open(access)}&direct=1` : open(access)),
   };
 }
 

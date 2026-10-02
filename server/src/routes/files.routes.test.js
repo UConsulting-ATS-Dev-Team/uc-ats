@@ -13,6 +13,7 @@ import { getFileMetadata, getFileStream } from '../services/google/drive.js';
 import filesRoutes from './files.js';
 import { clearDocumentStreamCache } from '../services/documentStreamCache.js';
 import { invalidateUserCache } from '../middleware/auth.js';
+import config from '../config.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -150,6 +151,21 @@ describe('signed links for opening a document in a new tab', () => {
     expect(await res.text()).toBe('%PDF-1.4 drive');
   });
 
+  it('says where a video may be streamed from directly', async () => {
+    const before = config.directStreamOrigin;
+    config.directStreamOrigin = 'https://uc-ats.onrender.com';
+    try {
+      prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+      const res = await fetch(`http://localhost:${port}/api/files/${FILE_ID}/link`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenFor(admin)}` },
+      });
+      expect((await res.json()).streamOrigin).toBe('https://uc-ats.onrender.com');
+    } finally {
+      config.directStreamOrigin = before;
+    }
+  });
+
   it('is not signed for a file the caller may not open', async () => {
     expect((await signLink(candidate)).status).toBe(403);
   });
@@ -254,6 +270,44 @@ describe('range requests', () => {
     expect(res.status).toBe(416);
     expect(res.headers.get('content-range')).toBe(`bytes */${SIZE}`);
     expect(getFileStream).not.toHaveBeenCalled();
+  });
+
+  it('gives a direct read far larger slices, and lets another origin embed it', async () => {
+    const BIG = 100 * MB;
+    getFileMetadata.mockResolvedValue({ name: 'video.mov', mimeType: 'video/quicktime', size: String(BIG) });
+    getFileStream.mockImplementation(async (fileId, { range }) => {
+      const { Readable } = await import('node:stream');
+      return Readable.from([Buffer.alloc(range.end - range.start + 1)]);
+    });
+    const res = await fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf?direct=1`, {
+      headers: { Authorization: `Bearer ${tokenFor(admin)}`, Range: 'bytes=0-' },
+    });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe(`bytes 0-${64 * MB - 1}/${BIG}`);
+    expect(res.headers.get('cross-origin-resource-policy')).toBe('cross-origin');
+    await res.arrayBuffer();
+  });
+
+  it('keeps the 4 MB slice and same-origin policy for a read through the proxy', async () => {
+    const res = await getRange('bytes=0-');
+    expect(res.headers.get('content-range')).toBe(`bytes 0-${4 * MB - 1}/${SIZE}`);
+    expect(res.headers.get('cross-origin-resource-policy')).toBeNull();
+    await res.arrayBuffer();
+  });
+
+  it('stops reading Drive when the player abandons a range', async () => {
+    const { PassThrough } = await import('node:stream');
+    const drive = new PassThrough();
+    getFileStream.mockResolvedValue(drive);
+    drive.write(Buffer.alloc(64 * 1024));
+    const controller = new AbortController();
+    const res = await fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf`, {
+      headers: { Authorization: `Bearer ${tokenFor(admin)}`, Range: 'bytes=0-' },
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(206);
+    controller.abort();
+    await vi.waitFor(() => expect(drive.destroyed).toBe(true));
   });
 
   it('serves the whole file, with its length, when no range is asked for', async () => {

@@ -93,6 +93,9 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // it never clears, flags or closes the form that is open now.
   const sessionRef = useRef(0);
   const videoRetriesRef = useRef(0);
+  // Where the video is streamed from (the link's streamOrigin, or null for the
+  // proxied path), and whether that source has played anything yet.
+  const videoStreamRef = useRef({ origin: null, loaded: false });
   // Bumped each time the preview loads a document, so a link renewal still in
   // flight for an earlier one cannot touch the preview shown now.
   const previewGenRef = useRef(0);
@@ -275,12 +278,17 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
       // A video streams from a signed link instead of arriving whole. /api goes
       // through Vercel's proxy, which cuts a long response off part way; that was
       // "The download stopped before the file finished". <video> asks for the
-      // file in ranges, each one a short response.
+      // file in ranges. Through the proxy each range is a 4 MB slice, about
+      // three seconds of an applicant's video, which played in stops and starts,
+      // so the video is read straight from the API server when it says where.
       const signed = documentType === 'video' ? signedDocumentTarget(documentUrl) : null;
       if (signed) {
         try {
-          const { access } = await apiClient.post(signed.linkEndpoint);
-          if (!cancelled) setPreviewUrl(signed.open(access));
+          const { access, streamOrigin } = await apiClient.post(signed.linkEndpoint);
+          if (!cancelled) {
+            videoStreamRef.current = { origin: streamOrigin || null, loaded: false };
+            setPreviewUrl(signed.stream(access, streamOrigin));
+          }
         } catch (e) {
           console.error('Failed to sign video preview link:', e);
           if (!cancelled) setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
@@ -334,23 +342,34 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // A streamed video re-requests its link with every range, and the link lasts
   // 15 minutes, so a grader who leaves the modal open can see it stop. The first
   // error re-signs and resumes where it was; a second one is reported.
+  //
+  // A direct stream that fails before playing anything (the API server's own
+  // address unreachable, say) is not counted: it falls back to the proxied
+  // path, which is slower but is how every video played before.
   const handleVideoError = async (event) => {
     const video = event.currentTarget;
     const target = signedDocumentTarget(application?.videoUrl);
-    if (!target || videoRetriesRef.current >= 1) {
+    const stream = videoStreamRef.current;
+    const fallBack = Boolean(target && stream.origin && !stream.loaded);
+    if (!target || (!fallBack && videoRetriesRef.current >= 1)) {
       setPreviewUrl(null);
       setPreviewError(
         'The video could not be played here. The browser may not support its format; try opening it in a new tab.'
       );
       return;
     }
-    videoRetriesRef.current += 1;
+    if (fallBack) {
+      console.warn('Direct video stream failed; falling back to the proxied one.');
+      videoStreamRef.current = { origin: null, loaded: false };
+    } else {
+      videoRetriesRef.current += 1;
+    }
     const resumeAt = video.currentTime;
     const generation = previewGenRef.current;
     try {
       const { access } = await apiClient.post(target.linkEndpoint);
       if (generation !== previewGenRef.current) return;
-      video.src = target.open(access);
+      video.src = target.stream(access, videoStreamRef.current.origin);
       video.currentTime = resumeAt;
     } catch (e) {
       if (generation !== previewGenRef.current) return;
@@ -606,7 +625,10 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
                       // frame takes several ranges to reach.
                       preload="auto"
                       onError={handleVideoError}
-                      onLoadedData={() => { videoRetriesRef.current = 0; }}
+                      onLoadedData={() => {
+                        videoRetriesRef.current = 0;
+                        videoStreamRef.current.loaded = true;
+                      }}
                       style={{
                         width: '100%',
                         height: '100%',

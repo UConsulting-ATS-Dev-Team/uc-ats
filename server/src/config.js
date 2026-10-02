@@ -106,6 +106,18 @@ const config = {
   corsOrigin,
 
   /**
+   * Where a browser streams a grading video from directly, skipping Vercel's
+   * /api proxy and the 4 MB slices it forces (routes/files.js). This service's
+   * own public URL on Render; DIRECT_STREAM_ORIGIN overrides it, and `off`
+   * turns direct streaming off. Null locally, where nothing cuts responses off.
+   */
+  directStreamOrigin: (() => {
+    const explicit = (process.env.DIRECT_STREAM_ORIGIN || '').trim();
+    if (explicit.toLowerCase() === 'off') return null;
+    return (explicit || renderUrl || '').replace(/\/+$/, '') || null;
+  })(),
+
+  /**
    * Where operational alerts addressed to recruitment go - currently the
    * "every interview slot is full, this candidate needs placing by hand" case.
    * Falls back to the reply-to address, which is already monitored by whoever

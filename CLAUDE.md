@@ -249,6 +249,14 @@ The system follows a **recruiting cycle-based workflow**:
   grading video is therefore never downloaded whole: the preview streams it, and
   `/api/files/:id/pdf` answers `Range` with slices of at most 4 MB
   ([server/src/services/byteRange.js](server/src/services/byteRange.js)).
+- 4 MB is about three seconds of an applicant's iPhone video, which played in stops and
+  starts. So the grading preview streams a video **straight from Render**: the file
+  `/link` returns `streamOrigin` (`config.directStreamOrigin`), and the player reads
+  `<streamOrigin>/api/files/:id/pdf?access=…&direct=1`. `direct=1` raises the slice to
+  64 MB and sends `Cross-Origin-Resource-Policy: cross-origin` so the app's page may embed
+  it. A direct stream that fails before playing falls back to the proxied path. Each
+  range's access check and Drive metadata are remembered for five minutes
+  ([documentStreamCache.js](server/src/services/documentStreamCache.js)).
 
 **Sealed recruiting records:**
 - `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and
@@ -990,6 +998,9 @@ Required in `server/.env`:
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
   that works elsewhere can still fail here with `ACCESS_DENIED`.
+- `DIRECT_STREAM_ORIGIN` - (Optional) Where the grading preview streams videos from,
+  bypassing Vercel. Defaults to Render's own `RENDER_EXTERNAL_URL`, so it needs no setting
+  on Render. `off` sends videos back through the proxy in 4 MB slices.
 - `ANALYTICS_DISABLED` - (Optional) `1` stops Site Analytics recording anything on the
   server. The client's equivalent is `VITE_ANALYTICS_DISABLED=1` in `client/.env`.
 - `RUN_CRONS` - (Optional) Scheduled jobs (form sync, scheduled sends, GTKUC reminders)

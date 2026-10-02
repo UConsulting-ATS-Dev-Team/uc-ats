@@ -367,6 +367,48 @@ describe('the video preview', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('streams straight from the API server when the link says where', async () => {
+    const DIRECT = 'https://api.example.com/api/files/vid/pdf?access=tok.en&direct=1';
+    apiClient.post.mockResolvedValue({ access: 'tok.en', streamOrigin: 'https://api.example.com' });
+    renderWithVideo();
+
+    await waitFor(() => expect(videoElement()?.getAttribute('src')).toBe(DIRECT));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the proxied stream when the direct one never plays', async () => {
+    apiClient.post
+      .mockResolvedValueOnce({ access: 'first', streamOrigin: 'https://api.example.com' })
+      .mockResolvedValueOnce({ access: 'second', streamOrigin: 'https://api.example.com' })
+      .mockResolvedValueOnce({ access: 'third', streamOrigin: 'https://api.example.com' });
+    renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+
+    const video = videoElement();
+    fireEvent.error(video);
+    await waitFor(() => expect(video.src).toMatch(/\/api\/files\/vid\/pdf\?access=second$/));
+    expect(video.src).not.toContain('api.example.com');
+
+    // The fallback did not use up the one renewal an expired link gets.
+    fireEvent.loadedData(video);
+    fireEvent.error(video);
+    await waitFor(() => expect(video.src).toMatch(/access=third$/));
+    expect(screen.queryByText(/could not be played here/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps streaming directly when a direct stream that played hits an expired link', async () => {
+    apiClient.post
+      .mockResolvedValueOnce({ access: 'first', streamOrigin: 'https://api.example.com' })
+      .mockResolvedValueOnce({ access: 'second', streamOrigin: 'https://api.example.com' });
+    renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+
+    const video = videoElement();
+    fireEvent.loadedData(video);
+    fireEvent.error(video);
+    await waitFor(() => expect(video.src).toBe('https://api.example.com/api/files/vid/pdf?access=second&direct=1'));
+  });
+
   it('says why when the link cannot be signed', async () => {
     apiClient.post.mockRejectedValue(Object.assign(new Error('Forbidden (Status: 403)'), { serverMessage: 'Forbidden' }));
     renderWithVideo();

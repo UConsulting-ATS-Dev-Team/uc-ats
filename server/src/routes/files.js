@@ -2,7 +2,8 @@ import express from 'express';
 import { getFileStream, getFileMetadata } from '../services/google/drive.js';
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
-import { parseByteRange } from '../services/byteRange.js';
+import { parseByteRange, MAX_RANGE_BYTES, DIRECT_MAX_RANGE_BYTES } from '../services/byteRange.js';
+import config from '../config.js';
 import { rememberFileAccess, rememberFileMetadata } from '../services/documentStreamCache.js';
 import prisma from '../prismaClient.js';
 
@@ -106,7 +107,12 @@ router.post('/:fileId/link', async (req, res) => {
     if (!allowed) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    res.json({ access: signDocumentLink(`file:${fileId}`, req.user.id) });
+    // streamOrigin: where a <video> may read this file from without going
+    // through Vercel (see the `direct` note on /pdf below). Null when unset.
+    res.json({
+      access: signDocumentLink(`file:${fileId}`, req.user.id),
+      streamOrigin: config.directStreamOrigin,
+    });
   } catch (error) {
     console.error('Error signing file link:', error);
     res.status(500).json({ error: 'Failed to create link' });
@@ -162,8 +168,14 @@ router.get('/:fileId/pdf', async (req, res) => {
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
     // Videos (stored behind this route too) arrive as a series of ranges; see
-    // services/byteRange.js for why each answer is capped.
-    const range = parseByteRange(req.headers.range, size);
+    // services/byteRange.js for why each answer is capped. `direct=1` marks a
+    // video read from this server's own URL instead of through Vercel, which is
+    // what the 4 MB cap protects against, so it gets far larger slices. The
+    // page that plays it is on another origin, which Helmet's default
+    // Cross-Origin-Resource-Policy would refuse to let embed it.
+    const direct = req.query.direct === '1';
+    const range = parseByteRange(req.headers.range, size, direct ? DIRECT_MAX_RANGE_BYTES : MAX_RANGE_BYTES);
+    if (direct) res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
     res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
@@ -188,6 +200,10 @@ router.get('/:fileId/pdf', async (req, res) => {
       console.error('Error streaming file:', error);
       res.destroy(error);
     });
+    // A player abandons a range whenever the viewer seeks. Without this the
+    // Drive download behind it stays open until Drive gives up on it, which
+    // with 64 MB slices is a lot of video read for nobody.
+    res.on('close', () => fileStream.destroy());
     fileStream.pipe(res);
 
   } catch (error) {

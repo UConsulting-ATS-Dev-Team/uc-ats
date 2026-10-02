@@ -11,6 +11,16 @@
 export const MAX_RANGE_BYTES = 4 * 1024 * 1024;
 
 /**
+ * The same, for a video the browser streams from this server directly rather
+ * than through Vercel (config.directStreamOrigin). 4 MB is about three seconds
+ * of an applicant's iPhone video, and each slice waits most of a second on
+ * Drive before its first byte, so playback ran dry between slices. Measured
+ * straight from Drive, 4 MB slices read at half the rate of one stream.
+ * With no proxy to cut it off, a slice is now about a minute of footage.
+ */
+export const DIRECT_MAX_RANGE_BYTES = 64 * 1024 * 1024;
+
+/**
  * The byte range to serve for a `Range` header against a file of `size` bytes.
  *
  * - `{ start, end }` (inclusive): answer 206 with that slice.
