@@ -150,17 +150,15 @@ router.get('/:fileId/pdf', async (req, res) => {
     }
 
     // A video asks for this route once per range, so both answers are remembered
-    // for the viewing (services/documentStreamCache.js) and, the first time, read
-    // side by side. The access answer is awaited first: a refused caller must get
-    // 403 even when Drive would have said the file does not exist.
-    const allowedP = rememberFileAccess(req.user.id, fileId, () => authorizeFileAccess(fileId, req.user));
-    const metaP = rememberFileMetadata(fileId, () => getFileMetadata(fileId));
-    if (!(await allowedP)) {
-      metaP.catch(() => {});
+    // for the viewing (services/documentStreamCache.js). Access is settled before
+    // Drive is asked anything, so a caller who may not open the file cannot spend
+    // Drive quota on it either.
+    const allowed = await rememberFileAccess(req.user, fileId, () => authorizeFileAccess(fileId, req.user));
+    if (!allowed) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const meta = await metaP;
+    const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
     // Videos (stored behind this route too) arrive as a series of ranges; see

@@ -12,6 +12,7 @@ import prisma from '../prismaClient.js';
 import { getFileMetadata, getFileStream } from '../services/google/drive.js';
 import filesRoutes from './files.js';
 import { clearDocumentStreamCache } from '../services/documentStreamCache.js';
+import { invalidateUserCache } from '../middleware/auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -298,9 +299,22 @@ describe('the ranges of one viewing', () => {
     expect((await getAs(candidate)).status).toBe(206);
   });
 
-  it('refuse with 403 even when Drive would say the file is missing', async () => {
-    getFileMetadata.mockRejectedValue(Object.assign(new Error('gone'), { code: 'FILE_NOT_FOUND' }));
+  it('do not outlive a demotion', async () => {
+    const staff = { id: 'member-9', role: 'MEMBER', isActive: true, email: 'm@uc.org' };
+    prisma.user.findUnique.mockImplementation(({ where: { id } }) => (id === staff.id ? staff : null));
+    prisma.application.findFirst.mockResolvedValueOnce({ id: 'app-1' });
+    expect((await getAs(staff)).status).toBe(206);
+
+    // An admin demotes them; the role change drops auth.js's user cache.
+    staff.role = 'USER';
+    invalidateUserCache(staff.id);
+    expect((await getAs(staff)).status).toBe(403);
+  });
+
+  it('never ask Drive about a file the caller may not open', async () => {
     expect((await getAs(candidate)).status).toBe(403);
+    expect(getFileMetadata).not.toHaveBeenCalled();
+    expect(getFileStream).not.toHaveBeenCalled();
   });
 
   it('do not keep a failed metadata read', async () => {

@@ -12,7 +12,7 @@
 export const STREAM_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 1000;
 
-const accessCache = new Map(); // `${userId}:${fileId}` -> { expiresAt, value: Promise<true> }
+const accessCache = new Map(); // [user identity..., fileId] -> { expiresAt, value: Promise<true> }
 const metadataCache = new Map(); // fileId -> { expiresAt, value: Promise<metadata> }
 
 /**
@@ -43,9 +43,19 @@ function remember(cache, key, compute, keep = () => true) {
 /**
  * Only a grant is remembered. A refusal is re-checked on the next request, so a
  * document attached a moment ago is not refused for five minutes.
+ *
+ * The grant is keyed on everything the access check reads about the caller, not
+ * only who they are: demoting staff to USER, or changing an account's email or
+ * UID, reaches the next request (auth.js drops its user cache on those changes)
+ * and so misses this cache, rather than streaming on an answer that no longer holds.
  */
-export const rememberFileAccess = (userId, fileId, check) =>
-  remember(accessCache, `${userId}:${fileId}`, check, (allowed) => allowed === true);
+export const rememberFileAccess = (user, fileId, check) =>
+  remember(
+    accessCache,
+    JSON.stringify([user.id, user.role, user.email ?? null, user.studentId ?? null, fileId]),
+    check,
+    (allowed) => allowed === true
+  );
 
 export const rememberFileMetadata = (fileId, fetch) =>
   remember(metadataCache, fileId, fetch);
