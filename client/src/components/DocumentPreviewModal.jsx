@@ -17,7 +17,10 @@ const overlayStyle = {
 const getModalStyle = (isMobile) => ({
   width: isMobile ? '100vw' : '90vw',
   height: isMobile ? '100vh' : '90vh',
-  backgroundColor: '#fff',
+  // Theme tokens, not fixed colours: the text inherits the theme's colour, so a
+  // fixed white background left dark mode's near-white text unreadable.
+  backgroundColor: 'var(--bg-primary)',
+  color: 'var(--text-primary)',
   borderRadius: isMobile ? 0 : '8px',
   display: 'flex',
   flexDirection: 'column',
@@ -26,7 +29,7 @@ const getModalStyle = (isMobile) => ({
 
 const headerStyle = {
   padding: '8px 12px',
-  borderBottom: '1px solid #eee',
+  borderBottom: '1px solid var(--border-light)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -34,7 +37,7 @@ const headerStyle = {
 
 const contentStyle = {
   flex: 1,
-  backgroundColor: '#f9fafb',
+  backgroundColor: 'var(--bg-gray-light)',
 };
 
 // kind 'text' shows `text` as written (an application's short answer) and
@@ -95,7 +98,7 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
           </div>
           <div style={contentStyle}>
             {kind === 'text' && (
-              <div style={{ height: '100%', overflow: 'auto', background: '#fff' }}>
+              <div style={{ height: '100%', overflow: 'auto', background: 'var(--bg-primary)' }}>
                 <p style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 32, whiteSpace: 'pre-wrap', lineHeight: 1.7, fontSize: 16 }}>
                   {text}
                 </p>
