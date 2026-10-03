@@ -5,10 +5,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   MenuItem,
   Stack,
   Table,
@@ -22,43 +18,14 @@ import {
 } from '@mui/material';
 import { AttachFile as AttachFileIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
-
-// Spelling shown to an admin, for the values the server records. Anything not
-// listed is shown as-is rather than hidden, so a category added on the server
-// needs no change here.
-const CATEGORY_LABELS = {
-  ACCOUNT: 'Account',
-  APPLICATION_RECEIVED: 'Application received',
-  APPLICATION_DECISION: 'Decision',
-  OFFER_LETTER: 'Offer letter',
-  EVENT: 'Event',
-  MEETING: 'Coffee chat',
-  INTERVIEW_SLOT: 'Interview slot',
-  REVIEWER_REMINDER: 'Reviewer reminder',
-  ACCOUNTABILITY_REMINDER: 'Accountability reminder',
-  MASTER_COMMUNICATION: 'Master communication',
-  DECISION_BATCH: 'Decision batch',
-  TEST: 'Test send',
-  OTHER: 'Other',
-};
-
-const CHANNEL_LABELS = { email: 'Email', slack: 'Slack', imessage: 'iMessage' };
-
-const STATUS_STYLES = {
-  // Sent is SES accepting the message; Delivered is the recipient's server
-  // accepting it, reported back later.
-  SENT: { color: 'default', label: 'Sent' },
-  DELIVERED: { color: 'success', label: 'Delivered' },
-  // SES click tracking saw a link followed, so it was delivered and read.
-  CLICKED: { color: 'success', label: 'Clicked' },
-  DELAYED: { color: 'warning', label: 'Delayed' },
-  BOUNCED: { color: 'error', label: 'Bounced' },
-  COMPLAINED: { color: 'error', label: 'Marked as spam' },
-  FAILED: { color: 'error', label: 'Failed' },
-  OPENED: { color: 'warning', label: 'Opened' },
-};
-
-const STATUS_LABELS = Object.fromEntries(Object.entries(STATUS_STYLES).map(([k, v]) => [k, v.label]));
+import CommunicationMessageDialog from './CommunicationMessageDialog';
+import {
+  CATEGORY_LABELS,
+  CHANNEL_LABELS,
+  STATUS_LABELS,
+  labelFor,
+  statusStyleFor,
+} from './communicationLabels';
 
 const TRIGGERS = [
   { value: '', label: 'Automated and manual' },
@@ -67,8 +34,6 @@ const TRIGGERS = [
 ];
 
 const PAGE_SIZE = 50;
-
-const labelFor = (map, value) => map[value] || value || '—';
 
 const EMPTY_FILTERS = {
   search: '',
@@ -329,7 +294,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
             </TableHead>
             <TableBody>
               {rows.map((row) => {
-                const status = STATUS_STYLES[row.status] || { color: 'default', label: row.status };
+                const status = statusStyleFor(row);
                 return (
                   <TableRow
                     key={row.id}
@@ -397,55 +362,7 @@ const CommunicationsLog = ({ cycleId = '', cycleName = '' }) => {
         </>
       )}
 
-      <Dialog open={Boolean(selected)} onClose={() => setSelected(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>{selected?.subject || 'Message'}</DialogTitle>
-        <DialogContent dividers>
-          {selected && (
-            <Stack spacing={1.5}>
-              <Typography variant="body2">
-                <strong>To:</strong>{' '}
-                {selected.recipientName
-                  ? `${selected.recipientName} <${selected.recipient}>`
-                  : selected.recipient}
-              </Typography>
-              <Typography variant="body2">
-                <strong>Sent:</strong> {new Date(selected.sentAt).toLocaleString()}
-              </Typography>
-              <Typography variant="body2">
-                <strong>Channel:</strong> {labelFor(CHANNEL_LABELS, selected.channel)} ·{' '}
-                <strong>Type:</strong> {labelFor(CATEGORY_LABELS, selected.category)} ·{' '}
-                <strong>{selected.trigger === 'MANUAL' ? 'Sent by a person' : 'Automated'}</strong>
-              </Typography>
-              {selected.cycle?.name && (
-                <Typography variant="body2">
-                  <strong>Cycle:</strong> {selected.cycle.name}
-                </Typography>
-              )}
-              {selected.error && <Alert severity="error">{selected.error}</Alert>}
-              <Typography variant="caption" color="text.secondary">
-                Message (first 2000 characters, formatting removed)
-              </Typography>
-              <Box
-                component="pre"
-                sx={{
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontFamily: 'inherit',
-                  bgcolor: 'action.hover',
-                  borderRadius: 1,
-                  p: 1.5,
-                  m: 0,
-                }}
-              >
-                {selected.bodyPreview || 'No body recorded.'}
-              </Box>
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSelected(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+      <CommunicationMessageDialog message={selected} onClose={() => setSelected(null)} />
     </Box>
   );
 };

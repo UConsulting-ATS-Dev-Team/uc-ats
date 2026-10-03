@@ -31,7 +31,9 @@ export const COMMUNICATION_CHANNELS = ['email', 'slack', 'imessage'];
 // CLICKED: SES click tracking saw the recipient follow a link (which implies
 // delivery). OPENED is older and means something else: an iMessage handed to
 // the admin's Messages app. SES opens never change a row's status.
-export const COMMUNICATION_STATUSES = ['SENT', 'DELIVERED', 'CLICKED', 'DELAYED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED'];
+// SENDING: claimed just before a send that must not repeat (applicationReceipts.js)
+// and overwritten with the outcome; one left over is a send that was interrupted.
+export const COMMUNICATION_STATUSES = ['SENDING', 'SENT', 'DELIVERED', 'CLICKED', 'DELAYED', 'BOUNCED', 'COMPLAINED', 'FAILED', 'OPENED'];
 
 const BODY_PREVIEW_LIMIT = 2000;
 
