@@ -17,15 +17,21 @@
 // Pure on purpose: the times are the part that goes subtly wrong, and they
 // should be provable without a database.
 
-/** Combine a calendar day and a wall-clock time into an instant. */
+import { localInputToUTC } from '../utils/timezoneUtils.js';
+
+/**
+ * Combine a calendar day and a wall-clock time into an instant.
+ *
+ * The time is Los Angeles time, which is what the admin typed. Not the
+ * server's own zone: Render runs in UTC, so setHours() there turned "9:00"
+ * into 9:00 UTC, which every page then showed as 2 AM.
+ */
 export function combine(day, time) {
   if (!day || !time) return null;
   const [hour, minute] = String(time).split(':').map(Number);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  const date = new Date(`${day}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setHours(hour, minute, 0, 0);
-  return date;
+  const pad = (n) => String(n).padStart(2, '0');
+  return localInputToUTC(`${day}T${pad(hour)}:${pad(minute)}`);
 }
 
 const overlaps = (startA, endA, startB, endB) => startA < endB && endA > startB;

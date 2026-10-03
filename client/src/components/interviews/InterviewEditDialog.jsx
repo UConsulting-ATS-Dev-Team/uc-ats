@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import { Add as AddIcon, DeleteOutline as DeleteIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
-import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
+import { formatDay, formatTimeRange, fromPacificInput, toPacificInput } from '../../utils/scheduleFormat';
 
 /**
  * Change an interview after it exists.
@@ -32,23 +32,18 @@ import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
  * it is never a side effect of fixing a title.
  */
 
-const asLocalInput = (value) => {
-  if (!value) return '';
-  const d = new Date(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-const asTimeInput = (value) => {
-  if (!value) return '';
-  const d = new Date(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-const asDayInput = (value) => {
-  if (!value) return '';
-  const d = new Date(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// Read and written in Pacific, as the pages show them, not in the browser's
+// own zone. An admin travelling would otherwise load a form whose hours differ
+// from the session they clicked, and save that difference back.
+const asLocalInput = toPacificInput;
+const asTimeInput = (value) => toPacificInput(value).slice(11);
+const asDayInput = (value) => toPacificInput(value).slice(0, 10);
+// Throws rather than returning nothing: the request would drop an undefined
+// time, keep the old one, and still report the edit as saved.
+const asInstant = (day, time) => {
+  const instant = fromPacificInput(`${day}T${time}`);
+  if (!instant) throw new Error('Give the session a day, a start time and an end time.');
+  return instant.toISOString();
 };
 
 export default function InterviewEditDialog({ open, interview, onClose, onSaved }) {
@@ -117,8 +112,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
           title: details.title,
           location: details.location,
           dresscode: details.dresscode,
-          startDate: details.startDate ? new Date(details.startDate).toISOString() : undefined,
-          endDate: details.endDate ? new Date(details.endDate).toISOString() : undefined,
+          startDate: details.startDate ? fromPacificInput(details.startDate)?.toISOString() : undefined,
+          endDate: details.endDate ? fromPacificInput(details.endDate)?.toISOString() : undefined,
         }),
       'Interview updated.'
     );
@@ -129,8 +124,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       () =>
         apiClient.patch(`/admin/interviews/slots/${s.id}`, {
           label: s.label,
-          startTime: new Date(`${s.day}T${s.start}`).toISOString(),
-          endTime: new Date(`${s.day}T${s.end}`).toISOString(),
+          startTime: asInstant(s.day, s.start),
+          endTime: asInstant(s.day, s.end),
           candidateCapacity: s.candidateCapacity === '' ? null : Number(s.candidateCapacity),
           interviewerCapacity: s.interviewerCapacity === '' ? null : Number(s.interviewerCapacity),
         }),
@@ -156,10 +151,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       () =>
         apiClient.post(`/admin/interviews/${interview.id}/slots`, {
           label: '',
-          startTime: new Date(`${last?.day ?? asDayInput(interview.startDate)}T${last?.end ?? '09:00'}`).toISOString(),
-          endTime: new Date(
-            `${last?.day ?? asDayInput(interview.startDate)}T${last?.end ?? '10:00'}`
-          ).toISOString(),
+          startTime: asInstant(last?.day ?? asDayInput(interview.startDate), last?.end ?? '09:00'),
+          endTime: asInstant(last?.day ?? asDayInput(interview.startDate), last?.end ?? '10:00'),
           candidateCapacity: last?.candidateCapacity || 4,
           interviewerCapacity: last?.interviewerCapacity || 2,
         }),
@@ -245,8 +238,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
                 size="small"
                 label="Name"
                 placeholder={formatTimeRange(
-                  new Date(`${session.day}T${session.start}`),
-                  new Date(`${session.day}T${session.end}`)
+                  fromPacificInput(`${session.day}T${session.start}`),
+                  fromPacificInput(`${session.day}T${session.end}`)
                 )}
                 value={session.label}
                 onChange={(e) => update(index, { label: e.target.value })}
@@ -340,7 +333,7 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
             <Chip
               size="small"
               variant="outlined"
-              label={`Currently ${formatDay(new Date(`${sessions[0].day}T${sessions[0].start}`))}`}
+              label={`Currently ${formatDay(fromPacificInput(`${sessions[0].day}T${sessions[0].start}`))}`}
             />
           </Stack>
         )}
