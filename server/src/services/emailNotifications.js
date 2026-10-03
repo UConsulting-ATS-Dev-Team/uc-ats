@@ -244,6 +244,41 @@ export const formatEventDate = (date) => {
   return formatEmailDateTime(date);
 };
 
+// Confirms that a synced form response is on file. Nothing has been decided
+// yet, so it says only that it arrived and what happens next.
+const createApplicationReceivedEmail = async (candidateName, cycleName) => {
+  const key = 'application-received';
+  const copy = await resolveEmailCopy(key);
+  const values = { candidateName, cycleName };
+
+  return composeEmail(key, {
+    subject: copySubject(copy.subject, values),
+    values,
+    parts: [
+      part.heading(copy.heading),
+      part.greeting(copy.greeting),
+      part.copy(copy.intro),
+      part.copy(copy.outro),
+      part.signOff(copy.signOff),
+    ],
+  });
+};
+
+export const sendApplicationReceivedEmail = async (candidateEmail, candidateName, cycleName, { cycleId = null, attemptKey = null } = {}) => {
+  try {
+    const emailContent = await createApplicationReceivedEmail(candidateName, cycleName);
+    return await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], {
+      category: 'APPLICATION_RECEIVED',
+      recipientName: candidateName,
+      cycleId,
+      attemptKey,
+    });
+  } catch (error) {
+    console.error('Error in sendApplicationReceivedEmail:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // The coffee-chat advance and the rejection: same shape, different tone.
 const applicationDecisionEmail = async (key, tone, candidateName, currentCycleName) => {
   const copy = await resolveEmailCopy(key);
@@ -1289,6 +1324,7 @@ export const sendWelcomeEmail = async (email, fullName, { audience = 'candidate'
 export const TEMPLATE_BUILDERS = {
   'rsvp-confirmation': createRSVPConfirmationEmail,
   'attendance-confirmation': createAttendanceConfirmationEmail,
+  'application-received': createApplicationReceivedEmail,
   'application-acceptance': createAcceptanceEmail,
   'application-rejection': createRejectionEmail,
   'offer-letter': createOfferLetterEmail,

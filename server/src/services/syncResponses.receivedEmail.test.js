@@ -1,12 +1,11 @@
-// A cycle whose application form was replaced mid-cycle keeps receiving
-// applications from both versions: people who opened the old link before the
-// switch still submit to it. Sync reads every version, and one it cannot open
-// does not stop the rest.
+// Form sync hands "we received your application" to applicationReceipts.js
+// once its applications are filed, without waiting for the mail.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { getResponses } from './google/forms.js';
 import { transformFormResponse } from '../utils/dataMapper.js';
 import { resolveCandidateCycle } from './activeCycle.js';
+import { sendApplicationReceipts } from './applicationReceipts.js';
 import syncFormResponses from './syncResponses.js';
 
 vi.mock('../prismaClient.js', () => {
@@ -27,17 +26,8 @@ vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
 vi.mock('./applicationReceipts.js', () => ({ sendApplicationReceipts: vi.fn(async () => ({})) }));
 vi.mock('./luma/ingestGuests.js', () => ({ claimLumaGuestsForCandidate: vi.fn(async () => []) }));
 
-const cycle = {
-  id: 'cycle-1',
-  name: 'Fall 2026',
-  formUrl: 'https://docs.google.com/forms/d/new-form/edit',
-  previousFormUrls: ['https://docs.google.com/forms/d/old-form/edit']
-};
-
-const responsesByForm = {
-  'old-form': [{ responseId: 'old-1' }],
-  'new-form': [{ responseId: 'new-1' }]
-};
+const cycle = { id: 'cycle-1', name: 'Fall 2026', formUrl: 'https://docs.google.com/forms/d/form-1/edit', previousFormUrls: [] };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,7 +36,7 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 
   resolveCandidateCycle.mockResolvedValue(cycle);
-  getResponses.mockImplementation(async (formId) => responsesByForm[formId] || []);
+  getResponses.mockResolvedValue([{ responseId: 'r-1' }, { responseId: 'r-2' }]);
   transformFormResponse.mockImplementation((response) => ({
     responseID: response.responseId,
     studentId: `uid-${response.responseId}`,
@@ -65,38 +55,33 @@ beforeEach(() => {
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
-const createdResponseIds = () =>
-  prisma.application.create.mock.calls.map(([args]) => args.data.responseID).sort();
-
-describe('form sync across form versions', () => {
-  it('files applications from the current form and every earlier version', async () => {
+describe('application received email from form sync', () => {
+  it('sweeps the last week of the cycle once every application is filed', async () => {
+    const before = Date.now();
     await syncFormResponses();
 
-    expect(getResponses.mock.calls.map(([id]) => id)).toEqual(['new-form', 'old-form']);
-    expect(createdResponseIds()).toEqual(['new-1', 'old-1']);
+    expect(sendApplicationReceipts).toHaveBeenCalledTimes(1);
+    const [{ cycle: sweptCycle, since, responseIDs }] = sendApplicationReceipts.mock.calls[0];
+    expect(sweptCycle).toBe(cycle);
+    // Passed by id as well, for a response that syncs more than a week late.
+    expect(responseIDs).toEqual(['r-1', 'r-2']);
+    expect(before - since.getTime()).toBeGreaterThanOrEqual(7 * DAY_MS - 1000);
+    expect(before - since.getTime()).toBeLessThanOrEqual(7 * DAY_MS + 1000);
+
+    const lastCreate = Math.max(...prisma.application.create.mock.invocationCallOrder);
+    expect(lastCreate).toBeLessThan(sendApplicationReceipts.mock.invocationCallOrder[0]);
   });
 
-  it('keeps syncing the other versions when one cannot be read', async () => {
-    getResponses.mockImplementation(async (formId) => {
-      if (formId === 'new-form') throw new Error('The caller does not have permission');
-      return responsesByForm[formId];
-    });
+  it('returns without waiting for the mail', async () => {
+    sendApplicationReceipts.mockImplementation(() => new Promise(() => {}));
 
-    await syncFormResponses();
-
-    expect(createdResponseIds()).toEqual(['old-1']);
+    await expect(syncFormResponses()).resolves.toBeUndefined();
   });
 
-  it('leaves a response from a form with unmapped questions unsynced, to retry later', async () => {
-    transformFormResponse.mockImplementation((response) => (
-      response.responseId === 'new-1'
-        ? { responseID: 'new-1' }
-        : { responseID: response.responseId, studentId: 'uid-old', email: 'old@ucla.edu', firstName: 'A', lastName: 'B' }
-    ));
+  it('a failed sweep does not fail the sync', async () => {
+    sendApplicationReceipts.mockRejectedValue(new Error('database went away'));
 
-    await syncFormResponses();
-
-    expect(createdResponseIds()).toEqual(['old-1']);
-    expect(prisma.candidate.create).toHaveBeenCalledTimes(1);
+    await expect(syncFormResponses()).resolves.toBeUndefined();
+    expect(prisma.application.create).toHaveBeenCalledTimes(2);
   });
 });

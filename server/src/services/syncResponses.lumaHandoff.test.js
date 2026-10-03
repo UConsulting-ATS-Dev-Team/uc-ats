@@ -39,6 +39,7 @@ vi.mock('../prismaClient.js', () => {
 vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
+vi.mock('./applicationReceipts.js', () => ({ sendApplicationReceipts: vi.fn(async () => ({})) }));
 vi.mock('../utils/formUtils.js', () => ({ cycleFormIds: vi.fn(() => ['form-1']) }));
 
 const UID = '405123456';

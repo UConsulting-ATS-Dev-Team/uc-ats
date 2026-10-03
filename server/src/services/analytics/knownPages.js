@@ -11,6 +11,7 @@ export const KNOWN_PAGES = Object.freeze([
   '/admin-document-grading',
   '/admin/analytics',
   '/admin/assigned-interviews',
+  '/admin/email-health',
   '/admin/email-templates',
   '/admin/final-round-interview',
   '/admin/help',

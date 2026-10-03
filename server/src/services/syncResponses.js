@@ -6,6 +6,7 @@ import { cycleFormIds } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
+import { sendApplicationReceipts } from './applicationReceipts.js'
 
 /**
  * The candidate whose email this is, resolved so the answer never depends on
@@ -80,6 +81,8 @@ async function resolveCandidate({ studentId, email }) {
   return { candidate, emailTaken: Boolean(byEmail && candidate && byEmail.id !== candidate.id) };
 }
 
+const RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
@@ -132,6 +135,7 @@ export default async function syncFormResponses() {
     console.log(`Found ${newResponses.length} new responses to process`);
     
     let successCount = 0;
+    const filedResponseIDs = [];
     let errorCount = 0;
     
     for (const response of newResponses) {
@@ -243,6 +247,7 @@ export default async function syncFormResponses() {
         // against the same candidate submitting twice by cycle with the same responseID
         await prisma.application.create({ data: dataToCreate });
         successCount++;
+        filedResponseIDs.push(dataToCreate.responseID);
 
         // A member may have referred this person by name before they applied.
         // Now that the application is actually on file, those referrals have
@@ -292,6 +297,21 @@ export default async function syncFormResponses() {
     }
     
     console.log(`Sync complete: ${successCount} processed successfully, ${errorCount} errored`);
+
+    // "We received your application" for everything this sync and recent
+    // ones filed. Not awaited: a slow SES must not hold up server startup,
+    // which awaits the first sync. Sweeping a window rather than this run's
+    // list is what makes that safe - a send lost to a deploy goes out on the
+    // next tick. The window is a week of submittedAt, which is the form's own
+    // timestamp; this run's own applications are passed too, so one that
+    // syncs later than that (an unmapped form version) still gets one.
+    // applicationReceipts.js owns who is owed one and sending it once.
+    sendApplicationReceipts({
+      cycle: activeCycle,
+      since: new Date(Date.now() - RECEIPT_WINDOW_MS),
+      responseIDs: filedResponseIDs,
+    })
+      .catch((error) => console.error('Failed to send application received emails:', error));
     
   } catch (error) {
     console.error('Error syncing form responses:', error)
