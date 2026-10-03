@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import apiClient from '../utils/api';
 import ImageCache from '../utils/imageCache';
 
-const AuthenticatedImage = ({ src, alt, style, onError, ...props }) => {
+// `fallback`, when given, replaces the "Photo unavailable" box for a missing or
+// broken image, and is shown while loading too, so a row never flashes the box.
+const AuthenticatedImage = ({ src, alt, style, onError, fallback, ...props }) => {
   const [imageUrl, setImageUrl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -42,6 +44,10 @@ const AuthenticatedImage = ({ src, alt, style, onError, ...props }) => {
       isMounted = false;
     };
   }, [src, onError]);
+
+  if (fallback && (loading || error || !imageUrl)) {
+    return fallback;
+  }
 
   if (loading) {
     return (

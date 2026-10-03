@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
 import {
@@ -12,70 +12,34 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
   Alert,
   Snackbar,
   TextField,
   CircularProgress,
-  Card,
-  Grid,
-  CardContent,
-  Divider,
-  Badge,
   Tooltip,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
   Checkbox,
   FormControlLabel,
-  Switch,
   Tabs,
-  Tab
+  Tab,
+  Collapse
 } from '@mui/material';
 import {
-  Edit as EditIcon,
   ThumbUp as ThumbUpIcon,
   ThumbDown as ThumbDownIcon,
   SkipNext as SkipNextIcon,
   Refresh as RefreshIcon,
   ExpandMore as ExpandMoreIcon,
-  CheckCircle as CheckCircleIcon,
-  Cancel as CancelIcon,
   Help as HelpIcon,
-  Event as EventIcon,
-  Grade as GradeIcon,
-  Person as PersonIcon,
-  School as SchoolIcon,
-  Email as EmailIcon,
-  Phone as PhoneIcon,
-  CalendarToday as CalendarIcon,
-  TrendingUp as TrendingUpIcon,
   Visibility as VisibilityIcon,
-  Send as SendIcon,
-  FilterList as FilterListIcon,
   Search as SearchIcon,
   Clear as ClearIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
-  Sort as SortIcon,
   HowToVote as HowToVoteIcon,
   MenuBook as MenuBookIcon,
   HelpOutline as HelpOutlineIcon
 } from '@mui/icons-material';
+import '../styles/ApplicationList.css';
 import '../styles/Staging.css';
 import apiClient from '../utils/api';
 import usePolling, { POLL_STATUS, POLL_NO_CHANGE } from '../hooks/usePolling';
@@ -94,6 +58,7 @@ import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditor
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
 import { hasCoverLetter as hasCoverLetterSubmission } from '../utils/coverLetter';
 import { stagingMax, useDocumentRubrics } from '../utils/documentRubrics';
+import { rankByScore } from '../utils/stagingRank';
 
 const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
 const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
@@ -286,201 +251,93 @@ const DecisionChip = ({ decision, size = 'small' }) => {
   );
 };
 
+const ordinal = (n) => {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${{ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'}`;
+};
+
+const initials = (candidate) =>
+  `${candidate.firstName?.[0] || ''}${candidate.lastName?.[0] || ''}`.toUpperCase() || '?';
+
 const ScoreDisplay = ({ score, maxScore = 10 }) => {
-  const percentage = (score / maxScore) * 100;
-  const getColor = (percentage) => {
-    if (percentage >= 80) return 'success';
-    if (percentage >= 60) return 'warning';
-    return 'error';
-  };
+  if (!score) {
+    return <span className="staging-zero">—</span>;
+  }
+  const percentage = Math.min((score / maxScore) * 100, 100);
+  const tone = percentage >= 80 ? 'high' : percentage >= 60 ? 'mid' : 'low';
 
   return (
-    <Box display="flex" alignItems="center" gap={1}>
-      <Typography variant="body2" fontWeight="bold">
-        {score.toFixed(1)}
-      </Typography>
-      <Box
-        sx={{
-          width: 40,
-          height: 8,
-          backgroundColor: 'grey.200',
-          borderRadius: 1,
-          overflow: 'hidden'
-        }}
-      >
-        <Box
-          sx={{
-            width: `${Math.min(percentage, 100)}%`,
-            height: '100%',
-            backgroundColor: `${getColor(percentage)}.main`,
-            transition: 'width 0.3s ease'
-          }}
-        />
-      </Box>
-    </Box>
+    <div className="staging-score">
+      <span className="staging-score-value">{score.toFixed(1)}</span>
+      <span className="staging-score-track" aria-hidden="true">
+        <span className={`staging-score-fill staging-score-fill--${tone}`} style={{ width: `${percentage}%` }} />
+      </span>
+    </div>
   );
+};
+
+// Event names a candidate attended this cycle, plus GTKUC. Names are matched loosely
+// because attendance is keyed by whatever the event was called when it synced.
+const attendedEventNames = (attendance, events) => {
+  if (!attendance) return [];
+  const names = (events || [])
+    .map(event => event.eventName || event.name || event.id)
+    .filter(eventName => {
+      if (!eventName) return false;
+      if (attendance[eventName] !== undefined) return Boolean(attendance[eventName]);
+      const matchingKey = Object.keys(attendance).find(key =>
+        key.toLowerCase() === eventName.toLowerCase() ||
+        key.toLowerCase().includes(eventName.toLowerCase()) ||
+        eventName.toLowerCase().includes(key.toLowerCase())
+      );
+      return matchingKey !== undefined ? Boolean(attendance[matchingKey]) : false;
+    });
+  return attendance.GTKUC ? [...names, 'GTKUC'] : names;
 };
 
 const AttendanceDisplay = ({ attendance, events }) => {
   if (!events || events.length === 0) {
-    return (
-      <Box display="flex" alignItems="center" justifyContent="center" minHeight="60px">
-        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-          No events available for this cycle
-        </Typography>
-      </Box>
-    );
+    return <span className="staging-zero">—</span>;
   }
-
-  const getAttendanceStatus = (event) => {
-    const eventName = event.eventName || event.name || event.id;
-    let isAttended = false;
-    
-    if (attendance && eventName) {
-      if (attendance[eventName] !== undefined) {
-        isAttended = Boolean(attendance[eventName]);
-      } else {
-        const attendanceKeys = Object.keys(attendance);
-        const matchingKey = attendanceKeys.find(key => 
-          key.toLowerCase() === eventName.toLowerCase() ||
-          key.toLowerCase().includes(eventName.toLowerCase()) || 
-          eventName.toLowerCase().includes(key.toLowerCase())
-        );
-        if (matchingKey !== undefined) {
-          isAttended = Boolean(attendance[matchingKey]);
-        }
-      }
-    }
-    
-    return isAttended;
-  };
-
-  const attendedEventsList = events.filter(event => getAttendanceStatus(event));
-
-  // Check if candidate attended GTKUC (Get to Know UC meeting)
-  const hasGTKUC = attendance && attendance['GTKUC'];
-
-  // Create a combined list including GTKUC if attended
-  const allAttendedItems = [
-    ...attendedEventsList,
-    ...(hasGTKUC ? [{ id: 'gtkuc', eventName: 'GTKUC' }] : [])
-  ];
-  const totalAttendedCount = allAttendedItems.length;
-
-  if (totalAttendedCount === 0) {
-    return (
-      <Box display="flex" alignItems="center" justifyContent="center" minHeight="60px">
-        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-          No events attended
-        </Typography>
-      </Box>
-    );
+  const attended = attendedEventNames(attendance, events);
+  if (attended.length === 0) {
+    return <span className="staging-zero">None</span>;
   }
-
-  const maxVisibleEvents = 2;
-  const visibleEvents = allAttendedItems.slice(0, maxVisibleEvents);
-  const hiddenCount = totalAttendedCount - maxVisibleEvents;
-
-  const tooltipContent = allAttendedItems.map(e => e.eventName || e.name || e.id).join('\n');
-
   return (
-    <Tooltip title={tooltipContent} arrow placement="top">
-      <Stack spacing={0.25} sx={{ maxWidth: '100%', overflow: 'hidden' }}>
-        <Chip
-          label={`${totalAttendedCount} event${totalAttendedCount !== 1 ? 's' : ''}`}
-          color="success"
-          size="small"
-          sx={{ fontSize: '0.7rem', height: 20 }}
-        />
-
-        {visibleEvents.map((event) => {
-          const eventName = event.eventName || event.name || event.id;
-
-          return (
-            <Box key={event.id || event.name} display="flex" alignItems="center" gap={0.25}>
-              <CheckCircleIcon sx={{ fontSize: 14, color: 'success.main' }} />
-              <Typography
-                variant="caption"
-                color="success.main"
-                sx={{
-                  fontSize: '0.65rem',
-                  fontWeight: 500,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {eventName}
-              </Typography>
-            </Box>
-          );
-        })}
-
-        {hiddenCount > 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem' }}>
-            +{hiddenCount} more
-          </Typography>
-        )}
-      </Stack>
+    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{attended.join('\n')}</span>} arrow>
+      <span className="staging-pill staging-pill--success">
+        {attended.length} event{attended.length !== 1 ? 's' : ''}
+      </span>
     </Tooltip>
   );
 };
 
-const getDecisionHighlight = (decision) => {
-  switch (decision) {
-    case 'yes':
-      return { bg: 'success.light', border: 'success.main' };
-    case 'maybe_yes':
-      return { bg: 'info.light', border: 'info.main' };
-    case 'maybe_no':
-      return { bg: 'warning.light', border: 'warning.main' };
-    case 'no':
-      return { bg: 'error.light', border: 'error.main' };
-    default:
-      return { bg: 'grey.50', border: 'grey.300' };
-  }
-};
-
-const GradingStatusDisplay = ({ candidate, gradingData }) => {
+const GradingStatusDisplay = ({ gradingData }) => {
   if (!gradingData) {
-    return (
-      <Chip label="No Grading Data" color="default" size="small" />
-    );
+    return <span className="staging-zero">No data</span>;
   }
-  
+
   const { complete, hasResume, hasCoverLetter, hasVideo, hasResumeScore, hasCoverLetterScore, hasVideoScore } = gradingData;
-  
-  if (complete) {
-    const tooltipText = `All available documents have been scored:
-${hasResume ? '✓ Resume' : '✗ No Resume'}
-${hasCoverLetter ? '✓ Short Answer' : '✗ No Short Answer'}
-${hasVideo ? '✓ Video' : '✗ No Video'}`;
-    
-    return (
-      <Tooltip title={tooltipText} arrow>
-        <Chip label="Grading Complete" color="success" size="small" />
-      </Tooltip>
-    );
-  }
-  
-  const missingItems = [];
-  if (hasResume && !hasResumeScore) missingItems.push('Resume Score');
-  if (hasCoverLetter && !hasCoverLetterScore) missingItems.push('Short Answer Score');
-  if (hasVideo && !hasVideoScore) missingItems.push('Video Score');
-  
-  const tooltipText = `Grading Progress:
-${hasResume ? (hasResumeScore ? '✓ Resume Scored' : '⏳ Resume Pending') : '✗ No Resume'}
-${hasCoverLetter ? (hasCoverLetterScore ? '✓ Short Answer Scored' : '⏳ Short Answer Pending') : '✗ No Short Answer'}
-${hasVideo ? (hasVideoScore ? '✓ Video Scored' : '⏳ Video Pending') : '✗ No Video'}`;
-  
+  const line = (has, scored, label) => (has ? (scored ? `✓ ${label} scored` : `⏳ ${label} pending`) : `✗ No ${label.toLowerCase()}`);
+  const tooltipText = [
+    line(hasResume, hasResumeScore, 'Resume'),
+    line(hasCoverLetter, hasCoverLetterScore, 'Short answer'),
+    line(hasVideo, hasVideoScore, 'Video')
+  ].join('\n');
+  const missing = [
+    hasResume && !hasResumeScore,
+    hasCoverLetter && !hasCoverLetterScore,
+    hasVideo && !hasVideoScore
+  ].filter(Boolean).length;
+
   return (
-    <Tooltip title={tooltipText} arrow>
-      <Box>
-        <Chip label="Grading in Progress" color="warning" size="small" sx={{ mb: 1 }} />
-        <Typography variant="caption" display="block" color="text.secondary">
-          Missing: {missingItems.join(', ') || 'None'}
-        </Typography>
-      </Box>
+    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tooltipText}</span>} arrow>
+      {complete ? (
+        <span className="staging-pill staging-pill--success">Graded</span>
+      ) : (
+        <span className="staging-pill staging-pill--warning">{missing} to grade</span>
+      )}
     </Tooltip>
   );
 };
@@ -548,7 +405,7 @@ export default function Staging() {
     invalidDecisions: 0,
     invalidDecisionCandidates: []
   });
-  const [demographics, setDemographics] = useState({ graduationYear: {}, gender: {}, referral: {} });
+  const [demographicsOpen, setDemographicsOpen] = useState(false);
   const [appModalOpen, setAppModalOpen] = useState(false);
   const [appModalLoading, setAppModalLoading] = useState(false);
   const [appModal, setAppModal] = useState(null);
@@ -818,8 +675,6 @@ export default function Staging() {
     setLiveVoteResults(data.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS);
     setGradingCompleteByCandidate(data.gradingMap || {});
 
-    calculateDemographics(candidatesData, false);
-
     setPagination(prev => ({
       ...prev,
       total: candidatesData.length,
@@ -829,8 +684,6 @@ export default function Staging() {
     }));
 
     setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- calculateDemographics is a
-    // hoisted declaration in this component and only writes state.
   }, []);
 
   // Change token behind the snapshot currently on screen. Null until the first
@@ -943,28 +796,6 @@ export default function Staging() {
   }, [currentTab]);
 
   useEffect(() => {
-    // Calculate demographics based on per-round filtering
-    if (candidates && candidates.length > 0) {
-      if (currentTab === 0) {
-        // Resume Review: Show ALL candidates
-        calculateDemographics(candidates, false);
-      } else if (currentTab === 1) {
-        // Coffee Chat: Show only candidates who passed resume review
-        const coffeeChatCandidates = candidates.filter(c => passedRound(c, 'resume'));
-        calculateDemographics(coffeeChatCandidates, false);
-      } else if (currentTab === 2) {
-        // First Round: Show only candidates who passed coffee chat
-        const firstRoundCandidates = candidates.filter(c => passedRound(c, 'coffee'));
-        calculateDemographics(firstRoundCandidates, false);
-      } else if (currentTab === 3) {
-        // Final Round: Show only candidates who passed first round
-        const finalRoundCandidates = candidates.filter(c => passedRound(c, 'firstRound'));
-        calculateDemographics(finalRoundCandidates, false);
-      }
-    }
-  }, [currentTab, candidates, adminApplications, perRoundDecisions]);
-
-  useEffect(() => {
     if (currentTab === 2 && adminApplications.length > 0) {
       const firstRoundApps = (adminApplications || []).filter(app => String(app.currentRound) === '3');
       if (firstRoundApps.length > 0) {
@@ -1045,6 +876,24 @@ export default function Staging() {
     return combinedScore;
   };
 
+  // Application id behind a Staging row, indexed once per snapshot. Scores are read for
+  // every comparison the sort makes, and scanning the applications for each one made
+  // sorting quadratic in the size of the cycle.
+  const adminAppIndex = useMemo(() => {
+    const byId = new Map();
+    const byCandidateId = new Map();
+    (adminApplications || []).forEach(app => {
+      byId.set(app.id, app);
+      if (app.candidateId && !byCandidateId.has(app.candidateId)) byCandidateId.set(app.candidateId, app);
+    });
+    return { byId, byCandidateId };
+  }, [adminApplications]);
+
+  const appIdFor = (candidate) => {
+    const adminApp = adminAppIndex.byId.get(candidate.id) || adminAppIndex.byCandidateId.get(candidate.candidateId);
+    return adminApp?.id || candidate.id;
+  };
+
   // Helper function to get the appropriate score based on the current tab
   const getScoreForTab = (candidate, tab) => {
     if (tab === 0) {
@@ -1052,8 +901,7 @@ export default function Staging() {
       return candidate.scores?.overall || 0;
     } else if (tab === 1) {
       // Coffee Chat: use evaluation summaries
-      const adminApp = adminApplications.find(app => app.id === candidate.id || app.candidateId === candidate.candidateId);
-      const appId = adminApp?.id || candidate.id;
+      const appId = appIdFor(candidate);
       const summary = evaluationSummaries[appId];
       if (summary?.evaluations?.length > 0) {
         return calculateRankingScore(summary.evaluations);
@@ -1061,8 +909,7 @@ export default function Staging() {
       return 0;
     } else if (tab === 2) {
       // First Round: use first round evaluation summaries
-      const adminApp = adminApplications.find(app => app.id === candidate.id || app.candidateId === candidate.candidateId);
-      const appId = adminApp?.id || candidate.id;
+      const appId = appIdFor(candidate);
       const summary = evaluationSummariesFirstRound[appId];
       if (summary?.evaluations?.length > 0) {
         return calculateFirstRoundRankingScore(summary.evaluations);
@@ -1070,8 +917,7 @@ export default function Staging() {
       return 0;
     } else if (tab === 3) {
       // Final Round: use final round evaluation summaries
-      const adminApp = adminApplications.find(app => app.id === candidate.id || app.candidateId === candidate.candidateId);
-      const appId = adminApp?.id || candidate.id;
+      const appId = appIdFor(candidate);
       const summary = evaluationSummariesFinal[appId];
       if (summary?.evaluations?.length > 0) {
         return calculateRankingScore(summary.evaluations);
@@ -1458,9 +1304,8 @@ export default function Staging() {
     }
   };
 
-  // Function declaration, not a const: applyStagingData above calls it during the
-  // first render's data apply, which a const in this position would not have
-  // initialised yet.
+  // Breakdown of a round's candidates by year, gender and referral, with this
+  // round's decisions. Derived during render (see `demographics` below).
   function calculateDemographics(data, isApplicationData = false) {
     const graduationYearBreakdown = Object.fromEntries(
       GRADUATION_YEARS.map((year) => [year, { total: 0, yes: 0, no: 0, maybe: 0, pending: 0 }])
@@ -1532,27 +1377,42 @@ export default function Staging() {
       else referralBreakdown[referralKey].pending++;
     });
     
-    setDemographics({ graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown });
+    return { graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown };
   }
 
+  // Optimistic: the pick shows at once and is put back if the save fails. There is
+  // no forced reload afterwards - the save bumps the change token, so the next poll
+  // (within STAGING_POLL_INTERVAL_MS) brings the server's copy, instead of every
+  // click re-reading the whole snapshot.
   const handleInlineDecisionChange = async (item, value, tabIndex = currentTab) => {
     const phase = tabToPhase(tabIndex);
+    const previous = perRoundDecisions[phase]?.[item.id] || '';
+    const setDecision = (decision) => setPerRoundDecisions(prev => ({
+      ...prev,
+      [phase]: { ...prev[phase], [item.id]: decision }
+    }));
+
+    setDecision(value);
     try {
       await stagingAPI.saveDecision(item.id, value, phase);
-      setPerRoundDecisions(prev => ({
-        ...prev,
-        [phase]: { ...prev[phase], [item.id]: value }
-      }));
-      setSnackbar({ open: true, message: 'Decision saved successfully', severity: 'success' });
-      await fetchCandidates();
+      stagingCache.invalidate();
     } catch (error) {
       console.error('Error saving inline decision:', error);
-      setSnackbar({ open: true, message: 'Failed to save decision', severity: 'error' });
+      setDecision(previous);
+      setSnackbar({
+        open: true,
+        message: `Could not save the decision for ${item.firstName} ${item.lastName}. It has been put back.`,
+        severity: 'error'
+      });
     }
   };
 
-  // First, filter candidates based on which tab we're on (previous round decisions)
-  const tabFilteredCandidates = candidates.filter(candidate => {
+  // Everything below is derived from the snapshot and recomputed only when an input
+  // changes, not on every render: typing in search or opening a menu used to re-run
+  // the whole filter, sort and breakdown for every applicant in the cycle. The
+  // helpers they call read the same state listed in each dependency array.
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const tabFilteredCandidates = useMemo(() => candidates.filter(candidate => {
     if (currentTab === 0) {
       // Resume Review: Show ALL applicants
       return true;
@@ -1567,9 +1427,25 @@ export default function Staging() {
       return passedRound(candidate, 'firstRound');
     }
     return true;
-  });
+  }), [candidates, currentTab, perRoundDecisions]);
 
-  const filteredCandidates = tabFilteredCandidates.filter(candidate => {
+  const scoreById = useMemo(() => {
+    const scores = new Map();
+    tabFilteredCandidates.forEach(candidate => scores.set(candidate.id, getScoreForTab(candidate, currentTab)));
+    return scores;
+  }, [tabFilteredCandidates, currentTab, adminAppIndex, evaluationSummaries, evaluationSummariesFirstRound, evaluationSummariesFinal]);
+  const scoreOf = (candidate) => scoreById.get(candidate.id) ?? 0;
+
+  const { ranks, rankedCount } = useMemo(
+    () => rankByScore(tabFilteredCandidates.map(candidate => candidate.id), id => scoreById.get(id)),
+    [tabFilteredCandidates, scoreById]
+  );
+
+  const demographics = useMemo(() => calculateDemographics(tabFilteredCandidates), [tabFilteredCandidates, perRoundDecisions, currentTab]);
+
+  const searchTerm = useDeferredValue(filters.search);
+
+  const filteredCandidates = useMemo(() => tabFilteredCandidates.filter(candidate => {
     const matchesStatus = filters.status === 'all' || candidate.status === filters.status;
     const matchesRound = filters.round === 'all' || parseInt(candidate.currentRound) === parseInt(filters.round);
 
@@ -1643,9 +1519,9 @@ export default function Staging() {
       }
     }
     
-    const matchesSearch = filters.search === '' ||
-      `${candidate.firstName} ${candidate.lastName}`.toLowerCase().includes(filters.search.toLowerCase()) ||
-      candidate.email.toLowerCase().includes(filters.search.toLowerCase());
+    const matchesSearch = searchTerm === '' ||
+      `${candidate.firstName} ${candidate.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      candidate.email.toLowerCase().includes(searchTerm.toLowerCase());
 
     let matchesGraduationYear = true;
     if (filters.graduationYear !== 'all') {
@@ -1679,7 +1555,7 @@ export default function Staging() {
     switch (sortConfig.field) {
       case 'score': {
         // desc = high scores first (default), asc = low scores first
-        const diff = getScoreForTab(a, currentTab) - getScoreForTab(b, currentTab);
+        const diff = scoreOf(a) - scoreOf(b);
         return multiplier * diff;
       }
       case 'name': {
@@ -1720,11 +1596,12 @@ export default function Staging() {
         return multiplier * diff;
       }
       default: {
-        const diff = getScoreForTab(a, currentTab) - getScoreForTab(b, currentTab);
+        const diff = scoreOf(a) - scoreOf(b);
         return multiplier * diff;
       }
     }
-  });
+  }), [tabFilteredCandidates, filters, searchTerm, events, sortConfig, scoreById, perRoundDecisions, currentTab, coffeeChatInterviewFilter, coffeeChatInterviews, adminApplications]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const paginatedCandidates = filteredCandidates.slice(
     (pagination.page - 1) * pagination.limit,
@@ -1745,6 +1622,15 @@ export default function Staging() {
     syncError ? `Last error: ${syncError.message}` : null
   ].filter(Boolean).join('\n');
 
+  // Applicants in each round, for the tab labels.
+  const tabCounts = useMemo(() => [
+    candidates.length,
+    candidates.filter(c => passedRound(c, 'resume')).length,
+    candidates.filter(c => passedRound(c, 'coffee')).length,
+    candidates.filter(c => passedRound(c, 'firstRound')).length
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- passedRound reads perRoundDecisions
+  ], [candidates, perRoundDecisions]);
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -1753,552 +1639,402 @@ export default function Staging() {
     );
   }
 
+  const phase = tabToPhase(currentTab);
+  const decisionTotals = Object.values(demographics.referral).reduce(
+    (totals, stats) => ({
+      yes: totals.yes + stats.yes,
+      no: totals.no + stats.no,
+      maybe: totals.maybe + stats.maybe,
+      pending: totals.pending + stats.pending
+    }),
+    { yes: 0, no: 0, maybe: 0, pending: 0 }
+  );
+  const nextStep = [
+    '"Yes" advances to Coffee Chats',
+    '"Yes" advances to First Round',
+    '"Yes" advances to Final Round',
+    '"Yes" accepts them as members and seals their recruiting records'
+  ][currentTab];
+  const processHelp = `Every candidate needs "Yes" or "No" first. ${nextStep}; "No" marks them rejected. No emails are sent here - they wait in Master Communications for you to review and send.`;
+  const hasActiveFilters = filters.decision !== 'all' || filters.graduationYear !== 'all' || filters.gender !== 'all' ||
+    filters.attendance !== 'all' || filters.referral !== 'all' || filters.reviewTeam !== 'all' || filters.search !== '' ||
+    (currentTab === 1 && coffeeChatInterviewFilter !== 'all');
+  const firstShown = filteredCandidates.length === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
+  const lastShown = Math.min(pagination.page * pagination.limit, filteredCandidates.length);
+  const totalPages = Math.max(1, Math.ceil(filteredCandidates.length / pagination.limit));
+  const setFilter = (key) => (e) => setFilters({ ...filters, [key]: e.target.value });
+
   return (
     <AccessControl allowedRoles={['ADMIN']}>
-      <Box className="staging-page" sx={{ p: 3 }}>
-          <Box mb={3} display="flex" alignItems="center" justifyContent="space-between">
-            <Box>
-              <Typography variant="h4" gutterBottom sx={{ fontWeight: 700, color: 'text.primary' }}>
-                Candidate Staging
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Review candidates, track attendance, evaluate scores, and make decisions
-              </Typography>
-            </Box>
-            <Box display="flex" alignItems="center" gap={2}>
-              <Tooltip title={syncStatusTooltip}>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  color={syncStatus === POLL_STATUS.ERROR ? 'error' : syncStatus === POLL_STATUS.PAUSED ? 'default' : 'success'}
-                  label={syncStatusLabel}
-                />
+      <div className="staging-page application-list">
+        <header className="staging-header">
+          <div>
+            <h1 className="header-title">Staging</h1>
+            <div className="staging-meta">
+              <span>{currentCycle ? currentCycle.name : 'No active cycle'}</span>
+              <span aria-hidden="true">·</span>
+              <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{syncStatusTooltip}</span>}>
+                <span className={`staging-sync staging-sync--${syncStatus === POLL_STATUS.ERROR ? 'error' : syncStatus === POLL_STATUS.PAUSED ? 'paused' : 'live'}`}>
+                  {syncStatusLabel}
+                </span>
               </Tooltip>
               <Tooltip title="Refresh now">
-                <IconButton onClick={fetchCandidates} aria-label="Refresh staging data">
-                  <RefreshIcon />
+                <IconButton size="small" onClick={fetchCandidates} aria-label="Refresh staging data">
+                  <RefreshIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Chip 
-                label={currentCycle ? `Current Cycle: ${currentCycle.name}` : 'No Active Cycle'}
-                color={currentCycle ? 'primary' : 'default'}
-              />
-            </Box>
-          </Box>
-
-          <Card sx={{ mb: 3 }}>
-            <CardContent>
-              <Tabs value={currentTab} onChange={(e, v) => { setCurrentTab(v); setCoffeeChatInterviewFilter('all'); }}>
-                <Tab label="Resume Review" />
-                <Tab label="Coffee Chats" />
-                <Tab label="First Round" />
-                <Tab label="Final Round" />
-              </Tabs>
-              {isAdmin && (
-                <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mt: 2 }}>
-                  {activeLiveVote ? (
-                    <Button
-                      variant="contained"
-                      color="error"
-                      startIcon={<HowToVoteIcon />}
-                      onClick={() => navigate(`/live-vote/${activeLiveVote.id}`)}
-                    >
-                      Live vote in progress · Open
-                    </Button>
-                  ) : (
-                    <Button variant="contained" startIcon={<HowToVoteIcon />} onClick={() => setLiveVoteSetupOpen(true)}>
-                      Start Live Vote
-                    </Button>
-                  )}
-                  <Button variant="outlined" startIcon={<MenuBookIcon />} onClick={() => setRubricEditorOpen(true)}>
-                    Configure {PHASE_LABELS[tabToPhase(currentTab)]} rubric
-                  </Button>
-                  <Button variant="outlined" startIcon={<HelpOutlineIcon />} onClick={() => setDecisionGuideOpen(true)}>
-                    Edit decision guide
-                  </Button>
-                </Stack>
+            </div>
+          </div>
+          {isAdmin && (
+            <div className="staging-header-actions">
+              <Tooltip title={`Configure the ${PHASE_LABELS[phase]} rubric`}>
+                <IconButton onClick={() => setRubricEditorOpen(true)} aria-label={`Configure ${PHASE_LABELS[phase]} rubric`}>
+                  <MenuBookIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Edit decision guide">
+                <IconButton onClick={() => setDecisionGuideOpen(true)} aria-label="Edit decision guide">
+                  <HelpOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              {activeLiveVote ? (
+                <button type="button" className="staging-btn staging-btn--live" onClick={() => navigate(`/live-vote/${activeLiveVote.id}`)}>
+                  <HowToVoteIcon fontSize="small" /> Live vote in progress · Open
+                </button>
+              ) : (
+                <button type="button" className="staging-btn" onClick={() => setLiveVoteSetupOpen(true)}>
+                  <HowToVoteIcon fontSize="small" /> Start live vote
+                </button>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          )}
+        </header>
 
-          {/* Improved Demographics Section */}
-          <Card sx={{ mb: 4 }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                📊 Demographics Overview ({currentTab === 0 ? 'Resume Review' : currentTab === 1 ? 'Coffee Chat' : currentTab === 2 ? 'First Round' : 'Final Round'} Round)
-              </Typography>
-              
-              <Grid container spacing={4}>
-                <Grid item xs={12} md={4}>
-                  <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
-                    Graduation Year
-                  </Typography>
-                  <Stack spacing={1.5}>
-                    {Object.entries(demographics.graduationYear).map(([year, stats]) => {
-                      const totalApps = Object.values(demographics.graduationYear).reduce((sum, s) => sum + s.total, 0);
-                      const pct = totalApps > 0 ? ((stats.total / totalApps) * 100).toFixed(1) : 0;
-                      const yesPct = stats.total > 0 ? ((stats.yes / stats.total) * 100).toFixed(1) : 0;
-                      const noPct = stats.total > 0 ? ((stats.no / stats.total) * 100).toFixed(1) : 0;
-                      return (
-                        <Box key={year} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.paper' }}>
-                          <Typography variant="body1" fontWeight="bold">
-                            Class of {year} ({stats.total} • {pct}%)
-                          </Typography>
-                          <Stack direction="row" spacing={1} mt={1} flexWrap="wrap" gap={1}>
-                            <Chip label={`Yes: ${stats.yes} (${yesPct}%)`} color="success" size="small" />
-                            <Chip label={`No: ${stats.no} (${noPct}%)`} color="error" size="small" />
-                            <Chip label={`Maybe: ${stats.maybe}`} color="warning" size="small" />
-                            <Chip label={`Pending: ${stats.pending}`} size="small" />
-                          </Stack>
-                        </Box>
-                      );
-                    })}
-                  </Stack>
-                </Grid>
+        <Tabs
+          className="staging-tabs"
+          value={currentTab}
+          onChange={(e, v) => { setCurrentTab(v); setCoffeeChatInterviewFilter('all'); }}
+          variant="scrollable"
+          allowScrollButtonsMobile
+        >
+          {['Resume Review', 'Coffee Chats', 'First Round', 'Final Round'].map((label, index) => (
+            <Tab
+              key={label}
+              label={<span className="staging-tab-label">{label}<span className="staging-tab-count">{tabCounts[index]}</span></span>}
+            />
+          ))}
+        </Tabs>
 
-                <Grid item xs={12} md={4}>
-                  <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
-                    Gender
-                  </Typography>
-                  <Stack spacing={1.5}>
-                    {Object.entries(demographics.gender).map(([gender, stats]) => {
-                      const totalApps = Object.values(demographics.gender).reduce((sum, s) => sum + s.total, 0);
-                      const pct = totalApps > 0 ? ((stats.total / totalApps) * 100).toFixed(1) : 0;
-                      const yesPct = stats.total > 0 ? ((stats.yes / stats.total) * 100).toFixed(1) : 0;
-                      const noPct = stats.total > 0 ? ((stats.no / stats.total) * 100).toFixed(1) : 0;
-                      return (
-                        <Box key={gender} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.paper' }}>
-                          <Typography variant="body1" fontWeight="bold">
-                            {gender} ({stats.total} • {pct}%)
-                          </Typography>
-                          <Stack direction="row" spacing={1} mt={1} flexWrap="wrap" gap={1}>
-                            <Chip label={`Yes: ${stats.yes} (${yesPct}%)`} color="success" size="small" />
-                            <Chip label={`No: ${stats.no} (${noPct}%)`} color="error" size="small" />
-                            <Chip label={`Maybe: ${stats.maybe}`} color="warning" size="small" />
-                            <Chip label={`Pending: ${stats.pending}`} size="small" />
-                          </Stack>
-                        </Box>
-                      );
-                    })}
-                  </Stack>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                  <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold' }}>
-                    Referral Status
-                  </Typography>
-                  <Stack spacing={1.5}>
-                    {Object.entries(demographics.referral).map(([ref, stats]) => {
-                      const totalApps = Object.values(demographics.referral).reduce((sum, s) => sum + s.total, 0);
-                      const pct = totalApps > 0 ? ((stats.total / totalApps) * 100).toFixed(1) : 0;
-                      const yesPct = stats.total > 0 ? ((stats.yes / stats.total) * 100).toFixed(1) : 0;
-                      const noPct = stats.total > 0 ? ((stats.no / stats.total) * 100).toFixed(1) : 0;
-                      return (
-                        <Box key={ref} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.paper' }}>
-                          <Typography variant="body1" fontWeight="bold">
-                            Referred: {ref} ({stats.total} • {pct}%)
-                          </Typography>
-                          <Stack direction="row" spacing={1} mt={1} flexWrap="wrap" gap={1}>
-                            <Chip label={`Yes: ${stats.yes} (${yesPct}%)`} color="success" size="small" />
-                            <Chip label={`No: ${stats.no} (${noPct}%)`} color="error" size="small" />
-                            <Chip label={`Maybe: ${stats.maybe}`} color="warning" size="small" />
-                            <Chip label={`Pending: ${stats.pending}`} size="small" />
-                          </Stack>
-                        </Box>
-                      );
-                    })}
-                  </Stack>
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
-
-          {/* Main Table */}
-          <Card>
-            <CardContent>
-              <Box mb={2} display="flex" justifyContent="space-between" alignItems="center">
-                <Typography variant="body2" color="text.secondary">
-                  {currentTab === 0 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Coffee Chats, "No" marks as rejected.'}
-                  {currentTab === 1 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to First Round, "No" marks as rejected.'}
-                  {currentTab === 2 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" advances to Final Round, "No" marks as rejected.'}
-                  {currentTab === 3 && '⚠️ All candidates must have a "Yes" or "No" decision. "Yes" accepts them as members and seals their recruiting records, "No" marks as rejected.'}
-                  {' '}No emails are sent here - they wait in Master Communications for you to review and send.
-                </Typography>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  startIcon={<SkipNextIcon />}
-                  onClick={currentTab === 0 ? openPushAll : currentTab === 1 ? openPushAllCoffee : currentTab === 2 ? openPushAllFirstRound : openPushAllFinal}
+        <section className="staging-summary" aria-label="Round summary">
+          <div className="staging-summary-row">
+            <div className="staging-summary-counts">
+              <span className="staging-count staging-count--yes"><strong>{decisionTotals.yes}</strong> yes</span>
+              <span className="staging-count staging-count--no"><strong>{decisionTotals.no}</strong> no</span>
+              <span className="staging-count staging-count--maybe"><strong>{decisionTotals.maybe}</strong> maybe</span>
+              <span className="staging-count"><strong>{decisionTotals.pending}</strong> pending</span>
+              {tabFilteredCandidates.length > 0 && (
+                <button
+                  type="button"
+                  className="staging-link"
+                  onClick={() => setDemographicsOpen(open => !open)}
+                  aria-expanded={demographicsOpen}
                 >
-                  Process All Decisions
-                </Button>
-              </Box>
+                  Demographics
+                  <ExpandMoreIcon fontSize="small" className={demographicsOpen ? 'staging-chevron open' : 'staging-chevron'} />
+                </button>
+              )}
+            </div>
+            <div className="staging-summary-actions">
+              <Tooltip title={processHelp}>
+                <HelpOutlineIcon fontSize="small" className="staging-help-icon" aria-label={processHelp} />
+              </Tooltip>
+              <button
+                type="button"
+                className="staging-btn staging-btn--primary"
+                onClick={currentTab === 0 ? openPushAll : currentTab === 1 ? openPushAllCoffee : currentTab === 2 ? openPushAllFirstRound : openPushAllFinal}
+              >
+                <SkipNextIcon fontSize="small" /> Process all decisions
+              </button>
+            </div>
+          </div>
 
-              {/* Filters and Sorting */}
-              <Box sx={{ mb: 3, p: 2, bgcolor: 'grey.50', borderRadius: 2 }}>
-                <Box display="flex" alignItems="center" gap={1} mb={2}>
-                  <FilterListIcon color="action" />
-                  <Typography variant="subtitle2" fontWeight="bold">Filters & Sorting</Typography>
-                  <Chip
-                    label={`${filteredCandidates.length} candidates`}
-                    size="small"
-                    color="primary"
-                    sx={{ ml: 1 }}
-                  />
-                  {(filters.decision !== 'all' || filters.graduationYear !== 'all' || filters.gender !== 'all' || filters.attendance !== 'all' || filters.referral !== 'all' || filters.reviewTeam !== 'all' || filters.search !== '' || (currentTab === 1 && coffeeChatInterviewFilter !== 'all')) && (
-                    <Button
-                      size="small"
-                      startIcon={<ClearIcon />}
-                      onClick={() => {
-                        setFilters({
-                          ...filters,
-                          decision: 'all',
-                          graduationYear: 'all',
-                          gender: 'all',
-                          attendance: 'all',
-                          referral: 'all',
-                          reviewTeam: 'all',
-                          search: ''
-                        });
-                        setCoffeeChatInterviewFilter('all');
-                      }}
-                      sx={{ ml: 'auto' }}
-                    >
-                      Clear Filters
-                    </Button>
-                  )}
-                </Box>
+          <Collapse in={demographicsOpen && tabFilteredCandidates.length > 0} unmountOnExit>
+            <div className="staging-demographics">
+              {[
+                { title: 'Graduation year', rows: demographics.graduationYear, label: (key) => `Class of ${key}` },
+                { title: 'Gender', rows: demographics.gender, label: (key) => key },
+                { title: 'Referral', rows: demographics.referral, label: (key) => (key === 'Yes' ? 'Referred' : 'Not referred') }
+              ].map(({ title, rows, label }) => {
+                const groupTotal = Object.values(rows).reduce((sum, stats) => sum + stats.total, 0);
+                return (
+                  <table key={title} className="staging-demo-table">
+                    <thead>
+                      <tr>
+                        <th>{title}</th>
+                        <th className="num">Total</th>
+                        <th className="num">Yes</th>
+                        <th className="num">No</th>
+                        <th className="num">Maybe</th>
+                        <th className="num">Pending</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(rows).filter(([, stats]) => stats.total > 0).map(([key, stats]) => (
+                        <tr key={key}>
+                          <td>{label(key)}</td>
+                          <td className="num">
+                            {stats.total}
+                            <span className="staging-muted"> {groupTotal ? Math.round((stats.total / groupTotal) * 100) : 0}%</span>
+                          </td>
+                          <td className={`num ${stats.yes ? 'staging-yes' : 'staging-zero'}`}>{stats.yes}</td>
+                          <td className={`num ${stats.no ? 'staging-no' : 'staging-zero'}`}>{stats.no}</td>
+                          <td className={`num ${stats.maybe ? 'staging-maybe' : 'staging-zero'}`}>{stats.maybe}</td>
+                          <td className={`num ${stats.pending ? '' : 'staging-zero'}`}>{stats.pending}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                );
+              })}
+            </div>
+          </Collapse>
+        </section>
 
-                <Grid container spacing={2} alignItems="center">
-                  {/* Search */}
-                  <Grid item xs={12} md={3}>
-                    <TextField
-                      size="small"
-                      fullWidth
-                      placeholder="Search by name or email..."
-                      value={filters.search}
-                      onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                      InputProps={{
-                        startAdornment: <SearchIcon color="action" sx={{ mr: 1 }} />
-                      }}
-                    />
-                  </Grid>
+        <div className="staging-toolbar">
+          <div className="header-search staging-search">
+            <SearchIcon className="search-icon" />
+            <input
+              type="search"
+              className="search-input"
+              placeholder="Search by name or email"
+              value={filters.search}
+              onChange={setFilter('search')}
+              aria-label="Search candidates"
+            />
+          </div>
+          <select className="filter-select" value={filters.decision} onChange={setFilter('decision')} aria-label="Decision">
+            <option value="all">Decision: All</option>
+            <option value="yes">Yes</option>
+            <option value="maybe_yes">Maybe Yes</option>
+            <option value="maybe_no">Maybe No</option>
+            <option value="no">No</option>
+            <option value="pending">Pending</option>
+          </select>
+          <select className="filter-select" value={filters.graduationYear} onChange={setFilter('graduationYear')} aria-label="Graduation year">
+            <option value="all">Year: All</option>
+            {GRADUATION_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
+          </select>
+          <select className="filter-select" value={filters.gender} onChange={setFilter('gender')} aria-label="Gender">
+            <option value="all">Gender: All</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other/Not Specified</option>
+          </select>
+          <select className="filter-select" value={filters.attendance} onChange={setFilter('attendance')} aria-label="Attendance">
+            <option value="all">Attendance: All</option>
+            <option value="high">High (80%+)</option>
+            <option value="medium">Medium (60-79%)</option>
+            <option value="low">Low (40-59%)</option>
+            <option value="very_low">Very Low (&lt;40%)</option>
+            <option value="none">No Events</option>
+          </select>
+          <select className="filter-select" value={filters.referral} onChange={setFilter('referral')} aria-label="Referral">
+            <option value="all">Referral: All</option>
+            <option value="yes">Has Referral</option>
+            <option value="no">No Referral</option>
+          </select>
+          <select className="filter-select" value={filters.reviewTeam} onChange={setFilter('reviewTeam')} aria-label="Review team">
+            <option value="all">Team: All</option>
+            <option value="unassigned">Unassigned</option>
+            {reviewTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+          </select>
+          {currentTab === 1 && (
+            <select className="filter-select" value={coffeeChatInterviewFilter} onChange={(e) => setCoffeeChatInterviewFilter(e.target.value)} aria-label="Coffee chat interview">
+              <option value="all">Interview: All</option>
+              {coffeeChatInterviews.map((interview) => <option key={interview.id} value={interview.id}>{interview.title}</option>)}
+            </select>
+          )}
+          <div className="staging-sort">
+            <select
+              className="filter-select"
+              value={sortConfig.field}
+              onChange={(e) => setSortConfig({ field: e.target.value, direction: 'desc' })}
+              aria-label="Sort by"
+            >
+              <option value="score">Sort: Score</option>
+              <option value="name">Sort: Name</option>
+              <option value="graduationYear">Sort: Grad Year</option>
+              <option value="decision">Sort: Decision</option>
+              <option value="attendance">Sort: Attendance</option>
+              <option value="referral">Sort: Referral</option>
+            </select>
+            <Tooltip title={sortConfig.direction === 'desc' ? 'Descending' : 'Ascending'}>
+              <IconButton
+                size="small"
+                onClick={() => setSortConfig({ ...sortConfig, direction: sortConfig.direction === 'desc' ? 'asc' : 'desc' })}
+                aria-label={`Sort ${sortConfig.direction === 'desc' ? 'ascending' : 'descending'}`}
+              >
+                {sortConfig.direction === 'desc' ? <ArrowDownwardIcon fontSize="small" /> : <ArrowUpwardIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          </div>
+          <div className="staging-toolbar-end">
+            {hasActiveFilters && (
+              <button
+                type="button"
+                className="staging-link"
+                onClick={() => {
+                  setFilters({
+                    ...filters,
+                    decision: 'all',
+                    graduationYear: 'all',
+                    gender: 'all',
+                    attendance: 'all',
+                    referral: 'all',
+                    reviewTeam: 'all',
+                    search: ''
+                  });
+                  setCoffeeChatInterviewFilter('all');
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+            {hasActiveFilters && (
+              <span className="results-count">{filteredCandidates.length} of {tabFilteredCandidates.length}</span>
+            )}
+          </div>
+        </div>
 
-                  {/* Decision Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Decision</InputLabel>
-                      <Select
-                        value={filters.decision}
-                        label="Decision"
-                        onChange={(e) => setFilters({ ...filters, decision: e.target.value })}
-                      >
-                        <MenuItem value="all">All Decisions</MenuItem>
-                        <MenuItem value="yes">Yes</MenuItem>
-                        <MenuItem value="maybe_yes">Maybe Yes</MenuItem>
-                        <MenuItem value="maybe_no">Maybe No</MenuItem>
-                        <MenuItem value="no">No</MenuItem>
-                        <MenuItem value="pending">Pending</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Graduation Year Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Grad Year</InputLabel>
-                      <Select
-                        value={filters.graduationYear}
-                        label="Grad Year"
-                        onChange={(e) => setFilters({ ...filters, graduationYear: e.target.value })}
-                      >
-                        <MenuItem value="all">All Years</MenuItem>
-                        {GRADUATION_YEARS.map((year) => (
-                          <MenuItem key={year} value={year}>{year}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Gender Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Gender</InputLabel>
-                      <Select
-                        value={filters.gender}
-                        label="Gender"
-                        onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
-                      >
-                        <MenuItem value="all">All Genders</MenuItem>
-                        <MenuItem value="male">Male</MenuItem>
-                        <MenuItem value="female">Female</MenuItem>
-                        <MenuItem value="other">Other/Not Specified</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Attendance Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Attendance</InputLabel>
-                      <Select
-                        value={filters.attendance}
-                        label="Attendance"
-                        onChange={(e) => setFilters({ ...filters, attendance: e.target.value })}
-                      >
-                        <MenuItem value="all">All Attendance</MenuItem>
-                        <MenuItem value="high">High (80%+)</MenuItem>
-                        <MenuItem value="medium">Medium (60-79%)</MenuItem>
-                        <MenuItem value="low">Low (40-59%)</MenuItem>
-                        <MenuItem value="very_low">Very Low (&lt;40%)</MenuItem>
-                        <MenuItem value="none">No Events</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Referral Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Referral</InputLabel>
-                      <Select
-                        value={filters.referral}
-                        label="Referral"
-                        onChange={(e) => setFilters({ ...filters, referral: e.target.value })}
-                      >
-                        <MenuItem value="all">All</MenuItem>
-                        <MenuItem value="yes">Has Referral</MenuItem>
-                        <MenuItem value="no">No Referral</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Review Team Filter */}
-                  <Grid item xs={6} md={2}>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Review Team</InputLabel>
-                      <Select
-                        value={filters.reviewTeam}
-                        label="Review Team"
-                        onChange={(e) => setFilters({ ...filters, reviewTeam: e.target.value })}
-                        renderValue={(selected) => {
-                          if (selected === 'all') return 'All Teams';
-                          if (selected === 'unassigned') return 'Unassigned';
-                          const selectedTeam = reviewTeams.find(team => team.id === selected);
-                          return selectedTeam ? selectedTeam.name : selected;
-                        }}
-                      >
-                        <MenuItem value="all">All Teams</MenuItem>
-                        <MenuItem value="unassigned">Unassigned</MenuItem>
-                        {reviewTeams.map((team) => (
-                          <MenuItem key={team.id} value={team.id}>
-                            {team.name}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Grid>
-
-                  {/* Coffee Chat Interview Filter - Only shown on Coffee Chat tab */}
-                  {currentTab === 1 && (
-                    <Grid item xs={6} md={2}>
-                      <FormControl size="small" fullWidth>
-                        <InputLabel>Interview</InputLabel>
-                        <Select
-                          value={coffeeChatInterviewFilter}
-                          label="Interview"
-                          onChange={(e) => setCoffeeChatInterviewFilter(e.target.value)}
-                          renderValue={(selected) => {
-                            if (selected === 'all') return 'All Interviews';
-                            const selectedInterview = coffeeChatInterviews.find(i => i.id === selected);
-                            return selectedInterview ? selectedInterview.title : selected;
+        {filteredCandidates.length === 0 ? (
+          <div className="empty-state">
+            <h3>{tabFilteredCandidates.length === 0 ? `No one in ${PHASE_LABELS[phase]} yet` : 'No candidates match these filters'}</h3>
+          </div>
+        ) : (
+          <div className="staging-table-wrapper">
+            <table className="staging-table">
+              <colgroup>
+                <col className="col-rank" />
+                <col />
+                <col className="col-score" />
+                <col className="col-grading" />
+                <col className="col-events" />
+                <col className="col-decision" />
+                <col className="col-actions" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th className="num">
+                    <Tooltip title={`Rank on score among everyone in ${PHASE_LABELS[phase]}, whatever the filters or sort. Ties share a rank.`}>
+                      <span>#</span>
+                    </Tooltip>
+                  </th>
+                  <th>Candidate</th>
+                  <th>Score</th>
+                  <th>Grading</th>
+                  <th>Events</th>
+                  <th>Decision</th>
+                  <th><span className="visually-hidden">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedCandidates.map((candidate) => {
+                  const rank = ranks.get(candidate.id);
+                  const displayDecision = getDecisionForTab(candidate.id, currentTab);
+                  const name = `${candidate.firstName} ${candidate.lastName}`;
+                  return (
+                    <tr key={candidate.id} className="staging-row">
+                      <td className="num staging-rank" data-label="Rank">
+                        {rank ? (
+                          <Tooltip title={`${ordinal(rank)} of ${rankedCount} scored`} placement="left">
+                            <span>{rank}</span>
+                          </Tooltip>
+                        ) : (
+                          <span className="staging-zero" aria-label="Not scored yet">—</span>
+                        )}
+                      </td>
+                      <td data-label="Candidate" data-no-track>
+                        <div className="applicant-cell">
+                          <AuthenticatedImage
+                            src={candidate.headshotUrl}
+                            alt={name}
+                            className="staging-avatar"
+                            fallback={<div className="staging-avatar staging-avatar--initials">{initials(candidate)}</div>}
+                          />
+                          <div className="staging-name-block">
+                            <div className="applicant-name">{name}</div>
+                            <div className="applicant-email">{candidate.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td data-label="Score">
+                        <ScoreDisplay score={scoreOf(candidate)} maxScore={currentTab === 0 ? stagingMax(rubricData) : 10} />
+                      </td>
+                      <td data-label="Grading">
+                        <GradingStatusDisplay gradingData={gradingCompleteByCandidate[candidate.id]} />
+                      </td>
+                      <td data-label="Events">
+                        <AttendanceDisplay attendance={candidate.attendance} events={events} />
+                      </td>
+                      <td data-label="Decision">
+                        <div className="staging-decision-cell">
+                          <select
+                            className={`staging-decision staging-decision--${displayDecision || 'pending'}`}
+                            value={displayDecision}
+                            onChange={(e) => handleInlineDecisionChange(candidate, e.target.value)}
+                            aria-label={`Decision for ${name}`}
+                            data-track="staging-decision"
+                          >
+                            <option value="">Pending</option>
+                            <option value="yes">Yes</option>
+                            <option value="maybe_yes">Maybe Yes</option>
+                            <option value="maybe_no">Maybe No</option>
+                            <option value="no">No</option>
+                          </select>
+                          <LiveVoteResultChip ballots={liveVoteResults[phase]?.[candidate.id]} />
+                        </div>
+                      </td>
+                      <td data-label="Actions" className="staging-actions">
+                        <button
+                          type="button"
+                          className="staging-btn staging-btn--quiet"
+                          onClick={() => {
+                            setAppModal(candidate);
+                            setAppModalOpen(true);
                           }}
+                          aria-label={`View details for ${name}`}
+                          data-track="staging-view-details"
                         >
-                          <MenuItem value="all">All Interviews</MenuItem>
-                          {coffeeChatInterviews.map((interview) => (
-                            <MenuItem key={interview.id} value={interview.id}>
-                              {interview.title}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </Grid>
-                  )}
-                </Grid>
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-                {/* Sorting Row */}
-                <Box display="flex" alignItems="center" gap={2} mt={2}>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <SortIcon color="action" fontSize="small" />
-                    <Typography variant="body2" color="text.secondary">Sort by:</Typography>
-                  </Box>
-                  <Stack direction="row" spacing={1}>
-                    {[
-                      { field: 'score', label: 'Score' },
-                      { field: 'name', label: 'Name' },
-                      { field: 'graduationYear', label: 'Grad Year' },
-                      { field: 'decision', label: 'Decision' },
-                      { field: 'attendance', label: 'Attendance' },
-                      { field: 'referral', label: 'Referral' }
-                    ].map(({ field, label }) => (
-                      <Chip
-                        key={field}
-                        label={
-                          <Box display="flex" alignItems="center" gap={0.5}>
-                            {label}
-                            {sortConfig.field === field && (
-                              sortConfig.direction === 'desc' ? <ArrowDownwardIcon fontSize="small" /> : <ArrowUpwardIcon fontSize="small" />
-                            )}
-                          </Box>
-                        }
-                        onClick={() => {
-                          if (sortConfig.field === field) {
-                            setSortConfig({ field, direction: sortConfig.direction === 'desc' ? 'asc' : 'desc' });
-                          } else {
-                            setSortConfig({ field, direction: 'desc' });
-                          }
-                        }}
-                        color={sortConfig.field === field ? 'primary' : 'default'}
-                        variant={sortConfig.field === field ? 'filled' : 'outlined'}
-                        size="small"
-                        sx={{ cursor: 'pointer' }}
-                      />
-                    ))}
-                  </Stack>
-                </Box>
-              </Box>
-
-              <TableContainer component={Paper} className="responsive-table">
-                <Table stickyHeader sx={{ tableLayout: { xs: 'auto', md: 'fixed' }, minWidth: { xs: 'auto', md: 900 } }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ width: { xs: 'auto', md: 220 } }}>Candidate</TableCell>
-                      <TableCell sx={{ width: { xs: 'auto', md: 100 } }}>Score</TableCell>
-                      <TableCell sx={{ width: { xs: 'auto', md: 150 } }}>Grading</TableCell>
-                      <TableCell sx={{ width: { xs: 'auto', md: 180 } }}>Attendance</TableCell>
-                      <TableCell sx={{ width: { xs: 'auto', md: 140 } }}>Decision</TableCell>
-                      <TableCell sx={{ width: { xs: 'auto', md: 110 } }}>Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {paginatedCandidates.map((candidate) => {
-                      const gradingData = gradingCompleteByCandidate[candidate.id];
-                      const displayDecision = getDecisionForTab(candidate.id, currentTab);
-                      
-                      return (
-                        <TableRow key={candidate.id} hover>
-                          <TableCell data-label="Candidate">
-                            <Box display="flex" alignItems="center" gap={1} sx={{ overflow: 'hidden' }}>
-                              <AuthenticatedImage
-                                src={candidate.headshotUrl}
-                                alt={`${candidate.firstName} ${candidate.lastName}`}
-                                style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
-                                fallback={<PersonIcon />}
-                              />
-                              <Box sx={{ overflow: 'hidden', minWidth: 0 }}>
-                                <Typography
-                                  variant="body2"
-                                  fontWeight="bold"
-                                  sx={{
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap'
-                                  }}
-                                >
-                                  {candidate.firstName} {candidate.lastName}
-                                </Typography>
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                    display: 'block'
-                                  }}
-                                >
-                                  {candidate.email}
-                                </Typography>
-                              </Box>
-                            </Box>
-                          </TableCell>
-                          <TableCell data-label="Score">
-                            <ScoreDisplay
-                              score={getScoreForTab(candidate, currentTab)}
-                              maxScore={currentTab === 0 ? stagingMax(rubricData) : 10}
-                            />
-                          </TableCell>
-                          <TableCell data-label="Grading">
-                            <GradingStatusDisplay candidate={candidate} gradingData={gradingData} />
-                          </TableCell>
-                          <TableCell data-label="Attendance">
-                            <AttendanceDisplay attendance={candidate.attendance} events={events} />
-                          </TableCell>
-                          <TableCell data-label="Decision">
-                            <FormControl size="small" fullWidth>
-                              <Select
-                                value={displayDecision}
-                                displayEmpty
-                                onChange={(e) => handleInlineDecisionChange(candidate, e.target.value)}
-                                sx={{
-                                  '& .MuiSelect-select': {
-                                    bgcolor: getDecisionHighlight(displayDecision).bg,
-                                    border: `1px solid ${getDecisionHighlight(displayDecision).border}`,
-                                    borderRadius: 1,
-                                  }
-                                }}
-                                renderValue={(selected) => {
-                                  if (!selected) return <em>Pending</em>;
-                                  const labels = { yes: 'Yes', maybe_yes: 'Maybe Yes', maybe_no: 'Maybe No', no: 'No' };
-                                  return labels[selected] || selected;
-                                }}
-                              >
-                                <MenuItem value=""><em>Pending</em></MenuItem>
-                                <MenuItem value="yes">Yes</MenuItem>
-                                <MenuItem value="maybe_yes">Maybe Yes</MenuItem>
-                                <MenuItem value="maybe_no">Maybe No</MenuItem>
-                                <MenuItem value="no">No</MenuItem>
-                              </Select>
-                            </FormControl>
-                            <LiveVoteResultChip ballots={liveVoteResults[tabToPhase(currentTab)]?.[candidate.id]} />
-                          </TableCell>
-                          <TableCell data-label="Actions">
-                            <Button
-                              size="small"
-                              onClick={() => {
-                                setAppModal(candidate);
-                                setAppModalOpen(true);
-                              }}
-                            >
-                              View Details
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3 }}>
-                <Typography variant="body2">
-                  Showing {(pagination.page - 1) * pagination.limit + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} candidates
-                </Typography>
-                <Box display="flex" gap={2} alignItems="center">
-                  <FormControl size="small">
-                    <InputLabel>Per page</InputLabel>
-                    <Select value={pagination.limit} label="Per page" onChange={(e) => handleLimitChange(e.target.value)}>
-                      <MenuItem value={25}>25</MenuItem>
-                      <MenuItem value={50}>50</MenuItem>
-                      <MenuItem value={100}>100</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <Button disabled={!pagination.hasPrevPage} onClick={() => handlePageChange(pagination.page - 1)}>Previous</Button>
-                  <Typography>Page {pagination.page} of {pagination.totalPages}</Typography>
-                  <Button disabled={!pagination.hasNextPage} onClick={() => handlePageChange(pagination.page + 1)}>Next</Button>
-                </Box>
-              </Box>
-            </CardContent>
-          </Card>
+        {filteredCandidates.length > 0 && (
+          <div className="staging-pagination">
+            <span className="results-count">Showing {firstShown}–{lastShown} of {filteredCandidates.length}</span>
+            <div className="staging-pagination-controls">
+              <select className="filter-select" value={pagination.limit} onChange={(e) => handleLimitChange(Number(e.target.value))} aria-label="Per page">
+                <option value={25}>25 per page</option>
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+              </select>
+              <button type="button" className="staging-btn staging-btn--quiet" disabled={pagination.page <= 1} onClick={() => handlePageChange(pagination.page - 1)}>
+                Previous
+              </button>
+              <span className="results-count">Page {pagination.page} of {totalPages}</span>
+              <button type="button" className="staging-btn staging-btn--quiet" disabled={pagination.page >= totalPages} onClick={() => handlePageChange(pagination.page + 1)}>
+                Next
+              </button>
+            </div>
+          </div>
+        )}
 
           {/* Candidate Details Modal - Popup with Embedded Application Detail */}
           <Dialog
@@ -2568,7 +2304,7 @@ export default function Staging() {
               {snackbar.message}
             </Alert>
           </Snackbar>
-        </Box>
+      </div>
     </AccessControl>
   );
 }
