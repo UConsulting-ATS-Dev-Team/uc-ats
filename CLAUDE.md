@@ -948,6 +948,10 @@ Key notification types in [emailNotifications.js](server/src/services/emailNotif
 - Application received (`application-received`): sent by form sync right after it saves a
   new application, to the address typed on the form. Only the run whose create succeeded
   sends it, so overlapping syncs send one copy and a failed insert sends none.
+  People who applied before it existed are sent it once with
+  `node scripts/send-application-received-backfill.js` (dry run; `--apply` sends). Only
+  applications still awaiting a first decision get one, and an address already logged as
+  sent for the cycle is skipped, so it is safe to re-run.
 - Password reset emails
 - Event reminder emails (upcoming events, RSVPs)
 - Interview assignment notifications (future)
