@@ -24,7 +24,7 @@ vi.mock('../prismaClient.js', () => {
 vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
-vi.mock('./emailNotifications.js', () => ({ sendApplicationReceivedEmail: vi.fn(async () => ({ success: true })) }));
+vi.mock('./applicationReceipts.js', () => ({ sendApplicationReceipts: vi.fn(async () => ({})) }));
 vi.mock('./luma/ingestGuests.js', () => ({ claimLumaGuestsForCandidate: vi.fn(async () => []) }));
 
 const cycle = {

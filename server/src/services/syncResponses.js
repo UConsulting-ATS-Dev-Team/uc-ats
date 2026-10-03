@@ -6,7 +6,7 @@ import { cycleFormIds } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
-import { sendApplicationReceivedEmail } from './emailNotifications.js'
+import { sendApplicationReceipts } from './applicationReceipts.js'
 
 /**
  * The candidate whose email this is, resolved so the answer never depends on
@@ -81,13 +81,7 @@ async function resolveCandidate({ studentId, email }) {
   return { candidate, emailTaken: Boolean(byEmail && candidate && byEmail.id !== candidate.id) };
 }
 
-// sendApplicationReceivedEmail never throws; a failed send is recorded in the
-// communications log.
-async function sendReceipts(receipts, cycle) {
-  for (const { email, name } of receipts) {
-    await sendApplicationReceivedEmail(email, name, cycle.name, { cycleId: cycle.id });
-  }
-}
+const RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default async function syncFormResponses() {
   try {
@@ -141,7 +135,6 @@ export default async function syncFormResponses() {
     console.log(`Found ${newResponses.length} new responses to process`);
     
     let successCount = 0;
-    const receipts = [];
     let errorCount = 0;
     
     for (const response of newResponses) {
@@ -295,17 +288,6 @@ export default async function syncFormResponses() {
           console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
         }
 
-        // Queue the "we received your application" email. Only the run whose
-        // create succeeded gets here, so overlapping syncs on several servers
-        // still send one copy. The address is the one they typed on this form,
-        // not the candidate's, which may be an older one.
-        if (emailFromForm) {
-          const applicantName = [dbRecord.firstName, dbRecord.lastName].filter(Boolean).join(' ')
-            || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ')
-            || 'Applicant';
-          receipts.push({ email: emailFromForm, name: applicantName });
-        }
-
       } catch (error) {
         console.error(`Error processing response ${response.responseId}:`, error);
         errorCount++;
@@ -314,14 +296,15 @@ export default async function syncFormResponses() {
     
     console.log(`Sync complete: ${successCount} processed successfully, ${errorCount} errored`);
 
-    // Sent after the loop and not awaited: a slow SES must not hold up the
-    // next application, or server startup, which awaits the first sync.
-    // One at a time, so a large backlog stays under the SES send rate.
-    if (receipts.length > 0) {
-      sendReceipts(receipts, activeCycle).catch((error) => {
-        console.error('Failed to send application received emails:', error);
-      });
-    }
+    // "We received your application" for everything this sync and recent
+    // ones filed. Not awaited: a slow SES must not hold up server startup,
+    // which awaits the first sync. Sweeping a window rather than this run's
+    // list is what makes that safe - a send lost to a deploy goes out on the
+    // next tick. The window is a week because submittedAt is the form's own
+    // timestamp, and a response can sync days late (an unmapped form version).
+    // applicationReceipts.js owns who is owed one and sending it once.
+    sendApplicationReceipts({ cycle: activeCycle, since: new Date(Date.now() - RECEIPT_WINDOW_MS) })
+      .catch((error) => console.error('Failed to send application received emails:', error));
     
   } catch (error) {
     console.error('Error syncing form responses:', error)

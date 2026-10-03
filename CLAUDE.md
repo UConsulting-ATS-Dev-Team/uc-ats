@@ -945,13 +945,18 @@ current version and the only one "Apply Here" links to; sync reads every link in
 Configured via environment variables `EMAIL_USER` and `EMAIL_PASS` (Gmail app-specific password).
 
 Key notification types in [emailNotifications.js](server/src/services/emailNotifications.js):
-- Application received (`application-received`): sent by form sync right after it saves a
-  new application, to the address typed on the form. Only the run whose create succeeded
-  sends it, so overlapping syncs send one copy and a failed insert sends none.
-  People who applied before it existed are sent it once with
-  `node scripts/send-application-received-backfill.js` (dry run; `--apply` sends). Only
-  applications still awaiting a first decision get one, and an address already logged as
-  sent for the cycle is skipped, so it is safe to re-run.
+- Application received (`application-received`): after each run, form sync sweeps the
+  last 7 days of the cycle (by `submittedAt`) and sends it, without waiting, to everyone
+  still owed one. [applicationReceipts.js](server/src/services/applicationReceipts.js)
+  decides who that is and sends each one under an advisory lock. The communications log
+  is the record: a person is owed one until an `APPLICATION_RECEIVED` row for their
+  address in that cycle is not `FAILED`, or three have failed. That way a send lost to a
+  deploy goes out on the next tick, and servers running at the same moment send one copy.
+  Only applications still waiting on a first decision (SUBMITTED/UNDER_REVIEW, round 1)
+  are owed one.
+  People who applied before it existed are sent it with
+  `node scripts/send-application-received-backfill.js` (dry run; `--apply` sends). It
+  goes through the same service, so it is safe to re-run or run beside sync.
 - Password reset emails
 - Event reminder emails (upcoming events, RSVPs)
 - Interview assignment notifications (future)

@@ -1,11 +1,11 @@
-// Every application form sync files gets a "we received your application"
-// email, sent once the application is actually on file.
+// Form sync hands "we received your application" to applicationReceipts.js
+// once its applications are filed, without waiting for the mail.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { getResponses } from './google/forms.js';
 import { transformFormResponse } from '../utils/dataMapper.js';
 import { resolveCandidateCycle } from './activeCycle.js';
-import { sendApplicationReceivedEmail } from './emailNotifications.js';
+import { sendApplicationReceipts } from './applicationReceipts.js';
 import syncFormResponses from './syncResponses.js';
 
 vi.mock('../prismaClient.js', () => {
@@ -23,10 +23,11 @@ vi.mock('../prismaClient.js', () => {
 vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
-vi.mock('./emailNotifications.js', () => ({ sendApplicationReceivedEmail: vi.fn(async () => ({ success: true })) }));
+vi.mock('./applicationReceipts.js', () => ({ sendApplicationReceipts: vi.fn(async () => ({})) }));
 vi.mock('./luma/ingestGuests.js', () => ({ claimLumaGuestsForCandidate: vi.fn(async () => []) }));
 
 const cycle = { id: 'cycle-1', name: 'Fall 2026', formUrl: 'https://docs.google.com/forms/d/form-1/edit', previousFormUrls: [] };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -35,13 +36,13 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 
   resolveCandidateCycle.mockResolvedValue(cycle);
-  getResponses.mockResolvedValue([{ responseId: 'r-1' }]);
+  getResponses.mockResolvedValue([{ responseId: 'r-1' }, { responseId: 'r-2' }]);
   transformFormResponse.mockImplementation((response) => ({
     responseID: response.responseId,
-    studentId: '123456789',
-    email: ' Maria@ucla.edu ',
-    firstName: 'Maria',
-    lastName: 'Lopez'
+    studentId: `uid-${response.responseId}`,
+    email: `${response.responseId}@ucla.edu`,
+    firstName: 'A',
+    lastName: response.responseId
   }));
 
   prisma.application.findMany.mockResolvedValue([]);
@@ -49,47 +50,36 @@ beforeEach(() => {
   prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.candidate.findFirst.mockResolvedValue(null);
   prisma.candidate.findMany.mockResolvedValue([]);
-  prisma.candidate.create.mockImplementation(async ({ data }) => ({ id: 'cand-1', ...data }));
+  prisma.candidate.create.mockImplementation(async ({ data }) => ({ id: `cand-${data.studentId}`, ...data }));
   prisma.referral.findMany.mockResolvedValue([]);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
 
-describe('application received email', () => {
-  it('emails the address on the form once the application is saved', async () => {
+describe('application received email from form sync', () => {
+  it('sweeps the last week of the cycle once every application is filed', async () => {
+    const before = Date.now();
     await syncFormResponses();
 
-    expect(sendApplicationReceivedEmail).toHaveBeenCalledTimes(1);
-    expect(sendApplicationReceivedEmail).toHaveBeenCalledWith(
-      'Maria@ucla.edu', 'Maria Lopez', 'Fall 2026', { cycleId: 'cycle-1' }
-    );
-    expect(prisma.application.create.mock.invocationCallOrder[0])
-      .toBeLessThan(sendApplicationReceivedEmail.mock.invocationCallOrder[0]);
+    expect(sendApplicationReceipts).toHaveBeenCalledTimes(1);
+    const [{ cycle: sweptCycle, since }] = sendApplicationReceipts.mock.calls[0];
+    expect(sweptCycle).toBe(cycle);
+    expect(before - since.getTime()).toBeGreaterThanOrEqual(7 * DAY_MS - 1000);
+    expect(before - since.getTime()).toBeLessThanOrEqual(7 * DAY_MS + 1000);
+
+    const lastCreate = Math.max(...prisma.application.create.mock.invocationCallOrder);
+    expect(lastCreate).toBeLessThan(sendApplicationReceipts.mock.invocationCallOrder[0]);
   });
 
-  it('does not wait for mail before filing the next application or returning', async () => {
-    getResponses.mockResolvedValue([{ responseId: 'r-1' }, { responseId: 'r-2' }]);
-    sendApplicationReceivedEmail.mockImplementation(() => new Promise(() => {}));
+  it('returns without waiting for the mail', async () => {
+    sendApplicationReceipts.mockImplementation(() => new Promise(() => {}));
 
-    await syncFormResponses();
+    await expect(syncFormResponses()).resolves.toBeUndefined();
+  });
 
+  it('a failed sweep does not fail the sync', async () => {
+    sendApplicationReceipts.mockRejectedValue(new Error('database went away'));
+
+    await expect(syncFormResponses()).resolves.toBeUndefined();
     expect(prisma.application.create).toHaveBeenCalledTimes(2);
-    // The second receipt waits behind the first, which never finishes.
-    expect(sendApplicationReceivedEmail).toHaveBeenCalledTimes(1);
-  });
-
-  it('sends nothing when the application fails to save', async () => {
-    prisma.application.create.mockRejectedValue(new Error('Unique constraint failed on responseID'));
-
-    await syncFormResponses();
-
-    expect(sendApplicationReceivedEmail).not.toHaveBeenCalled();
-  });
-
-  it('sends nothing for a response already on file', async () => {
-    prisma.application.findMany.mockResolvedValue([{ responseID: 'r-1' }]);
-
-    await syncFormResponses();
-
-    expect(sendApplicationReceivedEmail).not.toHaveBeenCalled();
   });
 });

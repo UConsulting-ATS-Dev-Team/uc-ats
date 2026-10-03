@@ -8,16 +8,11 @@
 // Options:
 //   --cycle=<id>   a cycle other than the one applicants are currently applying to
 //
-// Only applications still waiting on a first decision get one: SUBMITTED or
-// UNDER_REVIEW, on round 1. Telling someone already advanced or rejected that
-// they "will hear from us shortly" would be wrong, so they are listed as
-// skipped rather than sent.
-//
-// One email per person: two applications from the same address (either UCLA
-// spelling) are one send. An address that already has an APPLICATION_RECEIVED
-// row for this cycle that did not fail is skipped, so re-running after a
-// partial run only sends what is left, and anyone form sync already emailed
-// is not emailed twice.
+// Who is owed one, and sending it once, is services/applicationReceipts.js -
+// the same code form sync sends through. So the dry run lists exactly who
+// --apply would write to, anyone sync already emailed is skipped, and this can
+// run beside live sync, or be re-run after a partial run, without anyone
+// getting two.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -28,17 +23,14 @@ loadEnv({ path: join(__dirname, '..', '.env') });
 
 const { default: prisma } = await import('../src/prismaClient.js');
 const { resolveCandidateCycle } = await import('../src/services/activeCycle.js');
-const { sendApplicationReceivedEmail } = await import('../src/services/emailNotifications.js');
-const { emailIdentityKey } = await import('../src/utils/mailingListImport.js');
+const { planApplicationReceipts, sendApplicationReceipts } = await import('../src/services/applicationReceipts.js');
 
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const cycleOption = args.find((a) => a.startsWith('--cycle='))?.split('=')[1];
 
-const WAITING_STATUSES = new Set(['SUBMITTED', 'UNDER_REVIEW']);
 // Keeps a long run well under the SES account's per-second send rate.
 const PAUSE_MS = 150;
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const cycle = cycleOption
   ? await prisma.recruitingCycle.findUnique({ where: { id: cycleOption } })
@@ -49,73 +41,44 @@ if (!cycle) {
   process.exit(1);
 }
 
-const applications = await prisma.application.findMany({
-  where: { cycleId: cycle.id },
-  select: { id: true, email: true, firstName: true, lastName: true, status: true, currentRound: true, submittedAt: true },
-  orderBy: { submittedAt: 'asc' },
-});
-
-const alreadySent = new Set(
-  (await prisma.communicationLog.findMany({
-    where: { category: 'APPLICATION_RECEIVED', cycleId: cycle.id, status: { not: 'FAILED' } },
-    select: { recipient: true },
-  })).map((row) => emailIdentityKey(row.recipient))
-);
-
-const toSend = [];
-const skipped = [];
-const seen = new Set();
-
-for (const app of applications) {
-  const email = (app.email || '').trim();
-  const name = [app.firstName, app.lastName].filter(Boolean).join(' ') || 'Applicant';
-  const key = email ? emailIdentityKey(email) : null;
-  const skip = (reason) => skipped.push({ name, email: email || '(none)', reason });
-
-  if (!email) skip('no email on the application');
-  else if (seen.has(key)) skip('second application from the same address');
-  else if (alreadySent.has(key)) skip('already sent');
-  else if (!WAITING_STATUSES.has(app.status) || (app.currentRound && app.currentRound !== '1')) {
-    skip(`already decided (status ${app.status}, round ${app.currentRound ?? '-'})`);
-  } else toSend.push({ email, name });
-
-  if (key) seen.add(key);
-}
-
-console.log(`Cycle: ${cycle.name} (${cycle.id})`);
-console.log(`Applications: ${applications.length}`);
-console.log(`Will send: ${toSend.length}`);
-console.log(`Skipped: ${skipped.length}`);
-
-const reasons = skipped.reduce((acc, s) => ({ ...acc, [s.reason]: (acc[s.reason] || 0) + 1 }), {});
-for (const [reason, count] of Object.entries(reasons)) console.log(`  ${count}  ${reason}`);
+const summarize = ({ applicationCount, toSend, skipped }) => {
+  console.log(`Cycle: ${cycle.name} (${cycle.id})`);
+  console.log(`Applications: ${applicationCount}`);
+  console.log(`Owed a receipt: ${toSend.length}`);
+  console.log(`Skipped: ${skipped.length}`);
+  const reasons = skipped.reduce((acc, s) => ({ ...acc, [s.reason]: (acc[s.reason] || 0) + 1 }), {});
+  for (const [reason, count] of Object.entries(reasons)) console.log(`  ${count}  ${reason}`);
+};
 
 if (!apply) {
+  const plan = await planApplicationReceipts({ cycle });
+  summarize(plan);
   console.log('\nRecipients:');
-  for (const r of toSend) console.log(`  ${r.name} <${r.email}>`);
-  if (skipped.length) {
+  for (const r of plan.toSend) console.log(`  ${r.name} <${r.email}>`);
+  if (plan.skipped.length) {
     console.log('\nSkipped:');
-    for (const s of skipped) console.log(`  ${s.name} <${s.email}>: ${s.reason}`);
+    for (const s of plan.skipped) console.log(`  ${s.name} <${s.email}>: ${s.reason}`);
   }
   console.log('\nDry run. Nothing was sent. Re-run with --apply to send.');
   await prisma.$disconnect();
   process.exit(0);
 }
 
-let sent = 0;
-const failed = [];
-for (const [i, r] of toSend.entries()) {
-  const result = await sendApplicationReceivedEmail(r.email, r.name, cycle.name, { cycleId: cycle.id });
-  if (result?.success === false) failed.push({ ...r, error: result.error });
-  else sent += 1;
-  if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${toSend.length}`);
-  await sleep(PAUSE_MS);
-}
+const result = await sendApplicationReceipts({
+  cycle,
+  pauseMs: PAUSE_MS,
+  onProgress: (done, total) => {
+    if (done % 25 === 0 || done === total) console.log(`  ${done}/${total}`);
+  },
+});
 
-console.log(`\nSent: ${sent}`);
-console.log(`Failed: ${failed.length}`);
-for (const f of failed) console.log(`  ${f.name} <${f.email}>: ${f.error}`);
-if (failed.length) console.log('Re-run with --apply to retry the failures; successful sends are skipped.');
+summarize(result);
+console.log(`\nSent: ${result.sent}`);
+console.log(`Failed: ${result.failed.length}`);
+for (const f of result.failed) console.log(`  ${f.name} <${f.email}>: ${f.error}`);
+const elsewhere = result.toSend.length - result.sent - result.failed.length;
+if (elsewhere > 0) console.log(`Sent by another process meanwhile: ${elsewhere}`);
+if (result.failed.length) console.log('Re-run with --apply to retry the failures; sent ones are skipped.');
 
 await prisma.$disconnect();
-process.exit(failed.length ? 1 : 0);
+process.exit(result.failed.length ? 1 : 0);
