@@ -552,13 +552,32 @@ The system follows a **recruiting cycle-based workflow**:
   furthest (two graders, or 2 / 6 / 10) a wide gap is a **split**. It shows on everyone
   involved and counts against nobody.
 - The walkthrough order (widest disagreement first) is fixed at launch so resolving one does
-  not reshuffle it; raising the threshold appends newly qualifying candidates.
+  not reshuffle it. Changing the threshold (`rethresholdWalkthrough` in teamStats.js) keeps
+  the entries that still have an outlier or split at the new threshold, in their order, and
+  appends newly qualifying ones; so raising it drops candidates and lowering it adds them.
+  An entry still counts if its *graded* scores qualify, so one an override resolved stays.
+  Sealed or moved candidates are left in and skipped by the walk. If the room is on a
+  dropped candidate on the Outliers step it moves to the next one still listed, else the
+  last. The scores are read inside the session lock.
+- **Overall is Staging's number**: the documents total plus participation points (one per
+  cycle event attended, one for Get to Know UC inside the cycle's dates matched on the
+  application's UID, capped at `PARTICIPATION_MAX`), rounded to one place as Staging rounds
+  it. `loadTeamInput` reads the points in bulk (`loadParticipationPoints` in
+  applicationParticipation.js, whose `participationPoints` Staging also uses); teamStats.js
+  only adds them up. Sealed candidates are not asked about.
 - **Edits are ordinary edits.** An override writes only the score row's `adminScore` through
   `adminScorePatch`; the grader's own score stays, and clearing the override restores it. A
   decision is `saveRoundDecision` with phase `resume`, the same write as Staging's picker.
   Both are logged in `review_delib_changes` for the summary and leave an audit comment.
 - **Sealed candidates are identity only, and the exec unlock is ignored** (`sealedRowPredicate`,
   not `lockedRowPredicate`): one admin's unlock says nothing about who else is on the screen.
+- **The card also shows events attended and referrals** for the cycle, read through
+  [server/src/services/applicationParticipation.js](server/src/services/applicationParticipation.js),
+  the same lookups behind Application Detail's `/:id/events` and `/:id/referrals`. The whole
+  room sees them, so a referral carries the referrer's name, relationship and reason, never
+  an email or user id. They are read only after the seal and team checks pass, and never
+  cached with the team bundle. The "n of m" counts the cycle's own events; Get to Know UC
+  is listed but counted in neither number.
 - Concurrency works as in live votes. `withVersionLock`
   ([server/src/services/versionLock.js](server/src/services/versionLock.js), shared by both)
   bumps the session's version first and holds the row lock. Clients poll the light state and

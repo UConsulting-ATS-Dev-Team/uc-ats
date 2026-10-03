@@ -21,6 +21,7 @@ import {
   setThreshold
 } from './reviewDelibs.js';
 import { loadTeamInput } from './teamData.js';
+import { loadParticipationPoints } from '../applicationParticipation.js';
 import { normalizeRow } from './teamStats.js';
 import { nudgeReviewDelib, nudgeReviewDelibsGlobal } from '../realtime.js';
 
@@ -105,7 +106,27 @@ function fakeDb() {
       score('c5', 'm1', 4), score('c5', 'm2', 6), score('c5', 'admin1', 6) // only an outlier at a low threshold
     ],
     coverLetterScore: [],
-    videoScore: []
+    videoScore: [],
+    // What Application Detail shows besides grades, for the card.
+    events: [
+      { id: 'e1', cycleId: 'cycle-1', eventName: 'Info Sesh', eventStartDate: new Date('2026-09-20'), eventEndDate: null, eventLocation: 'Ackerman' },
+      { id: 'e2', cycleId: 'cycle-1', eventName: 'Case Workshop', eventStartDate: new Date('2026-09-25'), eventEndDate: null, eventLocation: 'Bunche' },
+      { id: 'e-old', cycleId: 'cycle-0', eventName: 'Last Year', eventStartDate: new Date('2025-09-20'), eventEndDate: null, eventLocation: null }
+    ],
+    eventRsvp: [{ candidateId: 'c1', eventId: 'e1' }, { candidateId: 'c1', eventId: 'e2' }],
+    eventAttendance: [
+      { candidateId: 'c1', eventId: 'e1', event: { cycleId: 'cycle-1' } },
+      { candidateId: 'c5', eventId: 'e-old', event: { cycleId: 'cycle-0' } }
+    ],
+    meetingSignup: [{
+      id: 'signup-1', studentId: '1', attended: true,
+      slot: { startTime: new Date('2026-09-22T17:00:00Z'), endTime: new Date('2026-09-22T17:30:00Z'), location: 'Kerckhoff', member: { fullName: 'Mia Member' } }
+    }],
+    referral: [
+      { id: 'r2', candidateId: 'c1', cycleId: 'cycle-1', source: 'PRE_APPLICATION', referrerName: 'Mia', relationship: 'Roommate', reason: 'Sharp and kind', referredByUserId: 'm1', createdAt: new Date(2) },
+      { id: 'r1', candidateId: 'c1', cycleId: 'cycle-1', source: 'MANUAL', referrerName: 'Pat Alum', relationship: 'Classmate', reason: null, referredByUserId: null, createdAt: new Date(1) },
+      { id: 'r-old', candidateId: 'c1', cycleId: 'cycle-0', source: 'MANUAL', referrerName: 'Old', relationship: 'Old', reason: null, referredByUserId: null, createdAt: new Date(0) }
+    ]
   };
 
   const find = (table, where) => tables[table].find((row) => matches(row, where)) || null;
@@ -155,7 +176,27 @@ function fakeDb() {
     applications,
     candidates,
     $transaction: async (fn) => fn(client),
-    recruitingCycle: { findFirst: vi.fn(async () => ({ id: 'cycle-1', isActive: true, isAdminActive: true })) },
+    recruitingCycle: {
+      findFirst: vi.fn(async () => ({ id: 'cycle-1', isActive: true, isAdminActive: true })),
+      findUnique: vi.fn(async () => ({ startDate: new Date('2026-09-01'), endDate: new Date('2026-12-15') }))
+    },
+    events: { findMany: vi.fn(async ({ where }) => filter('events', where)) },
+    eventRsvp: { findMany: vi.fn(async ({ where }) => filter('eventRsvp', where)) },
+    eventAttendance: { findMany: vi.fn(async ({ where }) => filter('eventAttendance', where)) },
+    // Only the fields this service asks on; the date window is the service's own test.
+    meetingSignup: {
+      findFirst: vi.fn(async ({ where }) => find('meetingSignup', { studentId: where.studentId, attended: where.attended })),
+      // Staging's bulk read, date window and all.
+      findMany: vi.fn(async ({ where }) => tables.meetingSignup.filter((row) => where.studentId.in.includes(row.studentId) &&
+        row.attended === where.attended &&
+        row.slot.startTime >= where.slot.startTime.gte &&
+        (!where.slot.startTime.lte || row.slot.startTime <= where.slot.startTime.lte)))
+    },
+    referral: {
+      findMany: vi.fn(async ({ where }) => filter('referral', where)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((row) => ({ ...row, referredBy: row.referredByUserId ? userById(row.referredByUserId) : null })))
+    },
     documentRubric: { findMany: vi.fn(async () => []) },
     groups: { findUnique: vi.fn(async ({ where }) => groupById(where.id)) },
     candidate: { findMany: vi.fn(async ({ where }) => candidates.filter((row) => matches(row, where))) },
@@ -225,7 +266,7 @@ function fakeDb() {
 
 // What teamData.js would read, built from the fake tables so overrides show up.
 function inputFrom(db) {
-  return async ({ groupId, cycleId }) => {
+  return async ({ groupId, cycleId, participation = true }) => {
     const groups = db.groupRows.filter((group) => group.cycleId === cycleId);
     const candidates = db.applications
       .filter((application) => groups.some((group) => group.id === application.candidate.assignedGroupId))
@@ -240,6 +281,13 @@ function inputFrom(db) {
         application
       }));
     const sealed = new Set(candidates.filter((entry) => entry.locked).map((entry) => entry.candidateId));
+    const open = candidates.filter((entry) => !entry.locked);
+    const points = participation && await loadParticipationPoints({
+      client: db,
+      cycleId,
+      candidates: open.map((entry) => ({ candidateId: entry.candidateId, studentId: entry.application.studentId }))
+    });
+    if (points) for (const entry of open) entry.participationPoints = points.get(entry.candidateId);
     const rows = db.tables.resumeScore
       .filter((row) => !sealed.has(row.candidateId))
       .map((row) => normalizeRow({ ...row, evaluator: db.users.find((user) => user.id === row.evaluatorId) }, 'resume'));
@@ -255,6 +303,7 @@ function inputFrom(db) {
       candidates,
       rows,
       maxByType: { resume: 13, coverLetter: 3, video: 2 },
+      participationMax: 3,
       rubrics: { resume: { rubric: { categories: [] } }, coverLetter: { rubric: { categories: [] } }, video: { rubric: { categories: [] } } }
     };
   };
@@ -431,11 +480,56 @@ describe('a walkthrough candidate sealed mid-session', () => {
 });
 
 describe('setThreshold', () => {
-  it('adds newly qualifying candidates to the end of the walkthrough', async () => {
+  const scoreOf = (candidateId, evaluatorId) =>
+    db.tables.resumeScore.find((row) => row.candidateId === candidateId && row.evaluatorId === evaluatorId);
+  const threshold = (sessionId, thresholdPct) => setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct });
+
+  it('adds newly qualifying candidates to the end of the walkthrough when lowered', async () => {
     const sessionId = await launched();
-    const state = await setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct: 0.1 });
+    const state = await threshold(sessionId, 0.1);
     expect(state.session.thresholdPct).toBe(0.1);
     expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2', 'app5']);
+  });
+
+  it('drops candidates who no longer qualify when raised, keeping the order of the rest', async () => {
+    const sessionId = await launched('g1', { thresholdPct: 0.1 }); // app1, app2, app5
+    // app2's split widens past app1's outlier, so a fresh order would put app2 first.
+    scoreOf('c2', 'm1').overallScore = 0;
+    let state = await threshold(sessionId, 0.2);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2']);
+
+    state = await threshold(sessionId, 0.6);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2']); // 12 apart is still a split at 7.8
+    scoreOf('c2', 'm1').overallScore = 6;
+    state = await threshold(sessionId, 0.5);
+    expect(state.session.outlierApplicationIds).toEqual(['app1']);
+  });
+
+  it('keeps a candidate whose outlier the room resolved with an override', async () => {
+    const sessionId = await launched(); // app1, app2
+    await overrideScore({ client: db, sessionId, user: as('admin1'), type: 'resume', scoreId: scoreOf('c1', 'm1').id, adminScore: 10 });
+    const state = await threshold(sessionId, 0.5);
+    expect(state.session.outlierApplicationIds).toEqual(['app1']);
+  });
+
+  it('moves the room off a candidate the walkthrough just dropped, only on the Outliers step', async () => {
+    const sessionId = await launched(); // app1, app2
+    await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', applicationId: 'app2' });
+    let state = await threshold(sessionId, 0.5);
+    expect(state.session).toMatchObject({ outlierApplicationIds: ['app1'], currentApplicationId: 'app1' });
+
+    await threshold(sessionId, 0.3);
+    await navigate({ client: db, sessionId, user: as('admin1'), step: 'ALL', applicationId: 'app2' });
+    state = await threshold(sessionId, 0.5);
+    expect(state.session).toMatchObject({ step: 'ALL', currentApplicationId: 'app2' });
+  });
+
+  it('empties the walkthrough, and the screen, when nothing qualifies', async () => {
+    const sessionId = await launched();
+    await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS' });
+    for (const row of db.tables.resumeScore) row.overallScore = 6;
+    const state = await threshold(sessionId, 0.3);
+    expect(state.session).toMatchObject({ outlierApplicationIds: [], currentApplicationId: null });
   });
 });
 
@@ -538,6 +632,28 @@ describe('getCandidateCard', () => {
     await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app3', user: as('admin1') }), 423, 'RECORD_LOCKED');
   });
 
+  it("carries Staging's overall: documents total plus capped participation", async () => {
+    const sessionId = await launched();
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') });
+    // 2 / 10 / 10 averages 7.33; Info Sesh and Get to Know UC are 2 points.
+    expect(card).toMatchObject({ total: 7.33, participation: 2, overall: 9.3, overallMax: 13 + 3 + 2 + 3 });
+
+    // Last cycle's event does not count.
+    const other = await getCandidateCard({ client: db, sessionId, applicationId: 'app5', user: as('admin1') });
+    expect(other).toMatchObject({ total: 5.33, participation: 0, overall: 5.3 });
+  });
+
+  it('puts the overall on the team table, and nothing of it on a sealed row', async () => {
+    const sessionId = await launched();
+    const team = await getTeamView({ client: db, sessionId, user: as('admin1') });
+    expect(team.overallMax).toBe(21);
+    expect(team.candidates.find((row) => row.applicationId === 'app1')).toMatchObject({ participation: 2, overall: 9.3 });
+    expect(team.candidates.find((row) => row.applicationId === 'app3')).not.toHaveProperty('overall');
+    // The sealed candidate is never asked about.
+    const asked = db.eventAttendance.findMany.mock.calls.flatMap(([args]) => args.where.candidateId.in ?? []);
+    expect(asked).not.toContain('c3');
+  });
+
   it("shows every grader's score with the outlier marked", async () => {
     const sessionId = await launched();
     const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') });
@@ -545,6 +661,52 @@ describe('getCandidateCard', () => {
     expect(card.docs.resume.rows.map((row) => [row.evaluatorId, row.isOutlier, row.onTeam])).toEqual([
       ['m2', false, true], ['m1', true, true], ['admin1', false, false]
     ]);
+  });
+});
+
+describe('getCandidateCard: attendance and referrals', () => {
+  it("shows the cycle's events they came to, Get to Know UC, and every referral", async () => {
+    const sessionId = await launched();
+    await joinSession({ client: db, sessionId, user: as('m1') });
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('m1') });
+
+    expect(card.attendance).toEqual({
+      attended: [
+        { id: 'e1', name: 'Info Sesh', startDate: new Date('2026-09-20') },
+        { id: 'meeting-signup-1', name: 'Get to Know UC', startDate: new Date('2026-09-22T17:00:00Z'), isMeeting: true }
+      ],
+      // Get to Know UC is listed but is not one of the cycle's events.
+      attendedCount: 1,
+      eventCount: 2
+    });
+    expect(card.referrals).toEqual([
+      { id: 'r1', source: 'MANUAL', referrerName: 'Pat Alum', relationship: 'Classmate', reason: null },
+      { id: 'r2', source: 'PRE_APPLICATION', referrerName: 'Mia Member', relationship: 'Roommate', reason: 'Sharp and kind' }
+    ]);
+    // The whole room sees this: no referrer's address or account.
+    expect(JSON.stringify(card.referrals)).not.toMatch(/mia@ucla\.edu|"m1"/);
+  });
+
+  it('is empty, not missing, for someone with neither', async () => {
+    const sessionId = await launched();
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app5', user: as('admin1') });
+    expect(card.attendance).toEqual({ attended: [], attendedCount: 0, eventCount: 2 });
+    expect(card.referrals).toEqual([]);
+  });
+
+  it('reads none of it for a sealed or off-team candidate', async () => {
+    const sessionId = await launched();
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app3', user: as('admin1') }), 423, 'RECORD_LOCKED');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app4', user: as('admin1') }), 404, 'NOT_ON_TEAM_LIST');
+    for (const call of [db.events.findMany, db.eventRsvp.findMany, db.eventAttendance.findMany, db.meetingSignup.findFirst, db.referral.findMany, db.recruitingCycle.findUnique]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
+
+  it('fails the card rather than showing it without them', async () => {
+    const sessionId = await launched();
+    db.referral.findMany.mockRejectedValueOnce(new Error('database down'));
+    await expect(getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') })).rejects.toThrow('database down');
   });
 });
 

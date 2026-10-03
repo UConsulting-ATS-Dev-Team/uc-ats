@@ -1,5 +1,6 @@
 import prisma from '../../prismaClient.js';
 import { resolveAdminCycle } from '../activeCycle.js';
+import { getCycleEventParticipation, getCycleReferrals } from '../applicationParticipation.js';
 import { adminScorePatch, DOCUMENT_TYPES, formatScore } from '../documentRubrics.js';
 import { isDecisionValue, saveRoundDecision } from '../stagingDecisions.js';
 import { nudgeReviewDelib, nudgeReviewDelibsGlobal } from '../realtime.js';
@@ -14,7 +15,9 @@ import {
   docLabel,
   MAX_THRESHOLD_PCT,
   MIN_THRESHOLD_PCT,
-  outlierOrder
+  outlierOrder,
+  rethresholdWalkthrough,
+  walkthroughPosition
 } from './teamStats.js';
 
 // Review team deliberations.
@@ -212,7 +215,7 @@ export async function launchSession({ client = prisma, user, groupId, thresholdP
     throw fail(409, 'That review team belongs to another cycle', 'GROUP_NOT_IN_CYCLE');
   }
 
-  const input = await loadTeamInput({ client, groupId, cycleId: cycle.id });
+  const input = await loadTeamInput({ client, groupId, cycleId: cycle.id, participation: false });
   const order = outlierOrder(computeTeamStats({ ...input, thresholdPct: threshold }));
 
   let session;
@@ -370,25 +373,33 @@ export async function navigate({ client = prisma, sessionId, user, step, applica
 }
 
 /**
- * Changes what counts as an outlier. Candidates that qualify under the new
- * threshold join the end of the walkthrough; nobody already in it is removed,
- * so the "3 of 7" an admin is on does not shift under them.
+ * Changes what counts as an outlier, and the walkthrough with it (see
+ * rethresholdWalkthrough): raising it drops candidates who no longer qualify,
+ * lowering it adds the newly qualifying ones at the end. A candidate the room
+ * resolved by an override stays. If the room is on a candidate the walkthrough
+ * just dropped, it moves to the next one still in it.
+ *
+ * The scores are read inside the lock, so two threshold changes, or a change
+ * and an override, cannot each work from what the other is replacing.
  */
 export async function setThreshold({ client = prisma, sessionId, user, thresholdPct }) {
   const threshold = normalizeThreshold(thresholdPct);
-  const head = await loadHead(client, sessionId);
-  const input = await loadTeamInput({ client, groupId: head.groupId, cycleId: head.cycleId });
-  const order = outlierOrder(computeTeamStats({ ...input, thresholdPct: threshold }));
 
   const { version } = await lock(client, sessionId, async (tx, session) => {
     assertActive(session);
     await assertHost(tx, session, user);
-    const current = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
+    const input = await loadTeamInput({ client: tx, groupId: session.groupId, cycleId: session.cycleId, participation: false });
+    const stats = computeTeamStats({ ...input, thresholdPct: threshold });
+    const before = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
+    const after = rethresholdWalkthrough(stats, before);
     await tx.reviewDelibSession.update({
       where: { id: sessionId },
       data: {
         thresholdPct: threshold,
-        outlierApplicationIds: [...current, ...order.filter((id) => !current.includes(id))]
+        outlierApplicationIds: after,
+        ...(session.step === 'OUTLIERS' && {
+          currentApplicationId: walkthroughPosition(before, after, session.currentApplicationId)
+        })
       }
     });
   });
@@ -621,7 +632,7 @@ export async function getTeamView({ client = prisma, sessionId, user }) {
   };
 }
 
-/** One candidate's card: profile, documents and every grader's score on each. */
+/** One candidate's card: profile, documents, every grader's score on each, events attended and referrals. */
 export async function getCandidateCard({ client = prisma, sessionId, applicationId, user }) {
   const session = await loadForViewer(client, sessionId, user);
   const participants = await client.reviewDelibParticipant.findMany({ where: { sessionId }, select: { userId: true, leftAt: true } });
@@ -630,12 +641,16 @@ export async function getCandidateCard({ client = prisma, sessionId, application
   // Against the database, not the cached bundle: sealing a record or moving the
   // candidate to another team bumps nothing here, and the card is everything
   // about them. 404 off the team, 423 sealed.
-  await teamApplication(client, session, { id: applicationId }, user);
+  const checked = await teamApplication(client, session, { id: applicationId }, user);
 
   const { input, stats } = await teamBundle(client, session);
   const candidate = input.candidates.find((entry) => entry.applicationId === applicationId && entry.groupId === session.groupId);
   if (!candidate) throw fail(404, "That candidate is not on this team's list", 'NOT_ON_TEAM_LIST');
   if (candidate.locked) throw fail(423, 'This record is sealed', 'RECORD_LOCKED');
+
+  // Only now, with the seal and the team checked twice over, is anything else
+  // about them read. Not cached with the team bundle: it is one candidate's.
+  const { attendance, referrals } = await loadParticipation(client, session, checked);
 
   const memberIds = new Set((input.groups.find((group) => group.id === session.groupId)?.members || []).map((member) => member.id));
   const summary = stats.candidates.find((entry) => entry.applicationId === applicationId);
@@ -671,9 +686,66 @@ export async function getCandidateCard({ client = prisma, sessionId, application
     videoUrl: application.videoUrl || null,
     resumeDecision: application.resumeDecision ?? null,
     total: summary?.total ?? null,
+    participation: summary?.participation ?? null,
+    overall: summary?.overall ?? null,
+    overallMax: stats.overallMax ?? null,
     outlierCount: summary?.outlierCount ?? 0,
     splitDocs: summary?.splitDocs ?? 0,
+    attendance,
+    referrals,
     docs
+  };
+}
+
+/**
+ * What the card shows besides grades: the cycle's events they came to and who
+ * referred them, as Application Detail reads them. The whole room sees this, so
+ * it carries names and words only, never a referrer's email or user id.
+ *
+ * `attendedCount` of `eventCount` counts the cycle's own events. Get to Know UC
+ * is in `attended` (with `isMeeting`) when they came to one, but in neither
+ * number: it is not an event of the cycle, and counting it would allow "4 of 3".
+ */
+async function loadParticipation(client, session, application) {
+  const [events, referrals] = await Promise.all([
+    client.recruitingCycle
+      .findUnique({ where: { id: session.cycleId }, select: { startDate: true, endDate: true } })
+      .then((cycle) => getCycleEventParticipation({
+        client,
+        cycleId: session.cycleId,
+        candidateId: application.candidateId,
+        studentId: application.candidate?.studentId || application.studentId,
+        cycleStartDate: cycle?.startDate,
+        cycleEndDate: cycle?.endDate
+      })),
+    application.candidateId
+      ? getCycleReferrals({ client, candidateId: application.candidateId, cycleId: session.cycleId })
+      : []
+  ]);
+
+  const cycleEvents = events.events.filter((event) => !event.isMeeting);
+  return {
+    attendance: {
+      attended: events.events
+        .filter((event) => event.attendanceStatus === 'Attended')
+        .map((event) => ({
+          id: event.id,
+          name: event.eventName,
+          startDate: event.eventStartDate,
+          ...(event.isMeeting && { isMeeting: true })
+        })),
+      attendedCount: cycleEvents.filter((event) => event.attendanceStatus === 'Attended').length,
+      eventCount: cycleEvents.length
+    },
+    referrals: referrals.map((referral) => ({
+      id: referral.id,
+      source: referral.source,
+      // A member's submission names the member's current account; a manual one
+      // only has the name typed on Application Detail.
+      referrerName: (referral.source === 'PRE_APPLICATION' && referral.referredBy?.fullName) || referral.referrerName,
+      relationship: referral.relationship || null,
+      reason: referral.reason || null
+    }))
   };
 }
 

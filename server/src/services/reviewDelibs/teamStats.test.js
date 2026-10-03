@@ -7,8 +7,10 @@ import {
   graderSummaries,
   normalizeRow,
   outlierOrder,
+  rethresholdWalkthrough,
   teamComparison,
-  docAverages
+  docAverages,
+  walkthroughPosition
 } from './teamStats.js';
 
 const MAX = { resume: 13, coverLetter: 3, video: 2 };
@@ -286,5 +288,72 @@ describe('computeTeamStats', () => {
   it('flags what needs correcting, naming the candidates', () => {
     expect(stats.flags.map((flag) => flag.id)).toEqual(['outliers', 'splits', 'missing', 'undecided']);
     expect(stats.flags[0].applicationIds).toEqual(['app-c1']);
+  });
+
+  it("adds participation to the documents total for Staging's overall, 0 when absent", () => {
+    const withPoints = computeTeamStats({
+      groupId: 'g1',
+      maxByType: MAX,
+      participationMax: 3,
+      groups,
+      candidates: [candidate('c1', 'g1', { participationPoints: 2 }), candidate('c2', 'g1')],
+      rows: [row('c1', 'a', 'resume', 2), row('c1', 'b', 'resume', 10), row('c1', 'c', 'resume', 10), row('c2', 'a', 'resume', 6)]
+    });
+    const [c1, c2] = withPoints.candidates;
+    // 22 / 3 = 7.333..., plus 2, rounded to one place as Staging rounds it.
+    expect(c1).toMatchObject({ total: 7.33, participation: 2, overall: 9.3 });
+    expect(c2).toMatchObject({ total: 6, participation: 0, overall: 6 });
+    expect(withPoints).toMatchObject({ participationMax: 3, overallMax: 13 + 3 + 2 + 3 });
+
+    // The tutorial capture passes neither.
+    expect(stats.candidates[0]).toMatchObject({ participation: 0, overall: 7.3 });
+    expect(stats).toMatchObject({ participationMax: null, overallMax: null });
+  });
+});
+
+describe('rethresholdWalkthrough', () => {
+  const groups = [{ id: 'g1', name: 'One', members: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }] }];
+  const candidate = (candidateId, extra = {}) => ({
+    candidateId, applicationId: `app-${candidateId}`, groupId: 'g1', name: candidateId,
+    hasDoc: { resume: true, coverLetter: false, video: false }, resumeDecision: null, locked: false, ...extra
+  });
+  const at = (thresholdPct, rows, candidates = [candidate('c1'), candidate('c2'), candidate('c3')]) =>
+    computeTeamStats({ groupId: 'g1', thresholdPct, maxByType: MAX, groups, candidates, rows });
+  // c1: 2 / 10 / 10 (8 away, 62% of max). c2: 6 / 12 (a 6-point split, 46%). c3: 4 / 6 / 6 (2 away, 15%).
+  const rows = () => [
+    row('c1', 'a', 'resume', 2), row('c1', 'b', 'resume', 10), row('c1', 'c', 'resume', 10),
+    row('c2', 'a', 'resume', 6), row('c2', 'b', 'resume', 12),
+    row('c3', 'a', 'resume', 4), row('c3', 'b', 'resume', 6), row('c3', 'c', 'resume', 6)
+  ];
+
+  it('drops entries that no longer qualify and keeps the rest in their order', () => {
+    // Kept order wins over outlierOrder's, which would put app-c1 first.
+    expect(rethresholdWalkthrough(at(0.2, rows()), ['app-c2', 'app-c3', 'app-c1'])).toEqual(['app-c2', 'app-c1']);
+    expect(rethresholdWalkthrough(at(0.5, rows()), ['app-c1', 'app-c2', 'app-c3'])).toEqual(['app-c1']);
+  });
+
+  it('appends newly qualifying candidates when the threshold drops', () => {
+    expect(rethresholdWalkthrough(at(0.1, rows()), ['app-c2'])).toEqual(['app-c2', 'app-c1', 'app-c3']);
+  });
+
+  it('keeps an entry whose outlier an override resolved, but adds none on graded scores alone', () => {
+    const resolved = [row('c1', 'a', 'resume', 2, 10), row('c1', 'b', 'resume', 10), row('c1', 'c', 'resume', 10)];
+    expect(rethresholdWalkthrough(at(0.3, resolved), ['app-c1'])).toEqual(['app-c1']);
+    expect(rethresholdWalkthrough(at(0.3, resolved), [])).toEqual([]);
+  });
+
+  it('leaves sealed and moved candidates for the walk to skip', () => {
+    const stats = at(0.5, rows(), [candidate('c1'), candidate('c2', { locked: true })]);
+    expect(rethresholdWalkthrough(stats, ['app-c2', 'app-gone', 'app-c1'])).toEqual(['app-c2', 'app-gone', 'app-c1']);
+  });
+});
+
+describe('walkthroughPosition', () => {
+  it('stays put, or moves to the next survivor, else the last, else nowhere', () => {
+    expect(walkthroughPosition(['a', 'b', 'c'], ['a', 'b'], 'b')).toBe('b');
+    expect(walkthroughPosition(['a', 'b', 'c', 'd'], ['a', 'd'], 'b')).toBe('d');
+    expect(walkthroughPosition(['a', 'b', 'c'], ['a'], 'c')).toBe('a');
+    expect(walkthroughPosition(['a'], [], 'a')).toBe(null);
+    expect(walkthroughPosition(['a'], [], null)).toBe(null);
   });
 });

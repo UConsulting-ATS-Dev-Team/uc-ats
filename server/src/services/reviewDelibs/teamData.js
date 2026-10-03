@@ -1,4 +1,5 @@
 import prisma from '../../prismaClient.js';
+import { loadParticipationPoints } from '../applicationParticipation.js';
 import { DOCUMENT_TYPES, getRubrics } from '../documentRubrics.js';
 import { getGroupMemberUsers, groupMemberUserInclude } from '../../utils/groupMembers.js';
 import { sealedRowPredicate } from '../../utils/lockedRecords.js';
@@ -55,8 +56,12 @@ export const APPLICATION_SELECT = {
 
 export const scoreModel = (type) => SCORE_MODEL[type] || null;
 
-/** The input computeTeamStats() takes, for `groupId`'s cycle. */
-export async function loadTeamInput({ client = prisma, groupId, cycleId }) {
+/**
+ * The input computeTeamStats() takes, for `groupId`'s cycle. `participation:
+ * false` skips the participation points, for callers that only need the
+ * outlier walkthrough.
+ */
+export async function loadTeamInput({ client = prisma, groupId, cycleId, participation = true }) {
   const [groups, rubrics, ...scoreSets] = await Promise.all([
     client.groups.findMany({
       where: { cycleId },
@@ -123,6 +128,18 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId }) {
   const sealedIds = new Set(candidates.filter(isSealed).map((candidate) => candidate.candidateId));
   for (const candidate of candidates) candidate.locked = sealedIds.has(candidate.candidateId);
 
+  // Staging's participation points, so the overall here is the one Staging
+  // ranks on. Sealed candidates are identity only and are not asked about.
+  if (participation) {
+    const open = candidates.filter((candidate) => !candidate.locked);
+    const points = await loadParticipationPoints({
+      client,
+      cycleId,
+      candidates: open.map((candidate) => ({ candidateId: candidate.candidateId, studentId: candidate.application.studentId }))
+    });
+    for (const candidate of open) candidate.participationPoints = points.get(candidate.candidateId) ?? 0;
+  }
+
   const known = new Set(candidates.map((candidate) => candidate.candidateId));
   const rows = DOCUMENT_TYPES.flatMap((type, index) =>
     scoreSets[index]
@@ -143,6 +160,7 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId }) {
     candidates,
     rows,
     maxByType,
+    participationMax: rubrics.participationMax,
     rubrics: rubrics.rubrics
   };
 }

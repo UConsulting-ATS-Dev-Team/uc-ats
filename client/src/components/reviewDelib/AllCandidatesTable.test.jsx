@@ -19,7 +19,7 @@ const candidates = [
 const names = () => screen.getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[0].textContent);
 
 describe('AllCandidatesTable', () => {
-  it('ranks by total, sealed last, and shows decisions and disagreements', () => {
+  it('ranks by documents total when rows have no overall, sealed last, and shows decisions and disagreements', () => {
     render(<AllCandidatesTable candidates={candidates} canOpen={false} onOpen={vi.fn()} />);
     expect(names()).toEqual(['Blair HighMath', 'Alex LowEcon', 'Casey Sealed']);
     expect(screen.getByText('1 outlier')).toBeInTheDocument();
@@ -30,7 +30,8 @@ describe('AllCandidatesTable', () => {
 
   it('keeps sealed candidates last when a column sorts ascending', async () => {
     render(<AllCandidatesTable candidates={candidates} canOpen={false} onOpen={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Total' })); // descending → ascending
+    await userEvent.click(screen.getByRole('button', { name: 'Docs total' })); // descending
+    await userEvent.click(screen.getByRole('button', { name: 'Docs total' })); // → ascending
     expect(names()).toEqual(['Alex LowEcon', 'Blair HighMath', 'Casey Sealed']);
     await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
@@ -52,5 +53,22 @@ describe('AllCandidatesTable', () => {
     await userEvent.click(screen.getByText('Alex Low'));
     expect(onOpen).not.toHaveBeenCalled();
     expect(screen.getByText('Blair High').closest('tr')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('ranks by the overall Staging uses, beside the documents-only total', async () => {
+    const withOverall = [
+      { ...candidates[0], participation: 3, overall: 12 },
+      { ...candidates[1], total: 11, participation: 0, overall: 11 },
+      { ...candidates[0], applicationId: 'a4', name: 'Dana Mid', total: 10, participation: 3, overall: 13 }
+    ];
+    render(<AllCandidatesTable candidates={withOverall} canOpen={false} onOpen={vi.fn()} />);
+    // Participation lifts Dana and Alex past Blair, who leads on documents alone.
+    expect(names()).toEqual(['Dana MidEcon', 'Alex LowEcon', 'Blair HighMath']);
+    const dana = screen.getByText('Dana Mid').closest('tr');
+    expect(within(dana).getByText('10')).toBeInTheDocument();
+    expect(within(dana).getByText('13')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Docs total' }));
+    expect(names()).toEqual(['Blair HighMath', 'Dana MidEcon', 'Alex LowEcon']);
   });
 });

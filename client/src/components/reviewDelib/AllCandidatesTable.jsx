@@ -20,6 +20,8 @@ import { DOC_LABELS, DOC_TYPES, score } from '../../utils/reviewDelib';
 
 const SORTERS = {
   name: (row) => row.name.toLowerCase(),
+  // A row from before overall existed sorts by its documents total.
+  overall: (row) => row.overall ?? row.total ?? -Infinity,
   total: (row) => row.total ?? -Infinity,
   resume: (row) => row.perDoc?.resume?.avg ?? -Infinity,
   coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? -Infinity,
@@ -28,7 +30,7 @@ const SORTERS = {
 };
 
 export default function AllCandidatesTable({ candidates, currentApplicationId, canOpen, onOpen }) {
-  const [sort, setSort] = useState({ by: 'total', desc: true });
+  const [sort, setSort] = useState({ by: 'overall', desc: true });
 
   const rows = useMemo(() => {
     const key = SORTERS[sort.by];
@@ -62,7 +64,8 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
             <TableRow>
               {header('name', 'Candidate', 'left')}
               {DOC_TYPES.map((type) => <Fragment key={type}>{header(type, DOC_LABELS[type])}</Fragment>)}
-              {header('total', 'Total')}
+              {header('total', 'Docs total')}
+              {header('overall', 'Overall')}
               {header('flags', 'Disagreement', 'left')}
               <TableCell>Decision</TableCell>
             </TableRow>
@@ -87,7 +90,7 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
                     {row.major && <Typography variant="caption" color="text.secondary">{row.major}</Typography>}
                   </TableCell>
                   {row.locked ? (
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={7}>
                       <Chip size="small" label="Sealed" variant="outlined" />
                     </TableCell>
                   ) : (
@@ -101,7 +104,8 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
                           </TableCell>
                         );
                       })}
-                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{score(row.total)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{score(row.total)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{score(row.overall)}</TableCell>
                       <TableCell>
                         <Stack direction="row" spacing={0.5}>
                           {row.outlierCount > 0 && <Chip size="small" color="error" label={`${row.outlierCount} outlier${row.outlierCount === 1 ? '' : 's'}`} />}
@@ -125,7 +129,7 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
         </Table>
       </TableContainer>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, py: 1 }}>
-        Averages per document; * includes an admin override.{canOpen ? ' Click a candidate to open it for everyone.' : ''}
+        Averages per document; * includes an admin override. Overall is the documents total plus participation points, as Staging ranks it.{canOpen ? ' Click a candidate to open it for everyone.' : ''}
       </Typography>
     </Paper>
   );

@@ -362,12 +362,19 @@ export function buildFlags({ candidates, gaps }) {
  *
  * input:
  *   groupId, thresholdPct, maxByType
+ *   participationMax: optional, the cap on participation points; only used to
+ *                  report overallMax
  *   groups:     [{ id, name, members: [{ id, name }] }] - every team in the cycle
  *   candidates: [{ candidateId, applicationId, groupId, name, major, year,
- *                  hasDoc: { resume, coverLetter, video }, resumeDecision, locked }]
+ *                  hasDoc: { resume, coverLetter, video }, resumeDecision, locked,
+ *                  participationPoints }] - participationPoints already capped,
+ *                  0 when absent
  *   rows:       normalizeRow() output for the whole cycle, sealed candidates' already dropped
+ *
+ * A row's `overall` is Staging's: the documents total plus participation,
+ * rounded to one place the way Staging rounds it, so both show the same number.
  */
-export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT, maxByType, groups, candidates, rows }) {
+export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT, maxByType, participationMax = null, groups, candidates, rows }) {
   const group = groups.find((entry) => entry.id === groupId);
   const members = group?.members || [];
   const teamOf = new Map(candidates.map((candidate) => [candidate.candidateId, candidate.groupId]));
@@ -409,10 +416,13 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
       };
     }
     const flagged = mine.filter((row) => row.flag);
+    const participation = toNumber(candidate.participationPoints) ?? 0;
     return {
       ...base,
       perDoc,
       total: round(total),
+      participation,
+      overall: Number((total + participation).toFixed(1)),
       resumeDecision: candidate.resumeDecision ?? null,
       outlierCount: mine.filter((row) => row.isOutlier).length,
       splitDocs: DOCUMENT_TYPES.filter((type) => perDoc[type].split).length,
@@ -438,9 +448,12 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
     overrides: teamRows.filter((row) => row.admin !== null).length
   };
 
+  const documentsMax = DOCUMENT_TYPES.reduce((sum, type) => sum + (maxByType[type] || 0), 0);
   return {
     thresholdPct,
     maxByType,
+    participationMax,
+    overallMax: participationMax === null ? null : documentsMax + participationMax,
     counts,
     graders,
     comparison,
@@ -457,6 +470,37 @@ export function outlierOrder(stats) {
     .filter((row) => !row.locked && (row.outlierCount > 0 || row.splitDocs > 0))
     .sort((a, b) => b.spread - a.spread || a.name.localeCompare(b.name))
     .map((row) => row.applicationId);
+}
+
+/**
+ * The walkthrough after the threshold changes. Entries already in it stay, in
+ * their order, while they still have an outlier or split at the new threshold,
+ * on effective scores or on the graded ones (`rawFlag`): a candidate whose
+ * outlier an override resolved during the session is still one to come back
+ * to. Then come candidates newly qualifying on effective scores, in
+ * outlierOrder(). An entry sealed or moved off the team is not this function's
+ * business and stays; the walk skips it when it gets there.
+ */
+export function rethresholdWalkthrough(stats, current = []) {
+  const byApplication = new Map(stats.candidates.map((row) => [row.applicationId, row]));
+  const rawFlagged = new Set(stats.rows.filter((row) => row.rawFlag).map((row) => row.candidateId));
+  const kept = current.filter((applicationId) => {
+    const row = byApplication.get(applicationId);
+    if (!row || row.locked) return true;
+    return row.outlierCount > 0 || row.splitDocs > 0 || rawFlagged.has(row.candidateId);
+  });
+  const keptIds = new Set(kept);
+  return [...kept, ...outlierOrder(stats).filter((applicationId) => !keptIds.has(applicationId))];
+}
+
+/**
+ * Where the walkthrough stands once its list changed: the same candidate if they
+ * are still in it, otherwise the next one after them that is, otherwise the last.
+ */
+export function walkthroughPosition(before, after, applicationId) {
+  if (!applicationId || after.includes(applicationId)) return applicationId ?? null;
+  const later = before.slice(before.indexOf(applicationId) + 1).find((id) => after.includes(id));
+  return later ?? after.at(-1) ?? null;
 }
 
 export const docLabel = (type) => SINGULAR[type] || type;
