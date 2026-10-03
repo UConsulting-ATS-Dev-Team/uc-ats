@@ -10,6 +10,15 @@ import { sendApplicationReceipts } from './applicationReceipts.js';
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js';
 import syncFormResponses from './syncResponses.js';
 
+const { REVIEW_COUNT_MODELS } = vi.hoisted(() => ({
+  REVIEW_COUNT_MODELS: [
+    'resumeScore', 'coverLetterScore', 'videoScore',
+    'comment', 'flaggedDocument', 'interviewEvaluation', 'firstRoundInterviewEvaluation', 'caseAssignment',
+    'clientResumeAssignment', 'behavioralQuestion', 'interviewSlotSignup', 'liveVoteSessionCandidate',
+    'decisionMessage', 'reviewDelibChange', 'reviewDelibSession'
+  ]
+}));
+
 vi.mock('../prismaClient.js', () => {
   const client = {
     application: { findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
@@ -21,8 +30,12 @@ vi.mock('../prismaClient.js', () => {
     $executeRaw: vi.fn(),
     $transaction: vi.fn((fn) => fn(client))
   };
+  // What findReviewEvidence counts: the three score tables and every review
+  // dependent of an application.
+  for (const model of REVIEW_COUNT_MODELS) client[model] = { count: vi.fn() };
   return { default: client };
 });
+
 vi.mock('./google/forms.js', () => ({ getResponses: vi.fn() }));
 vi.mock('../utils/dataMapper.js', () => ({ transformFormResponse: vi.fn() }));
 vi.mock('./activeCycle.js', () => ({ resolveCandidateCycle: vi.fn() }));
@@ -100,6 +113,7 @@ beforeEach(() => {
     (where.studentId === candidate.studentId || where.email === candidate.email ? { ...candidate } : null));
   prisma.candidate.findMany.mockResolvedValue([]);
   prisma.resumeUpload.count.mockResolvedValue(0);
+  for (const model of REVIEW_COUNT_MODELS) prisma[model].count.mockResolvedValue(0);
   prisma.referral.findMany.mockResolvedValue([]);
   prisma.$transaction.mockImplementation((fn) => fn(prisma));
 });
@@ -188,5 +202,84 @@ describe('form sync with a resubmission', () => {
     expect(prisma.application.updateMany).not.toHaveBeenCalled();
     expect(sendApplicationReceipts.mock.calls[0][0].responseIDs).toEqual(['only-1']);
     expect(claimLumaGuestsForCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('only records a resubmission once a grader has scored the candidate in this cycle', async () => {
+    applications.push(existingApp());
+    prisma.resumeScore.count.mockResolvedValue(1);
+    getResponses.mockResolvedValue([response('new-1', '2026-09-25T10:00:00Z')]);
+
+    await syncFormResponses();
+
+    expect(applications[0]).toMatchObject({
+      responseID: 'old-1',
+      resumeUrl: '/api/files/old-resume/pdf',
+      supersededResponseIds: ['new-1']
+    });
+  });
+
+  it('only records a resubmission once someone has commented on the application', async () => {
+    applications.push(existingApp());
+    prisma.comment.count.mockImplementation(async ({ where }) => (where.applicationId === 'app-1' ? 1 : 0));
+    getResponses.mockResolvedValue([response('new-1', '2026-09-25T10:00:00Z')]);
+
+    await syncFormResponses();
+
+    expect(applications[0]).toMatchObject({ responseID: 'old-1', supersededResponseIds: ['new-1'] });
+  });
+
+  it('files a response as its own application when its UID and address belong to different people', async () => {
+    // The UID resolves to Maria, who already applied; the address is Jo's.
+    applications.push(existingApp());
+    const jo = { id: 'cand-2', studentId: '999999999', email: 'jo@ucla.edu', firstName: 'Jo', lastName: 'Kim', recordsLockedAt: null };
+    prisma.candidate.findUnique.mockImplementation(async ({ where }) => {
+      if (where.studentId === candidate.studentId) return { ...candidate };
+      if (where.email === jo.email) return { ...jo };
+      return null;
+    });
+    transformFormResponse.mockImplementation((r) => ({
+      responseID: r.responseId,
+      submittedAt: new Date(r.createTime),
+      rawResponses: {},
+      studentId: candidate.studentId,
+      email: jo.email,
+      firstName: 'Jo',
+      lastName: 'Kim',
+      resumeUrl: `/api/files/resume-${r.responseId}/pdf`
+    }));
+    getResponses.mockResolvedValue([response('new-1', '2026-09-25T10:00:00Z')]);
+
+    await syncFormResponses();
+
+    expect(prisma.application.create).toHaveBeenCalledTimes(1);
+    expect(applications).toHaveLength(2);
+    // Maria's application is exactly as it was.
+    expect(applications[0]).toMatchObject({ id: 'app-1', responseID: 'old-1', resumeUrl: '/api/files/old-resume/pdf', supersededResponseIds: [] });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('filed as its own application'));
+  });
+
+  it('decides create-or-fold inside one transaction, under a lock on the candidate and cycle', async () => {
+    getResponses.mockResolvedValue([response('only-1', '2026-09-20T10:00:00Z')]);
+
+    await syncFormResponses();
+
+    // The first raw statement is the lock; the referral claim after the create
+    // takes its own.
+    const [strings, key] = prisma.$executeRaw.mock.calls[0];
+    expect(strings.join('?')).toContain('pg_advisory_xact_lock');
+    expect(key).toBe(`${candidate.id}|${cycle.id}`);
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.application.create.mock.invocationCallOrder[0]);
+  });
+
+  it('still sends the receipt when a submission filed earlier in the same run is replaced', async () => {
+    getResponses.mockResolvedValue([
+      response('second', '2026-09-25T10:00:00Z'),
+      response('first', '2026-09-20T10:00:00Z')
+    ]);
+
+    await syncFormResponses();
+
+    // The application now holds "second"; the sweep looks it up by that id.
+    expect(sendApplicationReceipts.mock.calls[0][0].responseIDs).toEqual(['second']);
   });
 });

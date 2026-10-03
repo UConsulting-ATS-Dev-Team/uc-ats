@@ -8,17 +8,20 @@
 //
 // Before form sync folded resubmissions (applicationResubmissions.js), someone
 // who submitted twice in a cycle got two Application rows, and their review
-// split across the two. This keeps the oldest row, gives it the latest
-// submission's answers, moves every decision, comment, evaluation and signup
-// onto it, and deletes the rest.
+// split across the two. This keeps the oldest row, moves every decision,
+// comment, evaluation and signup onto it, and deletes the rest. The answers it
+// keeps are the ones reviewers saw: a reviewed row's, else the version graded
+// first, else the latest submission (chooseContent in the service). The dry run
+// says which rule decided for each person.
 //
 // Only the one cycle is touched. A group is skipped whole, and listed at the
-// end, when merging it would mean choosing between two things people wrote:
-// different decisions for one round, the same evaluator on both rows of one
-// interview, or a sealed candidate.
+// end, when merging it would mean choosing between two things people wrote, or
+// might fold in somebody else: different decisions for one round, the same
+// evaluator on both rows of one interview, a client assigned a resume that
+// would change, a row submitted under another candidate's address, or a sealed
+// candidate.
 //
-// The dry run reads only, and runs before the supersededResponseIds migration
-// is applied. --apply refuses to start until the migration is in and every
+// The dry run reads only. --apply refuses to start until the migration is in and every
 // table holding an application id is one this script knows how to move.
 //
 // Re-runnable: once merged, a cycle has no groups left to find.
@@ -42,6 +45,7 @@ const {
   APPLICATION_ID_ARRAYS,
   ApplicationMergeConflict,
   DECISION_FIELDS,
+  contentRuleLabel,
   findDuplicateApplicationGroups,
   mergeDuplicateApplications
 } = await import('../src/services/applicationResubmissions.js');
@@ -111,6 +115,8 @@ function printGroup(group, index) {
     console.log(`      rows pointing at it: ${held.join(', ') || 'none'}`);
   }
 
+  console.log(`   answers kept: ${plan.contentFrom}'s, ${contentRuleLabel(plan.contentRule)}`
+    + `${group.firstScoreAt ? ` (first document score ${fmtDate(group.firstScoreAt)})` : ''}`);
   if (plan.conflicts.length) {
     console.log('   -> skip:');
     for (const conflict of plan.conflicts) console.log(`      ${conflict.code}: ${conflict.message}`);
@@ -180,7 +186,7 @@ async function main() {
       );
       merged.push({ group, summary });
       const moved = Object.entries(summary.moved).filter(([, n]) => n > 0).map(([t, n]) => `${t} ${n}`).join(', ') || 'no rows';
-      console.log(`Merged ${loserIds.join(', ')} into ${survivorId} (answers from ${summary.contentFrom}); moved ${moved}.`);
+      console.log(`Merged ${loserIds.join(', ')} into ${survivorId} (answers from ${summary.contentFrom}, ${contentRuleLabel(summary.contentRule)}); moved ${moved}.`);
     } catch (error) {
       if (!(error instanceof ApplicationMergeConflict)) {
         console.error(`Failed on candidate ${group.candidateId}:`, error);

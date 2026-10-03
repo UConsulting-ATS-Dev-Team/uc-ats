@@ -1,3 +1,5 @@
+import { emailIdentityKey, emailVariants } from '../utils/mailingListImport.js';
+
 // One application per candidate per cycle.
 //
 // A cycle's form can be replaced mid-cycle (previousFormUrls), and people
@@ -20,11 +22,15 @@
 // and the application keeps the answers it had.
 
 export const RESUBMISSION_ACTIONS = Object.freeze({
+  CREATED: 'CREATED',
   REPLACE: 'REPLACE',
   RECORD_ONLY: 'RECORD_ONLY'
 });
 
 export const RESUBMISSION_REASONS = Object.freeze({
+  FIRST_SUBMISSION: 'FIRST_SUBMISSION',
+  // The UID and the address on the response belong to different candidates.
+  IDENTITY_CONFLICT: 'IDENTITY_CONFLICT',
   NEWER_SUBMISSION: 'NEWER_SUBMISSION',
   OLDER_SUBMISSION: 'OLDER_SUBMISSION',
   REVIEW_STARTED: 'REVIEW_STARTED',
@@ -112,7 +118,7 @@ const isUntouched = (field, value) => {
   return false;
 };
 
-/** Whether anyone has started reviewing this application. */
+/** Whether a review field on this application has been written. */
 export const reviewStarted = (application) =>
   REVIEW_FIELDS.some((field) => !isUntouched(field, application?.[field]));
 
@@ -121,17 +127,62 @@ const timeOf = (value) => {
   return Number.isNaN(ms) ? null : ms;
 };
 
+// The document grades. They are keyed by candidate and cycle, not by
+// application, so they never show up as a dependent of either row.
+const SCORE_MODELS = Object.freeze(['resumeScore', 'coverLetterScore', 'videoScore']);
+
+// A grade for this candidate in this cycle. The legacy /applications/:id/grades
+// route still writes resume scores with no cycle at all; one written on or
+// after `since` (the first submission on file) is taken to be about this
+// application. That errs towards calling it reviewed, the side that changes
+// nothing.
+const scoreWhere = ({ candidateId, cycleId, since }) => ({
+  candidateId,
+  OR: [{ cycleId }, ...(since ? [{ cycleId: null, createdAt: { gte: since } }] : [])]
+});
+
+// Rows pointing at an application that mean someone reviewed it. Every
+// dependent but resume_uploads: a portal resume replacement is the candidate's
+// own act. A function because APPLICATION_DEPENDENTS is declared further down.
+const reviewDependents = () => APPLICATION_DEPENDENTS.filter((dependent) => dependent.table !== 'resume_uploads');
+
+/**
+ * Whether review has started on `application` beyond its own columns: any
+ * document score for the candidate in the cycle, or any comment, flag,
+ * evaluation, client assignment, signup or other review row pointing at it.
+ * Read inside sync's locked transaction, right before the plan is made.
+ *
+ * Returns { started, scores, dependents: { [table]: count } }.
+ */
+export async function findReviewEvidence(client, { application, candidateId, cycleId }) {
+  let scores = 0;
+  for (const model of SCORE_MODELS) {
+    scores += await client[model].count({ where: scoreWhere({ candidateId, cycleId, since: application.submittedAt }) });
+  }
+  const dependents = {};
+  for (const dependent of reviewDependents()) {
+    const count = await client[dependent.model].count({ where: { [dependent.column]: application.id } });
+    if (count) dependents[dependent.table] = count;
+  }
+  const inWalkthrough = await client.reviewDelibSession.count({
+    where: { cycleId, outlierApplicationIds: { array_contains: [application.id] } }
+  });
+  if (inWalkthrough) dependents['review_delib_sessions.outlierApplicationIds'] = inWalkthrough;
+  return { started: scores > 0 || Object.keys(dependents).length > 0, scores, dependents };
+}
+
 /**
  * What to do with `incoming`, a submission from a candidate who already has
  * `existing` in the same cycle. Pure.
  *
- * REPLACE only when the incoming submission is strictly later and nothing about
- * the existing one has been reviewed or sealed. Otherwise RECORD_ONLY: the
- * response id is remembered so it is never synced again, and the answers stay.
- * An unreadable submit time counts as not later, which is the side that changes
- * nothing.
+ * REPLACE only when the incoming submission is strictly later, the existing
+ * row's review fields are untouched, `reviewEvidence` (findReviewEvidence)
+ * found no scores or review rows, and the record is not sealed. Otherwise
+ * RECORD_ONLY: the response id is remembered so it is never synced again, and
+ * the answers stay. An unreadable submit time counts as not later, which is the
+ * side that changes nothing.
  */
-export function resubmissionPlan({ existing, incoming, candidateLocked = false }) {
+export function resubmissionPlan({ existing, incoming, candidateLocked = false, reviewEvidence = null }) {
   const existingAt = timeOf(existing?.submittedAt);
   const incomingAt = timeOf(incoming?.submittedAt);
   if (incomingAt === null || existingAt === null || incomingAt <= existingAt) {
@@ -140,7 +191,7 @@ export function resubmissionPlan({ existing, incoming, candidateLocked = false }
   if (candidateLocked) {
     return { action: RESUBMISSION_ACTIONS.RECORD_ONLY, reason: RESUBMISSION_REASONS.RECORD_LOCKED };
   }
-  if (reviewStarted(existing)) {
+  if (reviewStarted(existing) || reviewEvidence?.started) {
     return { action: RESUBMISSION_ACTIONS.RECORD_ONLY, reason: RESUBMISSION_REASONS.REVIEW_STARTED };
   }
   return { action: RESUBMISSION_ACTIONS.REPLACE, reason: RESUBMISSION_REASONS.NEWER_SUBMISSION };
@@ -148,9 +199,10 @@ export function resubmissionPlan({ existing, incoming, candidateLocked = false }
 
 /**
  * The update that makes `existing` hold `incoming`'s answers: every submission
- * field replaced, and the response being replaced appended to
+ * field replaced, and the response being replaced pushed onto
  * `supersededResponseIds`. Review fields, ids, the cycle, the candidate and
- * testFor are never in it.
+ * testFor are never in it. A push rather than a whole-array write, so nothing
+ * already recorded on the row can be lost.
  */
 export function replacementData(existing, incoming) {
   const data = {};
@@ -162,7 +214,10 @@ export function replacementData(existing, incoming) {
     }
     data[field] = value;
   }
-  data.supersededResponseIds = appendIds(existing?.supersededResponseIds, [existing?.responseID], data.responseID);
+  if (existing?.responseID && existing.responseID !== data.responseID
+    && !(existing.supersededResponseIds || []).includes(existing.responseID)) {
+    data.supersededResponseIds = { push: existing.responseID };
+  }
   return data;
 }
 
@@ -176,9 +231,10 @@ export function appendIds(current = [], ids = [], exclude = null) {
   return out;
 }
 
-// The same "nobody has reviewed it" test as reviewStarted, as a where clause,
-// so a decision written in the instant between sync's read and its write
-// stops the replacement instead of being overwritten by it.
+// The same "no review field written" test as reviewStarted, as a where clause.
+// Sync's lock keeps other syncs out, but not a reviewer: a decision written in
+// the instant between the read and the write stops the replacement instead of
+// being overwritten by it.
 const UNTOUCHED_WHERE = [
   { status: 'SUBMITTED' },
   { approved: null },
@@ -187,9 +243,8 @@ const UNTOUCHED_WHERE = [
 ];
 
 async function recordOnly(client, applicationId, responseID) {
-  // Conditional, so two servers recording the same response at once still
-  // leave it in the list once, and a response that is the row's own is never
-  // listed as superseded by itself.
+  // Conditional, so a response is never listed twice and the row's own
+  // response is never listed as superseded by itself.
   await client.application.updateMany({
     where: {
       id: applicationId,
@@ -199,23 +254,52 @@ async function recordOnly(client, applicationId, responseID) {
   });
 }
 
+/** What applyResubmission needs to know about the application already on file. */
+export const RESUBMISSION_SELECT = Object.freeze({
+  id: true,
+  candidateId: true,
+  cycleId: true,
+  responseID: true,
+  supersededResponseIds: true,
+  submittedAt: true,
+  resumeUrl: true,
+  status: true,
+  currentRound: true,
+  approved: true,
+  resumeDecision: true,
+  coffeeChatDecision: true,
+  firstRoundDecision: true,
+  finalRoundDecision: true
+});
+
 /**
- * Applies resubmissionPlan to `existing` through `client` (the Prisma client or
- * a transaction). `incoming` is the record transformFormResponse produced.
- * Returns { action, reason, applicationId }.
+ * Applies resubmissionPlan to `existing` through `client`, which should be the
+ * transaction fileSubmission holds the candidate's lock in. `incoming` is the
+ * record transformFormResponse produced. Review evidence is read here, so it is
+ * read under the same lock as the write.
+ *
+ * Returns { action, reason, applicationId, previousResponseID }; the last is
+ * the response the row held before a REPLACE, and null otherwise.
  */
 export async function applyResubmission(client, { existing, incoming, candidateLocked = false }) {
   const applicationId = existing.id;
   const responseID = incoming.responseID;
+  const unchanged = (reason) =>
+    ({ action: RESUBMISSION_ACTIONS.RECORD_ONLY, reason, applicationId, previousResponseID: null });
 
   if (responseID === existing.responseID || (existing.supersededResponseIds || []).includes(responseID)) {
-    return { action: RESUBMISSION_ACTIONS.RECORD_ONLY, reason: RESUBMISSION_REASONS.ALREADY_RECORDED, applicationId };
+    return unchanged(RESUBMISSION_REASONS.ALREADY_RECORDED);
   }
 
-  const plan = resubmissionPlan({ existing, incoming, candidateLocked });
+  const reviewEvidence = await findReviewEvidence(client, {
+    application: existing,
+    candidateId: existing.candidateId,
+    cycleId: existing.cycleId
+  });
+  const plan = resubmissionPlan({ existing, incoming, candidateLocked, reviewEvidence });
   if (plan.action === RESUBMISSION_ACTIONS.RECORD_ONLY) {
     await recordOnly(client, applicationId, responseID);
-    return { ...plan, applicationId };
+    return unchanged(plan.reason);
   }
 
   const data = replacementData(existing, incoming);
@@ -225,7 +309,7 @@ export async function applyResubmission(client, { existing, incoming, candidateL
   });
   if (count === 0) {
     await recordOnly(client, applicationId, responseID);
-    return { action: RESUBMISSION_ACTIONS.RECORD_ONLY, reason: RESUBMISSION_REASONS.CHANGED_DURING_SYNC, applicationId };
+    return unchanged(RESUBMISSION_REASONS.CHANGED_DURING_SYNC);
   }
 
   // A candidate who replaced their resume in the portal has version rows, and
@@ -251,7 +335,45 @@ export async function applyResubmission(client, { existing, incoming, candidateL
     }
   }
 
-  return { ...plan, applicationId };
+  return { ...plan, applicationId, previousResponseID: existing.responseID };
+}
+
+/**
+ * Files one form response for a resolved candidate inside `tx`: creates their
+ * application in the cycle, or folds the response into the one they have.
+ *
+ * The whole decision runs under a transaction-scoped advisory lock on
+ * (candidate, cycle), the referrals.js pattern. Every server runs sync on the
+ * same tick and a slow run can overlap the next; without the lock two servers
+ * filing two first submissions from one person could each find no application
+ * and both create one, or both fold into the same row from stale reads.
+ *
+ * `identityConflict` is sync's "the UID's owner is not the address's owner".
+ * Such a response is filed as its own application, exactly as before this
+ * rule existed, and never folded: it may well be somebody else's submission,
+ * and folding it would overwrite or bury their answers. A duplicate an admin
+ * can see is better than an application lost into someone else's row.
+ *
+ * Returns { action, reason, applicationId, previousResponseID }.
+ */
+export async function fileSubmission(tx, { candidateId, cycleId, record, createData, candidateLocked = false, identityConflict = false }) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${candidateId}|${cycleId}`}))`;
+
+  const create = async (reason) => {
+    const created = await tx.application.create({ data: createData });
+    return { action: RESUBMISSION_ACTIONS.CREATED, reason, applicationId: created?.id ?? null, previousResponseID: null };
+  };
+  if (identityConflict) return create(RESUBMISSION_REASONS.IDENTITY_CONFLICT);
+
+  const [existing] = await tx.application.findMany({
+    where: { candidateId, cycleId },
+    select: RESUBMISSION_SELECT,
+    orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+    take: 1
+  });
+  if (!existing) return create(RESUBMISSION_REASONS.FIRST_SUBMISSION);
+
+  return applyResubmission(tx, { existing, incoming: record, candidateLocked });
 }
 
 // ---------------------------------------------------------------------------
@@ -328,9 +450,35 @@ export const MERGE_CONFLICTS = Object.freeze({
   REVIEW_CONFLICT: 'REVIEW_CONFLICT',
   UNIQUE_COLLISION: 'UNIQUE_COLLISION',
   RESUME_VERSIONS: 'RESUME_VERSIONS',
+  CLIENT_RESUME: 'CLIENT_RESUME',
+  IDENTITY_CONFLICT: 'IDENTITY_CONFLICT',
   RECORD_LOCKED: 'RECORD_LOCKED',
   NOT_A_GROUP: 'NOT_A_GROUP'
 });
+
+/** Which branch of the merge's content rule chose the answers kept. */
+export const CONTENT_RULES = Object.freeze({
+  // a. Exactly one row has been reviewed (review fields, or review rows on it).
+  REVIEWED_ROW: 'REVIEWED_ROW',
+  // a. Several have; the latest of them.
+  LATEST_REVIEWED_ROW: 'LATEST_REVIEWED_ROW',
+  // b. None has, but documents were graded: the version graders saw.
+  BEFORE_FIRST_SCORE: 'BEFORE_FIRST_SCORE',
+  // b. Every submission came after the first grade; nothing better to go on.
+  OLDEST_ALL_AFTER_FIRST_SCORE: 'OLDEST_ALL_AFTER_FIRST_SCORE',
+  // c. No review of any kind.
+  LATEST_SUBMISSION: 'LATEST_SUBMISSION'
+});
+
+const CONTENT_RULE_LABELS = {
+  [CONTENT_RULES.REVIEWED_ROW]: 'the only row with review on it',
+  [CONTENT_RULES.LATEST_REVIEWED_ROW]: 'the latest of the rows with review on them',
+  [CONTENT_RULES.BEFORE_FIRST_SCORE]: 'the latest submission made before the first document score',
+  [CONTENT_RULES.OLDEST_ALL_AFTER_FIRST_SCORE]: 'the oldest row, because every submission came after the first document score',
+  [CONTENT_RULES.LATEST_SUBMISSION]: 'the latest submission, since nothing has been reviewed'
+};
+
+export const contentRuleLabel = (rule) => CONTENT_RULE_LABELS[rule] || rule;
 
 /**
  * Raised when a group cannot be merged without choosing between two things a
@@ -350,8 +498,7 @@ export class ApplicationMergeConflict extends Error {
 const SUMMARY_FIELDS = ['id', 'candidateId', 'cycleId', ...SUBMISSION_FIELDS, ...REVIEW_FIELDS];
 
 // What the dry run reads. Deliberately an explicit list without
-// supersededResponseIds: the dry run is meant to be run against production
-// before that column exists.
+// supersededResponseIds, so the dry run never depends on that column.
 const REPORT_SELECT = Object.freeze(Object.fromEntries(
   ['id', 'candidateId', 'cycleId', 'responseID', 'submittedAt', 'email', 'firstName', 'lastName',
     'resumeUrl', ...REVIEW_FIELDS].map((field) => [field, true])
@@ -384,24 +531,72 @@ export function mergeReviewFields(applications, survivorId) {
   return { review, conflicts };
 }
 
+// Whether `app` carries review of its own: a written review field, or any row
+// in `dependents` (as loadGroupEvidence reports it) other than a portal resume
+// version, which is the candidate's own act.
+const hasReviewEvidence = (app, dependents) => reviewStarted(app)
+  || Object.entries(dependents).some(([table, byApp]) => table !== 'resume_uploads' && (byApp?.[app.id] || 0) > 0);
+
+/**
+ * Whose answers a merged row keeps, and which rule said so. Pure.
+ *
+ * Reviewers must keep seeing what they reviewed, so evidence decides first:
+ *   a. Rows with review of their own. One: its answers. Several: the latest.
+ *   b. Otherwise, if any document was graded (`firstScoreAt`, the earliest
+ *      score's createdAt), the latest submission made before that grade, since
+ *      that is the version graders opened. If every submission came after it,
+ *      the oldest row.
+ *   c. Otherwise the latest submission: people resubmitted because the first
+ *      form was broken, so the latest is what they meant to send.
+ */
+export function chooseContent(ordered, { dependents = {}, firstScoreAt = null } = {}) {
+  const reviewed = ordered.filter((app) => hasReviewEvidence(app, dependents));
+  if (reviewed.length === 1) return { content: reviewed[0], rule: CONTENT_RULES.REVIEWED_ROW };
+  if (reviewed.length > 1) return { content: reviewed[reviewed.length - 1], rule: CONTENT_RULES.LATEST_REVIEWED_ROW };
+
+  const scoredAt = timeOf(firstScoreAt);
+  if (scoredAt !== null) {
+    const before = ordered.filter((app) => (timeOf(app.submittedAt) ?? Infinity) < scoredAt);
+    return before.length
+      ? { content: before[before.length - 1], rule: CONTENT_RULES.BEFORE_FIRST_SCORE }
+      : { content: ordered[0], rule: CONTENT_RULES.OLDEST_ALL_AFTER_FIRST_SCORE };
+  }
+  return { content: ordered[ordered.length - 1], rule: CONTENT_RULES.LATEST_SUBMISSION };
+}
+
 /**
  * How a group would merge, without touching anything. Pure, and shared by the
  * dry run and the merge itself so the two cannot disagree.
  *
  * The survivor is the oldest row, since it is the one longest referenced from
- * elsewhere. Its answers come from the latest submission: people resubmitted
- * because the first form was broken, so the latest is what they meant to send.
+ * elsewhere. Whose answers it ends up holding is chooseContent's call.
+ * `dependents` is { [table]: { [applicationId]: count } } from loadGroupEvidence.
  */
-export function planDuplicateMerge({ applications, survivorId = null, candidateLocked = false, resumeVersionCounts = {}, collisions = [] }) {
+export function planDuplicateMerge({
+  applications,
+  survivorId = null,
+  candidateLocked = false,
+  dependents = {},
+  firstScoreAt = null,
+  collisions = [],
+  identityConflicts = []
+}) {
   const ordered = [...applications].sort(byOldest);
   const survivor = ordered.find((app) => app.id === survivorId) ?? ordered[0];
   const losers = ordered.filter((app) => app.id !== survivor.id);
-  const content = ordered[ordered.length - 1];
+  const { content, rule } = chooseContent(ordered, { dependents, firstScoreAt });
   const { review, conflicts: reviewConflicts } = mergeReviewFields(ordered, survivor.id);
 
   const conflicts = [];
   if (candidateLocked) {
     conflicts.push({ code: MERGE_CONFLICTS.RECORD_LOCKED, message: 'the candidate record is sealed' });
+  }
+  for (const conflict of identityConflicts) {
+    conflicts.push({
+      code: MERGE_CONFLICTS.IDENTITY_CONFLICT,
+      message: `${conflict.applicationId} was submitted as ${conflict.email}, which is candidate ${conflict.otherCandidateId}'s address`,
+      ...conflict
+    });
   }
   for (const conflict of reviewConflicts) {
     conflicts.push({
@@ -415,11 +610,25 @@ export function planDuplicateMerge({ applications, survivorId = null, candidateL
   // file resumeUrl points at. Only one row may carry that history, and it has
   // to be the row whose answers are kept, or the merged row would show one
   // resume while its history says another is current.
-  const withVersions = ordered.filter((app) => (resumeVersionCounts[app.id] || 0) > 0);
+  const versions = dependents.resume_uploads || {};
+  const withVersions = ordered.filter((app) => (versions[app.id] || 0) > 0);
   if (withVersions.length > 1 || (withVersions.length === 1 && withVersions[0].id !== content.id)) {
     conflicts.push({
       code: MERGE_CONFLICTS.RESUME_VERSIONS,
       message: `resume replaced in the portal on ${withVersions.map((app) => app.id).join(', ')}, `
+        + `but the answers kept are ${content.id}'s`
+    });
+  }
+
+  // A Talent Partner client's PDF route reads the resume off the linked
+  // application, and the assignment promised that client a stable resume.
+  // Moving it onto a row holding different answers would change what they see.
+  const assigned = dependents.client_resume_assignments || {};
+  const assignedElsewhere = ordered.filter((app) => app.id !== content.id && (assigned[app.id] || 0) > 0);
+  if (assignedElsewhere.length) {
+    conflicts.push({
+      code: MERGE_CONFLICTS.CLIENT_RESUME,
+      message: `a client was assigned the resume on ${assignedElsewhere.map((app) => app.id).join(', ')}, `
         + `but the answers kept are ${content.id}'s`
     });
   }
@@ -432,7 +641,14 @@ export function planDuplicateMerge({ applications, survivorId = null, candidateL
     });
   }
 
-  return { survivorId: survivor.id, loserIds: losers.map((app) => app.id), contentFrom: content.id, review, conflicts };
+  return {
+    survivorId: survivor.id,
+    loserIds: losers.map((app) => app.id),
+    contentFrom: content.id,
+    contentRule: rule,
+    review,
+    conflicts
+  };
 }
 
 /**
@@ -479,6 +695,79 @@ export async function countDependents(client, applicationIds) {
   return counts;
 }
 
+/**
+ * Applications in the group submitted under an address that is another
+ * candidate's `Candidate.email`, compared the way the rest of the ATS compares
+ * people (emailIdentityKey: case-insensitive, g.ucla.edu and ucla.edu as one).
+ * Such a row may be somebody else's submission filed under the wrong UID, so
+ * it must not be folded into this person. Read-only.
+ */
+export async function findIdentityConflicts(client, { candidateId, applications }) {
+  const variants = [...new Set(applications.flatMap((app) => emailVariants(app.email)))];
+  if (!variants.length) return [];
+  const others = await client.candidate.findMany({
+    where: {
+      id: { not: candidateId },
+      OR: variants.map((email) => ({ email: { equals: email, mode: 'insensitive' } }))
+    },
+    select: { id: true, email: true }
+  });
+  const conflicts = [];
+  for (const app of applications) {
+    const key = app.email ? emailIdentityKey(app.email) : null;
+    if (!key) continue;
+    for (const other of others) {
+      if (emailIdentityKey(other.email) === key) {
+        conflicts.push({ applicationId: app.id, email: app.email, otherCandidateId: other.id });
+      }
+    }
+  }
+  return conflicts;
+}
+
+/**
+ * Everything planDuplicateMerge needs from the database about one group.
+ * Read-only, and used by both the dry run and the merge.
+ *
+ * `firstScoreAt` is the earliest createdAt across the three score tables for
+ * the candidate in the cycle, plus cycle-less legacy scores written on or after
+ * the group's first submission (scoreWhere).
+ */
+export async function loadGroupEvidence(client, { cycleId, candidateId, applications }) {
+  const ids = applications.map((app) => app.id);
+  const dependents = await countDependents(client, ids);
+
+  // Walkthrough orders are JSON, so countDependents cannot see them.
+  const sessions = await client.reviewDelibSession.findMany({
+    where: { cycleId },
+    select: { outlierApplicationIds: true }
+  });
+  dependents['review_delib_sessions.outlierApplicationIds'] = Object.fromEntries(ids
+    .map((id) => [id, sessions.filter((s) => Array.isArray(s.outlierApplicationIds) && s.outlierApplicationIds.includes(id)).length])
+    .filter(([, n]) => n > 0));
+
+  const since = [...applications].sort(byOldest)[0]?.submittedAt ?? null;
+  let firstScoreAt = null;
+  for (const model of SCORE_MODELS) {
+    const scores = await client[model].findMany({
+      where: scoreWhere({ candidateId, cycleId, since }),
+      select: { createdAt: true }
+    });
+    for (const { createdAt } of scores) {
+      if (timeOf(createdAt) !== null && (firstScoreAt === null || timeOf(createdAt) < timeOf(firstScoreAt))) {
+        firstScoreAt = createdAt;
+      }
+    }
+  }
+
+  return {
+    dependents,
+    firstScoreAt,
+    collisions: await findUniqueCollisions(client, ids),
+    identityConflicts: await findIdentityConflicts(client, { candidateId, applications })
+  };
+}
+
 const isUniqueViolation = (error) => error?.code === 'P2002'
   || /unique constraint/i.test(String(error?.message || ''));
 
@@ -486,8 +775,8 @@ const isUniqueViolation = (error) => error?.code === 'P2002'
  * Folds `loserIds` into `survivorId` inside `tx`, the caller's transaction.
  *
  * Re-points every APPLICATION_DEPENDENTS row, rewrites review deliberation
- * walkthrough orders, deletes the losers, then gives the survivor the latest
- * submission's answers, the merged review fields, and every response id the
+ * walkthrough orders, deletes the losers, then gives the survivor the answers
+ * chooseContent picked, the merged review fields, and every response id the
  * group had seen. Throws ApplicationMergeConflict, having changed nothing the
  * transaction will keep, when the group cannot be merged without choosing
  * between two people's work.
@@ -512,18 +801,14 @@ export async function mergeDuplicateApplications(tx, { survivorId, loserIds }) {
       { survivorId, loserIds }
     );
   }
+  const { candidateId, cycleId } = applications[0];
 
-  const resumeVersions = await tx.resumeUpload.groupBy({
-    by: ['applicationId'],
-    where: { applicationId: { in: ids } },
-    _count: { _all: true }
-  });
+  const evidence = await loadGroupEvidence(tx, { cycleId, candidateId, applications });
   const plan = planDuplicateMerge({
     applications,
     survivorId,
     candidateLocked: applications.some((app) => app.candidate?.recordsLockedAt),
-    resumeVersionCounts: Object.fromEntries(resumeVersions.map((row) => [row.applicationId, row._count._all])),
-    collisions: await findUniqueCollisions(tx, ids)
+    ...evidence
   });
   if (plan.conflicts.length) {
     throw new ApplicationMergeConflict(plan.conflicts[0].code, plan.conflicts.map((c) => c.message).join('; '), {
@@ -556,7 +841,7 @@ export async function mergeDuplicateApplications(tx, { survivorId, loserIds }) {
   // The walkthrough order of a review deliberation is stored as a JSON array of
   // application ids, which no updateMany can reach.
   const sessions = await tx.reviewDelibSession.findMany({
-    where: { cycleId: applications[0].cycleId },
+    where: { cycleId },
     select: { id: true, outlierApplicationIds: true }
   });
   let rewrittenOrders = 0;
@@ -595,6 +880,7 @@ export async function mergeDuplicateApplications(tx, { survivorId, loserIds }) {
     survivorId,
     loserIds,
     contentFrom: plan.contentFrom,
+    contentRule: plan.contentRule,
     responseID: content.responseID,
     review: plan.review,
     moved,
@@ -605,10 +891,10 @@ export async function mergeDuplicateApplications(tx, { survivorId, loserIds }) {
 
 /**
  * Every candidate with more than one application in `cycleId`, oldest first,
- * with what a report needs and the dependent rows on each application. Read-only.
+ * with what a report needs, the dependent rows on each application and the
+ * merge plan. Read-only.
  *
- * Uses only explicit selects that leave out supersededResponseIds, so it runs
- * against a database that has not had that migration yet.
+ * Uses only explicit selects that leave out supersededResponseIds.
  */
 export async function findDuplicateApplicationGroups(client, { cycleId }) {
   const all = await client.application.findMany({
@@ -637,29 +923,16 @@ export async function findDuplicateApplicationGroups(client, { cycleId }) {
     groups.set(app.candidateId, group);
   }
 
-  // Walkthrough orders are JSON, so countDependents cannot see them; counted
-  // here so the report shows every place an application id is held.
-  const sessions = await client.reviewDelibSession.findMany({
-    where: { cycleId },
-    select: { outlierApplicationIds: true }
-  });
-
   const result = [];
   for (const group of groups.values()) {
     group.applications.sort(byOldest);
-    const ids = group.applications.map((app) => app.id);
-    const dependents = await countDependents(client, ids);
-    dependents['review_delib_sessions.outlierApplicationIds'] = Object.fromEntries(ids
-      .map((id) => [id, sessions.filter((s) => Array.isArray(s.outlierApplicationIds) && s.outlierApplicationIds.includes(id)).length])
-      .filter(([, n]) => n > 0));
-    const collisions = await findUniqueCollisions(client, ids);
+    const evidence = await loadGroupEvidence(client, { cycleId, candidateId: group.candidateId, applications: group.applications });
     const plan = planDuplicateMerge({
       applications: group.applications,
       candidateLocked: Boolean(group.candidate?.recordsLockedAt),
-      resumeVersionCounts: dependents.resume_uploads || {},
-      collisions
+      ...evidence
     });
-    result.push({ ...group, dependents, plan });
+    result.push({ ...group, dependents: evidence.dependents, firstScoreAt: evidence.firstScoreAt, plan });
   }
   return result;
 }
