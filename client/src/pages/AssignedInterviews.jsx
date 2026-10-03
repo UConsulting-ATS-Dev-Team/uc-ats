@@ -19,6 +19,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
 import { groupsForMember } from '../utils/interviewGroups';
@@ -109,7 +110,7 @@ const CandidateCard = ({ application }) => {
           <div className="candidate-avatar">
             {application.headshotUrl ? (
               <AuthenticatedImage
-                src={application.headshotUrl}
+                src={headshotSrc(application.headshotUrl, 60)}
                 alt={application.name}
                 style={{
                   width: '60px',
@@ -1024,7 +1025,7 @@ export default function AssignedInterviews() {
                                         <div className="candidate-photo">
                                           {application.headshotUrl ? (
                                             <AuthenticatedImage
-                                              src={application.headshotUrl}
+                                              src={headshotSrc(application.headshotUrl, 48)}
                                               alt={`${application.firstName} ${application.lastName}`}
                                               className="candidate-headshot"
                                               style={{
@@ -1240,7 +1241,7 @@ export default function AssignedInterviews() {
               <div className="candidate-info-modal">
                 {editingEvaluation.application.headshotUrl && (
                   <AuthenticatedImage
-                    src={editingEvaluation.application.headshotUrl}
+                    src={headshotSrc(editingEvaluation.application.headshotUrl, 40)}
                     alt={`${editingEvaluation.application.firstName} ${editingEvaluation.application.lastName}`}
                     className="modal-candidate-photo"
                     style={{

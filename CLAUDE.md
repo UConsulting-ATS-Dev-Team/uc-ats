@@ -271,6 +271,14 @@ The system follows a **recruiting cycle-based workflow**:
   sends Drive's `md5Checksum` as `ETag` and answers a matching `If-None-Match` with 304
   ([documentValidators.js](server/src/services/documentValidators.js)), so a copy past its
   hour is confirmed rather than sent again.
+- Headshots are drawn as avatars from a small copy: `/api/files/:id/image?size=256` (or
+  `640`) is a WebP whose short edge is that size, rendered on first request and kept in
+  memory ([server/src/services/headshotThumbnails.js](server/src/services/headshotThumbnails.js));
+  no `size` is the original. The client picks the size with `headshotSrc(url, cssPx)`
+  ([client/src/utils/headshotUrl.js](client/src/utils/headshotUrl.js)), and a list that
+  preloads headshots must preload that same URL. A bare `<img src>` carries no session
+  and gets a 401, so draw headshots with `AuthenticatedImage`, `CandidateAvatar` or
+  `liveVote/Headshot`.
 
 **Sealed recruiting records:**
 - `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and

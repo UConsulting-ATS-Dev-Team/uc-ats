@@ -5,6 +5,7 @@ import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.
 import { parseByteRange } from '../services/byteRange.js';
 import { documentValidators, etagMatches } from '../services/documentValidators.js';
 import { rememberFileAccess, rememberFileMetadata, refreshFileMetadata } from '../services/documentStreamCache.js';
+import { getHeadshotThumbnail, parseThumbnailSize, THUMBNAIL_SIZES } from '../services/headshotThumbnails.js';
 import prisma from '../prismaClient.js';
 
 const router = express.Router();
@@ -114,6 +115,11 @@ router.post('/:fileId/link', async (req, res) => {
   }
 });
 
+// A headshot's URL names one Drive file, whose content never changes (a new
+// photo is a new file), so the browser may keep it for a week. The ETag from
+// res.send lets it revalidate cheaply after that.
+const IMAGE_CACHE_CONTROL = 'private, max-age=604800';
+
 router.get('/:fileId/image', async (req, res) => {
   try {
     const { fileId } = req.params;
@@ -122,17 +128,42 @@ router.get('/:fileId/image', async (req, res) => {
       return res.status(400).json({ error: 'Invalid file ID' });
     }
 
+    // `?size=` asks for a small copy for an avatar (services/headshotThumbnails.js);
+    // without it, the original.
+    const size = parseThumbnailSize(req.query.size);
+    if (size === false) {
+      return res.status(400).json({ error: `size must be one of ${THUMBNAIL_SIZES.join(', ')}` });
+    }
+
+    // Checked on every request, before Drive is asked anything and before any
+    // cached thumbnail is handed out, so a headshot removed from an application
+    // stops being served at once. The browser cache is what spares repeats.
     const allowed = await authorizeFileAccess(fileId, req.user);
     if (!allowed) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const meta = await getFileMetadata(fileId);
+    if (size) {
+      const thumbnail = await getHeadshotThumbnail(fileId, size, { download: (id) => getFileStream(id) });
+      if (thumbnail) {
+        res.setHeader('Content-Type', thumbnail.contentType);
+        res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
+        return res.send(thumbnail.body);
+      }
+      // Not an image sharp can read (an iPhone HEIC, say): stream the original,
+      // exactly as before thumbnails existed.
+    }
+
+    const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
     const fileStream = await getFileStream(fileId);
 
     res.setHeader('Content-Type', meta?.mimeType || 'image/jpeg');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
 
+    fileStream.on('error', (error) => {
+      console.error('Error streaming image:', error);
+      res.destroy(error);
+    });
     fileStream.pipe(res);
 
   } catch (error) {

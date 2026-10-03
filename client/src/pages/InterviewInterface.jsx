@@ -6,6 +6,8 @@ import {
   UserIcon,
   DocumentTextIcon
 } from '@heroicons/react/24/outline';
+import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
@@ -409,26 +411,18 @@ export default function InterviewInterface() {
               <div className="application-header">
                 <div className="applicant-info">
                   <div className="applicant-avatar">
-                    {application.headshotUrl ? (
-                      <img
-                        src={application.headshotUrl}
-                        alt={application.name}
-                        className="avatar-image"
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          borderRadius: '50%',
-                          objectFit: 'cover'
-                        }}
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          e.currentTarget.nextSibling.style.display = 'flex';
-                        }}
-                      />
-                    ) : null}
-                    <UserIcon 
-                      className="avatar-icon" 
-                      style={{ display: application.headshotUrl ? 'none' : 'flex' }}
+                    {/* Fetched with the session: a bare <img> sends none, and was answered 401. */}
+                    <AuthenticatedImage
+                      src={headshotSrc(application.headshotUrl, 48)}
+                      alt={application.name}
+                      className="avatar-image"
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        borderRadius: '50%',
+                        objectFit: 'cover'
+                      }}
+                      fallback={<UserIcon className="avatar-icon" />}
                     />
                   </div>
                   <div className="applicant-details">
