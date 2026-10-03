@@ -340,6 +340,17 @@ The system follows a **recruiting cycle-based workflow**:
   is why `sendMasterCommunication` writes the campaign row *before* the first email.
 - An iMessage row is `OPENED`, not `SENT`: the server hands the conversation to the
   admin's Messages app and cannot observe what happens after.
+- A `SENDING` row is a claim written just before a send that must not repeat
+  (`applicationReceipts.js`) and overwritten with the outcome. The UI shows one older
+  than 10 minutes as **Interrupted**; it was retried as a new attempt.
+- Candidates list and Candidate Detail show a person's history (admin only,
+  `/api/admin/candidate-communications`,
+  [candidateCommunications.js](server/src/services/candidateCommunications.js)). Rows
+  carry no candidate id, so they are matched on every address the candidate is known by
+  (their own and each application's, both UCLA spellings) and, for iMessage, on the last
+  ten digits of each application's, onboarding's and account's number. An address two
+  candidates share shows its rows on both. Shown for sealed candidates too: it is the
+  same log every admin can already read.
 - An email row's `SENT` only means SES accepted it. What happened next arrives from SES
   (configuration set `SES_CONFIGURATION_SET` → SNS topic `SES_SNS_TOPIC_ARN` →
   `POST /api/webhooks/ses`) and moves the row to `DELIVERED`, `DELAYED`, `BOUNCED`,

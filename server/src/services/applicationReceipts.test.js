@@ -130,7 +130,7 @@ describe('sendApplicationReceipts', () => {
     const [{ data }] = prisma.communicationLog.create.mock.calls[0];
     expect(data).toMatchObject({
       category: 'APPLICATION_RECEIVED',
-      status: 'FAILED',
+      status: 'SENDING',
       recipient: 'maria@ucla.edu',
       cycleId: 'cycle-1',
       attemptKey: 'application-received:cycle-1:maria@ucla.edu:1|maria@ucla.edu',
@@ -155,6 +155,16 @@ describe('sendApplicationReceipts', () => {
 
     await sendApplicationReceipts({ cycle });
 
+    expect(sendApplicationReceivedEmail.mock.calls[0][3].attemptKey).toBe('application-received:cycle-1:maria@ucla.edu:2');
+  });
+
+  it('treats a leftover SENDING claim as an interrupted attempt and retries it', async () => {
+    prisma.application.findMany.mockResolvedValue([app('maria@ucla.edu')]);
+    logRows = [{ recipient: 'maria@ucla.edu', status: 'SENDING' }];
+
+    const result = await sendApplicationReceipts({ cycle });
+
+    expect(result.sent).toBe(1);
     expect(sendApplicationReceivedEmail.mock.calls[0][3].attemptKey).toBe('application-received:cycle-1:maria@ucla.edu:2');
   });
 

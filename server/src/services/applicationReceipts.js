@@ -22,9 +22,9 @@ import { emailIdentityKey, emailVariants } from '../utils/mailingListImport.js';
  * The row is written before the send, not after. recordCommunication swallows
  * a failed write, so a row written only after SES accepted could go missing
  * and the next sweep would send again. Here a claim that cannot be written
- * stops the send. The claim starts FAILED ("not sent yet") and sendEmail
- * overwrites it through the same attemptKey with how the send ended, so a
- * process killed mid-send leaves a failed attempt to retry, not a gap. Each
+ * stops the send. The claim is SENDING, and sendEmail overwrites it through
+ * the same attemptKey with how the send ended, so a process killed mid-send
+ * leaves an unfinished attempt to retry, not a gap. Each
  * attempt has its own key, which is what lets failures count toward
  * MAX_ATTEMPTS. One duplicate is still possible: SES accepted and the update
  * to SENT failed. There is no exactly-once across SES and the database, and
@@ -63,7 +63,9 @@ async function receiptHistory(cycleId, client, email = null) {
   const history = {};
   for (const { recipient, status } of rows) {
     const entry = (history[emailIdentityKey(recipient)] ??= { done: false, failures: 0 });
-    if (status === 'FAILED') entry.failures += 1;
+    // A SENDING row the lock no longer covers never finished: its process
+    // died between the claim and the overwrite. It counts as a failed try.
+    if (status === 'FAILED' || status === 'SENDING') entry.failures += 1;
     else entry.done = true;
   }
   return history;
@@ -146,8 +148,7 @@ async function sendUnderLock(cycle, person) {
           channel: 'email',
           category: CATEGORY,
           trigger: 'AUTOMATED',
-          status: 'FAILED',
-          error: 'Not sent yet: interrupted before the email server accepted it.',
+          status: 'SENDING',
           recipient: person.email,
           recipientName: person.name,
           cycleId: cycle.id,

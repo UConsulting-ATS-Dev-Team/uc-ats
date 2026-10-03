@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CoffeeChatsPublic from './CoffeeChatsPublic';
@@ -38,6 +38,16 @@ const mockGets = ({ mine, slots = [slot] }) => {
     return Promise.resolve(slots);
   });
 };
+
+// The fixtures are dated slots, and the page hides ones already over. Only
+// Date is faked, so Testing Library's timers still run.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-15T12:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -241,6 +241,18 @@ describe('summarizeDelivery', () => {
     expect(fail.complaintRate.status).toBe(STATUS.FAIL);
   });
 
+  it('counts interrupted sends as not sent, so it never claims SES accepted everything', () => {
+    const { checks, totals } = summarizeDelivery({ DELIVERED: 100 }, { interrupted: 2 });
+    expect(totals.interrupted).toBe(2);
+    expect(byKey(checks).sendFailures.status).toBe(STATUS.WARN);
+    expect(byKey(checks).sendFailures.detail).toBe('2 sends interrupted before SES answered, then retried.');
+  });
+
+  it('still says SES accepted every message when nothing failed or was interrupted', () => {
+    const { checks } = summarizeDelivery({ DELIVERED: 100 });
+    expect(byKey(checks).sendFailures.detail).toBe('SES accepted every message.');
+  });
+
   it('leaves FAILED out of the rates SES judges', () => {
     const { totals } = summarizeDelivery({ DELIVERED: 100, FAILED: 5 });
     expect(totals.attempted).toBe(100);
@@ -278,9 +290,15 @@ describe('deliveryReport', () => {
     expect(where.sentAt.gte).toEqual(new Date('2026-09-19T12:00:00Z'));
     expect(client.emailSuppression.groupBy.mock.calls[0][0].where).toEqual({ resubscribedAt: null });
     // Delivery-report coverage counts only mail SES accepted, never a mailto: row.
-    for (const [{ where: w }] of client.communicationLog.count.mock.calls) {
+    for (const [{ where: w }] of client.communicationLog.count.mock.calls.slice(0, 2)) {
       expect(w.providerMessageId).toEqual({ not: null });
     }
+    // Interrupted claims never reached SES, so that count is the one without a provider id.
+    expect(client.communicationLog.count.mock.calls[2][0].where).toEqual({
+      channel: 'email',
+      status: 'SENDING',
+      sentAt: { gte: new Date('2026-09-19T12:00:00Z'), lt: new Date('2026-09-26T11:50:00Z') },
+    });
     expect(client.communicationLog.count.mock.calls[1][0].where.status).toEqual({ notIn: ['FAILED', 'OPENED'] });
     expect(report.totals.delivered).toBe(60);
     expect(report.suppressions).toEqual({ BOUNCED: 3 });

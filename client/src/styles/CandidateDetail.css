@@ -136,6 +136,12 @@
   gap: 1.5rem;
 }
 
+/* A table needs the whole row; narrow screens scroll it rather than the page. */
+.detail-section-wide {
+  grid-column: 1 / -1;
+  overflow-x: auto;
+}
+
 .detail-section {
   background-color: var(--bg-white);
   border: 1px solid var(--border-light);

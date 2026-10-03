@@ -46,6 +46,7 @@ import memberHelpRoutes from './routes/memberHelp.js';
 import adminHelpRoutes from './routes/adminHelp.js';
 import emailTemplateRoutes from './routes/emailTemplates.js';
 import emailHealthRoutes from './routes/emailHealth.js';
+import candidateCommunicationsRoutes from './routes/candidateCommunications.js';
 import sesWebhookRoutes from './routes/sesWebhooks.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import lumaIntegrationRoutes from './routes/lumaIntegration.js';
@@ -121,6 +122,7 @@ app.use('/api/admin/talent-pool', requireAuth, requireAdmin, talentPoolAdminRout
 app.use('/api/admin/help', requireAuth, requireAdmin, adminHelpRoutes);
 app.use('/api/admin/email-templates', requireAuth, requireAdmin, emailTemplateRoutes);
 app.use('/api/admin/email-health', requireAuth, requireAdmin, emailHealthRoutes);
+app.use('/api/admin/candidate-communications', requireAuth, requireAdmin, candidateCommunicationsRoutes);
 app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
 app.use('/api/admin/analytics', requireAuth, requireAdmin, analyticsAdminRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
