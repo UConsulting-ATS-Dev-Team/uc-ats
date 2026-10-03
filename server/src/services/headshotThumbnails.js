@@ -99,21 +99,28 @@ let running = 0;
 const waiting = [];
 
 async function withRenderSlot(task) {
-  if (running >= MAX_CONCURRENT_RENDERS) {
+  if (running < MAX_CONCURRENT_RENDERS) {
+    running += 1;
+  } else {
+    // The slot is handed over by the render that finishes, still counted, so a
+    // request arriving in between cannot take it as well.
     await new Promise((resolve) => waiting.push(resolve));
   }
-  running += 1;
   try {
     return await task();
   } finally {
-    running -= 1;
-    waiting.shift()?.();
+    const next = waiting.shift();
+    if (next) next();
+    else running -= 1;
   }
 }
 
+/** Tests only: renders running now, and waiting for a slot. */
+export const renderSlotsForTest = () => ({ running, waiting: waiting.length, max: MAX_CONCURRENT_RENDERS });
+
 // --- cache ---------------------------------------------------------------------
 
-const cache = new Map(); // `${fileId}:${size}` -> { body, contentType }, oldest first
+const cache = new Map(); // `${fileId}:${size}` -> thumbnail result, oldest first
 let cachedBytes = 0;
 const inFlight = new Map(); // same key -> Promise
 // Files that could not be thumbnailed. Remembered so a HEIC headshot is not
@@ -142,8 +149,14 @@ function recall(key) {
 }
 
 /**
- * The thumbnail of one file at one size: `{ body, contentType }`, or null when
- * the original cannot be thumbnailed (too large, or not an image sharp reads).
+ * One file at one size, as one of:
+ *
+ * - `{ kind: 'thumbnail', body, contentType }`
+ * - `{ kind: 'original', body }`: sharp could not read it (an iPhone HEIC, a
+ *   PDF uploaded as a photo). The original was downloaded to find that out, so
+ *   it is handed back for the caller to serve rather than fetched twice.
+ * - `null`: serve the original from Drive. The file is too large to decode, or
+ *   an earlier request already found it unreadable.
  *
  * `download(fileId)` returns a readable stream of the original. It is passed in
  * so this module never decides where files live or who may read them: the
@@ -163,10 +176,11 @@ export function getHeadshotThumbnail(fileId, size, { download }) {
   const pending = withRenderSlot(async () => {
     const original = await readStreamToBuffer(await download(fileId));
     if (!original) return null;
-    return renderThumbnail(original, size);
+    const thumbnail = await renderThumbnail(original, size);
+    return thumbnail ? { kind: 'thumbnail', ...thumbnail } : { kind: 'original', body: original };
   })
     .then((result) => {
-      if (result) remember(key, result);
+      if (result?.kind === 'thumbnail') remember(key, result);
       else if (unrenderable.size < MAX_UNRENDERABLE) unrenderable.add(key);
       return result;
     })

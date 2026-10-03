@@ -134,23 +134,29 @@ router.get('/:fileId/image', async (req, res) => {
       return res.status(400).json({ error: `size must be one of ${THUMBNAIL_SIZES.join(', ')}` });
     }
 
-    // Settled before Drive is asked anything, and before any cached thumbnail
-    // is handed out. A list page asks for every headshot again on each visit,
-    // so the grant is remembered the same way the video ranges remember it.
-    const allowed = await rememberFileAccess(req.user, fileId, () => authorizeFileAccess(fileId, req.user));
+    // Checked on every request, before Drive is asked anything and before any
+    // cached thumbnail is handed out, so a headshot removed from an application
+    // stops being served at once. The browser cache is what spares repeats.
+    const allowed = await authorizeFileAccess(fileId, req.user);
     if (!allowed) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
     if (size) {
-      const thumbnail = await getHeadshotThumbnail(fileId, size, { download: (id) => getFileStream(id) });
-      if (thumbnail) {
-        res.setHeader('Content-Type', thumbnail.contentType);
+      const result = await getHeadshotThumbnail(fileId, size, { download: (id) => getFileStream(id) });
+      if (result?.kind === 'thumbnail') {
+        res.setHeader('Content-Type', result.contentType);
         res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
-        return res.send(thumbnail.body);
+        return res.send(result.body);
       }
-      // Not an image sharp can read (an iPhone HEIC, say): serve the original,
-      // exactly as before thumbnails existed.
+      // Not an image sharp can read (an iPhone HEIC, say): the original, as
+      // before thumbnails existed. Already downloaded on the first such request.
+      if (result?.kind === 'original') {
+        const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
+        res.setHeader('Content-Type', meta?.mimeType || 'image/jpeg');
+        res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
+        return res.send(result.body);
+      }
     }
 
     const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));

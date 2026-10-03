@@ -68,6 +68,7 @@ beforeEach(() => {
   prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
   prisma.resumeUpload.findFirst.mockResolvedValue(null);
   getFileStream.mockImplementation(async () => Readable.from([original]));
+  getFileMetadata.mockImplementation(async () => ({ name: 'headshot.jpg', mimeType: 'image/jpeg' }));
 });
 
 describe('a thumbnail', () => {
@@ -115,12 +116,18 @@ describe('a thumbnail', () => {
   it('falls back to the original when the file is not something sharp can read', async () => {
     const heic = Buffer.from('....ftypheic not decodable here');
     getFileStream.mockImplementation(async () => Readable.from([heic]));
-    getFileMetadata.mockResolvedValueOnce({ name: 'IMG_0001.HEIC', mimeType: 'image/heic' });
 
-    const res = await get(`/api/files/${FILE_ID}/image?size=256`, member);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('image/heic');
-    expect(Buffer.from(await res.arrayBuffer()).equals(heic)).toBe(true);
+    getFileMetadata.mockResolvedValue({ name: 'IMG_0001.HEIC', mimeType: 'image/heic' });
+
+    for (let i = 0; i < 2; i += 1) {
+      const res = await get(`/api/files/${FILE_ID}/image?size=256`, member);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/heic');
+      expect(Buffer.from(await res.arrayBuffer()).equals(heic)).toBe(true);
+    }
+    // Once per request, never twice in one: the first request serves the copy
+    // it downloaded trying to resize it.
+    expect(getFileStream).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -152,6 +159,12 @@ describe('access', () => {
     expect((await get(`/api/files/${FILE_ID}/image?size=256`, candidate)).status).toBe(403);
   });
 
+  it('stops serving a headshot the moment no application references it', async () => {
+    await (await get(`/api/files/${FILE_ID}/image?size=256`, member)).arrayBuffer();
+    prisma.application.findFirst.mockResolvedValue(null);
+    expect((await get(`/api/files/${FILE_ID}/image?size=256`, member)).status).toBe(403);
+  });
+
   it('lets a candidate see the headshot on their own application', async () => {
     expect((await get(`/api/files/${FILE_ID}/image?size=256`, candidate)).status).toBe(200);
   });
@@ -163,7 +176,6 @@ describe('access', () => {
     expect(prisma.application.findFirst).toHaveBeenCalled();
 
     prisma.application.findFirst.mockResolvedValue(null);
-    clearDocumentStreamCache();
     const refused = await get(`/api/files/${FILE_ID}/image?size=256&access=${encodeURIComponent(access)}`);
     expect(refused.status).toBe(403);
   });

@@ -8,6 +8,7 @@ import {
   readStreamToBuffer,
   getHeadshotThumbnail,
   clearHeadshotThumbnailCache,
+  renderSlotsForTest,
 } from './headshotThumbnails.js';
 
 // A portrait "phone photo": random pixels so the JPEG is realistically large.
@@ -91,6 +92,7 @@ describe('getHeadshotThumbnail', () => {
     const first = await getHeadshotThumbnail('file-1', 256, { download });
     const second = await getHeadshotThumbnail('file-1', 256, { download });
 
+    expect(first.kind).toBe('thumbnail');
     expect(download).toHaveBeenCalledTimes(1);
     expect(download).toHaveBeenCalledWith('file-1');
     expect(second.body.equals(first.body)).toBe(true);
@@ -114,12 +116,40 @@ describe('getHeadshotThumbnail', () => {
     expect(large.body.length).toBeGreaterThan(small.body.length);
   });
 
-  it('answers null for a file it cannot read, and does not download it again', async () => {
-    const download = vi.fn(async () => Readable.from([Buffer.from('not an image')]));
+  it('hands back the original it downloaded when it cannot read it, and never downloads it again', async () => {
+    const heic = Buffer.from('not an image');
+    const download = vi.fn(async () => Readable.from([heic]));
 
-    expect(await getHeadshotThumbnail('heic', 256, { download })).toBeNull();
+    const first = await getHeadshotThumbnail('heic', 256, { download });
+    expect(first.kind).toBe('original');
+    expect(first.body.equals(heic)).toBe(true);
+    // Later requests stream the original themselves; nothing is downloaded here.
     expect(await getHeadshotThumbnail('heic', 256, { download })).toBeNull();
     expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs at most the slot limit of renders at once, even as slots free up', async () => {
+    const original = await photo(64, 80);
+    const { max } = renderSlotsForTest();
+    let active = 0;
+    let peak = 0;
+    const download = vi.fn(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+      return Readable.from([original]);
+    });
+
+    // Two waves: the second arrives while the first is releasing its slots.
+    const first = Array.from({ length: max * 2 }, (_, i) => getHeadshotThumbnail(`a${i}`, 256, { download }));
+    await new Promise((r) => setTimeout(r, 6));
+    const second = Array.from({ length: max * 2 }, (_, i) => getHeadshotThumbnail(`b${i}`, 256, { download }));
+    await Promise.all([...first, ...second]);
+
+    expect(peak).toBeLessThanOrEqual(max);
+    expect(download).toHaveBeenCalledTimes(max * 4);
+    expect(renderSlotsForTest()).toMatchObject({ running: 0, waiting: 0 });
   });
 
   it('passes a Drive failure through and tries again next time', async () => {
