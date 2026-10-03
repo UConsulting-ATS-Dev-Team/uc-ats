@@ -84,7 +84,21 @@ describe('looksLikeReadableImage', () => {
     }
   });
 
-  it('refuses HEIC and PDF, the two that turn up as headshots', () => {
+  it('knows SVG, with or without an XML declaration', () => {
+    expect(looksLikeReadableImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg">'))).toBe(true);
+    expect(looksLikeReadableImage(Buffer.from('<?xml version="1.0"?><svg>'))).toBe(true);
+    expect(looksLikeReadableImage(Buffer.from('\n  <svg viewBox="0 0 1 1">'))).toBe(true);
+  });
+
+  it('thumbnails an SVG headshot like any other', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800"><rect width="600" height="800" fill="#369"/></svg>');
+    const out = await getHeadshotThumbnail('svg', 256, { download: async () => Readable.from([svg]) });
+    const meta = await sharp(out.body).metadata();
+    expect([meta.format, meta.width]).toEqual(['webp', 256]);
+  });
+
+  it('refuses HEIC, PDF and BMP, which sharp cannot read', () => {
+    expect(looksLikeReadableImage(Buffer.from('BM6\u0000\u0000\u0000\u0000\u0000\u0000\u00006\u0000\u0000'))).toBe(false);
     expect(looksLikeReadableImage(HEIC_HEAD)).toBe(false);
     expect(looksLikeReadableImage(Buffer.from('%PDF-1.7\n%abcdef'))).toBe(false);
     expect(looksLikeReadableImage(Buffer.from('short'))).toBe(false);

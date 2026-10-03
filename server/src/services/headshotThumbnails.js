@@ -82,8 +82,9 @@ const ascii = (buf, at, text) => buf.toString('latin1', at, at + text.length) ==
 
 /**
  * Do these first bytes start a format sharp's prebuilt binaries decode?
- * JPEG, PNG, GIF, WebP, TIFF and AVIF. Notably not HEIC (iPhone photos) or PDF,
- * which are the two kinds of "headshot" that turn up in practice.
+ * JPEG, PNG, GIF, WebP, TIFF, AVIF and SVG: `sharp.format` lists what they
+ * read. Not HEIC (iPhone photos), PDF or BMP, which sharp cannot read at all,
+ * so those keep being served as the original, as they were before thumbnails.
  */
 export function looksLikeReadableImage(head) {
   if (!head || head.length < 12) return false;
@@ -93,7 +94,11 @@ export function looksLikeReadableImage(head) {
   if (ascii(head, 0, 'RIFF') && ascii(head, 8, 'WEBP')) return true;
   if (ascii(head, 0, 'II*\0') || ascii(head, 0, 'MM\0*')) return true; // TIFF
   if (ascii(head, 4, 'ftyp') && (ascii(head, 8, 'avif') || ascii(head, 8, 'avis'))) return true;
-  return false;
+  // SVG is text: an <svg> root, or the XML declaration in front of one. A
+  // non-SVG XML file gets this far and then fails to decode, which only costs
+  // that one file a second download.
+  const text = head.toString('latin1').replace(/^\uFEFF|^\xEF\xBB\xBF/, '').trimStart();
+  return text.startsWith('<svg') || text.startsWith('<?xml');
 }
 
 const SNIFF_BYTES = 12;
