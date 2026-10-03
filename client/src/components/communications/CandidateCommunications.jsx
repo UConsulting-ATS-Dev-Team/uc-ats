@@ -32,6 +32,9 @@ const CandidateCommunications = ({ candidateId }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
+  // Bumped to re-run a failed load: after a failed "Load more", offset is
+  // already where the next page starts, so setting it again would not refetch.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     setRows([]);
@@ -61,7 +64,10 @@ const CandidateCommunications = ({ candidateId }) => {
     return () => {
       cancelled = true;
     };
-  }, [candidateId, offset]);
+  }, [candidateId, offset, attempt]);
+
+  const retry = () => setAttempt((n) => n + 1);
+  const loadMore = () => (offset === rows.length ? retry() : setOffset(rows.length));
 
   const searched = matchedOn ? [...matchedOn.emails, ...matchedOn.phones] : [];
 
@@ -74,7 +80,18 @@ const CandidateCommunications = ({ candidateId }) => {
         </Typography>
       )}
 
-      {error && <Alert severity="error">{error}</Alert>}
+      {error && (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={retry} disabled={loading}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+      )}
 
       {loading && rows.length === 0 ? (
         <Stack alignItems="center" sx={{ py: 3 }}>
@@ -117,7 +134,7 @@ const CandidateCommunications = ({ candidateId }) => {
                 Showing {rows.length} of {total}
               </Typography>
               {rows.length < total && (
-                <Button size="small" disabled={loading} onClick={() => setOffset(rows.length)}>
+                <Button size="small" disabled={loading} onClick={loadMore}>
                   {loading ? 'Loading…' : 'Load more'}
                 </Button>
               )}

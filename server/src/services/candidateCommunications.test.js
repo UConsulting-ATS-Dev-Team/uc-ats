@@ -9,7 +9,6 @@ import {
 vi.mock('../prismaClient.js', () => ({
   default: {
     candidate: { findMany: vi.fn() },
-    user: { findMany: vi.fn() },
     communicationLog: { findMany: vi.fn() },
     $queryRawUnsafe: vi.fn(),
   },
@@ -31,15 +30,19 @@ const logRow = (id, address, { channel = 'email', phone = null, category = 'OTHE
   ({ id, address, phone, channel, category, status, sentAt: new Date(sentAt) });
 
 let matched;
+let users;
+const matchCalls = () => prisma.$queryRawUnsafe.mock.calls.filter(([sql]) => sql.includes('communication_logs'));
 
 beforeEach(() => {
   vi.clearAllMocks();
   matched = [];
   prisma.candidate.findMany.mockImplementation(async ({ where }) =>
     [maria, jo].filter((c) => where.id.in.includes(c.id)));
-  prisma.user.findMany.mockResolvedValue([]);
-  prisma.$queryRawUnsafe.mockImplementation(async (sql) =>
-    (sql.includes('count(*)') ? [{ total: matched.length }] : matched));
+  users = [];
+  prisma.$queryRawUnsafe.mockImplementation(async (sql) => {
+    if (sql.includes('FROM users')) return users;
+    return sql.includes('count(*)') ? [{ total: matched.length }] : matched;
+  });
   prisma.communicationLog.findMany.mockImplementation(async ({ where }) =>
     where.id.in.map((id) => ({ id, subject: `row ${id}` })));
 });
@@ -55,7 +58,7 @@ describe('phoneKey', () => {
 
 describe('listCandidateCommunications', () => {
   it('searches every address the candidate is known by, in both UCLA spellings, and their numbers', async () => {
-    prisma.user.findMany.mockResolvedValue([{ email: 'maria@ucla.edu', phoneNumber: '+13105550000' }]);
+    users = [{ email: 'maria@ucla.edu', phoneNumber: '+13105550000' }];
 
     const result = await listCandidateCommunications('cand-maria');
 
@@ -64,7 +67,10 @@ describe('listCandidateCommunications', () => {
     ]));
     expect(new Set(result.matchedOn.phones)).toEqual(new Set(['3105551234', '4245559876', '3105550000']));
 
-    const [sql, emails, phones] = prisma.$queryRawUnsafe.mock.calls[0];
+    const [userSql] = prisma.$queryRawUnsafe.mock.calls.find(([q]) => q.includes('FROM users'));
+    expect(userSql).toContain('lower(email) = ANY($1::text[])');
+
+    const [sql, emails, phones] = matchCalls()[0];
     expect(sql).toContain('lower(recipient) = ANY($1::text[])');
     expect(sql).toContain("channel = 'imessage'");
     expect(emails).toEqual(result.matchedOn.emails);
@@ -84,7 +90,7 @@ describe('listCandidateCommunications', () => {
   it('pages through the match query', async () => {
     await listCandidateCommunications('cand-maria', { limit: '10', offset: '20' });
 
-    const [sql, , , limit, offset] = prisma.$queryRawUnsafe.mock.calls[0];
+    const [sql, , , limit, offset] = matchCalls()[0];
     expect(sql).toContain('LIMIT $3 OFFSET $4');
     expect([limit, offset]).toEqual([10, 20]);
   });
@@ -105,7 +111,7 @@ describe('summarizeCandidateCommunications', () => {
 
     const summary = await summarizeCandidateCommunications(['cand-maria', 'cand-jo']);
 
-    expect(prisma.$queryRawUnsafe.mock.calls.filter(([sql]) => !sql.includes('count(*)'))).toHaveLength(1);
+    expect(matchCalls().filter(([sql]) => !sql.includes('count(*)'))).toHaveLength(1);
     expect(summary['cand-maria']).toEqual({
       total: 2,
       latest: { category: 'APPLICATION_RECEIVED', channel: 'email', status: 'SENT', sentAt: new Date('2026-10-02T00:00:00Z') },
@@ -125,6 +131,12 @@ describe('summarizeCandidateCommunications', () => {
   it('answers every requested candidate, including ones with nothing sent', async () => {
     const summary = await summarizeCandidateCommunications(['cand-jo']);
     expect(summary).toEqual({ 'cand-jo': { total: 0, latest: null } });
+  });
+
+  it('answers 400 for anything but an array of ids', async () => {
+    for (const bad of ['cand-maria', { id: 'cand-maria' }, undefined, null]) {
+      await expect(summarizeCandidateCommunications(bad)).rejects.toMatchObject({ status: 400 });
+    }
   });
 
   it('refuses more than a page of candidates', async () => {

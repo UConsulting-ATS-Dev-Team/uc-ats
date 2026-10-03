@@ -79,18 +79,20 @@ async function contactPointsFor(candidateIds, client) {
     points[c.id] = { emails, phones };
   }
 
-  // A member's number lives on their account, found by the same address.
+  // A member's number lives on their account, found by the same address,
+  // compared without case like every other user lookup.
   const allEmails = [...new Set(Object.values(points).flatMap((p) => [...p.emails]))];
   if (allEmails.length) {
-    const users = await client.user.findMany({
-      where: { email: { in: allEmails }, phoneNumber: { not: null } },
-      select: { email: true, phoneNumber: true },
-    });
+    const users = await client.$queryRawUnsafe(
+      `SELECT lower(email) AS email, "phoneNumber" FROM users
+        WHERE lower(email) = ANY($1::text[]) AND "phoneNumber" IS NOT NULL`,
+      allEmails
+    );
     for (const u of users) {
       const key = phoneKey(u.phoneNumber);
       if (!key) continue;
       for (const p of Object.values(points)) {
-        if (p.emails.has(u.email.toLowerCase())) p.phones.add(key);
+        if (p.emails.has(u.email)) p.phones.add(key);
       }
     }
   }
@@ -160,7 +162,10 @@ export async function listCandidateCommunications(candidateId, { limit = 50, off
  * latest one's kind, date and status. One query for the whole page.
  */
 export async function summarizeCandidateCommunications(candidateIds, { client = prisma } = {}) {
-  const ids = [...new Set((candidateIds || []).filter((id) => typeof id === 'string' && id))];
+  if (!Array.isArray(candidateIds)) {
+    throw Object.assign(new Error('candidateIds must be an array of ids'), { status: 400 });
+  }
+  const ids = [...new Set(candidateIds.filter((id) => typeof id === 'string' && id))];
   if (ids.length > MAX_SUMMARY_CANDIDATES) {
     throw Object.assign(new Error(`At most ${MAX_SUMMARY_CANDIDATES} candidates at once`), { status: 400 });
   }

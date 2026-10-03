@@ -438,7 +438,7 @@ function grade(rate, { warn, fail }) {
 
 const pct = (rate) => `${(rate * 100).toFixed(rate < 0.01 ? 2 : 1)}%`;
 
-export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFeedback = 0, feedbackConfigured = true } = {}) {
+export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFeedback = 0, feedbackConfigured = true, interrupted = 0 } = {}) {
   const n = (s) => counts[s] || 0;
   // FAILED never left the server, so it is not part of what SES rates us on.
   const attempted = n('SENT') + n('DELIVERED') + n('DELAYED') + n('BOUNCED') + n('COMPLAINED');
@@ -468,14 +468,24 @@ export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFee
   );
 
   const failed = n('FAILED');
-  const failTotal = attempted + failed;
-  const failRate = failTotal ? failed / failTotal : 0;
+  // A SENDING claim past STALE_SENDING_MS was cut off mid-send (see
+  // applicationReceipts.js). It may or may not have left, so it counts here
+  // rather than letting this say SES accepted everything.
+  const notSent = failed + interrupted;
+  const failTotal = attempted + notSent;
+  const failRate = failTotal ? notSent / failTotal : 0;
+  const plural = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
   checks.push(
     check(
       'sendFailures',
       'Send failures',
-      failed === 0 ? STATUS.OK : failRate >= 0.05 ? STATUS.FAIL : STATUS.WARN,
-      failed === 0 ? 'SES accepted every message.' : `${failed} message${failed === 1 ? '' : 's'} never left: SES refused them or could not be reached.`
+      notSent === 0 ? STATUS.OK : failRate >= 0.05 ? STATUS.FAIL : STATUS.WARN,
+      notSent === 0
+        ? 'SES accepted every message.'
+        : [
+            failed ? `${plural(failed, 'message')} never left: SES refused them or could not be reached.` : '',
+            interrupted ? `${plural(interrupted, 'send')} interrupted before SES answered, then retried.` : '',
+          ].filter(Boolean).join(' ')
     )
   );
 
@@ -513,6 +523,7 @@ export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFee
       bounced: n('BOUNCED'),
       complained: n('COMPLAINED'),
       failed,
+      interrupted,
       awaiting: n('SENT'),
     },
     checks,
@@ -520,6 +531,9 @@ export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFee
 }
 
 const PROBLEM_STATUSES = ['BOUNCED', 'COMPLAINED', 'FAILED', 'DELAYED'];
+// A send takes seconds; a SENDING claim older than this never finished.
+// Mirrors INTERRUPTED_AFTER_MS in the client's communicationLabels.js.
+const STALE_SENDING_MS = 10 * 60 * 1000;
 
 export async function deliveryReport({ days = 7, env = process.env, now = new Date(), client = prisma } = {}) {
   const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
@@ -529,13 +543,14 @@ export async function deliveryReport({ days = 7, env = process.env, now = new Da
   // email row too (OPENED, no provider id), and counting it would dilute a
   // webhook that has gone silent into looking healthy.
   const olderThanGrace = { channel: 'email', sentAt: { gte: since, lt: graceCutoff }, providerMessageId: { not: null } };
+  const interruptedWhere = { channel: 'email', status: 'SENDING', sentAt: { gte: since, lt: new Date(now.getTime() - STALE_SENDING_MS) } };
 
-  const [grouped, awaitingFeedback, eligibleForFeedback, problems, lastDelivered, suppressions] = await Promise.all([
+  const [grouped, awaitingFeedback, eligibleForFeedback, problems, lastDelivered, suppressions, interrupted] = await Promise.all([
     client.communicationLog.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
     client.communicationLog.count({ where: { ...olderThanGrace, status: 'SENT' } }),
     client.communicationLog.count({ where: { ...olderThanGrace, status: { notIn: ['FAILED', 'OPENED'] } } }),
     client.communicationLog.findMany({
-      where: { ...base, status: { in: PROBLEM_STATUSES } },
+      where: { OR: [{ ...base, status: { in: PROBLEM_STATUSES } }, interruptedWhere] },
       orderBy: { sentAt: 'desc' },
       take: 25,
       select: { id: true, recipient: true, recipientName: true, subject: true, status: true, error: true, category: true, sentAt: true },
@@ -546,6 +561,7 @@ export async function deliveryReport({ days = 7, env = process.env, now = new Da
       select: { sentAt: true },
     }),
     client.emailSuppression.groupBy({ by: ['reason'], where: { resubscribedAt: null }, _count: { _all: true } }),
+    client.communicationLog.count({ where: interruptedWhere }),
   ]);
 
   const counts = Object.fromEntries(grouped.map((g) => [g.status, g._count._all]));
@@ -553,6 +569,7 @@ export async function deliveryReport({ days = 7, env = process.env, now = new Da
     awaitingFeedback,
     eligibleForFeedback,
     feedbackConfigured: Boolean(env.SES_CONFIGURATION_SET && env.SES_SNS_TOPIC_ARN),
+    interrupted,
   });
 
   return {

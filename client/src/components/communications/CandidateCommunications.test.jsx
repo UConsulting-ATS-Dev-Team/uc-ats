@@ -70,6 +70,22 @@ describe('CandidateCommunications', () => {
     await waitFor(() => expect(screen.queryByText('Load more')).toBeNull());
   });
 
+  it('retries a failed "Load more" from the same place', async () => {
+    apiClient.get
+      .mockResolvedValueOnce(page([row({ id: 'r1' })], 2))
+      .mockRejectedValueOnce(new Error('Network down'))
+      .mockResolvedValueOnce({ ...page([row({ id: 'r2', subject: 'Older one' })], 2), offset: 1 });
+    render(<CandidateCommunications candidateId="cand-1" />);
+
+    fireEvent.click(await screen.findByText('Load more'));
+    expect(await screen.findByText('Network down')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Retry'));
+
+    expect(await screen.findByText('Older one')).toBeTruthy();
+    expect(apiClient.get.mock.calls.map(([url]) => url.split('offset=')[1])).toEqual(['0', '1', '1']);
+  });
+
   it('says so when nothing has been sent', async () => {
     apiClient.get.mockResolvedValue(page([]));
     render(<CandidateCommunications candidateId="cand-1" />);

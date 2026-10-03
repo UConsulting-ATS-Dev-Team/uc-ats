@@ -149,6 +149,13 @@ export default function CandidateDetail() {
           Back to Candidates
         </Link>
         <LockedRecord />
+        {/* Message history is identity, not the sealed record, so it stays
+            visible; it needs only the id from the URL. */}
+        {isAdmin && (
+          <div className="details-grid">
+            <CandidateCommunications candidateId={id} />
+          </div>
+        )}
       </div>
     );
   }

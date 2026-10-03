@@ -42,7 +42,7 @@ const CommunicationMessageDialog = ({ message, onClose }) => {
               <Alert severity={status.label === 'Interrupted' ? 'error' : 'info'}>
                 {status.label === 'Interrupted'
                   ? 'This send was interrupted before the email server answered. It is retried as a new attempt.'
-                  : 'Being sent right now. This updates with the result in a moment.'}
+                  : 'Was being sent when this list loaded. Reload the list to see how it ended.'}
               </Alert>
             )}
             {message.error && <Alert severity="error">{message.error}</Alert>}
