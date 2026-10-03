@@ -16,6 +16,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import CandidateQuestionList from '../components/interview/CandidateQuestionList';
@@ -908,7 +909,7 @@ export default function FirstRoundInterviewInterface() {
                       <div className="interviewee-avatar">
                         {application.headshotUrl ? (
                           <AuthenticatedImage
-                            src={application.headshotUrl}
+                            src={headshotSrc(application.headshotUrl, 60)}
                             alt={application.name}
                             style={{
                               width: '100%',

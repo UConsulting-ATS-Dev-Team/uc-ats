@@ -10,6 +10,8 @@ import apiClient from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import { LockedChip } from '../components/LockedRecord';
+import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
 import { coverLetterLabel } from '../utils/coverLetter';
@@ -283,17 +285,17 @@ export default function Candidates() {
                     <tr className="applications-row">
                       <td data-label="Applicant">
                         <div className="applicant-cell">
-                          {app.headshotUrl ? (
-                            <img
-                              src={app.headshotUrl}
-                              alt={app.name}
-                              className="applicant-avatar"
-                              onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextSibling.style.display = 'flex'; }}
-                            />
-                          ) : null}
-                          <div className="applicant-avatar-fallback" style={{ display: app.headshotUrl ? 'none' : 'flex' }}>
-                            {(app.name || '?').split(' ').map(n => n.charAt(0)).join('').slice(0,2).toUpperCase()}
-                          </div>
+                          {/* Fetched with the session: a bare <img> sends none, and was answered 401. */}
+                          <AuthenticatedImage
+                            src={headshotSrc(app.headshotUrl, 40)}
+                            alt={app.name}
+                            className="applicant-avatar"
+                            fallback={
+                              <div className="applicant-avatar-fallback">
+                                {(app.name || '?').split(' ').map(n => n.charAt(0)).join('').slice(0,2).toUpperCase()}
+                              </div>
+                            }
+                          />
                           <div>
                             <div className="applicant-name">
                               {app.name}{app.locked && <> <LockedChip /></>}
