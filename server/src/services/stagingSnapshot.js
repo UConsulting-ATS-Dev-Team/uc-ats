@@ -3,7 +3,7 @@ import { getGroupMemberUsers } from '../utils/groupMembers.js';
 import { readSnapshotVersion } from '../utils/snapshotVersion.js';
 // Staging is an admin console surface, so it follows the admin cycle pointer.
 import { resolveAdminCycle } from './activeCycle.js';
-import { PARTICIPATION_MAX } from './documentRubrics.js';
+import { participationPoints } from './applicationParticipation.js';
 import {
   GRADING_APPLICATION_SELECT,
   GROUP_WITH_MEMBERS_SELECT,
@@ -369,17 +369,11 @@ export async function loadStagingCandidates(client, { page, limit, cycle } = {})
     if (avgCoverLetter > 0) overallScore += avgCoverLetter;
     if (avgVideo > 0) overallScore += avgVideo;
 
-    // Add participation points (events + GTKUC meeting, capped at 3 total)
+    // Add participation points: one per event, one for a GTKUC meeting, capped
+    // at PARTICIPATION_MAX. The review team deliberation adds the same points
+    // through the same function.
     const attendedEvents = eventAttendanceMap.get(app.candidateId) || [];
-    let participationCount = attendedEvents.length;
-
-    // GTKUC meeting counts as a participation point
-    if (meetingAttendanceSet.has(app.studentId)) {
-      participationCount += 1;
-    }
-
-    // Cap at 3 points max (even if they attended all 4: info, womens, case, GTKUC)
-    const totalParticipationPoints = Math.min(participationCount, PARTICIPATION_MAX);
+    const totalParticipationPoints = participationPoints(attendedEvents.length, meetingAttendanceSet.has(app.studentId));
     overallScore += totalParticipationPoints;
 
 

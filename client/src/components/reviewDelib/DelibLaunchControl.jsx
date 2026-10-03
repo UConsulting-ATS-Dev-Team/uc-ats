@@ -19,7 +19,7 @@ import GroupsIcon from '@mui/icons-material/Groups';
 import usePolling from '../../hooks/usePolling';
 import reviewDelibApi from '../../utils/reviewDelibApi';
 import { useReviewDelibs } from '../../context/ReviewDelibContext';
-import { STEPS, THRESHOLD_OPTIONS, percent, plural } from '../../utils/reviewDelib';
+import { THRESHOLD_OPTIONS, percent, plural } from '../../utils/reviewDelib';
 
 // Review Teams' side of the deliberations: each team's status, and the button
 // that starts (or reopens) its session.
@@ -46,7 +46,7 @@ export function useDelibStatuses(enabled) {
     onData: (payload) => setByGroup(Object.fromEntries((payload?.groups || []).map((entry) => [entry.groupId, entry])))
   });
 
-  const running = sessions.map((session) => `${session.id}:${session.step}`).sort().join(',');
+  const running = sessions.map((session) => session.id).sort().join(',');
   useEffect(() => {
     if (enabled) refresh();
   }, [enabled, running]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -54,11 +54,9 @@ export function useDelibStatuses(enabled) {
   return { byGroup, refresh };
 }
 
-const stepLabel = (id) => STEPS.find((step) => step.id === id)?.label || id;
-
 export function DelibStatusChip({ status }) {
   if (status?.open) {
-    return <Chip size="small" color="warning" label={`Delib live · ${stepLabel(status.open.step)}`} />;
+    return <Chip size="small" color="warning" label="Delib live" />;
   }
   if (status?.last) {
     const date = new Date(status.last.endedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });

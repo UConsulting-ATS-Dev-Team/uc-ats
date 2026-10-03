@@ -61,8 +61,8 @@ export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, o
             <>
               <Typography variant="body1" gutterBottom>
                 {isAdmin
-                  ? 'Join to follow along or run it.'
-                  : 'Join to follow along with the admins as they go over your team’s grades.'}
+                  ? 'Join to go over the team’s grades with them, or run it.'
+                  : 'Join to go over your team’s grades with the admins.'}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {[first.groupName, first.createdByName ? `started by ${first.createdByName}` : null].filter(Boolean).join(' · ')}

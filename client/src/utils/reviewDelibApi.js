@@ -18,7 +18,6 @@ const reviewDelibApi = {
   candidate: (id, applicationId, options) => apiClient.get(`${base}/${id}/candidates/${applicationId}`, options),
   changes: (id, options) => apiClient.get(`${base}/${id}/changes`, options),
 
-  navigate: (id, body) => apiClient.post(`${base}/${id}/navigate`, body),
   threshold: (id, thresholdPct) => apiClient.post(`${base}/${id}/threshold`, { thresholdPct }),
   override: (id, type, scoreId, adminScore) => apiClient.post(`${base}/${id}/scores/${type}/${scoreId}`, { adminScore }),
   decide: (id, applicationId, decision) => apiClient.post(`${base}/${id}/decision`, { applicationId, decision }),

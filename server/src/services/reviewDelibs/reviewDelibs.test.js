@@ -1,6 +1,6 @@
 // The review team deliberation, run against an in-memory database. What matters:
 // only the team and admins can watch, one session per team (teams in parallel),
-// stale navigation is refused rather than applied twice, an override writes only
+// each viewer moves on their own with no shared place, an override writes only
 // adminScore and is logged, a decision lands where Staging's picker writes it,
 // and sealed or own records are never touched.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -15,12 +15,12 @@ import {
   getTeamView,
   joinSession,
   launchSession,
-  navigate,
   overrideScore,
   setDecision,
   setThreshold
 } from './reviewDelibs.js';
 import { loadTeamInput } from './teamData.js';
+import { loadParticipationPoints } from '../applicationParticipation.js';
 import { normalizeRow } from './teamStats.js';
 import { nudgeReviewDelib, nudgeReviewDelibsGlobal } from '../realtime.js';
 
@@ -63,7 +63,8 @@ function fakeDb() {
     { id: 'm1', role: 'MEMBER', fullName: 'Mia Member', email: 'mia@ucla.edu' },
     { id: 'm2', role: 'MEMBER', fullName: 'Max Member', email: 'max@ucla.edu' },
     { id: 'm3', role: 'MEMBER', fullName: 'Other Team', email: 'other@ucla.edu' },
-    { id: 'talent', role: 'MEMBER', fullName: 'Talent', isExternalTalent: true }
+    { id: 'talent', role: 'MEMBER', fullName: 'Talent', isExternalTalent: true },
+    { id: 'm-noname', role: 'MEMBER', fullName: null, email: 'anon@ucla.edu' }
   ];
   const groups = [
     { id: 'g1', cycleId: 'cycle-1', name: 'Team Alpha', memberOne: 'm1', memberTwo: 'm2', memberThree: null, groupMembers: [], createdAt: new Date(1) },
@@ -75,7 +76,8 @@ function fakeDb() {
     { id: 'c2', assignedGroupId: 'g1', recordsLockedAt: null, email: 'bo@ucla.edu', studentId: '222' }, // admin2's own
     { id: 'c3', assignedGroupId: 'g1', recordsLockedAt: new Date(), email: 'c3@ucla.edu', studentId: '3' },
     { id: 'c4', assignedGroupId: 'g2', recordsLockedAt: null, email: 'c4@ucla.edu', studentId: '4' },
-    { id: 'c5', assignedGroupId: 'g1', recordsLockedAt: null, email: 'c5@ucla.edu', studentId: '5' }
+    { id: 'c5', assignedGroupId: 'g1', recordsLockedAt: null, email: 'c5@ucla.edu', studentId: '5' },
+    { id: 'c6', assignedGroupId: null, recordsLockedAt: null, email: 'c6@ucla.edu', studentId: '6' } // on no team
   ];
   const app = (n, candidateId, extra = {}) => {
     const candidate = candidates.find((row) => row.id === candidateId);
@@ -88,7 +90,7 @@ function fakeDb() {
       ...extra
     };
   };
-  const applications = [app(1, 'c1'), app(2, 'c2'), app(3, 'c3'), app(4, 'c4'), app(5, 'c5')];
+  const applications = [app(1, 'c1'), app(2, 'c2'), app(3, 'c3'), app(4, 'c4'), app(5, 'c5'), app(6, 'c6')];
 
   const score = (candidateId, evaluatorId, overallScore) =>
     ({ id: uid('rs'), candidateId, evaluatorId, overallScore, adminScore: null, cycleId: 'cycle-1', scoreOne: null, scoreTwo: null, scoreThree: null });
@@ -102,10 +104,34 @@ function fakeDb() {
       score('c2', 'm1', 6), score('c2', 'm2', 12), // a split
       score('c3', 'm1', 1), score('c3', 'm2', 13), // sealed
       score('c4', 'm3', 9),
-      score('c5', 'm1', 4), score('c5', 'm2', 6), score('c5', 'admin1', 6) // only an outlier at a low threshold
+      score('c5', 'm1', 4), score('c5', 'm2', 6), score('c5', 'admin1', 6), // only an outlier at a low threshold
+      score('c6', 'admin1', 13) // on no team: counts towards rank only
     ],
     coverLetterScore: [],
-    videoScore: []
+    videoScore: [],
+    // What Application Detail shows besides grades, for the card.
+    events: [
+      { id: 'e1', cycleId: 'cycle-1', eventName: 'Info Sesh', eventStartDate: new Date('2026-09-20'), eventEndDate: null, eventLocation: 'Ackerman' },
+      { id: 'e2', cycleId: 'cycle-1', eventName: 'Case Workshop', eventStartDate: new Date('2026-09-25'), eventEndDate: null, eventLocation: 'Bunche' },
+      { id: 'e-old', cycleId: 'cycle-0', eventName: 'Last Year', eventStartDate: new Date('2025-09-20'), eventEndDate: null, eventLocation: null }
+    ],
+    eventRsvp: [{ candidateId: 'c1', eventId: 'e1' }, { candidateId: 'c1', eventId: 'e2' }],
+    eventAttendance: [
+      { candidateId: 'c1', eventId: 'e1', event: { cycleId: 'cycle-1' } },
+      { candidateId: 'c5', eventId: 'e-old', event: { cycleId: 'cycle-0' } }
+    ],
+    meetingSignup: [{
+      id: 'signup-1', studentId: '1', attended: true,
+      slot: { startTime: new Date('2026-09-22T17:00:00Z'), endTime: new Date('2026-09-22T17:30:00Z'), location: 'Kerckhoff', member: { fullName: 'Mia Member' } }
+    }],
+    referral: [
+      { id: 'r2', candidateId: 'c1', cycleId: 'cycle-1', source: 'PRE_APPLICATION', referrerName: 'Mia', relationship: 'Roommate', reason: 'Sharp and kind', referredByUserId: 'm1', createdAt: new Date(2) },
+      { id: 'r1', candidateId: 'c1', cycleId: 'cycle-1', source: 'MANUAL', referrerName: 'Pat Alum', relationship: 'Classmate', reason: null, referredByUserId: null, createdAt: new Date(1) },
+      // A member with no name is stored by address; a manual one had an address pasted in.
+      { id: 'r3', candidateId: 'c2', cycleId: 'cycle-1', source: 'PRE_APPLICATION', referrerName: 'anon@ucla.edu', relationship: 'Friend', reason: null, referredByUserId: 'm-noname', createdAt: new Date(3) },
+      { id: 'r4', candidateId: 'c2', cycleId: 'cycle-1', source: 'MANUAL', referrerName: 'pat@gmail.com', relationship: 'Alum', reason: null, referredByUserId: null, createdAt: new Date(4) },
+      { id: 'r-old', candidateId: 'c1', cycleId: 'cycle-0', source: 'MANUAL', referrerName: 'Old', relationship: 'Old', reason: null, referredByUserId: null, createdAt: new Date(0) }
+    ]
   };
 
   const find = (table, where) => tables[table].find((row) => matches(row, where)) || null;
@@ -155,7 +181,27 @@ function fakeDb() {
     applications,
     candidates,
     $transaction: async (fn) => fn(client),
-    recruitingCycle: { findFirst: vi.fn(async () => ({ id: 'cycle-1', isActive: true, isAdminActive: true })) },
+    recruitingCycle: {
+      findFirst: vi.fn(async () => ({ id: 'cycle-1', isActive: true, isAdminActive: true })),
+      findUnique: vi.fn(async () => ({ startDate: new Date('2026-09-01'), endDate: new Date('2026-12-15') }))
+    },
+    events: { findMany: vi.fn(async ({ where }) => filter('events', where)) },
+    eventRsvp: { findMany: vi.fn(async ({ where }) => filter('eventRsvp', where)) },
+    eventAttendance: { findMany: vi.fn(async ({ where }) => filter('eventAttendance', where)) },
+    // Only the fields this service asks on; the date window is the service's own test.
+    meetingSignup: {
+      findFirst: vi.fn(async ({ where }) => find('meetingSignup', { studentId: where.studentId, attended: where.attended })),
+      // Staging's bulk read, date window and all.
+      findMany: vi.fn(async ({ where }) => tables.meetingSignup.filter((row) => where.studentId.in.includes(row.studentId) &&
+        row.attended === where.attended &&
+        row.slot.startTime >= where.slot.startTime.gte &&
+        (!where.slot.startTime.lte || row.slot.startTime <= where.slot.startTime.lte)))
+    },
+    referral: {
+      findMany: vi.fn(async ({ where }) => filter('referral', where)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((row) => ({ ...row, referredBy: row.referredByUserId ? userById(row.referredByUserId) : null })))
+    },
     documentRubric: { findMany: vi.fn(async () => []) },
     groups: { findUnique: vi.fn(async ({ where }) => groupById(where.id)) },
     candidate: { findMany: vi.fn(async ({ where }) => candidates.filter((row) => matches(row, where))) },
@@ -225,7 +271,7 @@ function fakeDb() {
 
 // What teamData.js would read, built from the fake tables so overrides show up.
 function inputFrom(db) {
-  return async ({ groupId, cycleId }) => {
+  return async ({ groupId, cycleId, participation = true }) => {
     const groups = db.groupRows.filter((group) => group.cycleId === cycleId);
     const candidates = db.applications
       .filter((application) => groups.some((group) => group.id === application.candidate.assignedGroupId))
@@ -240,9 +286,26 @@ function inputFrom(db) {
         application
       }));
     const sealed = new Set(candidates.filter((entry) => entry.locked).map((entry) => entry.candidateId));
-    const rows = db.tables.resumeScore
-      .filter((row) => !sealed.has(row.candidateId))
-      .map((row) => normalizeRow({ ...row, evaluator: db.users.find((user) => user.id === row.evaluatorId) }, 'resume'));
+    const known = new Set(candidates.map((entry) => entry.candidateId));
+    const normalized = (row) => normalizeRow({ ...row, evaluator: db.users.find((user) => user.id === row.evaluatorId) }, 'resume');
+    const rows = db.tables.resumeScore.filter((row) => known.has(row.candidateId) && !sealed.has(row.candidateId)).map(normalized);
+
+    let outsideTeams = { candidates: [], rows: [] };
+    const open = candidates.filter((entry) => !entry.locked);
+    if (participation) {
+      const outside = db.applications
+        .filter((application) => application.cycleId === cycleId && !known.has(application.candidateId) && !application.candidate.recordsLockedAt)
+        .map((application) => ({ candidateId: application.candidateId, applicationId: application.id, studentId: application.studentId }));
+      const outsideIds = new Set(outside.map((entry) => entry.candidateId));
+      outsideTeams = { candidates: outside, rows: db.tables.resumeScore.filter((row) => outsideIds.has(row.candidateId)).map(normalized) };
+      const everyone = [...open, ...outside];
+      const points = await loadParticipationPoints({
+        client: db,
+        cycleId,
+        candidates: everyone.map((entry) => ({ candidateId: entry.candidateId, studentId: entry.studentId ?? entry.application.studentId }))
+      });
+      for (const entry of everyone) entry.participationPoints = points.get(entry.candidateId);
+    }
     const user = (id) => db.users.find((entry) => entry.id === id);
     return {
       groupId,
@@ -254,7 +317,9 @@ function inputFrom(db) {
       })),
       candidates,
       rows,
+      outsideTeams,
       maxByType: { resume: 13, coverLetter: 3, video: 2 },
+      participationMax: 3,
       rubrics: { resume: { rubric: { categories: [] } }, coverLetter: { rubric: { categories: [] } }, video: { rubric: { categories: [] } } }
     };
   };
@@ -359,57 +424,40 @@ describe('who can watch', () => {
   });
 });
 
-describe('navigate', () => {
-  it('needs an admin who has joined', async () => {
+describe('each viewer moves on their own', () => {
+  it('keeps no shared place in the state', async () => {
     const sessionId = await launched();
-    await joinSession({ client: db, sessionId, user: as('m1') });
-    await rejects(navigate({ client: db, sessionId, user: as('m1'), step: 'OUTLIERS' }), 403, 'FORBIDDEN');
-    await rejects(navigate({ client: db, sessionId, user: as('admin2'), step: 'OUTLIERS' }), 403, 'JOIN_REQUIRED');
+    const state = await getState({ client: db, sessionId, user: as('admin1') });
+    expect(state.session).not.toHaveProperty('step');
+    expect(state.session).not.toHaveProperty('currentApplicationId');
+    expect((await getActiveSessions({ client: db, user: as('admin1') })).sessions[0]).not.toHaveProperty('step');
   });
 
-  it('opens the first outlier and moves everyone with it', async () => {
+  it("lets a member open any candidate on the team's list, and only those", async () => {
     const sessionId = await launched();
-    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', from: { step: 'OVERVIEW', applicationId: null } });
-    expect(state.session).toMatchObject({ step: 'OUTLIERS', currentApplicationId: 'app1' });
-    expect(nudgeReviewDelib).toHaveBeenCalledWith(sessionId, expect.objectContaining({ kind: 'control' }));
+    await joinSession({ client: db, sessionId, user: as('m2') });
+    for (const applicationId of ['app1', 'app2', 'app5']) {
+      await expect(getCandidateCard({ client: db, sessionId, applicationId, user: as('m2') })).resolves.toMatchObject({ applicationId });
+    }
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app4', user: as('m2') }), 404, 'NOT_ON_TEAM_LIST');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app3', user: as('m2') }), 423, 'RECORD_LOCKED');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app6', user: as('m2') }), 404, 'NOT_ON_TEAM_LIST');
   });
 
-  it('refuses a move made from a screen someone already changed', async () => {
+  it('a member who has not joined still cannot read a card', async () => {
     const sessionId = await launched();
-    await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', from: { step: 'OVERVIEW', applicationId: null } });
-    await rejects(
-      navigate({ client: db, sessionId, user: as('admin1'), step: 'ALL', from: { step: 'OVERVIEW', applicationId: null } }),
-      409, 'STALE_NAV'
-    );
-  });
-
-  it('only opens candidates on this team, and only walkthrough ones in the walkthrough', async () => {
-    const sessionId = await launched();
-    await rejects(navigate({ client: db, sessionId, user: as('admin1'), step: 'ALL', applicationId: 'app4' }), 404, 'NOT_ON_TEAM_LIST');
-    await rejects(navigate({ client: db, sessionId, user: as('admin1'), step: 'ALL', applicationId: 'app3' }), 423, 'RECORD_LOCKED');
-    await rejects(navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', applicationId: 'app5' }), 400, 'NOT_IN_WALKTHROUGH');
-    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'ALL', applicationId: 'app5' });
-    expect(state.session.currentApplicationId).toBe('app5');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('m2') }), 403, 'NOT_JOINED');
   });
 });
 
 describe('a walkthrough candidate sealed mid-session', () => {
   const seal = (candidateId) => { db.candidates.find((row) => row.id === candidateId).recordsLockedAt = new Date(); };
 
-  it('opens Outliers on the first one still available', async () => {
+  it('stays in the walkthrough for the page to skip', async () => {
     const sessionId = await launched();
     seal('c1');
-    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS' });
-    expect(state.session.currentApplicationId).toBe('app2');
-  });
-
-  it('is skipped by Next instead of blocking it', async () => {
-    const sessionId = await launched();
-    await setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct: 0.1 }); // app1, app2, app5
-    await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS' });
-    seal('c2');
-    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', applicationId: 'app2' });
-    expect(state.session.currentApplicationId).toBe('app5');
+    const state = await setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct: 0.3 });
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2']);
   });
 
   it('drops to a name in the team view at once, cache or no cache', async () => {
@@ -431,11 +479,83 @@ describe('a walkthrough candidate sealed mid-session', () => {
 });
 
 describe('setThreshold', () => {
-  it('adds newly qualifying candidates to the end of the walkthrough', async () => {
+  const scoreOf = (candidateId, evaluatorId) =>
+    db.tables.resumeScore.find((row) => row.candidateId === candidateId && row.evaluatorId === evaluatorId);
+  const threshold = (sessionId, thresholdPct) => setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct });
+
+  it('adds newly qualifying candidates to the end of the walkthrough when lowered', async () => {
     const sessionId = await launched();
-    const state = await setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct: 0.1 });
+    const state = await threshold(sessionId, 0.1);
     expect(state.session.thresholdPct).toBe(0.1);
     expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2', 'app5']);
+  });
+
+  it('drops candidates who no longer qualify when raised, keeping the order of the rest', async () => {
+    const sessionId = await launched('g1', { thresholdPct: 0.1 }); // app1, app2, app5
+    // app2's split widens past app1's outlier, so a fresh order would put app2 first.
+    scoreOf('c2', 'm1').overallScore = 0;
+    let state = await threshold(sessionId, 0.2);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2']);
+
+    state = await threshold(sessionId, 0.6);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app2']); // 12 apart is still a split at 7.8
+    scoreOf('c2', 'm1').overallScore = 6;
+    state = await threshold(sessionId, 0.5);
+    expect(state.session.outlierApplicationIds).toEqual(['app1']);
+  });
+
+  it('keeps a candidate whose outlier the room resolved with an override', async () => {
+    const sessionId = await launched(); // app1, app2
+    await overrideScore({ client: db, sessionId, user: as('admin1'), type: 'resume', scoreId: scoreOf('c1', 'm1').id, adminScore: 10 });
+    const state = await threshold(sessionId, 0.5);
+    expect(state.session.outlierApplicationIds).toEqual(['app1']);
+  });
+
+  it('empties the walkthrough when nothing qualifies, and bumps the version for everyone', async () => {
+    const sessionId = await launched();
+    for (const row of db.tables.resumeScore) row.overallScore = 6;
+    const before = db.tables.reviewDelibSession[0].version;
+    const state = await threshold(sessionId, 0.3);
+    expect(state.session.outlierApplicationIds).toEqual([]);
+    expect(state.version).toBeGreaterThan(before);
+    expect(nudgeReviewDelib).toHaveBeenCalledWith(sessionId, expect.objectContaining({ kind: 'control' }));
+  });
+
+  // An override (or any other change) committing after the scores were read
+  // but before the lock: the version moves, so the read is done again.
+  const changeDuringRead = (change) => async (args) => {
+    const input = await inputFrom(db)(args);
+    change();
+    db.tables.reviewDelibSession[0].version += 1;
+    return input;
+  };
+
+  it('reads the scores again when the session changed while they were read', async () => {
+    const sessionId = await launched(); // app1, app2
+    vi.mocked(loadTeamInput).mockClear();
+    // 13 / 6 / 6 is an outlier at 50%; the stale read still has 4 / 6 / 6.
+    vi.mocked(loadTeamInput).mockImplementationOnce(changeDuringRead(() => { scoreOf('c5', 'm1').adminScore = 13; }));
+
+    const state = await threshold(sessionId, 0.5);
+    expect(loadTeamInput).toHaveBeenCalledTimes(2);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app5']);
+  });
+
+  it('applies its third read even if the session moved again, rather than retrying forever', async () => {
+    const sessionId = await launched();
+    vi.mocked(loadTeamInput).mockClear();
+    vi.mocked(loadTeamInput).mockImplementation(changeDuringRead(() => {}));
+
+    const state = await threshold(sessionId, 0.5);
+    expect(loadTeamInput).toHaveBeenCalledTimes(3);
+    expect(state.session).toMatchObject({ thresholdPct: 0.5, outlierApplicationIds: ['app1'] });
+  });
+
+  it('is admin only, and needs the admin to have joined', async () => {
+    const sessionId = await launched();
+    await joinSession({ client: db, sessionId, user: as('m1') });
+    await rejects(setThreshold({ client: db, sessionId, user: as('m1'), thresholdPct: 0.5 }), 403, 'FORBIDDEN');
+    await rejects(setThreshold({ client: db, sessionId, user: as('admin2'), thresholdPct: 0.5 }), 403, 'JOIN_REQUIRED');
   });
 });
 
@@ -538,6 +658,40 @@ describe('getCandidateCard', () => {
     await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app3', user: as('admin1') }), 423, 'RECORD_LOCKED');
   });
 
+  it("carries Staging's overall: documents total plus capped participation", async () => {
+    const sessionId = await launched();
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') });
+    // 2 / 10 / 10 averages 7.33; Info Sesh and Get to Know UC are 2 points.
+    expect(card).toMatchObject({ total: 7.33, participation: 2, overall: 9.3, overallMax: 13 + 3 + 2 + 3 });
+
+    // Last cycle's event does not count.
+    const other = await getCandidateCard({ client: db, sessionId, applicationId: 'app5', user: as('admin1') });
+    expect(other).toMatchObject({ total: 5.33, participation: 0, overall: 5.3 });
+  });
+
+  it("carries Staging's rank across the whole cycle, applicants on no team included", async () => {
+    const sessionId = await launched();
+    // c6 (13, no team) leads; c1 9.3; c2 and c4 (another team) tie on 9; c5 5.3. c3 is sealed.
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') });
+    expect(card).toMatchObject({ rank: 2, rankedCount: 5 });
+
+    const team = await getTeamView({ client: db, sessionId, user: as('admin1') });
+    expect(team.rankedCount).toBe(5);
+    expect(Object.fromEntries(team.candidates.map((row) => [row.applicationId, row.rank ?? 'none'])))
+      .toEqual({ app1: 2, app2: 3, app3: 'none', app5: 5 });
+  });
+
+  it('puts the overall on the team table, and nothing of it on a sealed row', async () => {
+    const sessionId = await launched();
+    const team = await getTeamView({ client: db, sessionId, user: as('admin1') });
+    expect(team.overallMax).toBe(21);
+    expect(team.candidates.find((row) => row.applicationId === 'app1')).toMatchObject({ participation: 2, overall: 9.3 });
+    expect(team.candidates.find((row) => row.applicationId === 'app3')).not.toHaveProperty('overall');
+    // The sealed candidate is never asked about.
+    const asked = db.eventAttendance.findMany.mock.calls.flatMap(([args]) => args.where.candidateId.in ?? []);
+    expect(asked).not.toContain('c3');
+  });
+
   it("shows every grader's score with the outlier marked", async () => {
     const sessionId = await launched();
     const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') });
@@ -548,13 +702,66 @@ describe('getCandidateCard', () => {
   });
 });
 
+describe('getCandidateCard: attendance and referrals', () => {
+  it("shows the cycle's events they came to, Get to Know UC, and every referral", async () => {
+    const sessionId = await launched();
+    await joinSession({ client: db, sessionId, user: as('m1') });
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('m1') });
+
+    expect(card.attendance).toEqual({
+      attended: [
+        { id: 'e1', name: 'Info Sesh', startDate: new Date('2026-09-20') },
+        { id: 'meeting-signup-1', name: 'Get to Know UC', startDate: new Date('2026-09-22T17:00:00Z'), isMeeting: true }
+      ],
+      // Get to Know UC is listed but is not one of the cycle's events.
+      attendedCount: 1,
+      eventCount: 2
+    });
+    expect(card.referrals).toEqual([
+      { id: 'r1', source: 'MANUAL', referrerName: 'Pat Alum', relationship: 'Classmate', reason: null },
+      { id: 'r2', source: 'PRE_APPLICATION', referrerName: 'Mia Member', relationship: 'Roommate', reason: 'Sharp and kind' }
+    ]);
+    // The whole room sees this: no referrer's address or account.
+    expect(JSON.stringify(card.referrals)).not.toMatch(/mia@ucla\.edu|"m1"/);
+  });
+
+  it("never puts a referrer's address on the screen", async () => {
+    const sessionId = await launched();
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app2', user: as('admin1') });
+    expect(card.referrals.map((referral) => referral.referrerName)).toEqual(['A member', 'Name not given']);
+    expect(JSON.stringify(card)).not.toContain('@');
+  });
+
+  it('is empty, not missing, for someone with neither', async () => {
+    const sessionId = await launched();
+    const card = await getCandidateCard({ client: db, sessionId, applicationId: 'app5', user: as('admin1') });
+    expect(card.attendance).toEqual({ attended: [], attendedCount: 0, eventCount: 2 });
+    expect(card.referrals).toEqual([]);
+  });
+
+  it('reads none of it for a sealed or off-team candidate', async () => {
+    const sessionId = await launched();
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app3', user: as('admin1') }), 423, 'RECORD_LOCKED');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app4', user: as('admin1') }), 404, 'NOT_ON_TEAM_LIST');
+    for (const call of [db.events.findMany, db.eventRsvp.findMany, db.eventAttendance.findMany, db.meetingSignup.findFirst, db.referral.findMany, db.recruitingCycle.findUnique]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
+
+  it('fails the card rather than showing it without them', async () => {
+    const sessionId = await launched();
+    db.referral.findMany.mockRejectedValueOnce(new Error('database down'));
+    await expect(getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') })).rejects.toThrow('database down');
+  });
+});
+
 describe('endSession', () => {
   it('any admin can end it; nothing changes afterwards, and it can still be read', async () => {
     const sessionId = await launched();
     await rejects(endSession({ client: db, sessionId, user: as('m1') }), 403, 'FORBIDDEN');
 
     const state = await endSession({ client: db, sessionId, user: as('admin2') });
-    expect(state.session).toMatchObject({ status: 'ENDED', step: 'SUMMARY' });
+    expect(state.session).toMatchObject({ status: 'ENDED' });
     expect(nudgeReviewDelibsGlobal).toHaveBeenLastCalledWith({ sessionId, status: 'ENDED' });
 
     await rejects(setDecision({ client: db, sessionId, user: as('admin1'), applicationId: 'app1', decision: 'yes' }), 409, 'SESSION_ENDED');

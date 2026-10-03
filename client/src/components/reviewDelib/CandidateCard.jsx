@@ -10,17 +10,20 @@ import {
   Paper,
   Select,
   Stack,
+  Tooltip,
   Typography
 } from '@mui/material';
 import Headshot from '../liveVote/Headshot';
+import CandidateParticipation from './CandidateParticipation';
 import DocumentPanel from './DocumentPanel';
 import ScoreCell from './ScoreCell';
 import { DECISION_COLORS, DECISION_OPTIONS, decisionLabel } from '../../utils/liveVoteSelection';
-import { DOC_LABELS, DOC_TYPES, score } from '../../utils/reviewDelib';
+import { DOC_LABELS, DOC_TYPES, ordinal, score } from '../../utils/reviewDelib';
 
-// One candidate on one screen: who they are, their documents, and every
-// grader's score on each, with the Resume Review decision. The room sees the
-// same card; only an admin running the session can change anything on it.
+// One candidate on one screen: who they are, what they came to and who referred
+// them, their documents, and every grader's score on each, with the Resume
+// Review decision. Everyone sees the same card; only an admin running the
+// session can change anything on it.
 
 export function DecisionControl({ value, canEdit, saving, onChange }) {
   if (!canEdit) {
@@ -48,6 +51,19 @@ export function DecisionControl({ value, canEdit, saving, onChange }) {
         ))}
       </Select>
     </FormControl>
+  );
+}
+
+/** Staging's Resume Review rank, against every applicant in the cycle. Absent on a card from before ranks. */
+export function RankChip({ card }) {
+  if (card.rank === undefined) return null;
+  if (card.rank === null) {
+    return card.overall ? null : <Chip size="small" variant="outlined" label="Unranked" title="Not scored yet" />;
+  }
+  return (
+    <Tooltip title={`${ordinal(card.rank)} of ${card.rankedCount} scored`}>
+      <Chip size="small" color="primary" variant="outlined" sx={{ fontWeight: 700 }} label={`Rank ${card.rank} of ${card.rankedCount}`} />
+    </Tooltip>
   );
 }
 
@@ -82,6 +98,16 @@ export default function CandidateCard({ card, error, canEdit, pending, onOverrid
             <Typography variant="h5" component="h2" sx={{ fontWeight: 700 }} data-no-track>{card.name}</Typography>
             <Typography color="text.secondary">{facts.join(' · ')}</Typography>
             <Stack direction="row" spacing={1} sx={{ mt: 0.75 }} flexWrap="wrap" useFlexGap>
+              {card.overall !== null && card.overall !== undefined && (
+                <Chip
+                  size="small"
+                  color="primary"
+                  sx={{ fontWeight: 700 }}
+                  label={`Overall ${score(card.overall)}${card.overallMax ? ` / ${score(card.overallMax)}` : ''}`}
+                  title={`Documents ${score(card.total)} + participation ${score(card.participation ?? 0)}, as Staging ranks it`}
+                />
+              )}
+              <RankChip card={card} />
               <Chip size="small" variant="outlined" label={`Documents total ${score(card.total)}`} />
               {card.outlierCount > 0 && <Chip size="small" color="error" label={`${card.outlierCount} outlier${card.outlierCount === 1 ? '' : 's'}`} />}
               {card.splitDocs > 0 && <Chip size="small" color="warning" label={`${card.splitDocs} split`} />}
@@ -95,6 +121,8 @@ export default function CandidateCard({ card, error, canEdit, pending, onOverrid
           onChange={(decision) => onDecide(card.applicationId, decision)}
         />
       </Stack>
+
+      <CandidateParticipation card={card} />
 
       <Grid container spacing={3}>
         <Grid size={{ xs: 12, md: 5 }}>

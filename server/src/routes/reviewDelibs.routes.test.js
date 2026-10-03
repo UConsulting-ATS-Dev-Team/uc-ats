@@ -12,7 +12,7 @@ vi.mock('../prismaClient.js', () => ({ default: { user: { findUnique: vi.fn() } 
 vi.mock('../services/reviewDelibs/reviewDelibs.js', () => {
   const names = [
     'endSession', 'getActiveSessions', 'getCandidateCard', 'getChanges', 'getGroupStatuses', 'getState',
-    'getTeamView', 'joinSession', 'launchSession', 'leaveSession', 'navigate', 'overrideScore', 'setDecision', 'setThreshold'
+    'getTeamView', 'joinSession', 'launchSession', 'leaveSession', 'overrideScore', 'setDecision', 'setThreshold'
   ];
   return Object.fromEntries(names.map((name) => [name, vi.fn()]));
 });
@@ -81,7 +81,6 @@ describe('review delib routes', () => {
   it.each([
     ['GET', '/groups'],
     ['POST', '/'],
-    ['POST', '/s1/navigate'],
     ['POST', '/s1/threshold'],
     ['POST', '/s1/scores/resume/score1'],
     ['POST', '/s1/decision'],
@@ -89,6 +88,10 @@ describe('review delib routes', () => {
   ])('refuses members %s %s', async (method, path) => {
     const res = await call('member', method, path, method === 'GET' ? undefined : {});
     expect(res.status).toBe(403);
+  });
+
+  it('has no shared navigation any more: each viewer moves on their own', async () => {
+    expect((await call('admin', 'POST', '/s1/navigate', { step: 'ALL' })).status).toBe(404);
   });
 
   it('launches with 201 and passes the threshold through', async () => {

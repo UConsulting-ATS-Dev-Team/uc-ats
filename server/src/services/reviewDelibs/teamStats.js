@@ -357,17 +357,70 @@ export function buildFlags({ candidates, gaps }) {
   return flags;
 }
 
+/** The documents total: each document's mean effective score, added up. Unrounded. */
+function documentsTotal(candidateId, averageOf) {
+  let total = 0;
+  for (const type of DOCUMENT_TYPES) {
+    const average = averageOf.get(docKey(candidateId, type));
+    if (average) total += average.avg;
+  }
+  return total;
+}
+
+/** Staging's overall: documents plus participation, rounded to one place as Staging rounds it. */
+const overallOf = (candidateId, averageOf, participationPoints) =>
+  Number((documentsTotal(candidateId, averageOf) + (toNumber(participationPoints) ?? 0)).toFixed(1));
+
+/**
+ * Staging's Resume Review rank (client/src/utils/stagingRank.js, over
+ * `scores.overall || null`): highest first, ties share a rank and the next one
+ * skips (1, 2, 2, 4), and an overall of 0 is unranked. Keyed by candidateId.
+ */
+export function rankOverall(overallByCandidate) {
+  const scored = [...overallByCandidate]
+    .filter(([, overall]) => Number.isFinite(overall) && overall !== 0)
+    .sort((a, b) => b[1] - a[1]);
+  const ranks = new Map();
+  scored.forEach(([candidateId, overall], index) => {
+    const previous = scored[index - 1];
+    ranks.set(candidateId, previous && previous[1] === overall ? ranks.get(previous[0]) : index + 1);
+  });
+  return { ranks, rankedCount: scored.length };
+}
+
 /**
  * Everything the overview and the candidate table need for one team.
  *
  * input:
  *   groupId, thresholdPct, maxByType
+ *   participationMax: optional, the cap on participation points; only used to
+ *                  report overallMax
  *   groups:     [{ id, name, members: [{ id, name }] }] - every team in the cycle
  *   candidates: [{ candidateId, applicationId, groupId, name, major, year,
- *                  hasDoc: { resume, coverLetter, video }, resumeDecision, locked }]
+ *                  hasDoc: { resume, coverLetter, video }, resumeDecision, locked,
+ *                  participationPoints }] - participationPoints already capped,
+ *                  0 when absent
  *   rows:       normalizeRow() output for the whole cycle, sealed candidates' already dropped
+ *   outsideTeams: optional { candidates: [{ candidateId, participationPoints }], rows } -
+ *                  open applicants on no review team, counted towards rank only
+ *
+ * A row's `overall` is Staging's: the documents total plus participation,
+ * rounded to one place the way Staging rounds it, so both show the same number.
+ * Its `rank` is Staging's Resume Review rank among every open candidate in the
+ * cycle, on any team or none. Sealed candidates are not in it: their scores are
+ * never read here. Staging ranks them too while an admin's executive unlock is
+ * open, so a rank here can then be better than the one that admin sees.
  */
-export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT, maxByType, groups, candidates, rows }) {
+export function computeTeamStats({
+  groupId,
+  thresholdPct = DEFAULT_THRESHOLD_PCT,
+  maxByType,
+  participationMax = null,
+  groups,
+  candidates,
+  rows,
+  outsideTeams = { candidates: [], rows: [] }
+}) {
   const group = groups.find((entry) => entry.id === groupId);
   const members = group?.members || [];
   const teamOf = new Map(candidates.map((candidate) => [candidate.candidateId, candidate.groupId]));
@@ -380,6 +433,16 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
 
   const averages = docAverages(annotated);
   const averageOf = new Map(averages.map((entry) => [docKey(entry.candidateId, entry.type), entry]));
+
+  // The rank is against the whole cycle. Outside-team averages stay out of
+  // `averages`, which the team comparison reads.
+  const outsideAverageOf = new Map(docAverages(outsideTeams.rows).map((entry) => [docKey(entry.candidateId, entry.type), entry]));
+  const { ranks, rankedCount } = rankOverall(new Map([
+    ...candidates.filter((candidate) => !candidate.locked)
+      .map((candidate) => [candidate.candidateId, overallOf(candidate.candidateId, averageOf, candidate.participationPoints)]),
+    ...outsideTeams.candidates
+      .map((candidate) => [candidate.candidateId, overallOf(candidate.candidateId, outsideAverageOf, candidate.participationPoints)])
+  ]));
 
   const table = team.map((candidate) => {
     // A sealed row is a name and nothing else, like redactApplication's.
@@ -394,11 +457,9 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
 
     const mine = teamRows.filter((row) => row.candidateId === candidate.candidateId);
     const perDoc = {};
-    let total = 0;
     for (const type of DOCUMENT_TYPES) {
       const docRows = mine.filter((row) => row.type === type);
       const average = averageOf.get(docKey(candidate.candidateId, type));
-      if (average) total += average.avg;
       perDoc[type] = {
         has: Boolean(candidate.hasDoc[type]),
         avg: round(average?.avg ?? null),
@@ -412,7 +473,10 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
     return {
       ...base,
       perDoc,
-      total: round(total),
+      total: round(documentsTotal(candidate.candidateId, averageOf)),
+      participation: toNumber(candidate.participationPoints) ?? 0,
+      overall: overallOf(candidate.candidateId, averageOf, candidate.participationPoints),
+      rank: ranks.get(candidate.candidateId) ?? null,
       resumeDecision: candidate.resumeDecision ?? null,
       outlierCount: mine.filter((row) => row.isOutlier).length,
       splitDocs: DOCUMENT_TYPES.filter((type) => perDoc[type].split).length,
@@ -438,9 +502,13 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
     overrides: teamRows.filter((row) => row.admin !== null).length
   };
 
+  const documentsMax = DOCUMENT_TYPES.reduce((sum, type) => sum + (maxByType[type] || 0), 0);
   return {
     thresholdPct,
     maxByType,
+    participationMax,
+    overallMax: participationMax === null ? null : documentsMax + participationMax,
+    rankedCount,
     counts,
     graders,
     comparison,
@@ -457,6 +525,27 @@ export function outlierOrder(stats) {
     .filter((row) => !row.locked && (row.outlierCount > 0 || row.splitDocs > 0))
     .sort((a, b) => b.spread - a.spread || a.name.localeCompare(b.name))
     .map((row) => row.applicationId);
+}
+
+/**
+ * The walkthrough after the threshold changes. Entries already in it stay, in
+ * their order, while they still have an outlier or split at the new threshold,
+ * on effective scores or on the graded ones (`rawFlag`): a candidate whose
+ * outlier an override resolved during the session is still one to come back
+ * to. Then come candidates newly qualifying on effective scores, in
+ * outlierOrder(). An entry sealed or moved off the team is not this function's
+ * business and stays; the walk skips it when it gets there.
+ */
+export function rethresholdWalkthrough(stats, current = []) {
+  const byApplication = new Map(stats.candidates.map((row) => [row.applicationId, row]));
+  const rawFlagged = new Set(stats.rows.filter((row) => row.rawFlag).map((row) => row.candidateId));
+  const kept = current.filter((applicationId) => {
+    const row = byApplication.get(applicationId);
+    if (!row || row.locked) return true;
+    return row.outlierCount > 0 || row.splitDocs > 0 || rawFlagged.has(row.candidateId);
+  });
+  const keptIds = new Set(kept);
+  return [...kept, ...outlierOrder(stats).filter((applicationId) => !keptIds.has(applicationId))];
 }
 
 export const docLabel = (type) => SINGULAR[type] || type;

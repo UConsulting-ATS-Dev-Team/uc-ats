@@ -20,8 +20,8 @@ vi.mock('./AuthContext', () => ({ useAuth: () => ({ user: currentUser }) }));
 vi.mock('../supabaseClient', () => ({ supabase: null }));
 vi.mock('../utils/reviewDelibApi', () => ({ default: { active: vi.fn() } }));
 
-const alpha = { id: 's1', groupId: 'g1', groupName: 'Team Alpha', step: 'OVERVIEW', createdByName: 'Ada Admin', joined: false };
-const beta = { id: 's2', groupId: 'g2', groupName: 'Team Beta', step: 'OVERVIEW', createdByName: 'Bo Admin', joined: false };
+const alpha = { id: 's1', groupId: 'g1', groupName: 'Team Alpha', createdByName: 'Ada Admin', joined: false };
+const beta = { id: 's2', groupId: 'g2', groupName: 'Team Beta', createdByName: 'Bo Admin', joined: false };
 
 beforeEach(() => {
   navigate.mockClear();

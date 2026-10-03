@@ -130,7 +130,7 @@ function BiasCell({ bias }) {
   );
 }
 
-export default function OverviewStep({ team, isHost, onOpenCandidate }) {
+export default function OverviewStep({ team, onOpenCandidate }) {
   if (!team) return null;
   const { counts, insights, flags, comparison, graders, group } = team;
   const teamName = group?.name || 'This team';
@@ -186,14 +186,14 @@ export default function OverviewStep({ team, isHost, onOpenCandidate }) {
                     direction="row"
                     spacing={1}
                     alignItems="center"
-                    component={isHost ? 'button' : 'div'}
-                    type={isHost ? 'button' : undefined}
-                    onClick={isHost ? () => onOpenCandidate(flag.applicationIds[0]) : undefined}
-                    data-track={isHost ? `delib-flag-${flag.id}` : undefined}
+                    component="button"
+                    type="button"
+                    onClick={() => onOpenCandidate(flag.applicationIds[0])}
+                    data-track={`delib-flag-${flag.id}`}
                     sx={{
                       border: 0, bgcolor: 'transparent', p: 0.5, borderRadius: 1, textAlign: 'left', font: 'inherit', color: 'inherit',
-                      cursor: isHost ? 'pointer' : 'default',
-                      '&:hover': isHost ? { bgcolor: 'action.hover' } : undefined
+                      cursor: 'pointer',
+                      '&:hover': { bgcolor: 'action.hover' }
                     }}
                   >
                     {FLAG_ICONS[flag.level]}

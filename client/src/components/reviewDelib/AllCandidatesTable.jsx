@@ -10,25 +10,31 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
+  Tooltip,
   Typography
 } from '@mui/material';
 import { DECISION_COLORS, decisionLabel } from '../../utils/liveVoteSelection';
-import { DOC_LABELS, DOC_TYPES, score } from '../../utils/reviewDelib';
+import { DOC_LABELS, DOC_TYPES, ordinal, score } from '../../utils/reviewDelib';
 
-// Step 3: every candidate the team graded. An admin running the session clicks a
-// row to open it for everyone; members see which row is open.
+// Step 3: every candidate the team graded. Clicking a row opens it below, for
+// you only.
 
+// null is "nothing to sort by" (ungraded, unranked) and goes last in both directions.
 const SORTERS = {
   name: (row) => row.name.toLowerCase(),
-  total: (row) => row.total ?? -Infinity,
-  resume: (row) => row.perDoc?.resume?.avg ?? -Infinity,
-  coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? -Infinity,
-  video: (row) => row.perDoc?.video?.avg ?? -Infinity,
+  // A row from before overall existed sorts by its documents total.
+  overall: (row) => row.overall ?? row.total ?? null,
+  // Negated so "descending" is best first, like the other columns.
+  rank: (row) => (row.rank ? -row.rank : null),
+  total: (row) => row.total ?? null,
+  resume: (row) => row.perDoc?.resume?.avg ?? null,
+  coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? null,
+  video: (row) => row.perDoc?.video?.avg ?? null,
   flags: (row) => row.outlierCount * 10 + row.splitDocs
 };
 
-export default function AllCandidatesTable({ candidates, currentApplicationId, canOpen, onOpen }) {
-  const [sort, setSort] = useState({ by: 'total', desc: true });
+export default function AllCandidatesTable({ candidates, rankedCount, currentApplicationId, canOpen, onOpen }) {
+  const [sort, setSort] = useState({ by: 'overall', desc: true });
 
   const rows = useMemo(() => {
     const key = SORTERS[sort.by];
@@ -37,6 +43,7 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
       if (Boolean(a.locked) !== Boolean(b.locked)) return a.locked ? 1 : -1;
       const x = key(a);
       const y = key(b);
+      if ((x === null) !== (y === null)) return x === null ? 1 : -1;
       if (x === y) return a.name.localeCompare(b.name);
       return (x < y ? -1 : 1) * (sort.desc ? -1 : 1);
     });
@@ -62,7 +69,9 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
             <TableRow>
               {header('name', 'Candidate', 'left')}
               {DOC_TYPES.map((type) => <Fragment key={type}>{header(type, DOC_LABELS[type])}</Fragment>)}
-              {header('total', 'Total')}
+              {header('total', 'Docs total')}
+              {header('overall', 'Overall')}
+              {header('rank', 'Rank')}
               {header('flags', 'Disagreement', 'left')}
               <TableCell>Decision</TableCell>
             </TableRow>
@@ -87,7 +96,7 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
                     {row.major && <Typography variant="caption" color="text.secondary">{row.major}</Typography>}
                   </TableCell>
                   {row.locked ? (
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={8}>
                       <Chip size="small" label="Sealed" variant="outlined" />
                     </TableCell>
                   ) : (
@@ -101,7 +110,17 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
                           </TableCell>
                         );
                       })}
-                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{score(row.total)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{score(row.total)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{score(row.overall)}</TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {row.rank ? (
+                          <Tooltip title={`${ordinal(row.rank)} of ${rankedCount} scored`} placement="left">
+                            <span>{row.rank}</span>
+                          </Tooltip>
+                        ) : (
+                          <Typography component="span" variant="body2" color="text.disabled" aria-label="Not scored yet">–</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Stack direction="row" spacing={0.5}>
                           {row.outlierCount > 0 && <Chip size="small" color="error" label={`${row.outlierCount} outlier${row.outlierCount === 1 ? '' : 's'}`} />}
@@ -125,7 +144,7 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
         </Table>
       </TableContainer>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, py: 1 }}>
-        Averages per document; * includes an admin override.{canOpen ? ' Click a candidate to open it for everyone.' : ''}
+        Averages per document; * includes an admin override. Overall is the documents total plus participation points, and Rank is its place among every applicant in the cycle, both as on Staging.{canOpen ? ' Click a candidate to open it.' : ''}
       </Typography>
     </Paper>
   );

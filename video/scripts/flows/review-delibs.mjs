@@ -7,9 +7,10 @@
 // The numbers come from the server's own teamStats.js run over the sample data,
 // so the overview, outliers and splits are exactly what the real page computes.
 //
-// Two browsers watch the session: the admin's (the harness's page) and a team
+// Two browsers are in the session: the admin's (the harness's page) and a team
 // member's, signed in with their own token. Like the real server, the stub tells
-// them apart by the token on each request.
+// them apart by the token on each request. Each moves around on their own: where
+// a viewer is lives in their page's URL, not in the session.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -24,7 +25,7 @@ import {
 } from "../../src/videos/review-delibs/sample-data.mjs";
 import { makeSampleDocs } from "../sample-docs.mjs";
 import { expect, readServerConstant } from "../server-source.mjs";
-import { computeTeamStats, normalizeRow, outlierOrder } from "../../../server/src/services/reviewDelibs/teamStats.js";
+import { computeTeamStats, normalizeRow, outlierOrder, rethresholdWalkthrough } from "../../../server/src/services/reviewDelibs/teamStats.js";
 
 // ---------- rubrics: the shipped defaults, read out of the server ----------
 const RUBRICS = readServerConstant("server/src/services/documentRubrics.js", "DEFAULT_RUBRICS", (r) => {
@@ -116,10 +117,8 @@ function state(viewer) {
       groupName: TEAM.name,
       cycleId: "cycle-fall",
       status: session.status,
-      step: session.step,
       thresholdPct: session.thresholdPct,
       outlierApplicationIds: session.outlierApplicationIds,
-      currentApplicationId: session.currentApplicationId,
       createdByName: ADMIN.fullName,
       startedAt: new Date(STARTED).toISOString(),
       endedAt: session.endedAt,
@@ -247,7 +246,7 @@ export async function api({ path, req, route, json }) {
   // Review team deliberations
   if (path === "/review-delibs/groups") {
     if (!session) return json({ groups: [] });
-    const open = session.status === "ACTIVE" ? { id: session.id, step: session.step, startedAt: new Date(STARTED).toISOString() } : null;
+    const open = session.status === "ACTIVE" ? { id: session.id, startedAt: new Date(STARTED).toISOString() } : null;
     const last = session.status === "ENDED" ? { id: session.id, endedAt: session.endedAt, changeCount: nettedChanges().changes.length } : null;
     return json({ groups: [{ groupId: TEAM.id, open, last }] });
   }
@@ -255,13 +254,13 @@ export async function api({ path, req, route, json }) {
     const live = session && session.status === "ACTIVE";
     return json({
       sessions: live
-        ? [{ id: session.id, groupId: TEAM.id, groupName: TEAM.name, step: session.step, startedAt: new Date(STARTED).toISOString(), createdByName: ADMIN.fullName, joined: viewer.id === ADMIN.id }]
+        ? [{ id: session.id, groupId: TEAM.id, groupName: TEAM.name, startedAt: new Date(STARTED).toISOString(), createdByName: ADMIN.fullName, joined: viewer.id === ADMIN.id }]
         : [],
     });
   }
   if (path === "/review-delibs" && method === "POST") {
     const { thresholdPct } = req.postDataJSON();
-    session = { id: "delib-1", status: "ACTIVE", step: "OVERVIEW", currentApplicationId: null, thresholdPct, version: 1, endedAt: null };
+    session = { id: "delib-1", status: "ACTIVE", thresholdPct, version: 1, endedAt: null };
     session.outlierApplicationIds = outlierOrder(stats(thresholdPct));
     return json({ session: { id: session.id, status: "ACTIVE", outlierCount: session.outlierApplicationIds.length } }, 201);
   }
@@ -280,20 +279,10 @@ export async function api({ path, req, route, json }) {
       changes: list.map((c) => ({ ...c, candidateName: apps.find((a) => a.id === c.applicationId).name, byName: ADMIN.fullName, at: new Date().toISOString() })),
     });
   }
-  if (action === "navigate") {
-    const { step, applicationId } = req.postDataJSON();
-    session.step = step;
-    session.currentApplicationId = step === "OUTLIERS"
-      ? applicationId ?? session.outlierApplicationIds[0] ?? null
-      : step === "ALL" ? applicationId ?? null : null;
-    bump();
-    return json(state(viewer));
-  }
   if (action === "threshold") {
     const { thresholdPct } = req.postDataJSON();
     session.thresholdPct = thresholdPct;
-    const order = outlierOrder(stats(thresholdPct));
-    session.outlierApplicationIds = [...session.outlierApplicationIds, ...order.filter((id) => !session.outlierApplicationIds.includes(id))];
+    session.outlierApplicationIds = rethresholdWalkthrough(stats(thresholdPct), session.outlierApplicationIds);
     bump();
     return json(state(viewer));
   }
@@ -323,8 +312,6 @@ export async function api({ path, req, route, json }) {
   }
   if (action === "end") {
     session.status = "ENDED";
-    session.step = "SUMMARY";
-    session.currentApplicationId = null;
     session.endedAt = new Date(STARTED + 9 * 60 * 1000 + 40 * 1000).toISOString();
     bump();
     return json(state(viewer));
@@ -442,7 +429,9 @@ export async function run({ page, base, browser, out, states, settle, pageState,
   await pageState("all-decided", { theo: tableRow("Theo Nguyen"), decision, ...barTargets() });
 
   // ---------- the member sees the same card, without controls ----------
-  await member.page.goto(`${base}/review-delib/delib-1`, { waitUntil: "networkidle" });
+  // Nobody follows the admin any more, so the member opens Theo themselves.
+  const theo = apps.find((a) => a.name === "Theo Nguyen");
+  await member.page.goto(`${base}/review-delib/delib-1?step=all&c=${theo.id}`, { waitUntil: "networkidle" });
   await member.page.getByRole("heading", { name: "Theo Nguyen" }).waitFor({ timeout: 20000 }).catch(async (e) => {
     await member.page.screenshot({ path: join(out, "member-debug.png") });
     throw e;

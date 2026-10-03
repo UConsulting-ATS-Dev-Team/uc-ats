@@ -535,12 +535,18 @@ The system follows a **recruiting cycle-based workflow**:
 **Review team deliberations:**
 - After document grading, admins meet each review team to go over its grades. An admin starts
   a session from that team's card on Review Teams; the team's members get a join prompt and
-  follow the admin through Overview → Outliers → All candidates → Summary at
-  `/review-delib/:id`. Rules live in
+  join at `/review-delib/:id`, which has Overview → Outliers → All candidates → Summary.
+  Rules live in
   [server/src/services/reviewDelibs/reviewDelibs.js](server/src/services/reviewDelibs/reviewDelibs.js);
   every number is computed in [teamStats.js](server/src/services/reviewDelibs/teamStats.js),
   which is pure and imports nothing (the tutorial capture runs it outside the server).
-- **Admins and the team's current members can watch.** Membership is re-checked on every
+- **Everyone moves around on their own.** Nobody follows the admin: each viewer, member or
+  admin, picks their own step and candidate, kept in their URL (`?step=outliers&c=<id>`) so
+  a refresh keeps their place. The server keeps no shared place and has no navigate
+  endpoint. What is shared is the data: the threshold, overrides and decisions are admin
+  actions, and their results reach everyone through the version bump. Ending the session
+  is admin-only and puts everyone on the summary.
+- **Admins and the team's current members can join.** Membership is re-checked on every
   request, so someone moved off the team mid-session loses access. Members of other teams get
   403 `NOT_ON_TEAM` and never see the prompt. A partial unique index allows one ACTIVE session
   per team; different teams run in parallel.
@@ -551,18 +557,55 @@ The system follows a **recruiting cycle-based workflow**:
   the two 10s as well, because the 2 drags their "others' mean" down. When no single grade is
   furthest (two graders, or 2 / 6 / 10) a wide gap is a **split**. It shows on everyone
   involved and counts against nobody.
-- The walkthrough order (widest disagreement first) is fixed at launch so resolving one does
-  not reshuffle it; raising the threshold appends newly qualifying candidates.
+- The walkthrough (`outlierApplicationIds`) is shared and server-owned, because it follows
+  the shared threshold. Its order (widest disagreement first) is fixed at launch so resolving
+  one does not reshuffle it. Changing the threshold (`rethresholdWalkthrough` in teamStats.js)
+  keeps the entries that still have an outlier or split at the new threshold, in their order,
+  and appends newly qualifying ones; so raising it drops candidates and lowering it adds them.
+  An entry still counts if its *graded* scores qualify, so one an override resolved stays.
+  Sealed or moved candidates are left in. The scores are read before the session lock, which
+  is held only to apply them to the list as it stands. If the session's version moved in
+  between (an override, decision or other threshold change), the read is redone, up to three
+  attempts; the third is applied regardless.
+- On the page, `walkthroughPosition` in
+  [client/src/utils/reviewDelib.js](client/src/utils/reviewDelib.js) keeps a viewer on the
+  Outliers step on a candidate the walkthrough lists: the first when they arrive or the list
+  fills, and the next one after theirs (else the last) when a threshold change drops theirs.
+  Previous, Next and the arrow keys skip sealed and moved candidates, which have no card.
+- **Overall is Staging's number**: the documents total plus participation points (one per
+  cycle event attended, one for Get to Know UC inside the cycle's dates matched on the
+  application's UID, capped at `PARTICIPATION_MAX`), rounded to one place as Staging rounds
+  it. `loadTeamInput` reads the points in bulk (`loadParticipationPoints` in
+  applicationParticipation.js, whose `participationPoints` Staging also uses); teamStats.js
+  only adds them up. Sealed candidates are not asked about.
+- **Rank is Staging's Resume Review rank**: by overall against every applicant in the cycle,
+  on any review team or none (ties share a rank and the next skips, 1, 2, 2, 4; an overall
+  of 0 is unranked), as `rankByScore` in client/src/utils/stagingRank.js does. Applicants on
+  no team are loaded only for this (`outsideTeams` from `loadTeamInput`) and kept out of the
+  table, comparison, gaps and outliers. Sealed candidates are unranked here and their scores
+  never read. Staging also leaves them unscored, except for an admin with the executive
+  unlock open, whose Staging ranks them; that admin can see a worse rank there than here.
+  Other teams' grades bump no version, so a rank can lag by the team cache (5 s) plus the
+  page's 30 s team refresh.
 - **Edits are ordinary edits.** An override writes only the score row's `adminScore` through
   `adminScorePatch`; the grader's own score stays, and clearing the override restores it. A
   decision is `saveRoundDecision` with phase `resume`, the same write as Staging's picker.
   Both are logged in `review_delib_changes` for the summary and leave an audit comment.
 - **Sealed candidates are identity only, and the exec unlock is ignored** (`sealedRowPredicate`,
   not `lockedRowPredicate`): one admin's unlock says nothing about who else is on the screen.
+- **The card also shows events attended and referrals** for the cycle, read through
+  [server/src/services/applicationParticipation.js](server/src/services/applicationParticipation.js),
+  the same lookups behind Application Detail's `/:id/events` and `/:id/referrals`. The whole
+  room sees them, so a referral carries the referrer's name, relationship and reason, never
+  an email or user id. A referrer name that is an address (a member with no full name is
+  stored by address) shows as "A member", or "Name not given" on a manual referral. They are read only after the seal and team checks pass, and never
+  cached with the team bundle. The "n of m" counts the cycle's own events; Get to Know UC
+  is listed but counted in neither number.
 - Concurrency works as in live votes. `withVersionLock`
   ([server/src/services/versionLock.js](server/src/services/versionLock.js), shared by both)
-  bumps the session's version first and holds the row lock. Clients poll the light state and
-  refetch the team view and the open card when the version moves. Supabase channels are
+  bumps the session's version first and holds the row lock. Clients poll the light state (the
+  shared settings and who is here) and refetch the team view and their own open card when the
+  version moves. Supabase channels are
   `review-delib:<id>` and `review-delibs`. A channel name can be subscribed once per page, so
   anything else that wants to know about launches reads `useReviewDelibs()` instead of joining
   `review-delibs` itself.
