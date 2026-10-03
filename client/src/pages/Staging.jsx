@@ -601,7 +601,38 @@ export default function Staging() {
     feedback: ''
   });
 
+  // Counts snapshot fetches started this mount. A fetch carries its number as
+  // `fetchSeq`, which is how a snapshot is known to have started after a save settled.
+  const stagingFetchSeqRef = useRef(0);
+
+  // Decision picks the page is ahead of the server on, by `${phase}:${candidateId}`:
+  // { value, coveredFrom }. coveredFrom is null until the save succeeds, then
+  // the first fetch number certain to include it. A snapshot read before that still
+  // has the old value, and applying it as is would undo the pick on screen.
+  const localDecisionsRef = useRef({});
+
+  // Returns the data as applied, local picks included, for the cache.
   const applyStagingData = useCallback((data) => {
+    const entries = Object.entries(localDecisionsRef.current);
+    if (entries.length > 0) {
+      const decisions = { ...(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} }) };
+      entries.forEach(([key, local]) => {
+        // A cached snapshot has no fetchSeq and cannot be newer than a save.
+        const covered = local.coveredFrom != null && data.fetchSeq != null && data.fetchSeq >= local.coveredFrom;
+        if (covered) {
+          // The server has it now, so its value stands, including a later change
+          // by another admin or a live vote.
+          delete localDecisionsRef.current[key];
+          return;
+        }
+        const separator = key.indexOf(':');
+        const phase = key.slice(0, separator);
+        const candidateId = key.slice(separator + 1);
+        decisions[phase] = { ...decisions[phase], [candidateId]: local.value };
+      });
+      data = { ...data, perRoundDecisions: decisions };
+    }
+
     const candidatesData = data.candidatesData || [];
 
     setCandidates(candidatesData);
@@ -621,6 +652,7 @@ export default function Staging() {
     }));
 
     setLoading(false);
+    return data;
   }, []);
 
   // Change token behind the snapshot currently on screen. Null until the first
@@ -647,6 +679,9 @@ export default function Staging() {
   };
 
   const fetchStagingData = useCallback(async (signal) => {
+    // Counted before the token read: a save that settled before this point is in
+    // whatever snapshot this fetch reads.
+    const fetchSeq = ++stagingFetchSeqRef.current;
     const { changeToken } = await stagingAPI.fetchVersion({ signal });
 
     // Nothing has changed since the snapshot on screen, so skip the expensive read.
@@ -668,6 +703,7 @@ export default function Staging() {
     const adminApplicationsData = snapshot.applications || [];
 
     return {
+      fetchSeq,
       candidatesData,
       // Database version of the transaction all six resources were read in.
       snapshotVersion: snapshot.snapshotVersion ?? null,
@@ -717,8 +753,7 @@ export default function Staging() {
     // Editing dialogs hold pending user input, so do not overwrite state underneath them.
     enabled: !appModalOpen && !decisionDialogOpen && !finalDecisionDialogOpen && !editScoreModalOpen,
     onData: (data) => {
-      stagingCache.set(data);
-      applyStagingData(data);
+      stagingCache.set(applyStagingData(data));
     },
     onError: (error) => {
       console.error('Staging sync failed:', error.message);
@@ -1350,7 +1385,8 @@ export default function Staging() {
   // Optimistic: the pick shows at once and is put back if the save fails. There is
   // no forced reload afterwards - the save bumps the change token, so the next poll
   // (within STAGING_POLL_INTERVAL_MS) brings the server's copy, instead of every
-  // click re-reading the whole snapshot.
+  // click re-reading the whole snapshot. Until a snapshot fetched after the save
+  // arrives, localDecisionsRef keeps polls from putting the old value back.
   const handleInlineDecisionChange = async (item, value, tabIndex = currentTab) => {
     const phase = tabToPhase(tabIndex);
     const key = `${phase}:${item.id}`;
@@ -1363,6 +1399,7 @@ export default function Staging() {
     }));
 
     setDecision(value);
+    localDecisionsRef.current[key] = { value, coveredFrom: null };
     const isLatest = () => decisionPickSeqRef.current[key] === pick;
     const save = (decisionSaveChainRef.current[key] || Promise.resolve())
       .catch(() => {})
@@ -1380,8 +1417,12 @@ export default function Staging() {
       await save;
       release();
       stagingCache.invalidate();
+      // Only a fetch started from here on is sure to have read this save. A newer
+      // pick owns the entry and its own save settles it.
+      if (isLatest()) localDecisionsRef.current[key].coveredFrom = stagingFetchSeqRef.current + 1;
     } catch (error) {
       release();
+      if (isLatest()) delete localDecisionsRef.current[key];
       console.error('Error saving inline decision:', error);
       // A newer pick owns the cell now; its own save decides what it shows.
       // Rolling back to `previous` here would overwrite it.

@@ -61,7 +61,11 @@ function candidate(id, firstName) {
 // stamped with `snapshotVersion`. The token defaults to the snapshot version so that
 // different data implies a different token, which is what these tests usually want.
 function snapshot(options) {
-  const { candidates, snapshotVersion } = options;
+  const {
+    candidates,
+    snapshotVersion,
+    perRoundDecisions = { resume: {}, coffee: {}, firstRound: {}, final: {} },
+  } = options;
   // `in`, not `??`: an explicitly null token is a case worth testing and must not be
   // quietly replaced by the default.
   const changeToken = 'changeToken' in options ? options.changeToken : String(snapshotVersion);
@@ -77,11 +81,23 @@ function snapshot(options) {
         applications: [],
         events: [],
         reviewTeams: [],
-        perRoundDecisions: { resume: {}, coffee: {}, firstRound: {}, final: {} },
+        perRoundDecisions,
       });
     }
     return Promise.resolve([]);
   };
+}
+
+// Like snapshot(), but the snapshot read waits until release() is called, so a test
+// can act while a poll is in flight.
+function gatedSnapshot(options) {
+  const respond = snapshot(options);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const get = (endpoint, ...rest) => (endpoint === '/admin/staging/snapshot'
+    ? gate.then(() => respond(endpoint, ...rest))
+    : respond(endpoint, ...rest));
+  return { get, release: () => release() };
 }
 
 // Only snapshot reads are interesting to count: token reads happen every tick.
@@ -321,6 +337,80 @@ describe('Staging table', () => {
     });
     expect(select.value).toBe('no');
     expect(screen.queryByText(/Could not save the decision/)).not.toBeInTheDocument();
+  });
+
+  // The poll reads the snapshot before the pick's save commits and delivers it after
+  // the pick, so the snapshot still has the old decision.
+  it('keeps a saved pick when a snapshot read before it lands after it', async () => {
+    apiClient.post.mockResolvedValue({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    const reads = snapshotCallCount();
+
+    const stale = gatedSnapshot({
+      candidates: [scored('c1', 'Alice', 18), scored('c2', 'Bob', 20), scored('c5', 'Eve', 10)],
+      snapshotVersion: 301,
+    });
+    apiClient.get.mockImplementation(stale.get);
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+    await waitFor(() => expect(snapshotCallCount()).toBe(reads + 1));
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    stale.release();
+
+    // Eve is only in the stale snapshot, so seeing her proves it was applied.
+    await screen.findByText('Eve Example');
+    expect(screen.getByLabelText('Decision for Alice Example').value).toBe('yes');
+  });
+
+  it('keeps a pick still saving when a snapshot read before it lands', async () => {
+    let finishSave;
+    apiClient.post.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    const reads = snapshotCallCount();
+
+    const stale = gatedSnapshot({
+      candidates: [scored('c1', 'Alice', 18), scored('c2', 'Bob', 20), scored('c5', 'Eve', 10)],
+      snapshotVersion: 301,
+    });
+    apiClient.get.mockImplementation(stale.get);
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+    await waitFor(() => expect(snapshotCallCount()).toBe(reads + 1));
+
+    fireEvent.change(screen.getByLabelText('Decision for Alice Example'), { target: { value: 'yes' } });
+    await waitFor(() => expect(finishSave).toBeDefined());
+
+    stale.release();
+
+    await screen.findByText('Eve Example');
+    expect(screen.getByLabelText('Decision for Alice Example').value).toBe('yes');
+    finishSave({ success: true });
+  });
+
+  it('shows the server value once a snapshot fetched after the save arrives', async () => {
+    apiClient.post.mockResolvedValue({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Another admin changed it after this save.
+    apiClient.get.mockImplementation(snapshot({
+      candidates: [scored('c1', 'Alice', 18), scored('c2', 'Bob', 20)],
+      snapshotVersion: 301,
+      perRoundDecisions: { resume: { c1: 'no' }, coffee: {}, firstRound: {}, final: {} },
+    }));
+    fireEvent.click(screen.getByLabelText('Refresh staging data'));
+
+    await waitFor(() => expect(screen.getByLabelText('Decision for Alice Example').value).toBe('no'));
   });
 
   const confirmProcessAll = async () => {
