@@ -1204,10 +1204,22 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
     if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;
 
-    const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
-    if (slot.endTime <= slot.startTime) {
-      return res.status(400).json({ error: 'The end time must be after the start time' });
+    // Checked before the write. Checking the saved row afterwards answered 400
+    // with the backwards session already stored.
+    if (data.startTime || data.endTime) {
+      const current = await prisma.interviewSlot.findUnique({
+        where: { id: slotId },
+        select: { startTime: true, endTime: true },
+      });
+      if (!current) return res.status(404).json({ error: 'That session no longer exists' });
+      const startTime = data.startTime ?? current.startTime;
+      const endTime = data.endTime ?? current.endTime;
+      if (endTime <= startTime) {
+        return res.status(400).json({ error: 'The end time must be after the start time' });
+      }
     }
+
+    const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
     res.json(slot);
   } catch (error) {
     fail(res, error, 'Failed to update that time slot');
