@@ -305,6 +305,10 @@ describe('caching a document', () => {
     const res = await request({ 'If-None-Match': `"${MD5}"`, Range: 'bytes=0-9' });
     expect(res.status).toBe(206);
     expect(res.headers.get('etag')).toBe('"aaaa"');
+
+    // The ranges after it carry the new version too, not the remembered one.
+    const next = await request({ Range: 'bytes=10-19' });
+    expect(next.headers.get('etag')).toBe('"aaaa"');
   });
 
   it('sends the bytes when the browser holds a different version', async () => {

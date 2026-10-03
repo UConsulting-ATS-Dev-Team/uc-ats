@@ -20,10 +20,10 @@ const metadataCache = new Map(); // fileId -> { expiresAt, value: Promise<metada
  * sends together (the start and the end of a file whose index sits last) share
  * one lookup. A rejection is never kept, and neither is a result `keep` refuses.
  */
-function remember(cache, key, compute, keep = () => true) {
+function remember(cache, key, compute, keep = () => true, { refresh = false } = {}) {
   const now = Date.now();
   const hit = cache.get(key);
-  if (hit && hit.expiresAt > now) return hit.value;
+  if (!refresh && hit && hit.expiresAt > now) return hit.value;
 
   const value = Promise.resolve().then(compute);
   if (cache.size >= MAX_ENTRIES) {
@@ -59,6 +59,14 @@ export const rememberFileAccess = (user, fileId, check) =>
 
 export const rememberFileMetadata = (fileId, fetch) =>
   remember(metadataCache, fileId, fetch);
+
+/**
+ * Read the metadata afresh and remember that answer in place of the old one.
+ * A browser asking "has it changed?" must be told by Drive's current metadata,
+ * and the ranges that follow must agree with what it was told.
+ */
+export const refreshFileMetadata = (fileId, fetch) =>
+  remember(metadataCache, fileId, fetch, undefined, { refresh: true });
 
 /** Tests only. */
 export function clearDocumentStreamCache() {

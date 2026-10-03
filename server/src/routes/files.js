@@ -4,7 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { parseByteRange } from '../services/byteRange.js';
 import { documentValidators, etagMatches } from '../services/documentValidators.js';
-import { rememberFileAccess, rememberFileMetadata } from '../services/documentStreamCache.js';
+import { rememberFileAccess, rememberFileMetadata, refreshFileMetadata } from '../services/documentStreamCache.js';
 import prisma from '../prismaClient.js';
 
 const router = express.Router();
@@ -161,10 +161,11 @@ router.get('/:fileId/pdf', async (req, res) => {
 
     // A browser asking "has it changed?" gets Drive's current answer, not the
     // remembered one: a file edited in place within the cache's five minutes
-    // would otherwise be confirmed as unchanged. Revalidation is rare (after an
-    // hour of max-age), so the extra Drive call costs little.
+    // would otherwise be confirmed as unchanged. The fresh answer replaces the
+    // remembered one, so later ranges agree with it. Revalidation is rare (after
+    // an hour of max-age), so the extra Drive call costs little.
     const meta = req.headers['if-none-match']
-      ? await getFileMetadata(fileId)
+      ? await refreshFileMetadata(fileId, () => getFileMetadata(fileId))
       : await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
