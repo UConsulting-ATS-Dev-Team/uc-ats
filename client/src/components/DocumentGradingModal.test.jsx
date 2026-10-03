@@ -172,6 +172,27 @@ describe('DocumentGradingModal', () => {
       ));
     });
 
+    // What the grading pages do: close, which clears the selected row, then open another.
+    it('drops it across a close and reopen too', async () => {
+      const answer = heldLookups();
+      const view = render(<DocumentGradingModal open onClose={vi.fn()} application={application} documentType="video" />);
+      await waitFor(() => expect(answer['cand-1']).toBeTypeOf('function'));
+      view.rerender(<DocumentGradingModal open={false} onClose={vi.fn()} application={null} documentType="video" />);
+      view.rerender(<DocumentGradingModal open onClose={vi.fn()} application={other} documentType="video" />);
+      await waitFor(() => expect(answer['cand-2']).toBeTypeOf('function'));
+
+      await act(async () => { answer['cand-1'](graded); });
+      expect(screen.queryByLabelText('Presence on camera')).not.toBeInTheDocument();
+
+      await act(async () => { answer['cand-2'](null); });
+      fireEvent.change(await screen.findByLabelText('Presence on camera'), { target: { value: '4' } });
+      fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+      await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
+        '/review-teams/video-score',
+        expect.objectContaining({ candidateId: 'cand-2', scoreOne: 4, notes: '' })
+      ));
+    });
+
     it('keeps the form waiting for its own lookup when the earlier one answers first', async () => {
       const answer = await openFirstThenSecond();
       await act(async () => { answer['cand-1'](graded); });
