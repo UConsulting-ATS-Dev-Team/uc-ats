@@ -291,6 +291,31 @@ export async function applyResubmission(client, { existing, incoming, candidateL
     return unchanged(RESUBMISSION_REASONS.ALREADY_RECORDED);
   }
 
+  // The advisory lock keeps other syncs out but not reviewers, so a score or
+  // comment could otherwise land between the evidence read below and the
+  // write. Locking the application and candidate rows closes that: inserting a
+  // row with a foreign key to either takes FOR KEY SHARE on it, which waits on
+  // FOR UPDATE until this transaction ends, and anything committed before the
+  // lock is visible to the read (READ COMMITTED). Application first, then
+  // candidate, always, so two transactions cannot take them in opposite orders.
+  //
+  // Covered, by a foreign key: the three score tables (to candidates) and
+  // comments, flagged_documents, interview_evaluations,
+  // first_round_interview_evaluations, case_assignments,
+  // client_resume_assignments, behavioral_questions, interview_slot_signups and
+  // live_vote_session_candidates (to applications).
+  //
+  // Not covered, an accepted gap: decision_messages, review_delib_changes and
+  // review_delib_sessions (currentApplicationId, and outlierApplicationIds,
+  // which is JSON) hold an application id with no foreign key, so a row written
+  // there in that instant is not waited for. Decision messages follow a
+  // decision written on the row, which the conditional update below catches,
+  // and a deliberation changes a score or decision, which the lock does cover.
+  await client.$queryRaw`SELECT id FROM applications WHERE id = ${applicationId} FOR UPDATE`;
+  if (existing.candidateId) {
+    await client.$queryRaw`SELECT id FROM candidates WHERE id = ${existing.candidateId} FOR UPDATE`;
+  }
+
   const reviewEvidence = await findReviewEvidence(client, {
     application: existing,
     candidateId: existing.candidateId,

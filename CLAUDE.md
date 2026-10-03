@@ -818,9 +818,15 @@ The system follows a **recruiting cycle-based workflow**:
   submission), when any `APPLICATION_DEPENDENTS` row points at the application (comment,
   flag, evaluation, case or client assignment, signup, live vote, decision email, review
   deliberation), or when the record is sealed. `resume_uploads` does not count: a portal
-  resume replacement is the candidate's own act. `findReviewEvidence` reads this inside
-  the locked transaction, and the write is still conditional on the review fields, since
-  the lock does not stop a reviewer. Otherwise the response is **only recorded**: the
+  resume replacement is the candidate's own act. The advisory lock does not stop a
+  reviewer, so before `findReviewEvidence` reads this, `applyResubmission` takes
+  `SELECT ... FOR UPDATE` on the application row and then the candidate row (always that
+  order). A score, comment, flag, evaluation, assignment or signup inserted meanwhile
+  needs FOR KEY SHARE on one of those rows for its foreign key, so it waits until the
+  replacement commits. `decision_messages`, `review_delib_changes` and
+  `review_delib_sessions` have no foreign key and are not held back; that gap is
+  accepted. The write is still conditional on the review fields, so a decision written
+  before the row lock is seen. Otherwise the response is **only recorded**: the
   application keeps its answers, because a reviewer must never find the resume they
   scored swapped underneath them.
 - `Application.supersededResponseIds` holds every response a row absorbed or ignored;

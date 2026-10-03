@@ -28,6 +28,7 @@ vi.mock('../prismaClient.js', () => {
     resumeUpload: { count: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
     referral: { findMany: vi.fn(), updateMany: vi.fn() },
     $executeRaw: vi.fn(),
+    $queryRaw: vi.fn(async () => []),
     $transaction: vi.fn((fn) => fn(client))
   };
   // What findReviewEvidence counts: the three score tables and every review

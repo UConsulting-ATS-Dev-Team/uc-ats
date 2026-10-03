@@ -77,7 +77,10 @@ function fakeDb(seed = {}) {
           return out;
         });
       }),
-      count: vi.fn(async ({ where } = {}) => rows(where).length),
+      count: vi.fn(async ({ where } = {}) => {
+        calls.push(`${model}.count`);
+        return rows(where).length;
+      }),
       groupBy: vi.fn(async ({ by: [column], where }) => {
         const counts = new Map();
         for (const row of rows(where)) counts.set(row[column], (counts.get(row[column]) || 0) + 1);
@@ -90,6 +93,7 @@ function fakeDb(seed = {}) {
         return row;
       }),
       updateMany: vi.fn(async ({ where, data }) => {
+        calls.push(`${model}.updateMany`);
         const matched = rows(where);
         matched.forEach((row) => applyData(row, data));
         return { count: matched.length };
@@ -110,6 +114,12 @@ function fakeDb(seed = {}) {
     $executeRaw: vi.fn(async (strings, ...values) => {
       calls.push(`lock:${values.join(',')}`);
       return 1;
+    }),
+    // Row locks: recorded as "rowlock:<table>:<id>".
+    $queryRaw: vi.fn(async (strings, ...values) => {
+      const table = strings.join('?').match(/FROM (\w+)/)[1];
+      if (/FOR UPDATE/.test(strings.join('?'))) calls.push(`rowlock:${table}:${values.join(',')}`);
+      return [{ id: values[0] }];
     })
   };
   for (const model of new Set([
@@ -295,6 +305,20 @@ describe('applyResubmission', () => {
     expect(where.AND).toEqual(expect.arrayContaining([{ status: 'SUBMITTED' }, { approved: null }]));
     expect(data.supersededResponseIds).toEqual({ push: 'resp-app-1' });
     expect(tables.application[0]).toMatchObject({ responseID: 'new-1', supersededResponseIds: ['ancient', 'resp-app-1'] });
+  });
+
+  it('locks the application row, then the candidate row, before reading review evidence or writing', async () => {
+    const { client, tables, calls } = seed();
+    await applyResubmission(client, { existing: { ...tables.application[0] }, incoming: incoming() });
+
+    const applicationLock = calls.indexOf('rowlock:applications:app-1');
+    const candidateLock = calls.indexOf('rowlock:candidates:cand-1');
+    const firstEvidenceRead = calls.findIndex((c) => c.endsWith('.count'));
+    const write = calls.indexOf('application.updateMany');
+    expect(applicationLock).toBeGreaterThanOrEqual(0);
+    expect(candidateLock).toBeGreaterThan(applicationLock);
+    expect(firstEvidenceRead).toBeGreaterThan(candidateLock);
+    expect(write).toBeGreaterThan(firstEvidenceRead);
   });
 
   it('does not replace answers a grader has scored', async () => {
