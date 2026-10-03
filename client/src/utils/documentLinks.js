@@ -22,6 +22,8 @@ const STORAGE_KEY = 'documentLinks';
 
 const inFlight = new Map();
 let memory = null;
+// Bumped on sign-out, so a request signed before it cannot put its link back.
+let epoch = 0;
 
 function readStore() {
   if (memory) return memory;
@@ -80,12 +82,20 @@ export async function getDocumentLink(linkEndpoint, { fresh = false } = {}) {
   for (const [k, entry] of Object.entries(store)) {
     if (entry.expiresAt - REUSE_MARGIN_MS <= now) delete store[k];
   }
-  if (!fresh && store[key]) return store[key].access;
-  if (!fresh && inFlight.has(key)) return inFlight.get(key);
+  if (fresh) {
+    // The stored link just failed: nobody else should be handed it while the
+    // renewal is on its way. They wait for the renewal instead.
+    delete store[key];
+    writeStore();
+  } else {
+    if (store[key]) return store[key].access;
+    if (inFlight.has(key)) return inFlight.get(key);
+  }
 
+  const startedIn = epoch;
   const request = apiClient.post(linkEndpoint).then(({ access }) => {
     const expiry = expiresAt(access);
-    if (expiry && expiry - REUSE_MARGIN_MS > Date.now()) {
+    if (startedIn === epoch && expiry && expiry - REUSE_MARGIN_MS > Date.now()) {
       readStore()[key] = { access, expiresAt: expiry };
       writeStore();
     }
@@ -101,6 +111,7 @@ export async function getDocumentLink(linkEndpoint, { fresh = false } = {}) {
 
 /** Forget every link. Called on sign-out. */
 export function clearDocumentLinks() {
+  epoch += 1;
   memory = {};
   inFlight.clear();
   try {

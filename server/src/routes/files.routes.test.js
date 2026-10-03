@@ -298,6 +298,15 @@ describe('caching a document', () => {
     expect(getFileStream).not.toHaveBeenCalled();
   });
 
+  it('asks Drive afresh before confirming a copy, rather than trusting remembered metadata', async () => {
+    await request({ Range: 'bytes=0-9' });
+    // Edited in place: Drive now reports a new checksum.
+    getFileMetadata.mockResolvedValue({ name: 'video.mov', mimeType: 'video/quicktime', size: '100', md5Checksum: 'aaaa' });
+    const res = await request({ 'If-None-Match': `"${MD5}"`, Range: 'bytes=0-9' });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('etag')).toBe('"aaaa"');
+  });
+
   it('sends the bytes when the browser holds a different version', async () => {
     const res = await request({ 'If-None-Match': '"something-else"', Range: 'bytes=0-9' });
     expect(res.status).toBe(206);

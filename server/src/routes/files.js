@@ -159,7 +159,13 @@ router.get('/:fileId/pdf', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
+    // A browser asking "has it changed?" gets Drive's current answer, not the
+    // remembered one: a file edited in place within the cache's five minutes
+    // would otherwise be confirmed as unchanged. Revalidation is rare (after an
+    // hour of max-age), so the extra Drive call costs little.
+    const meta = req.headers['if-none-match']
+      ? await getFileMetadata(fileId)
+      : await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
     // Videos (stored behind this route too) arrive as a series of ranges; see

@@ -93,4 +93,29 @@ describe('getDocumentLink', () => {
     expect(sessionStorage.getItem('documentLinks')).toBeNull();
     expect(await getDocumentLink('/files/vid/link')).toBe(linkToken('two'));
   });
+
+  it('does not let a link signed before sign-out back into storage', async () => {
+    let finish;
+    apiClient.post.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce({ access: linkToken('next') });
+    const pending = getDocumentLink('/files/vid/link');
+    clearDocumentLinks();
+    finish({ access: linkToken('old') });
+    await pending;
+    expect(sessionStorage.getItem('documentLinks') || '').not.toContain(linkToken('old'));
+    expect(await getDocumentLink('/files/vid/link')).toBe(linkToken('next'));
+  });
+
+  it('makes others wait for a renewal rather than hand out the link that failed', async () => {
+    let finish;
+    apiClient.post.mockResolvedValueOnce({ access: linkToken('failed') })
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await getDocumentLink('/files/vid/link');
+    const renewal = getDocumentLink('/files/vid/link', { fresh: true });
+    const other = getDocumentLink('/files/vid/link');
+    finish({ access: linkToken('renewed') });
+    expect(await renewal).toBe(linkToken('renewed'));
+    expect(await other).toBe(linkToken('renewed'));
+    expect(apiClient.post).toHaveBeenCalledTimes(2);
+  });
 });
