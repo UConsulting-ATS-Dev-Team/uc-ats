@@ -611,9 +611,10 @@ export default function Staging() {
   // has the old value, and applying it as is would undo the pick on screen.
   const localDecisionsRef = useRef({});
 
-  // Returns the data as applied, local picks included, for the cache.
+  // Returns whether a local pick was laid over the snapshot.
   const applyStagingData = useCallback((data) => {
     const entries = Object.entries(localDecisionsRef.current);
+    let overlaid = false;
     if (entries.length > 0) {
       const decisions = { ...(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} }) };
       entries.forEach(([key, local]) => {
@@ -629,6 +630,7 @@ export default function Staging() {
         const phase = key.slice(0, separator);
         const candidateId = key.slice(separator + 1);
         decisions[phase] = { ...decisions[phase], [candidateId]: local.value };
+        overlaid = true;
       });
       data = { ...data, perRoundDecisions: decisions };
     }
@@ -652,7 +654,7 @@ export default function Staging() {
     }));
 
     setLoading(false);
-    return data;
+    return overlaid;
   }, []);
 
   // Change token behind the snapshot currently on screen. Null until the first
@@ -753,7 +755,11 @@ export default function Staging() {
     // Editing dialogs hold pending user input, so do not overwrite state underneath them.
     enabled: !appModalOpen && !decisionDialogOpen && !finalDecisionDialogOpen && !editScoreModalOpen,
     onData: (data) => {
-      stagingCache.set(applyStagingData(data));
+      // A snapshot with picks laid over it is not cached either way. As read it has
+      // the old value, and with the pick it shows a save that can still fail after
+      // the page is left, where no rollback would reach the cached copy.
+      if (applyStagingData(data)) stagingCache.invalidate();
+      else stagingCache.set(data);
     },
     onError: (error) => {
       console.error('Staging sync failed:', error.message);

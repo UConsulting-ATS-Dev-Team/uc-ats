@@ -389,6 +389,9 @@ describe('Staging table', () => {
 
     await screen.findByText('Eve Example');
     expect(screen.getByLabelText('Decision for Alice Example').value).toBe('yes');
+    // Not cached: the save can still fail after the page is left, and a remount
+    // painting from the cache would show a decision that was never saved.
+    expect(stagingCache.get()).toBeNull();
     finishSave({ success: true });
   });
 
