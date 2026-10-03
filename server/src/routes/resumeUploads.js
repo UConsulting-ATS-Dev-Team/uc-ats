@@ -11,6 +11,7 @@ import { putResume, getResume, removeResume } from '../services/resumeStorage.js
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { isOwnedBy, isStaff } from '../utils/applicationOwnership.js';
+import { isApplicationLocked, sendRecordLocked } from '../utils/lockedRecords.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -71,11 +72,21 @@ export function resumeDeadlineAt(cycle) {
   return parsed;
 }
 
+// An admin replacing someone else's resume. Admins could already repoint
+// `resumeUrl` by hand in Edit Application; this is the same power with a file
+// instead of a link nobody knew how to produce. Members cannot.
+const isAdminReplacing = (application, user) =>
+  user?.role === 'ADMIN' && !isOwnedBy(application, user);
+
 // Whether THIS user may replace THIS application's resume right now, and why not
 // when they may not. The reason is candidate-facing copy.
 export function replacementWindow(application, user, now = new Date()) {
   const deadline = resumeDeadlineAt(application.cycle);
   const base = { deadline, deadlineLabel: application.cycle?.resumeDeadline || null };
+
+  // The deadline holds applicants to a date. An admin fixing a broken or wrong
+  // file is not bound by it, and the replaced version is kept either way.
+  if (isAdminReplacing(application, user)) return { ...base, canReplace: true, reason: null };
 
   if (!isOwnedBy(application, user)) {
     return { ...base, canReplace: false, reason: 'Only the applicant can replace this resume.' };
@@ -123,13 +134,19 @@ function buildVersions(application, rows) {
     ];
   }
 
+  // Who uploaded a stored file is decided by ownership, not by role: an applicant
+  // who has since become a member still uploaded their own resume. A stored file
+  // with no uploader on record predates admin uploads, so it was the applicant's.
+  const byApplicant = (row) => !row.uploadedBy || isOwnedBy(application, row.uploadedBy);
+
   return rows.map((row) => ({
     id: row.id,
     url: row.sourceUrl,
     originalName: row.originalName,
     sizeBytes: row.sizeBytes,
     uploadedAt: row.uploadedAt,
-    replacedByCandidate: Boolean(row.storagePath),
+    replacedByCandidate: Boolean(row.storagePath) && byApplicant(row),
+    uploadedByStaff: Boolean(row.storagePath) && !byApplicant(row),
     isCurrent: row.supersededAt === null,
   }));
 }
@@ -138,6 +155,7 @@ const versionRows = (applicationId) =>
   prisma.resumeUpload.findMany({
     where: { applicationId },
     orderBy: { uploadedAt: 'asc' },
+    include: { uploadedBy: { select: { email: true, studentId: true } } },
   });
 
 async function loadApplication(res, applicationId, user) {
@@ -185,8 +203,8 @@ router.get('/applications/:applicationId', requireAuth, async (req, res) => {
 });
 
 // POST /api/resume-uploads/applications/:applicationId
-// Replace the resume on an application with a freshly uploaded PDF. Candidates
-// only: staff replacing an applicant's documents is deliberately not a thing.
+// Replace the resume on an application with a freshly uploaded PDF. The
+// applicant, inside their window, or an admin at any time. Members cannot.
 router.post(
   '/applications/:applicationId',
   requireAuth,
@@ -202,8 +220,13 @@ router.post(
 
       // Ownership is checked before the window so staff get "not yours", not a
       // deadline message about someone else's application.
-      if (!isOwnedBy(application, req.user)) {
+      const byAdmin = isAdminReplacing(application, req.user);
+      if (!byAdmin && !isOwnedBy(application, req.user)) {
         return res.status(403).json({ error: 'Only the applicant can replace this resume.' });
+      }
+      // A sealed application is not changed without an executive unlock.
+      if (byAdmin && (await isApplicationLocked(req, application.id))) {
+        return sendRecordLocked(res);
       }
 
       const window = replacementWindow(application, req.user);
@@ -269,7 +292,7 @@ router.post(
 
       const rows = await versionRows(application.id);
       res.status(201).json({
-        message: 'Your resume has been updated.',
+        message: byAdmin ? 'Resume replaced.' : 'Your resume has been updated.',
         currentResumeUrl: servedUrl,
         versions: buildVersions({ ...application, resumeUrl: servedUrl }, rows),
       });

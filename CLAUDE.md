@@ -228,7 +228,10 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/applications` - Application CRUD and review
 - `/api/review-teams` - Review team management and scoring (ADMIN/MEMBER only)
 - `/api/files` - File upload/download via Google Drive
-- `/api/resume-uploads` - Candidate self-service resume replacement + version history
+- `/api/resume-uploads` - Resume replacement by PDF upload + version history. The
+  applicant, inside the cycle's resume deadline, or an admin at any time from Edit
+  Application (members cannot; a sealed application needs an exec unlock). Files go to
+  the private Supabase `resumes` bucket, not Drive
 - `/api/interview-resources` - Interview prep materials
 - `/api/exec-access` - Executive-committee unlock for sealed records, manual seal/unseal,
   password rotation and the access log

@@ -25,6 +25,13 @@ vi.mock('../services/resumeStorage.js', () => ({
   removeResume: vi.fn(async (key) => { stored.delete(key); }),
 }));
 
+// The seal has its own tests; here it is only switched on and off.
+const sealed = { value: false };
+vi.mock('../utils/lockedRecords.js', () => ({
+  isApplicationLocked: vi.fn(async () => sealed.value),
+  sendRecordLocked: (res) => res.status(423).json({ error: 'sealed', code: 'RECORD_LOCKED' }),
+}));
+
 vi.mock('../prismaClient.js', () => ({
   default: {
     user: { findUnique: vi.fn() },
@@ -56,6 +63,15 @@ const memberUser = {
   isActive: true,
   email: 'member@example.com',
   fullName: 'Member One',
+  studentId: null,
+};
+
+const adminUser = {
+  id: 'admin-1',
+  role: 'ADMIN',
+  isActive: true,
+  email: 'admin@example.com',
+  fullName: 'Admin One',
   studentId: null,
 };
 
@@ -111,8 +127,9 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sealed.value = false;
   prisma.user.findUnique.mockImplementation(({ where: { id } }) =>
-    [candidateUser, otherCandidate, memberUser].find((u) => u.id === id) || null
+    [candidateUser, otherCandidate, memberUser, adminUser].find((u) => u.id === id) || null
   );
   prisma.application.findUnique.mockResolvedValue(application());
   prisma.resumeUpload.findMany.mockResolvedValue([]);
@@ -235,6 +252,17 @@ describe('GET /api/resume-uploads/applications/:applicationId', () => {
     expect(body.reason).toMatch(/only the applicant/i);
   });
 
+  it('tells an admin they may replace it, deadline or not', async () => {
+    prisma.application.findUnique.mockResolvedValue(
+      application({ cycle: { id: 'c', name: 'Fall 2026', isActive: true, resumeDeadline: passedDeadline } })
+    );
+    const res = await request('/api/resume-uploads/applications/app-1', { user: adminUser });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.canReplace).toBe(true);
+  });
+
   it('404s on an application that does not exist', async () => {
     prisma.application.findUnique.mockResolvedValue(null);
     const res = await request('/api/resume-uploads/applications/nope', { user: candidateUser });
@@ -307,6 +335,83 @@ describe('POST /api/resume-uploads/applications/:applicationId', () => {
 
     expect([other.status, staff.status]).toEqual([403, 403]);
     expect(prisma.application.update).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin replace an applicant\'s resume, even past the deadline', async () => {
+    prisma.application.findUnique.mockResolvedValue(
+      application({ cycle: { id: 'c', name: 'Fall 2026', isActive: true, resumeDeadline: passedDeadline } })
+    );
+
+    const res = await upload('/api/resume-uploads/applications/app-1', { user: adminUser });
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    const created = prisma.resumeUpload.create.mock.calls[1][0].data;
+    expect(created.uploadedById).toBe(adminUser.id);
+    expect(prisma.application.update).toHaveBeenCalledWith({
+      where: { id: 'app-1' },
+      data: { resumeUrl: created.sourceUrl, blindResumeUrl: null },
+    });
+    expect(body.currentResumeUrl).toBe(created.sourceUrl);
+  });
+
+  it('refuses an admin upload to a sealed application', async () => {
+    sealed.value = true;
+
+    const res = await upload('/api/resume-uploads/applications/app-1', { user: adminUser });
+
+    expect(res.status).toBe(423);
+    expect(prisma.application.update).not.toHaveBeenCalled();
+  });
+
+  it('does not ask about the seal when the applicant uploads their own', async () => {
+    sealed.value = true;
+    const res = await upload('/api/resume-uploads/applications/app-1', { user: candidateUser });
+    expect(res.status).toBe(201);
+  });
+
+  it('marks a version an admin uploaded', async () => {
+    prisma.resumeUpload.findMany.mockResolvedValue([
+      {
+        id: 'v2',
+        applicationId: 'app-1',
+        storagePath: 'resumes/app-1/v2.pdf',
+        sourceUrl: '/api/resume-uploads/v2/file',
+        uploadedAt: new Date('2026-09-12T12:00:00Z'),
+        supersededAt: null,
+        originalName: 'fixed.pdf',
+        sizeBytes: 10,
+        uploadedBy: { email: adminUser.email, studentId: null },
+      },
+    ]);
+
+    const res = await request('/api/resume-uploads/applications/app-1', { user: candidateUser });
+    expect((await res.json()).versions[0]).toMatchObject({
+      uploadedByStaff: true,
+      replacedByCandidate: false,
+    });
+  });
+
+  it('still counts an upload as the applicant\'s own after they become a member', async () => {
+    prisma.resumeUpload.findMany.mockResolvedValue([
+      {
+        id: 'v2',
+        applicationId: 'app-1',
+        storagePath: 'resumes/app-1/v2.pdf',
+        sourceUrl: '/api/resume-uploads/v2/file',
+        uploadedAt: new Date('2026-09-12T12:00:00Z'),
+        supersededAt: null,
+        originalName: 'mine.pdf',
+        sizeBytes: 10,
+        uploadedBy: { email: candidateUser.email, studentId: candidateUser.studentId },
+      },
+    ]);
+
+    const res = await request('/api/resume-uploads/applications/app-1', { user: candidateUser });
+    expect((await res.json()).versions[0]).toMatchObject({
+      uploadedByStaff: false,
+      replacedByCandidate: true,
+    });
   });
 
   it('refuses an upload after the deadline has passed', async () => {

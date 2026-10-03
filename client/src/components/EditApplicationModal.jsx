@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
+
+// The server's limit (MAX_RESUME_BYTES), checked here so an oversized file is
+// refused when chosen rather than after it has been sent.
+const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 
 export default function EditApplicationModal({ isOpen, onClose, onSuccess, application }) {
   const [formData, setFormData] = useState({
@@ -29,9 +33,21 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [resumeError, setResumeError] = useState('');
+  const [resumeNotice, setResumeNotice] = useState('');
+  // An upload is saved the moment it finishes, so closing without pressing
+  // Update still has to refresh the list behind the modal.
+  const [resumeReplaced, setResumeReplaced] = useState(false);
+  const resumeInputRef = useRef(null);
 
   useEffect(() => {
     if (application && isOpen) {
+      setResumeFile(null);
+      setResumeError('');
+      setResumeNotice('');
+      setResumeReplaced(false);
       setFormData({
         firstName: application.firstName || '',
         lastName: application.lastName || '',
@@ -66,8 +82,57 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
     }));
   };
 
+  const handleResumeSelect = (e) => {
+    const selected = e.target.files?.[0] || null;
+    setResumeError('');
+    setResumeNotice('');
+    if (selected && selected.type !== 'application/pdf') {
+      setResumeFile(null);
+      setResumeError('The resume must be a PDF.');
+      return;
+    }
+    if (selected && selected.size > MAX_RESUME_BYTES) {
+      setResumeFile(null);
+      setResumeError('That file is larger than 10 MB.');
+      return;
+    }
+    setResumeFile(selected);
+  };
+
+  const handleResumeUpload = async () => {
+    // An Update in flight carries the old link; uploading under it would be undone.
+    if (!resumeFile || loading) return;
+    setResumeUploading(true);
+    setResumeError('');
+    setResumeNotice('');
+    try {
+      const body = new FormData();
+      body.append('resume', resumeFile);
+      const result = await apiClient.post(`/resume-uploads/applications/${application.id}`, body);
+      // The server also drops the blind resume: it was made from the old file.
+      setFormData(prev => ({ ...prev, resumeUrl: result.currentResumeUrl, blindResumeUrl: '' }));
+      setResumeReplaced(true);
+      setResumeNotice('Resume replaced. The previous version is kept in its history.');
+      setResumeFile(null);
+      if (resumeInputRef.current) resumeInputRef.current.value = '';
+    } catch (err) {
+      setResumeError(err.message || 'Failed to upload the resume');
+    } finally {
+      setResumeUploading(false);
+    }
+  };
+
+  // Closing and Update both wait for an upload in flight. Update would send the
+  // old link and put it back over the new file; closing would skip the refresh.
+  const handleClose = () => {
+    if (resumeUploading) return;
+    if (resumeReplaced) onSuccess();
+    onClose();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (resumeUploading) return;
     setLoading(true);
     setError(null);
 
@@ -134,7 +199,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
       <div className="modal-content">
         <div className="modal-header">
           <h2>Edit Application</h2>
-          <button className="close-btn" onClick={onClose}>
+          <button className="close-btn" onClick={handleClose} disabled={resumeUploading}>
             <XMarkIcon className="close-icon" />
           </button>
         </div>
@@ -360,7 +425,33 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
           <div className="form-section">
             <h3>Application Materials</h3>
             <div className="form-group">
-              <label htmlFor="resumeUrl">Resume URL *</label>
+              <label htmlFor="resumeFile">Resume *</label>
+              <div className="resume-upload-row">
+                <input
+                  ref={resumeInputRef}
+                  type="file"
+                  id="resumeFile"
+                  accept="application/pdf,.pdf"
+                  onChange={handleResumeSelect}
+                  disabled={resumeUploading}
+                />
+                <button
+                  type="button"
+                  className="submit-btn"
+                  onClick={handleResumeUpload}
+                  disabled={!resumeFile || resumeUploading || loading}
+                  data-track="Upload replacement resume"
+                >
+                  {resumeUploading ? 'Uploading...' : 'Upload PDF'}
+                </button>
+              </div>
+              <p className="field-hint">
+                Choose a PDF (10 MB at most) and press Upload PDF. It replaces the resume right away;
+                the old one stays in the version history.
+              </p>
+              {resumeError && <p className="field-error">{resumeError}</p>}
+              {resumeNotice && <p className="field-success">{resumeNotice}</p>}
+              <label htmlFor="resumeUrl" className="field-sublabel">Or paste a link</label>
               <input
                 type="text"
                 id="resumeUrl"
@@ -429,10 +520,10 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
           </div>
 
           <div className="form-actions">
-            <button type="button" onClick={onClose} className="cancel-btn">
+            <button type="button" onClick={handleClose} disabled={resumeUploading} className="cancel-btn">
               Cancel
             </button>
-            <button type="submit" disabled={loading} className="submit-btn">
+            <button type="submit" disabled={loading || resumeUploading} className="submit-btn">
               {loading ? 'Updating...' : 'Update Application'}
             </button>
           </div>
