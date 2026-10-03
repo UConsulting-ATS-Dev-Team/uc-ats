@@ -8,17 +8,19 @@
 // trouble unless they are translated.
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
-const { filesCreate } = vi.hoisted(() => ({ filesCreate: vi.fn() }));
+const { filesCreate, filesList, filesGet } = vi.hoisted(() => ({
+  filesCreate: vi.fn(), filesList: vi.fn(), filesGet: vi.fn(),
+}));
 
 vi.mock('googleapis', () => ({
-  google: { drive: () => ({ files: { create: filesCreate } }) },
+  google: { drive: () => ({ files: { create: filesCreate, list: filesList, get: filesGet } }) },
 }));
 
 vi.mock('./auth.js', () => ({
   getGoogleAuthClient: vi.fn(async () => ({ stub: 'auth' })),
 }));
 
-const { uploadFile } = await import('./drive.js');
+const { uploadFile, listFilesByAppProperty, getFileMetadata } = await import('./drive.js');
 
 // drive.js logs the full error before translating it; that is wanted in
 // production and noise here.
@@ -113,5 +115,46 @@ describe('uploadFile', () => {
 
     await expect(uploadFile({ name: 'list.csv', folderId: 'folder-1', body: 'x' }))
       .rejects.toBe(network);
+  });
+});
+
+describe('uploadFile appProperties', () => {
+  beforeEach(() => filesCreate.mockReset().mockResolvedValue({ data: { id: 'v1' } }));
+
+  it('tags the file when asked, and sends no appProperties otherwise', async () => {
+    await uploadFile({ name: 'a.web.mp4', folderId: 'f', body: 'x', mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig' } });
+    expect(filesCreate.mock.calls[0][0].requestBody).toMatchObject({ mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig' } });
+
+    await uploadFile({ name: 'list.csv', folderId: 'f', body: 'x' });
+    expect(filesCreate.mock.calls[1][0].requestBody).not.toHaveProperty('appProperties');
+  });
+});
+
+describe('listFilesByAppProperty', () => {
+  beforeEach(() => filesList.mockReset().mockResolvedValue({ data: { files: [{ id: 'v1' }] } }));
+
+  it('searches one folder, untrashed, by the tag, and escapes quotes', async () => {
+    const files = await listFilesByAppProperty({ folderId: "fold'er", key: 'transcodedFrom', value: 'orig1' });
+    expect(files).toEqual([{ id: 'v1' }]);
+    const { q, supportsAllDrives, includeItemsFromAllDrives } = filesList.mock.calls[0][0];
+    expect(q).toBe("'fold\\'er' in parents and trashed = false and appProperties has { key='transcodedFrom' and value='orig1' }");
+    expect(supportsAllDrives).toBe(true);
+    expect(includeItemsFromAllDrives).toBe(true);
+  });
+
+  it('answers an empty list when Drive returns no files key', async () => {
+    filesList.mockResolvedValue({ data: {} });
+    expect(await listFilesByAppProperty({ folderId: 'f', key: 'k', value: 'v' })).toEqual([]);
+  });
+});
+
+describe('getFileMetadata fields', () => {
+  beforeEach(() => filesGet.mockReset().mockResolvedValue({ data: { id: 'x' } }));
+
+  it('keeps the old default and lets a caller ask for more', async () => {
+    await getFileMetadata('x');
+    expect(filesGet.mock.calls[0][0].fields).toBe('id, name, mimeType, size');
+    await getFileMetadata('x', { fields: 'id, parents' });
+    expect(filesGet.mock.calls[1][0].fields).toBe('id, parents');
   });
 });
