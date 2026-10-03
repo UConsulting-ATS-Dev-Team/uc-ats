@@ -14,7 +14,8 @@ import {
 import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { loadMemberGradingQueue } from '../services/documentGradingQueue.js';
 import { hasCoverLetter } from '../utils/coverLetter.js';
-import { scoreFromRubric } from '../services/documentRubrics.js';
+import { getRubrics, scoreFromRubric } from '../services/documentRubrics.js';
+import { annotateOutliers, DEFAULT_THRESHOLD_PCT, normalizeRow } from '../services/reviewDelibs/teamStats.js';
 import { getCycleQuestionPrompt } from '../services/applicationFormPrompts.js';
 import { planBalancedAssignments, countsAfter } from '../services/reviewTeamDistribution.js';
 import {
@@ -360,6 +361,7 @@ router.get('/', requireAuth, async (req, res) => {
         candidateId: true,
         evaluatorId: true,
         overallScore: true,
+        adminScore: true,
         assignedGroupId: true,
         evaluator: {
           select: {
@@ -379,6 +381,7 @@ router.get('/', requireAuth, async (req, res) => {
         candidateId: true,
         evaluatorId: true,
         overallScore: true,
+        adminScore: true,
         assignedGroupId: true,
         evaluator: {
           select: {
@@ -398,6 +401,7 @@ router.get('/', requireAuth, async (req, res) => {
         candidateId: true,
         evaluatorId: true,
         overallScore: true,
+        adminScore: true,
         assignedGroupId: true,
         evaluator: {
           select: {
@@ -407,42 +411,28 @@ router.get('/', requireAuth, async (req, res) => {
       }
     });
     
-    // Helper function to detect outlier scores
-    // threshold: minimum point difference to be considered an outlier
-    // teamMemberCount: total number of team members who should grade
-    const detectOutliers = (scores, candidateId, groupId, threshold, teamMemberCount) => {
-      // Filter scores for this specific candidate and group
+    // Outliers on one candidate's document, by the review team deliberation's
+    // rule (services/reviewDelibs/teamStats.js): far from the other graders by at
+    // least 30% of the document's max, and further from them than anyone else.
+    // Only flagged once every team member has graded it.
+    const { rubrics: rubricInfo } = await getRubrics();
+    const maxByType = Object.fromEntries(Object.entries(rubricInfo).map(([type, info]) => [type, info.maxOverall]));
+    const detectOutliers = (scores, type, candidateId, groupId, teamMemberIds) => {
       const relevantScores = scores.filter(
         score => score.candidateId === candidateId && score.assignedGroupId === groupId
       );
-      
-      // Only detect outliers if ALL team members have submitted their scores
-      if (relevantScores.length < teamMemberCount || teamMemberCount < 2) {
-        return []; // Need all team members to have graded before detecting outliers
-      }
-      
-      const scoreValues = relevantScores.map(s => s.overallScore);
-      const mean = scoreValues.reduce((sum, val) => sum + val, 0) / scoreValues.length;
-      
-      // Detect outliers based on absolute point difference from mean
-      const outliers = [];
-      relevantScores.forEach(score => {
-        const deviationFromMean = Math.abs(score.overallScore - mean);
-        
-        // Only flag as outlier if deviation exceeds the threshold
-        if (deviationFromMean >= threshold) {
-          outliers.push({
-            evaluatorId: score.evaluatorId,
-            evaluatorName: score.evaluator.fullName,
-            score: score.overallScore,
-            mean: Math.round(mean * 10) / 10,
-            deviation: Math.round(deviationFromMean * 10) / 10,
-            isHigher: score.overallScore > mean
-          });
-        }
-      });
-      
-      return outliers;
+      if (relevantScores.length < teamMemberIds.length || teamMemberIds.length < 2) return [];
+
+      return annotateOutliers(relevantScores.map(score => normalizeRow(score, type)), { maxByType, thresholdPct: DEFAULT_THRESHOLD_PCT })
+        .filter(row => row.isOutlier)
+        .map(row => ({
+          evaluatorId: row.evaluatorId,
+          evaluatorName: row.evaluatorName,
+          score: row.effective,
+          mean: Math.round(row.othersMean * 10) / 10,
+          deviation: Math.round(Math.abs(row.deviation) * 10) / 10,
+          isHigher: row.deviation > 0
+        }));
     };
     
     // Transform the data to match the frontend expectations
@@ -484,14 +474,9 @@ router.get('/', requireAuth, async (req, res) => {
           (teamMemberIds.length > 0 ? 
             Math.round((candidateVideoScores.length / teamMemberIds.length) * 100) : 0);
 
-        // Detect outlier scores for this candidate
-        // Resume: 4 points difference minimum
-        // Cover Letter: 2 points difference minimum
-        // Video: 2 points difference minimum
-        // Only flag outliers if all team members have submitted grades
-        const resumeOutliers = detectOutliers(resumeScores, candidate.id, group.id, 4, teamMemberIds.length);
-        const coverLetterOutliers = detectOutliers(coverLetterScores, candidate.id, group.id, 2, teamMemberIds.length);
-        const videoOutliers = detectOutliers(videoScores, candidate.id, group.id, 2, teamMemberIds.length);
+        const resumeOutliers = detectOutliers(resumeScores, 'resume', candidate.id, group.id, teamMemberIds);
+        const coverLetterOutliers = detectOutliers(coverLetterScores, 'coverLetter', candidate.id, group.id, teamMemberIds);
+        const videoOutliers = detectOutliers(videoScores, 'video', candidate.id, group.id, teamMemberIds);
 
         return {
           id: latestApplication.id, // Use the actual application ID
