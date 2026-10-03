@@ -11,16 +11,16 @@ import {
   joinSession,
   launchSession,
   leaveSession,
-  navigate,
   overrideScore,
   setDecision,
   setThreshold
 } from '../services/reviewDelibs/reviewDelibs.js';
 
 // Review team deliberations. The rules live in services/reviewDelibs/; this
-// file only maps HTTP onto them. Members reach the router to watch their own
-// team's session - the service checks the team on every request - and running
-// one is admin-only, checked here for the role and in the service for "has joined".
+// file only maps HTTP onto them. Members reach the router to join their own
+// team's session and move around it on their own - the service checks the team
+// on every request. Changing anything is admin-only, checked here for the role
+// and in the service for "has joined".
 
 const router = express.Router();
 
@@ -73,15 +73,6 @@ router.get('/:id/candidates/:applicationId', delibRoute('GET /api/review-delibs/
 
 router.get('/:id/changes', delibRoute('GET /api/review-delibs/:id/changes',
   (req) => getChanges({ sessionId: req.params.id, user: req.user })));
-
-router.post('/:id/navigate', requireAdmin, delibRoute('POST /api/review-delibs/:id/navigate',
-  (req) => navigate({
-    sessionId: req.params.id,
-    user: req.user,
-    step: req.body?.step,
-    applicationId: req.body?.applicationId ?? null,
-    from: req.body?.from
-  })));
 
 router.post('/:id/threshold', requireAdmin, delibRoute('POST /api/review-delibs/:id/threshold',
   (req) => setThreshold({ sessionId: req.params.id, user: req.user, thresholdPct: req.body?.thresholdPct })));

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import CandidateCard from './CandidateCard';
 
 // The document viewer fetches; this is about the card around it.
@@ -51,6 +52,23 @@ describe('CandidateCard: overall', () => {
     renderCard(card());
     expect(screen.queryByText(/^Overall/)).not.toBeInTheDocument();
     expect(screen.getByText('Documents total 9')).toBeInTheDocument();
+  });
+});
+
+describe('CandidateCard: rank', () => {
+  it("shows Staging's rank beside the overall, worded as Staging words it", async () => {
+    renderCard(card({ overall: 11, overallMax: 21, rank: 7, rankedCount: 240 }));
+    const chip = screen.getByText('Rank 7 of 240');
+    await userEvent.hover(chip);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('7th of 240 scored');
+  });
+
+  it('says Unranked only for a card with nothing scored, and nothing on a card from before ranks', () => {
+    const { unmount } = renderCard(card({ overall: 0, rank: null, rankedCount: 240 }));
+    expect(screen.getByText('Unranked')).toBeInTheDocument();
+    unmount();
+    renderCard(card({ overall: 9 }));
+    expect(screen.queryByText(/^Rank|Unranked/)).not.toBeInTheDocument();
   });
 });
 

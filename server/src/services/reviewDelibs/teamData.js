@@ -58,8 +58,8 @@ export const scoreModel = (type) => SCORE_MODEL[type] || null;
 
 /**
  * The input computeTeamStats() takes, for `groupId`'s cycle. `participation:
- * false` skips the participation points, for callers that only need the
- * outlier walkthrough.
+ * false` skips the participation points and the rank population, for callers
+ * that only need the outlier walkthrough.
  */
 export async function loadTeamInput({ client = prisma, groupId, cycleId, participation = true }) {
   const [groups, rubrics, ...scoreSets] = await Promise.all([
@@ -128,23 +128,27 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId, partici
   const sealedIds = new Set(candidates.filter(isSealed).map((candidate) => candidate.candidateId));
   for (const candidate of candidates) candidate.locked = sealedIds.has(candidate.candidateId);
 
-  // Staging's participation points, so the overall here is the one Staging
-  // ranks on. Sealed candidates are identity only and are not asked about.
-  if (participation) {
-    const open = candidates.filter((candidate) => !candidate.locked);
-    const points = await loadParticipationPoints({
-      client,
-      cycleId,
-      candidates: open.map((candidate) => ({ candidateId: candidate.candidateId, studentId: candidate.application.studentId }))
-    });
-    for (const candidate of open) candidate.participationPoints = points.get(candidate.candidateId) ?? 0;
-  }
-
   const known = new Set(candidates.map((candidate) => candidate.candidateId));
   const rows = DOCUMENT_TYPES.flatMap((type, index) =>
     scoreSets[index]
       .filter((row) => known.has(row.candidateId) && !sealedIds.has(row.candidateId))
       .map((row) => normalizeRow(row, type)));
+
+  // Staging's participation points, so the overall here is the one Staging
+  // ranks on, and the rest of Staging's population for the rank. Sealed
+  // candidates are identity only and are not asked about.
+  let outsideTeams = { candidates: [], rows: [] };
+  if (participation) {
+    outsideTeams = await loadOutsideTeams(client, cycleId, known, scoreSets);
+    const open = candidates.filter((candidate) => !candidate.locked);
+    const everyone = [...open, ...outsideTeams.candidates];
+    const points = await loadParticipationPoints({
+      client,
+      cycleId,
+      candidates: everyone.map((candidate) => ({ candidateId: candidate.candidateId, studentId: candidate.studentId ?? candidate.application.studentId }))
+    });
+    for (const candidate of everyone) candidate.participationPoints = points.get(candidate.candidateId) ?? 0;
+  }
 
   const maxByType = Object.fromEntries(DOCUMENT_TYPES.map((type) => [type, rubrics.rubrics[type].maxOverall]));
   const group = groups.find((entry) => entry.id === groupId) || null;
@@ -159,9 +163,44 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId, partici
     })),
     candidates,
     rows,
+    outsideTeams,
     maxByType,
     participationMax: rubrics.participationMax,
     rubrics: rubrics.rubrics
+  };
+}
+
+/**
+ * Applicants in the cycle on none of its review teams. Staging ranks Resume
+ * Review against every applicant in the cycle, so they count towards a rank,
+ * and for nothing else: they are kept apart from `candidates` and `rows` so
+ * no table, comparison, gap or outlier ever sees them. Sealed ones are left
+ * out, their scores unread, as on the teams.
+ */
+async function loadOutsideTeams(client, cycleId, known, scoreSets) {
+  const applications = await client.application.findMany({
+    where: { cycleId, candidateId: { not: null, notIn: [...known] } },
+    orderBy: { submittedAt: 'desc' },
+    select: { id: true, candidateId: true, studentId: true, email: true }
+  });
+  // Latest application per person, as the team lists take.
+  const latest = new Map();
+  for (const application of applications) {
+    if (!latest.has(application.candidateId)) latest.set(application.candidateId, application);
+  }
+  const people = [...latest.values()];
+  const isSealed = await sealedRowPredicate(people, { client });
+  const open = people.filter((application) => !isSealed(application));
+  const ids = new Set(open.map((application) => application.candidateId));
+
+  return {
+    candidates: open.map((application) => ({
+      candidateId: application.candidateId,
+      applicationId: application.id,
+      studentId: application.studentId
+    })),
+    rows: DOCUMENT_TYPES.flatMap((type, index) =>
+      scoreSets[index].filter((row) => ids.has(row.candidateId)).map((row) => normalizeRow(row, type)))
   };
 }
 

@@ -16,18 +16,18 @@ import {
   MAX_THRESHOLD_PCT,
   MIN_THRESHOLD_PCT,
   outlierOrder,
-  rethresholdWalkthrough,
-  walkthroughPosition
+  rethresholdWalkthrough
 } from './teamStats.js';
 
 // Review team deliberations.
 //
 // After document grading, admins meet each review team for ten minutes to go
 // over what the team graded. An admin launches a session for one team; the
-// team's members and any admin join, and everyone sees what the admin running
-// it sees: the overview, then each candidate with an outlier or split, then the
-// whole list. Any admin who has joined can run it, so the session survives its
-// creator losing wifi.
+// team's members and any admin join. Each of them moves around it on their own:
+// the overview, the candidates with an outlier or split, the whole list and the
+// summary. What is shared is the data: the threshold, overrides and decisions
+// are admin actions, and everyone sees their result. Any admin who has joined
+// can run it, so the session survives its creator losing wifi.
 //
 // Edits made in the room are ordinary edits: an override is the score row's
 // adminScore, written through adminScorePatch like Application Detail's edit,
@@ -43,7 +43,6 @@ import {
 // Concurrency is the live vote's: every change runs in withVersionLock on the
 // session row, then sends a content-free nudge; clients refetch on a new version.
 
-const STEPS = Object.freeze(['OVERVIEW', 'OUTLIERS', 'ALL', 'SUMMARY']);
 const PRESENCE_WINDOW_MS = 30_000;
 const HEARTBEAT_EVERY_MS = 5_000;
 const STATE_CACHE_TTL_MS = 1_000;
@@ -121,32 +120,6 @@ async function teamApplication(tx, session, where, user, { forWrite = false } = 
     throw fail(403, 'You cannot change your own record', 'OWN_RECORD');
   }
   return application;
-}
-
-/**
- * The walkthrough keeps its launch order, but a candidate in it can be sealed
- * or moved to another team mid-session. Rather than stop the admin at that
- * entry, carry on past it in the direction they were going (forward unless
- * the request is before the candidate on screen). Null when no candidate in
- * the walkthrough can be shown any more.
- */
-async function nextAvailable(tx, session, order, requested, current) {
-  const candidates = await tx.application.findMany({
-    where: { id: { in: order }, cycleId: session.cycleId, candidate: { assignedGroupId: session.groupId } },
-    select: { id: true }
-  });
-  const sealed = await sealedApplicationIds(candidates.map((row) => row.id), tx);
-  const available = new Set(candidates.map((row) => row.id).filter((id) => !sealed.has(id)));
-
-  const from = order.indexOf(requested);
-  const step = current && order.indexOf(current) > from ? -1 : 1;
-  for (let i = from; i >= 0 && i < order.length; i += step) {
-    if (available.has(order[i])) return order[i];
-  }
-  // Nothing further that way. Mid-walkthrough, stay on the card on screen;
-  // opening the step, take any candidate that can still be shown.
-  if (current && available.has(current)) return current;
-  return order.find((id) => available.has(id)) ?? null;
 }
 
 function normalizeThreshold(value) {
@@ -264,7 +237,6 @@ export async function getActiveSessions({ client = prisma, user }) {
         id: session.id,
         groupId: session.groupId,
         groupName: groupName(session.group),
-        step: session.step,
         startedAt: session.startedAt,
         createdByName: session.createdBy?.fullName || null,
         joined: session.participants.length > 0
@@ -279,13 +251,13 @@ export async function getGroupStatuses({ client = prisma }) {
   const sessions = await client.reviewDelibSession.findMany({
     where: { cycleId: cycle.id },
     orderBy: { startedAt: 'desc' },
-    select: { id: true, groupId: true, status: true, step: true, startedAt: true, endedAt: true, _count: { select: { changes: true } } }
+    select: { id: true, groupId: true, status: true, startedAt: true, endedAt: true, _count: { select: { changes: true } } }
   });
   const byGroup = new Map();
   for (const session of sessions) {
     const entry = byGroup.get(session.groupId) || { groupId: session.groupId, open: null, last: null };
     if (session.status === 'ACTIVE' && !entry.open) {
-      entry.open = { id: session.id, step: session.step, startedAt: session.startedAt };
+      entry.open = { id: session.id, startedAt: session.startedAt };
     } else if (session.status === 'ENDED' && !entry.last) {
       entry.last = { id: session.id, endedAt: session.endedAt, changeCount: session._count.changes };
     }
@@ -336,71 +308,30 @@ export async function leaveSession({ client = prisma, sessionId, user }) {
 }
 
 /**
- * Moves everyone's screen. `from` is the step and candidate the admin was
- * looking at; if another admin moved first, this one is refused (STALE_NAV)
- * rather than yanking the room somewhere a second time.
- */
-export async function navigate({ client = prisma, sessionId, user, step, applicationId = null, from }) {
-  if (!STEPS.includes(step)) throw fail(400, `Unknown step: ${step}`, 'INVALID_STEP');
-
-  const { version } = await lock(client, sessionId, async (tx, session) => {
-    assertActive(session);
-    await assertHost(tx, session, user);
-
-    if (from && (from.step !== session.step || (from.applicationId ?? null) !== (session.currentApplicationId ?? null))) {
-      throw fail(409, 'Someone else moved the deliberation on', 'STALE_NAV');
-    }
-
-    let target = null;
-    if (step === 'OUTLIERS') {
-      const order = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
-      const requested = applicationId ?? order[0] ?? null;
-      if (requested && !order.includes(requested)) throw fail(400, 'That candidate is not in the outlier walkthrough', 'NOT_IN_WALKTHROUGH');
-      target = requested && await nextAvailable(tx, session, order, requested, session.currentApplicationId);
-    } else if (step === 'ALL' && applicationId) {
-      target = applicationId;
-      await teamApplication(tx, session, { id: target }, user);
-    }
-
-    await tx.reviewDelibSession.update({
-      where: { id: sessionId },
-      data: { step, currentApplicationId: target }
-    });
-  });
-
-  nudgeReviewDelib(sessionId, { version, kind: 'control' });
-  return getState({ client, sessionId, user });
-}
-
-/**
  * Changes what counts as an outlier, and the walkthrough with it (see
  * rethresholdWalkthrough): raising it drops candidates who no longer qualify,
  * lowering it adds the newly qualifying ones at the end. A candidate the room
- * resolved by an override stays. If the room is on a candidate the walkthrough
- * just dropped, it moves to the next one still in it.
+ * resolved by an override stays. Each viewer's own place in the walkthrough is
+ * theirs to keep; the page moves anyone whose candidate was dropped.
  *
- * The scores are read inside the lock, so two threshold changes, or a change
- * and an override, cannot each work from what the other is replacing.
+ * The scores are read before taking the lock, which is held only to apply them
+ * to the list as it stands, so two threshold changes each apply their own. An
+ * override landing between the read and the lock can leave one entry stale
+ * until the next change.
  */
 export async function setThreshold({ client = prisma, sessionId, user, thresholdPct }) {
   const threshold = normalizeThreshold(thresholdPct);
+  const head = await loadHead(client, sessionId);
+  const input = await loadTeamInput({ client, groupId: head.groupId, cycleId: head.cycleId, participation: false });
+  const stats = computeTeamStats({ ...input, thresholdPct: threshold });
 
   const { version } = await lock(client, sessionId, async (tx, session) => {
     assertActive(session);
     await assertHost(tx, session, user);
-    const input = await loadTeamInput({ client: tx, groupId: session.groupId, cycleId: session.cycleId, participation: false });
-    const stats = computeTeamStats({ ...input, thresholdPct: threshold });
     const before = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
-    const after = rethresholdWalkthrough(stats, before);
     await tx.reviewDelibSession.update({
       where: { id: sessionId },
-      data: {
-        thresholdPct: threshold,
-        outlierApplicationIds: after,
-        ...(session.step === 'OUTLIERS' && {
-          currentApplicationId: walkthroughPosition(before, after, session.currentApplicationId)
-        })
-      }
+      data: { thresholdPct: threshold, outlierApplicationIds: rethresholdWalkthrough(stats, before) }
     });
   });
 
@@ -511,7 +442,7 @@ export async function endSession({ client = prisma, sessionId, user }) {
     assertActive(session);
     await tx.reviewDelibSession.update({
       where: { id: sessionId },
-      data: { status: 'ENDED', step: 'SUMMARY', currentApplicationId: null, endedAt: new Date(), endedById: user.id }
+      data: { status: 'ENDED', endedAt: new Date(), endedById: user.id }
     });
   });
   nudgeReviewDelib(sessionId, { version, kind: 'control' });
@@ -529,7 +460,7 @@ function assertJoined(session, participants, user) {
   if (!mine || mine.leftAt) throw fail(403, 'Join the deliberation first', 'NOT_JOINED');
 }
 
-/** The light payload everyone polls: where the room is and who is in it. */
+/** The light payload everyone polls: the session's shared settings and who is in it. */
 export async function getState({ client = prisma, sessionId, user, now = Date.now() }) {
   const head = await client.reviewDelibSession.findUnique({ where: { id: sessionId }, select: { version: true } });
   if (!head) throw fail(404, 'Deliberation not found', 'NOT_FOUND');
@@ -598,10 +529,8 @@ export async function getState({ client = prisma, sessionId, user, now = Date.no
       groupName: groupName(raw.group),
       cycleId: raw.cycleId,
       status: raw.status,
-      step: raw.step,
       thresholdPct: raw.thresholdPct,
       outlierApplicationIds: Array.isArray(raw.outlierApplicationIds) ? raw.outlierApplicationIds : [],
-      currentApplicationId: raw.currentApplicationId,
       createdByName: raw.createdBy?.fullName || null,
       startedAt: raw.startedAt,
       endedAt: raw.endedAt
@@ -689,6 +618,8 @@ export async function getCandidateCard({ client = prisma, sessionId, application
     participation: summary?.participation ?? null,
     overall: summary?.overall ?? null,
     overallMax: stats.overallMax ?? null,
+    rank: summary?.rank ?? null,
+    rankedCount: stats.rankedCount ?? 0,
     outlierCount: summary?.outlierCount ?? 0,
     splitDocs: summary?.splitDocs ?? 0,
     attendance,
@@ -706,6 +637,25 @@ export async function getCandidateCard({ client = prisma, sessionId, application
  * is in `attended` (with `isMeeting`) when they came to one, but in neither
  * number: it is not an event of the cycle, and counting it would allow "4 of 3".
  */
+// A member with no full name is stored by address (member.js falls back to
+// req.user.email), and a typed name can be a pasted address. Neither goes on a
+// screen the whole room sees.
+const looksLikeEmail = (value) => typeof value === 'string' && value.includes('@');
+
+/**
+ * Who referred them, as the room may see it. A member's submission names the
+ * member's current account; a manual one only has the name typed on
+ * Application Detail.
+ */
+function referrerNameFor(referral) {
+  const name = [
+    referral.source === 'PRE_APPLICATION' ? referral.referredBy?.fullName : null,
+    referral.referrerName
+  ].map((value) => (typeof value === 'string' ? value.trim() : '')).find((value) => value && !looksLikeEmail(value));
+  if (name) return name;
+  return referral.source === 'PRE_APPLICATION' ? 'A member' : 'Name not given';
+}
+
 async function loadParticipation(client, session, application) {
   const [events, referrals] = await Promise.all([
     client.recruitingCycle
@@ -740,9 +690,7 @@ async function loadParticipation(client, session, application) {
     referrals: referrals.map((referral) => ({
       id: referral.id,
       source: referral.source,
-      // A member's submission names the member's current account; a manual one
-      // only has the name typed on Application Detail.
-      referrerName: (referral.source === 'PRE_APPLICATION' && referral.referredBy?.fullName) || referral.referrerName,
+      referrerName: referrerNameFor(referral),
       relationship: referral.relationship || null,
       reason: referral.reason || null
     }))

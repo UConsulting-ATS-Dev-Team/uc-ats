@@ -7,10 +7,10 @@ import {
   graderSummaries,
   normalizeRow,
   outlierOrder,
+  rankOverall,
   rethresholdWalkthrough,
   teamComparison,
-  docAverages,
-  walkthroughPosition
+  docAverages
 } from './teamStats.js';
 
 const MAX = { resume: 13, coverLetter: 3, video: 2 };
@@ -348,12 +348,61 @@ describe('rethresholdWalkthrough', () => {
   });
 });
 
-describe('walkthroughPosition', () => {
-  it('stays put, or moves to the next survivor, else the last, else nowhere', () => {
-    expect(walkthroughPosition(['a', 'b', 'c'], ['a', 'b'], 'b')).toBe('b');
-    expect(walkthroughPosition(['a', 'b', 'c', 'd'], ['a', 'd'], 'b')).toBe('d');
-    expect(walkthroughPosition(['a', 'b', 'c'], ['a'], 'c')).toBe('a');
-    expect(walkthroughPosition(['a'], [], 'a')).toBe(null);
-    expect(walkthroughPosition(['a'], [], null)).toBe(null);
+describe('rank', () => {
+  it("is Staging's rule: highest first, ties share and the next skips, 0 unranked", () => {
+    const { ranks, rankedCount } = rankOverall(new Map([['a', 9], ['b', 12], ['c', 9], ['d', 5], ['e', 0], ['f', 9]]));
+    expect(Object.fromEntries(ranks)).toEqual({ b: 1, a: 2, c: 2, f: 2, d: 5 });
+    expect(rankedCount).toBe(5);
+  });
+
+  const groups = [
+    { id: 'g1', name: 'One', members: [{ id: 'a', name: 'A' }] },
+    { id: 'g2', name: 'Two', members: [{ id: 'x', name: 'X' }] }
+  ];
+  const candidate = (candidateId, groupId, extra = {}) => ({
+    candidateId, applicationId: `app-${candidateId}`, groupId, name: candidateId,
+    hasDoc: { resume: true, coverLetter: false, video: false }, resumeDecision: null, locked: false, ...extra
+  });
+  const stats = computeTeamStats({
+    groupId: 'g1',
+    maxByType: MAX,
+    groups,
+    candidates: [
+      candidate('t1', 'g1', { participationPoints: 1 }), // 8 + 1 = 9
+      candidate('t2', 'g1'), // ungraded: 0, unranked
+      candidate('t3', 'g1', { locked: true }), // sealed: no scores read, unranked
+      candidate('o1', 'g2') // 11
+    ],
+    rows: [row('t1', 'a', 'resume', 8), row('o1', 'x', 'resume', 11)],
+    outsideTeams: {
+      candidates: [{ candidateId: 'u1', participationPoints: 2 }, { candidateId: 'u2', participationPoints: 0 }],
+      rows: [row('u1', 'z', 'resume', 10), row('u2', 'z', 'resume', 9)] // 12, and 9 ties t1
+    }
+  });
+  const byId = Object.fromEntries(stats.candidates.map((entry) => [entry.candidateId, entry]));
+
+  it('ranks the team against every candidate in the cycle, on a team or none', () => {
+    expect(byId.t1).toMatchObject({ overall: 9, rank: 3 }); // behind u1 (12) and o1 (11), level with u2
+    expect(stats.rankedCount).toBe(4);
+  });
+
+  it('leaves ungraded and sealed candidates unranked', () => {
+    expect(byId.t2).toMatchObject({ overall: 0, rank: null });
+    expect(byId.t3).not.toHaveProperty('rank');
+  });
+
+  it('keeps candidates outside the teams out of everything but the rank', () => {
+    expect(stats.candidates.map((entry) => entry.candidateId)).toEqual(['t1', 't2', 't3']);
+    expect(stats.rows.every((entry) => entry.candidateId.startsWith('t'))).toBe(true);
+    expect(stats.counts.candidates).toBe(3);
+    // The rest of the cycle, for the comparison, is o1 alone.
+    expect(stats.comparison.resume.rest.mean).toBe(11);
+    expect(stats.graders.map((grader) => grader.id)).toEqual(['a']);
+  });
+
+  it('ranks without them when none are passed, as the tutorial capture does', () => {
+    const alone = computeTeamStats({ groupId: 'g1', maxByType: MAX, groups, candidates: [candidate('t1', 'g1'), candidate('o1', 'g2')], rows: [row('t1', 'a', 'resume', 8), row('o1', 'x', 'resume', 11)] });
+    expect(alone.candidates[0].rank).toBe(2);
+    expect(alone.rankedCount).toBe(2);
   });
 });

@@ -71,4 +71,23 @@ describe('AllCandidatesTable', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Docs total' }));
     expect(names()).toEqual(['Blair HighMath', 'Dana MidEcon', 'Alex LowEcon']);
   });
+
+  it("adds Staging's rank, best first when sorted, unranked and sealed rows last", async () => {
+    const ranked = [
+      { ...candidates[0], overall: 12, rank: 2 },
+      { ...candidates[1], overall: 15, rank: 1 },
+      { ...candidates[0], applicationId: 'a4', name: 'Dana None', total: 0, overall: 0, rank: null },
+      candidates[2]
+    ];
+    render(<AllCandidatesTable candidates={ranked} rankedCount={240} canOpen={false} onOpen={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Rank' }));
+    expect(names()).toEqual(['Blair HighMath', 'Alex LowEcon', 'Dana NoneEcon', 'Casey Sealed']);
+    expect(screen.getByLabelText('Not scored yet')).toBeInTheDocument();
+    // The sealed row still spans every column after the name.
+    expect(screen.getByText('Sealed').closest('td')).toHaveAttribute('colspan', '8');
+
+    const rankCell = within(screen.getByText('Blair High').closest('tr')).getAllByRole('cell')[6];
+    await userEvent.hover(within(rankCell).getByText('1'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('1st of 240 scored');
+  });
 });

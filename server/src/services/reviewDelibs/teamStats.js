@@ -357,6 +357,37 @@ export function buildFlags({ candidates, gaps }) {
   return flags;
 }
 
+/** The documents total: each document's mean effective score, added up. Unrounded. */
+function documentsTotal(candidateId, averageOf) {
+  let total = 0;
+  for (const type of DOCUMENT_TYPES) {
+    const average = averageOf.get(docKey(candidateId, type));
+    if (average) total += average.avg;
+  }
+  return total;
+}
+
+/** Staging's overall: documents plus participation, rounded to one place as Staging rounds it. */
+const overallOf = (candidateId, averageOf, participationPoints) =>
+  Number((documentsTotal(candidateId, averageOf) + (toNumber(participationPoints) ?? 0)).toFixed(1));
+
+/**
+ * Staging's Resume Review rank (client/src/utils/stagingRank.js, over
+ * `scores.overall || null`): highest first, ties share a rank and the next one
+ * skips (1, 2, 2, 4), and an overall of 0 is unranked. Keyed by candidateId.
+ */
+export function rankOverall(overallByCandidate) {
+  const scored = [...overallByCandidate]
+    .filter(([, overall]) => Number.isFinite(overall) && overall !== 0)
+    .sort((a, b) => b[1] - a[1]);
+  const ranks = new Map();
+  scored.forEach(([candidateId, overall], index) => {
+    const previous = scored[index - 1];
+    ranks.set(candidateId, previous && previous[1] === overall ? ranks.get(previous[0]) : index + 1);
+  });
+  return { ranks, rankedCount: scored.length };
+}
+
 /**
  * Everything the overview and the candidate table need for one team.
  *
@@ -370,11 +401,26 @@ export function buildFlags({ candidates, gaps }) {
  *                  participationPoints }] - participationPoints already capped,
  *                  0 when absent
  *   rows:       normalizeRow() output for the whole cycle, sealed candidates' already dropped
+ *   outsideTeams: optional { candidates: [{ candidateId, participationPoints }], rows } -
+ *                  open applicants on no review team, counted towards rank only
  *
  * A row's `overall` is Staging's: the documents total plus participation,
  * rounded to one place the way Staging rounds it, so both show the same number.
+ * Its `rank` is Staging's Resume Review rank among every open candidate in the
+ * cycle, on any team or none. Sealed candidates are not in it: their scores are
+ * never read here. Staging ranks them too while an admin's executive unlock is
+ * open, so a rank here can then be better than the one that admin sees.
  */
-export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT, maxByType, participationMax = null, groups, candidates, rows }) {
+export function computeTeamStats({
+  groupId,
+  thresholdPct = DEFAULT_THRESHOLD_PCT,
+  maxByType,
+  participationMax = null,
+  groups,
+  candidates,
+  rows,
+  outsideTeams = { candidates: [], rows: [] }
+}) {
   const group = groups.find((entry) => entry.id === groupId);
   const members = group?.members || [];
   const teamOf = new Map(candidates.map((candidate) => [candidate.candidateId, candidate.groupId]));
@@ -387,6 +433,16 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
 
   const averages = docAverages(annotated);
   const averageOf = new Map(averages.map((entry) => [docKey(entry.candidateId, entry.type), entry]));
+
+  // The rank is against the whole cycle. Outside-team averages stay out of
+  // `averages`, which the team comparison reads.
+  const outsideAverageOf = new Map(docAverages(outsideTeams.rows).map((entry) => [docKey(entry.candidateId, entry.type), entry]));
+  const { ranks, rankedCount } = rankOverall(new Map([
+    ...candidates.filter((candidate) => !candidate.locked)
+      .map((candidate) => [candidate.candidateId, overallOf(candidate.candidateId, averageOf, candidate.participationPoints)]),
+    ...outsideTeams.candidates
+      .map((candidate) => [candidate.candidateId, overallOf(candidate.candidateId, outsideAverageOf, candidate.participationPoints)])
+  ]));
 
   const table = team.map((candidate) => {
     // A sealed row is a name and nothing else, like redactApplication's.
@@ -401,11 +457,9 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
 
     const mine = teamRows.filter((row) => row.candidateId === candidate.candidateId);
     const perDoc = {};
-    let total = 0;
     for (const type of DOCUMENT_TYPES) {
       const docRows = mine.filter((row) => row.type === type);
       const average = averageOf.get(docKey(candidate.candidateId, type));
-      if (average) total += average.avg;
       perDoc[type] = {
         has: Boolean(candidate.hasDoc[type]),
         avg: round(average?.avg ?? null),
@@ -416,13 +470,13 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
       };
     }
     const flagged = mine.filter((row) => row.flag);
-    const participation = toNumber(candidate.participationPoints) ?? 0;
     return {
       ...base,
       perDoc,
-      total: round(total),
-      participation,
-      overall: Number((total + participation).toFixed(1)),
+      total: round(documentsTotal(candidate.candidateId, averageOf)),
+      participation: toNumber(candidate.participationPoints) ?? 0,
+      overall: overallOf(candidate.candidateId, averageOf, candidate.participationPoints),
+      rank: ranks.get(candidate.candidateId) ?? null,
       resumeDecision: candidate.resumeDecision ?? null,
       outlierCount: mine.filter((row) => row.isOutlier).length,
       splitDocs: DOCUMENT_TYPES.filter((type) => perDoc[type].split).length,
@@ -454,6 +508,7 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
     maxByType,
     participationMax,
     overallMax: participationMax === null ? null : documentsMax + participationMax,
+    rankedCount,
     counts,
     graders,
     comparison,
@@ -491,16 +546,6 @@ export function rethresholdWalkthrough(stats, current = []) {
   });
   const keptIds = new Set(kept);
   return [...kept, ...outlierOrder(stats).filter((applicationId) => !keptIds.has(applicationId))];
-}
-
-/**
- * Where the walkthrough stands once its list changed: the same candidate if they
- * are still in it, otherwise the next one after them that is, otherwise the last.
- */
-export function walkthroughPosition(before, after, applicationId) {
-  if (!applicationId || after.includes(applicationId)) return applicationId ?? null;
-  const later = before.slice(before.indexOf(applicationId) + 1).find((id) => after.includes(id));
-  return later ?? after.at(-1) ?? null;
 }
 
 export const docLabel = (type) => SINGULAR[type] || type;

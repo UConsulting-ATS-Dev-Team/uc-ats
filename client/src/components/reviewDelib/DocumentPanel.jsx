@@ -5,8 +5,7 @@ import useDocumentPreview from '../../hooks/useDocumentPreview';
 import { DOC_LABELS, DOC_TYPES } from '../../utils/reviewDelib';
 
 // The candidate's documents beside their scores. Which tab is open and where a
-// video is are each viewer's own: the room follows the candidate, not the
-// scroll position.
+// video is are each viewer's own, like the step and candidate they are on.
 
 const HEIGHT = { xs: 480, md: 'calc(100vh - 320px)' };
 

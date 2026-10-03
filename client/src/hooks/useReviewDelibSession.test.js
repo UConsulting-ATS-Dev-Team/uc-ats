@@ -19,7 +19,7 @@ vi.mock('../utils/reviewDelibApi', () => ({
 
 const stateFor = (id, version) => ({
   version,
-  session: { id, groupName: id, status: 'ACTIVE', step: 'OVERVIEW', currentApplicationId: null, outlierApplicationIds: [] },
+  session: { id, groupName: id, status: 'ACTIVE', outlierApplicationIds: [] },
   viewer: { isHost: false },
   participants: []
 });
@@ -81,5 +81,22 @@ describe('useReviewDelibSession', () => {
       joinA.resolve(Promise.reject(Object.assign(new Error('nope'), { code: 'NOT_ON_TEAM' })));
     });
     expect(result.current.error).toBe(null);
+  });
+
+  it("loads the card for the viewer's own candidate, whatever version the session is at", async () => {
+    reviewDelibApi.join.mockImplementation((id) => Promise.resolve(stateFor(id, 3)));
+    reviewDelibApi.candidate.mockImplementation((id, applicationId) => Promise.resolve({ applicationId }));
+
+    const { result, rerender } = renderHook(({ applicationId }) => useReviewDelibSession('A', { applicationId }), { initialProps: { applicationId: 'app2' } });
+    await waitFor(() => expect(result.current.card?.applicationId).toBe('app2'));
+
+    reviewDelibApi.state.mockResolvedValue(stateFor('A', 4));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.card.applicationId).toBe('app2');
+    expect(reviewDelibApi.candidate.mock.calls.every(([, applicationId]) => applicationId === 'app2')).toBe(true);
+
+    rerender({ applicationId: 'app5' });
+    await waitFor(() => expect(result.current.card?.applicationId).toBe('app5'));
+    expect(result.current).not.toHaveProperty('navigate');
   });
 });

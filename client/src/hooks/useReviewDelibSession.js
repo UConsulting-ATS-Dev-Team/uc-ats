@@ -5,19 +5,22 @@ import { supabase } from '../supabaseClient';
 
 // One review team deliberation, kept current for this viewer.
 //
-// Two layers. The light state (which step, which candidate, who is here) is
-// polled and nudged exactly like a live vote: every response goes through
-// `accept`, which drops anything older than the version on screen. The heavy
-// payloads - the team's numbers and the candidate card on screen - are fetched
-// only when that state says something changed, so a room of ten polling every
-// second and a half reads one small row, not the whole cycle's scores.
+// Two layers. The light state (the shared settings and who is here) is polled
+// and nudged exactly like a live vote: every response goes through `accept`,
+// which drops anything older than the version on screen. The heavy payloads -
+// the team's numbers and the candidate card on screen - are fetched only when
+// that state says something changed, so a room of ten polling every second and
+// a half reads one small row, not the whole cycle's scores.
+//
+// Where the viewer is (their step and candidate) is theirs, not the session's:
+// the page passes it in, and nothing here moves it.
 
 export const POLL_MS = { realtime: 4000, polling: 1500, hidden: 10000 };
 // Grades saved outside the session do not bump its version.
 const TEAM_REFRESH_MS = 30000;
 
-// Another admin got there first, or the session just ended. Not worth an error.
-const QUIET_CODES = new Set(['STALE_NAV', 'SESSION_ENDED']);
+// The session just ended. Not worth an error.
+const QUIET_CODES = new Set(['SESSION_ENDED']);
 
 const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
@@ -60,7 +63,11 @@ function useKeyedFetch(load, key, enabled) {
   return { data, error, reload: run };
 }
 
-export default function useReviewDelibSession(sessionId, { onError } = {}) {
+/**
+ * `applicationId` is the candidate this viewer has open (null for none), and
+ * `step` the step they are on; the summary's changes load only there.
+ */
+export default function useReviewDelibSession(sessionId, { onError, applicationId = null, step = null } = {}) {
   const [state, setState] = useState(null);
   const [fatal, setFatal] = useState(null);
   const [ready, setReady] = useState(false);
@@ -197,8 +204,6 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   // --- Heavy payloads, refetched when the light state moves -----------------
 
   const version = state?.version ?? null;
-  const currentApplicationId = state?.session?.currentApplicationId ?? null;
-  const step = state?.session?.status === 'ENDED' ? 'SUMMARY' : state?.session?.step;
 
   const [teamTick, setTeamTick] = useState(0);
   useEffect(() => {
@@ -214,13 +219,14 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   // The open card refreshes on the same tick as the team view: a grade saved
   // outside the session, or a record sealed, changes no version.
   const loadCard = useCallback(
-    () => reviewDelibApi.candidate(sessionId, currentApplicationId),
-    [sessionId, currentApplicationId]
+    () => reviewDelibApi.candidate(sessionId, applicationId),
+    [sessionId, applicationId]
   );
-  const card = useKeyedFetch(loadCard, `${sessionId}:${currentApplicationId}:${version}:${teamTick}`, ready && Boolean(currentApplicationId));
+  const card = useKeyedFetch(loadCard, `${sessionId}:${applicationId}:${version}:${teamTick}`, ready && Boolean(applicationId));
 
+  const ended = state?.session?.status === 'ENDED';
   const loadChanges = useCallback(() => reviewDelibApi.changes(sessionId), [sessionId]);
-  const changes = useKeyedFetch(loadChanges, `${sessionId}:${version}`, ready && step === 'SUMMARY');
+  const changes = useKeyedFetch(loadChanges, `${sessionId}:${version}`, ready && (ended || step === 'SUMMARY'));
 
   // --- Admin actions --------------------------------------------------------
 
@@ -243,23 +249,17 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   }, [accept, report]);
 
   const actions = useMemo(() => ({
-    navigate: (toStep, applicationId = null) => state?.session && runAction('navigate', () =>
-      reviewDelibApi.navigate(sessionId, {
-        step: toStep,
-        applicationId,
-        from: { step: state.session.step, applicationId: state.session.currentApplicationId }
-      })),
     setThreshold: (pct) => runAction('threshold', () => reviewDelibApi.threshold(sessionId, pct)),
     override: (type, scoreId, value) => runAction(`override:${scoreId}`, () => reviewDelibApi.override(sessionId, type, scoreId, value)),
-    decide: (applicationId, decision) => runAction(`decide:${applicationId}`, () => reviewDelibApi.decide(sessionId, applicationId, decision)),
+    decide: (id, decision) => runAction(`decide:${id}`, () => reviewDelibApi.decide(sessionId, id, decision)),
     end: () => runAction('end', () => reviewDelibApi.end(sessionId))
-  }), [runAction, sessionId, state]);
+  }), [runAction, sessionId]);
 
   return {
     state,
     team: team.data,
     teamError: team.error,
-    card: card.data && card.data.applicationId === currentApplicationId ? card.data : null,
+    card: card.data && card.data.applicationId === applicationId ? card.data : null,
     cardError: card.error,
     changes: changes.data,
     changesError: changes.error,
