@@ -65,8 +65,13 @@ against what the ticket asked for, which is the one thing a diff-level reviewer 
 check. Run Greptile first so Oscar's pass is spent on that question and not on the
 mechanical findings.
 
-The Vercel bot posts the preview deployment on every PR. Use it for the `/before-and-after`
-captures instead of running the app locally.
+A PR has no Vercel preview: only `main` deploys (see "Vercel deploys `main` only" in
+CLAUDE.md). For the `/before-and-after` captures, take the before from the live site and
+the after from a local run. A local `.env` is the production database, so start it with
+Site Analytics off, or every page you open is recorded there as a real visit:
+`ANALYTICS_DISABLED=1 VITE_ANALYTICS_DISABLED=1 npm run dev`. Then only look: do not
+save, send or upload anything while capturing. When a change cannot be
+shown without writing, say so in the PR and leave the captures out.
 
 ## Commands and checks
 
