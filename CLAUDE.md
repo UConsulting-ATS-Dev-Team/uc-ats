@@ -1050,6 +1050,24 @@ The system follows a **recruiting cycle-based workflow**:
 - User cache with 5-minute TTL to reduce DB queries
 - Use `requireAuth` middleware for protected routes, `requireAdmin` for admin-only
 
+**Ending a dead session:**
+- `requireAuth` answers an expired or malformed token, a deleted user and a deactivated
+  user with `401` + `code: 'SESSION_INVALID'`. That code is the only thing the client
+  signs out on (`setSessionExpiredHandler` in [api.js](client/src/utils/api.js), registered
+  by `AuthContext`), landing on `/login` with "Your session expired". It acts only if the
+  failed request carried the token still in use, so a late 401 from an old session never
+  signs out a new one. A 401 without the code changes nothing, which is also how a new
+  client behaves against an old server.
+- `no-token` 401s and every `/api/auth/*` 401 (wrong password, `/verify`) carry **no**
+  code on purpose: a request with no header has no session to end, and a wrong password
+  must never look like a dead session.
+- A user lookup that throws is `503 AUTH_UNAVAILABLE`, never a 401. A database blip must
+  not sign out everyone mid-work.
+- An expired token is expected and is not `console.error`ed (it would land in
+  `server_error_logs` once per poll); any other bad token still is.
+- A new route that answers 401 for any reason other than a dead session must not use
+  `SESSION_INVALID`.
+
 **Sign in with Google:**
 - `POST /api/auth/google` takes a Google Identity Services ID token and is resolved by
   [server/src/services/googleAuth.js](server/src/services/googleAuth.js). No redirect leg,

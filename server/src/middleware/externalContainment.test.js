@@ -10,6 +10,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import externalContainment from './externalContainment.js';
+import { invalidateUserCache } from './auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -165,6 +166,16 @@ describe('externalContainment - transparent to everyone else', () => {
 
   it('passes a deactivated CLIENT through so requireAuth answers 401 Account deactivated', async () => {
     const res = await request('/api/users', { user: deactivatedClient });
+    expect(res.status).toBe(200);
+  });
+
+  it('passes a CLIENT through without resolving them when the user lookup fails', async () => {
+    // No user is resolved, so nothing is handed downstream: requireAuth looks
+    // the user up again and answers 503 (or 401) itself. The CLIENT never
+    // reaches a route as a signed-in user.
+    invalidateUserCache(clientUser.id);
+    prisma.user.findUnique.mockRejectedValue(new Error("Can't reach database server"));
+    const res = await request('/api/users', { user: clientUser });
     expect(res.status).toBe(200);
   });
 

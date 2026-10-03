@@ -51,7 +51,10 @@ export const externalContainment = async (req, res, next) => {
   const result = await resolveUserFromRequest(req);
 
   // No token, bad token, expired token, deleted or deactivated user: not our
-  // business. Downstream produces the right 401.
+  // business. Downstream produces the right 401. A failed user lookup lands
+  // here too, and is just as safe: with no user resolved nothing below can
+  // let a CLIENT through, and the downstream requireAuth re-resolves and
+  // answers 503 (or 401) itself.
   if (!result.user) {
     return next();
   }

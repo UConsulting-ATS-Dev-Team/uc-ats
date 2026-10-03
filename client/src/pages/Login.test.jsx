@@ -180,3 +180,21 @@ describe('Login, signing in with a password', () => {
     expect(await screen.findByText(/signs in with Google/i)).toBeInTheDocument();
   });
 });
+
+describe('Login, after the server ended the session', () => {
+  it('says the session expired when sent here with that state', () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/login', state: { sessionExpired: true } }]}>
+        <Login />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Your session expired. Sign in again to continue.')).toBeInTheDocument();
+  });
+
+  it('says nothing about a session on an ordinary visit', () => {
+    renderLogin();
+
+    expect(screen.queryByText(/session expired/i)).not.toBeInTheDocument();
+  });
+});

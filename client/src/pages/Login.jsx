@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
   TextField,
@@ -22,7 +22,11 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, loginWithGoogle, user, loading } = useAuth();
+  // Set by AuthContext when the server ended the session, so the person knows
+  // why they are looking at a sign-in form.
+  const sessionExpired = Boolean(location.state?.sessionExpired);
 
   // Redirect if user is already logged in
   useEffect(() => {
@@ -93,6 +97,12 @@ const Login = () => {
             <Typography variant="h4" sx={{ mb: 4 }}>
               Sign In
             </Typography>
+
+            {sessionExpired && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                Your session expired. Sign in again to continue.
+              </Alert>
+            )}
 
             {error && (
               <Alert severity="error" sx={{ mb: 3 }}>

@@ -13,6 +13,13 @@ class ApiClient {
     this.token = token;
   }
 
+  // Called when the server says the session itself is dead (401 with
+  // SESSION_INVALID): an expired token, a deleted or deactivated account.
+  // AuthContext registers it to sign the person out. Pass null to unregister.
+  setSessionExpiredHandler(handler) {
+    this.onSessionExpired = handler;
+  }
+
   // Short-lived executive unlock for sealed recruiting records. Managed by
   // ExecUnlockContext; sent alongside the session token, never instead of it.
   setExecUnlockToken(token) {
@@ -34,9 +41,11 @@ class ApiClient {
       config.headers['Content-Type'] = 'application/json';
     }
 
-    // Add authorization header if token is available
-    if (this.token) {
-      config.headers.Authorization = `Bearer ${this.token}`;
+    // Add authorization header if token is available. Remembered so a 401 can
+    // be checked against the token it was actually sent with.
+    const sentToken = this.token;
+    if (sentToken) {
+      config.headers.Authorization = `Bearer ${sentToken}`;
     }
 
     if (this.execUnlockToken) {
@@ -105,6 +114,22 @@ class ApiClient {
       err.body = error;
       if (error.contactEmail) {
         err.contactEmail = error.contactEmail;
+      }
+
+      // Only the server's explicit SESSION_INVALID signs anyone out, so an old
+      // server (no code) and a wrong password on /auth/login (no code) behave
+      // exactly as before. The token must still be the current one: a late
+      // answer to a request from a previous session must not sign out a fresh
+      // login, and since the handler clears the token, a burst of pollers all
+      // failing at once signs out only once.
+      if (
+        response.status === 401 &&
+        error.code === 'SESSION_INVALID' &&
+        sentToken &&
+        sentToken === this.token &&
+        this.onSessionExpired
+      ) {
+        this.onSessionExpired();
       }
       throw err;
     }

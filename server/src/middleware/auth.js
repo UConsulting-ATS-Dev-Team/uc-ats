@@ -31,7 +31,13 @@ const AUTH_USER_SELECT = {
  * Resolve the authenticated user for a request, reading and populating the same
  * 5-minute cache `requireAuth` uses. Returns `{ user }` on success or
  * `{ error }` where error is one of 'no-token' | 'invalid' | 'not-found' |
- * 'deactivated'.
+ * 'deactivated' | 'unavailable'. 'invalid' and 'unavailable' also carry
+ * `cause`.
+ *
+ * 'unavailable' means the token was good but the user lookup threw (the
+ * database is down or timing out). It is kept apart from 'invalid' because the
+ * client signs people out on a dead session, and a database blip must not sign
+ * out everyone who is mid-work.
  *
  * Extracted so the CLIENT containment middleware can ask "who is this?" before
  * the route's own requireAuth runs, without a second DB round trip and without
@@ -45,11 +51,17 @@ export const resolveUserFromRequest = async (req) => {
     return { error: 'no-token' };
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
-    return await resolveUserById(decoded.userId);
+    decoded = jwt.verify(token, config.jwtSecret);
   } catch (error) {
     return { error: 'invalid', cause: error };
+  }
+
+  try {
+    return await resolveUserById(decoded.userId);
+  } catch (error) {
+    return { error: 'unavailable', cause: error };
   }
 };
 
@@ -98,16 +110,32 @@ export const requireAuth = async (req, res, next) => {
     return next();
   }
 
+  // SESSION_INVALID is the one signal the client signs out on, so it goes only
+  // on answers that mean this token will never work again. A request with no
+  // header has no session to end (a bare <img> request lands here), so
+  // 'no-token' carries no code.
   switch (result.error) {
     case 'no-token':
       return res.status(401).json({ error: 'Authentication required' });
     case 'not-found':
-      return res.status(401).json({ error: 'User not found' });
+      return res.status(401).json({ error: 'User not found', code: 'SESSION_INVALID' });
     case 'deactivated':
-      return res.status(401).json({ error: 'Account deactivated' });
+      return res.status(401).json({ error: 'Account deactivated', code: 'SESSION_INVALID' });
+    case 'unavailable':
+      // Not a 401: the token may be fine, we just could not look the user up.
+      console.error('Auth middleware lookup failed:', result.cause);
+      return res.status(503).json({
+        error: 'Authentication is temporarily unavailable',
+        code: 'AUTH_UNAVAILABLE'
+      });
     default:
-      console.error('Auth middleware error:', result.cause);
-      return res.status(401).json({ error: 'Invalid token' });
+      // A tab left open past its token's expiry keeps polling. That is
+      // expected, and logging each one filled server_error_logs with stack
+      // traces. Anything else wrong with a token is still worth seeing.
+      if (result.cause?.name !== 'TokenExpiredError') {
+        console.error('Auth middleware error:', result.cause);
+      }
+      return res.status(401).json({ error: 'Invalid token', code: 'SESSION_INVALID' });
   }
 };
 
