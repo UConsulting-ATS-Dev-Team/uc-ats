@@ -92,7 +92,9 @@ router.post('/video-uploads', requireAdmin, async (req, res) => {
 
 // DELETE /api/application-documents/video-uploads/:documentId
 // The form was closed, or another video chosen, after this one was uploaded.
-// Only a video no application names is removed.
+// Only a video no application names is removed. The check cannot see a save
+// still in flight, so the form does not call this for a video whose save went
+// unanswered (AddApplicationModal).
 router.delete('/video-uploads/:documentId', requireAdmin, async (req, res) => {
   try {
     const document = parseDocumentId(req.params.documentId);

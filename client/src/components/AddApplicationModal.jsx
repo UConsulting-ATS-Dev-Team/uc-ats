@@ -47,8 +47,11 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
   // to create the application.
   const submitRef = useRef(null);
 
+  // A video whose save went unanswered is left in storage: the application may
+  // have been created after all, and would then name a file this just removed.
   const discardUploadedVideo = () => {
-    if (uploadedVideoRef.current) discardApplicationVideo(uploadedVideoRef.current.documentId);
+    const uploaded = uploadedVideoRef.current;
+    if (uploaded && !uploaded.saveUnanswered) discardApplicationVideo(uploaded.documentId);
     uploadedVideoRef.current = null;
   };
   const [loading, setLoading] = useState(false);
@@ -159,7 +162,15 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
       if (videoDocumentId) body.append('videoDocumentId', videoDocumentId);
 
       setSaving(true);
-      await apiClient.post('/applications/manual', body);
+      try {
+        await apiClient.post('/applications/manual', body);
+      } catch (err) {
+        // Only the server's own answer says the application was not created. A
+        // dropped connection or a proxy's 502/504 says nothing either way.
+        const refused = err.status && (err.status < 502 || err.code);
+        if (!refused && uploadedVideoRef.current) uploadedVideoRef.current.saveUnanswered = true;
+        throw err;
+      }
       // The application names the video now; closing must not discard it.
       uploadedVideoRef.current = null;
       onSuccess();

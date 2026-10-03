@@ -154,12 +154,26 @@ describe('AddApplicationModal', () => {
     await fillRequired(user);
     await user.upload(screen.getByLabelText('Resume (PDF) *'), pdf('resume.pdf'));
     await user.upload(screen.getByLabelText(/^Video/), video());
-    api.post.mockRejectedValueOnce(new Error('Failed to create application'));
+    api.post.mockRejectedValueOnce(Object.assign(new Error('Failed to create application'), { status: 500 }));
     submit();
     await screen.findByText('Failed to create application');
 
     modal.close();
     expect(discardApplicationVideo).toHaveBeenCalledWith('doc-1.mov');
+  });
+
+  it('keeps the video when the save went unanswered, since it may have gone through', async () => {
+    const user = userEvent.setup();
+    const modal = renderModal();
+    await fillRequired(user);
+    await user.upload(screen.getByLabelText('Resume (PDF) *'), pdf('resume.pdf'));
+    await user.upload(screen.getByLabelText(/^Video/), video());
+    api.post.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    submit();
+    await screen.findByText('Failed to fetch');
+
+    modal.close();
+    expect(discardApplicationVideo).not.toHaveBeenCalled();
   });
 
   it('locks the form while it is being sent', async () => {
