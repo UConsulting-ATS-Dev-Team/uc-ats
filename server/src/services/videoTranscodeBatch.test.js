@@ -98,7 +98,7 @@ describe('processVideoFile --apply', () => {
   it('skips a videoUrl that already points at a web copy, before downloading anything', async () => {
     const drive = stubDrive({ getFileMetadata: vi.fn(async () => ({ ...MOV, name: 'IMG_0001.web.mp4', mimeType: 'video/mp4' })) });
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint: vi.fn() });
-    expect(result).toMatchObject({ status: 'skipped', reason: 'already points at a web copy' });
+    expect(result).toMatchObject({ status: 'skipped', reason: 'already points at a web copy', driveConfirmed: true });
     expect(drive.downloadFile).not.toHaveBeenCalled();
   });
 
@@ -147,7 +147,7 @@ describe('processVideoFile --apply', () => {
   it('reports an ffmpeg failure as a failed row, not a Drive failure', async () => {
     transcodeVideo.mockRejectedValue(new Error('ffmpeg exited 1: moov atom not found'));
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive: stubDrive(), repoint: vi.fn() });
-    expect(result).toMatchObject({ status: 'failed', reason: expect.stringMatching(/ffmpeg failed/) });
+    expect(result).toMatchObject({ status: 'failed', reason: expect.stringMatching(/ffmpeg failed/), driveConfirmed: false });
     expect(fs.readdirSync(scratchDir)).toEqual([]);
   });
 
@@ -238,7 +238,7 @@ describe('runPool', () => {
     expect(outcome.stopReason).toMatch(/3 Drive failures in a row/);
   });
 
-  it('resets the Drive count only on a file that got through Drive, not on skips or other errors', async () => {
+  it('resets the Drive count on a file that finished its Drive calls, not on an ffmpeg failure', async () => {
     const run = async (script) => {
       let i = 0;
       return runPool({
@@ -249,15 +249,16 @@ describe('runPool', () => {
           const step = script[i++];
           if (step === 'drive') throw new DriveStepError('metadata', new Error('x'));
           if (step === 'other') throw new Error('ffmpeg');
-          if (step === 'skip') return { status: 'skipped' };
+          if (step === 'skip') return { status: 'skipped', driveConfirmed: true };
+          if (step === 'badcopy') return { status: 'failed', driveConfirmed: false };
           return { status: 'repointed', driveConfirmed: true };
         },
         onResult: () => {},
       });
     };
-    expect(await run(['drive', 'drive', 'ok', 'drive', 'drive', 'ok', 'drive']))
-      .toEqual({ processed: 7, notStarted: 0, stopReason: null });
-    const interleaved = await run(['drive', 'skip', 'drive', 'other', 'drive', 'ok', 'ok']);
+    expect(await run(['drive', 'drive', 'ok', 'drive', 'drive', 'skip', 'drive', 'drive', 'ok']))
+      .toEqual({ processed: 9, notStarted: 0, stopReason: null });
+    const interleaved = await run(['drive', 'badcopy', 'drive', 'other', 'drive', 'ok', 'ok']);
     expect(interleaved.stopReason).toMatch(/3 Drive failures/);
     expect(interleaved.notStarted).toBe(2);
   });

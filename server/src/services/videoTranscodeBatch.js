@@ -114,8 +114,10 @@ export async function processVideoFile({
     fileId,
     status,
     reason,
-    // A dry-run answer means every Drive call it needed worked.
-    driveConfirmed: status === MAPPING_STATUS.PLANNED,
+    // A skip or a dry-run answer finished every Drive call it needed. A failure
+    // (ffprobe, ffmpeg, the copy's check) stopped partway, so it shows nothing
+    // about Drive either way.
+    driveConfirmed: status !== MAPPING_STATUS.FAILED,
     ...fields,
     rows: fields.rows || rowsFor(applications, {
       originalFileId: fileId,
@@ -255,10 +257,10 @@ function summarize(rows, fields) {
 
 /**
  * Runs `processOne` over `groups`, `concurrency` at a time, in order. Stops taking
- * new work after `maxDriveFailures` Drive failures with no file getting through
- * Drive in between (a revoked share or an exhausted quota fails every file the
- * same way); work already started finishes. A result counts as getting through
- * when it carries `driveConfirmed`.
+ * new work after `maxDriveFailures` Drive failures with no file finishing its
+ * Drive calls in between (a revoked share or an exhausted quota fails every file the
+ * same way); work already started finishes. A result counts as finishing its
+ * Drive calls when it carries `driveConfirmed`.
  * `onResult(group, result | null, error | null)` is called as each one ends.
  */
 export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, processOne, onResult }) {
@@ -274,9 +276,10 @@ export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, p
       let failure = null;
       try {
         outcome = await processOne(group);
-        // Only a file that got all the way through Drive shows Drive is working
-        // again. A skip or an ffmpeg failure between two Drive errors says
-        // nothing about Drive, so it does not reset the count.
+        // Only a file that finished every Drive call it needed (a skip, a dry-run
+        // answer, a repoint) shows Drive is working again. An ffmpeg or check
+        // failure between two Drive errors says nothing about Drive, so it
+        // neither counts nor resets.
         if (outcome?.driveConfirmed) consecutiveDriveFailures = 0;
       } catch (error) {
         failure = error;
