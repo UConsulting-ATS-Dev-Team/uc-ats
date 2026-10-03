@@ -1,6 +1,7 @@
 // The per-file steps and the pool, against a stubbed Drive and a stubbed repoint.
 // ffprobe/ffmpeg are stubbed too, so this runs where neither is installed; the
 // real ffmpeg path is exercised by hand (see the PR) rather than in CI.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,7 +24,9 @@ vi.mock('./videoTranscode.js', async (importOriginal) => ({
 
 const { DriveStepError, groupByVideoFile, processVideoFile, runPool } = await import('./videoTranscodeBatch.js');
 
-const MOV = { id: 'orig1', name: 'IMG_0001.MOV', mimeType: 'video/quicktime', size: '48000000', md5Checksum: 'md5A', parents: ['folderA'] };
+// What the stubbed download writes, and so what a copy of it is tagged with.
+const SOURCE_MD5 = crypto.createHash('md5').update('source').digest('hex');
+const MOV = { id: 'orig1', name: 'IMG_0001.MOV', mimeType: 'video/quicktime', size: '48000000', md5Checksum: SOURCE_MD5, parents: ['folderA'] };
 const app = (id, fileId = 'orig1', origin = '') => ({ id, videoUrl: `${origin}/api/files/${fileId}/pdf` });
 
 function stubDrive(overrides = {}) {
@@ -103,7 +106,7 @@ describe('processVideoFile --apply', () => {
   });
 
   it('reuses a copy an interrupted run uploaded, after checking it, instead of transcoding again', async () => {
-    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', mimeType: 'video/mp4', size: '15000000', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: 'md5A' } }]) });
+    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', mimeType: 'video/mp4', size: '15000000', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: SOURCE_MD5 } }]) });
     const repoint = vi.fn(async () => {});
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint });
     expect(drive.listFilesByAppProperty).toHaveBeenCalledWith({ folderId: 'folderA', key: 'transcodedFrom', value: 'orig1', fields: 'id, name, mimeType, size, appProperties' });
@@ -120,7 +123,7 @@ describe('processVideoFile --apply', () => {
     const drive = stubDrive({
       listFilesByAppProperty: vi.fn(async () => [
         { id: 'notVideo', mimeType: 'application/pdf' },
-        { id: 'broken', mimeType: 'video/mp4', appProperties: { transcodedFromMd5: 'md5A' } },
+        { id: 'broken', mimeType: 'video/mp4', appProperties: { transcodedFromMd5: SOURCE_MD5 } },
       ]),
     });
     verifyWebCopy
@@ -135,7 +138,7 @@ describe('processVideoFile --apply', () => {
     expect(result.reason).toMatch(/did not reuse notVideo \(type is application\/pdf\), broken \(not web-ready/);
   });
 
-  it('does not reuse a copy made from an earlier version of the original, or one it cannot place', async () => {
+  it('does not reuse a copy made from another version of the original, or one it cannot place', async () => {
     const drive = stubDrive({
       listFilesByAppProperty: vi.fn(async () => [
         { id: 'stale', mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: 'md5Before' } },
@@ -148,13 +151,27 @@ describe('processVideoFile --apply', () => {
     expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1']);
     expect(transcodeVideo).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ status: 'repointed', newFileId: 'web1', action: 'transcode' });
-    expect(result.reason).toMatch(/did not reuse stale \(made from an earlier version of the original\), untagged \(cannot tell which version/);
+    expect(result.reason).toMatch(/did not reuse stale \(made from another version of the original\), untagged \(cannot tell which version/);
+  });
+
+  it('goes by the bytes it downloaded, so an original replaced after its metadata was read is not matched to the old copy', async () => {
+    // Drive said md5Before when asked; by the download the file was different.
+    const drive = stubDrive({
+      getFileMetadata: vi.fn(async () => ({ ...MOV, md5Checksum: 'md5Before' })),
+      listFilesByAppProperty: vi.fn(async () => [
+        { id: 'ofTheOldVideo', mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: 'md5Before' } },
+      ]),
+    });
+    const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint: vi.fn(async () => {}) });
+    expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1']);
+    expect(result).toMatchObject({ status: 'repointed', newFileId: 'web1', action: 'transcode' });
+    expect(drive.uploadFile.mock.calls[0][0].appProperties.transcodedFromMd5).toBe(SOURCE_MD5);
   });
 
   it('tags a new copy with the original id and its checksum', async () => {
     const drive = stubDrive();
     await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint: vi.fn(async () => {}) });
-    expect(drive.uploadFile.mock.calls[0][0].appProperties).toEqual({ transcodedFrom: 'orig1', transcodedFromMd5: 'md5A' });
+    expect(drive.uploadFile.mock.calls[0][0].appProperties).toEqual({ transcodedFrom: 'orig1', transcodedFromMd5: SOURCE_MD5 });
   });
 
   it('records a repointing row before each database write', async () => {
@@ -241,6 +258,19 @@ describe('processVideoFile dry run', () => {
     expect(transcodeVideo).not.toHaveBeenCalled();
     expect(drive.uploadFile).not.toHaveBeenCalled();
     expect(repoint).not.toHaveBeenCalled();
+  });
+  it('says in a dry run whether a leftover copy would be reused, by its tag', async () => {
+    const run = (copies, probe) => processVideoFile({
+      fileId: 'orig1', applications: [app('a1')], probe, scratchDir, repoint: vi.fn(),
+      drive: stubDrive({ listFilesByAppProperty: vi.fn(async () => copies) }),
+    });
+    const current = { id: 'webOld', mimeType: 'video/mp4', appProperties: { transcodedFromMd5: SOURCE_MD5 } };
+    const stale = { id: 'stale', mimeType: 'video/mp4', appProperties: { transcodedFromMd5: 'md5Before' } };
+    for (const probe of [false, true]) {
+      expect((await run([stale, current], probe)).reason).toMatch(/leftover web copy webOld matches this original, would reuse it if it passes its check/);
+      expect((await run([stale], probe)).reason).toMatch(/leftover web copy stale \(made from another version of the original\) would not be reused/);
+      expect((await run([], probe)).reason).not.toMatch(/leftover/);
+    }
   });
 });
 

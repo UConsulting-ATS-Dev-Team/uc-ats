@@ -9,8 +9,10 @@
 // Originals are never modified or deleted: a web copy is a new file, and the only
 // write anywhere else is the application's videoUrl.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import {
   DECISION,
   MAPPING_STATUS,
@@ -159,18 +161,15 @@ export async function processVideoFile({
 
   // An earlier run may have uploaded a copy and then stopped before repointing.
   // Such a copy is checked like a new one (below) and reused if it passes.
-  const sourceMd5 = meta.md5Checksum || null;
   const existing = await driveStep('lookup', () => drive.listFilesByAppProperty({
     folderId, key: TRANSCODED_FROM_KEY, value: fileId, fields: COPY_FIELDS,
   }));
 
   if (!apply && !probe) {
-    const guess = existing.length
-      ? `web copy ${existing[0].id} already uploaded; would check it and repoint to it`
-      : meta.mimeType === 'video/quicktime'
-        ? 'QuickTime; would transcode or remux'
-        : `${meta.mimeType}; needs a probe to decide (--probe)`;
-    return result(MAPPING_STATUS.PLANNED, guess, known);
+    const what = meta.mimeType === 'video/quicktime'
+      ? 'QuickTime; would transcode or remux'
+      : `${meta.mimeType}; needs a probe to decide (--probe)`;
+    return result(MAPPING_STATUS.PLANNED, `${what}${leftoverNote(existing, meta.md5Checksum)}`, known);
   }
 
   fs.mkdirSync(scratchDir, { recursive: true });
@@ -179,6 +178,10 @@ export async function processVideoFile({
   const outputPath = path.join(scratchDir, `${safeId}${WEB_SUFFIX}`);
   try {
     await driveStep('download', () => drive.downloadFile(fileId, sourcePath));
+    // The checksum of the bytes this run will actually transcode, not the one
+    // Drive reported before the download: an original replaced in between is
+    // then compared, and tagged, as what it now is.
+    const sourceMd5 = await md5OfFile(sourcePath);
 
     let decision;
     try {
@@ -190,8 +193,7 @@ export async function processVideoFile({
     const sourceDurationSec = decision.info.durationSec;
     if (action === DECISION.SKIP) return result(MAPPING_STATUS.SKIPPED, decision.reason, { ...known, action });
     if (!apply) {
-      const reuse = existing.length ? `; web copy ${existing[0].id} already uploaded, would check it first` : '';
-      return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${reuse}`, { ...known, action });
+      return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${leftoverNote(existing, sourceMd5)}`, { ...known, action });
     }
 
     const rejected = [];
@@ -227,7 +229,7 @@ export async function processVideoFile({
       folderId,
       body: fs.createReadStream(outputPath),
       mimeType: 'video/mp4',
-      appProperties: { [TRANSCODED_FROM_KEY]: fileId, ...(sourceMd5 ? { [TRANSCODED_FROM_MD5_KEY]: sourceMd5 } : {}) },
+      appProperties: { [TRANSCODED_FROM_KEY]: fileId, [TRANSCODED_FROM_MD5_KEY]: sourceMd5 },
     }));
 
     const fields = { originalBytes, newBytes, durationMs, action };
@@ -239,18 +241,48 @@ export async function processVideoFile({
   }
 }
 
+const md5OfFile = async (filePath) => {
+  const hash = crypto.createHash('md5');
+  await pipeline(fs.createReadStream(filePath), hash);
+  return hash.digest('hex');
+};
+
 /**
- * Why an earlier run's copy cannot be reused, or [] if it can: it must be an MP4
- * made from the original as it is now (same md5Checksum; an original replaced in
- * place keeps its id) that passes the same check as a fresh copy, at the source's
- * length. Anyone with folder access could have replaced or retagged it since.
- * Downloads it to `outputPath`, which the caller overwrites or removes.
+ * Why a leftover copy's tag rules it out, or null if the tag allows a reuse: it
+ * must be an MP4 tagged with the checksum of the original as it is now (an
+ * original replaced in place keeps its id).
+ */
+function tagProblem(copy, sourceMd5) {
+  if (copy.mimeType && copy.mimeType !== 'video/mp4') return `type is ${copy.mimeType}`;
+  const madeFrom = copy.appProperties?.[TRANSCODED_FROM_MD5_KEY];
+  if (!sourceMd5 || !madeFrom) return 'cannot tell which version of the original it was made from';
+  if (madeFrom !== sourceMd5) return 'made from another version of the original';
+  return null;
+}
+
+/**
+ * What a dry run can say about leftover copies without downloading them: which
+ * one a real run would check, or that none can be reused. `sourceMd5` is Drive's
+ * reported checksum on a metadata-only run, so this is what `--apply` would find
+ * unless the original changes first.
+ */
+function leftoverNote(existing, sourceMd5) {
+  if (!existing.length) return '';
+  const candidate = existing.find((copy) => !tagProblem(copy, sourceMd5));
+  return candidate
+    ? `; leftover web copy ${candidate.id} matches this original, would reuse it if it passes its check`
+    : `; leftover web ${existing.length === 1 ? 'copy' : 'copies'} ${existing.map((copy) => `${copy.id} (${tagProblem(copy, sourceMd5)})`).join(', ')} would not be reused`;
+}
+
+/**
+ * Why an earlier run's copy cannot be reused, or [] if it can: its tag must
+ * allow it (tagProblem), and it must pass the same check as a fresh copy, at the
+ * source's length. Anyone with folder access could have replaced or retagged it
+ * since. Downloads it to `outputPath`, which the caller overwrites or removes.
  */
 async function checkExistingCopy({ copy, drive, outputPath, sourceDurationSec, sourceMd5 }) {
-  if (copy.mimeType && copy.mimeType !== 'video/mp4') return [`type is ${copy.mimeType}`];
-  const madeFrom = copy.appProperties?.[TRANSCODED_FROM_MD5_KEY];
-  if (!sourceMd5 || !madeFrom) return ['cannot tell which version of the original it was made from'];
-  if (madeFrom !== sourceMd5) return ['made from an earlier version of the original'];
+  const tag = tagProblem(copy, sourceMd5);
+  if (tag) return [tag];
   await driveStep('download', () => drive.downloadFile(copy.id, outputPath));
   try {
     return (await verifyWebCopy(outputPath, { sourceDurationSec })).problems;
