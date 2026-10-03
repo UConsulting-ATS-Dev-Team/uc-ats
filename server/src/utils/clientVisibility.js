@@ -15,6 +15,8 @@
 //    assignment id is the security primitive: it is meaningless without a row
 //    that ties it to this client.
 
+import { documentFromUrl } from './applicationDocumentIds.js';
+
 export const VISIBILITY_LEVELS = ['BLIND', 'BASIC', 'FULL'];
 
 export const pdfUrlForAssignment = (assignmentId) =>
@@ -61,6 +63,28 @@ export const extractDriveFileId = (value) => {
   return null;
 };
 
+// An application's resume is a Drive file when it came from the form, and a
+// stored upload when an admin added or replaced it: a blind resume uploaded with
+// a manual application (services/applicationDocuments.js), or the current
+// ResumeUpload, whose path only the row knows. `resumeUploads` is read when the
+// caller loaded it and skipped when it did not.
+const applicationResumeSource = (app, visibility) => {
+  const stored = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
+
+  const document = documentFromUrl(stored);
+  if (document) {
+    return document.isVideo ? null : { kind: 'local', storagePath: document.key };
+  }
+
+  if (visibility !== 'BLIND') {
+    const upload = app.resumeUploads?.find((row) => row.storagePath && row.sourceUrl === stored);
+    if (upload) return { kind: 'local', storagePath: upload.storagePath };
+  }
+
+  const fileId = extractDriveFileId(stored);
+  return fileId ? { kind: 'drive', fileId } : null;
+};
+
 /**
  * Whether a resume can actually be rendered for this visibility level. Drives
  * the `available` flag so the UI can say "not available" instead of handing the
@@ -68,14 +92,10 @@ export const extractDriveFileId = (value) => {
  */
 export const isViewable = (assignment, visibility) => {
   if (assignment?.application) {
-    // Deliberately the same predicate the stream handler uses: a row whose
-    // stored URL we cannot parse into a file id is not viewable, and saying so
-    // in the list beats a card that opens onto a 404.
-    const stored =
-      visibility === 'BLIND'
-        ? assignment.application.blindResumeUrl
-        : assignment.application.resumeUrl;
-    return Boolean(extractDriveFileId(stored));
+    // Deliberately the same resolution the stream handler uses: a row whose
+    // stored URL names no file we can find is not viewable, and saying so in
+    // the list beats a card that opens onto a 404.
+    return Boolean(applicationResumeSource(assignment.application, visibility));
   }
   // No redacted variant of an uploaded PDF exists, for a member or a student.
   if (assignment?.memberResume || assignment?.externalResume) {
@@ -93,11 +113,7 @@ export const isViewable = (assignment, visibility) => {
  */
 export const resolveResumeSource = (assignment, visibility) => {
   if (assignment?.application) {
-    const app = assignment.application;
-    const stored = visibility === 'BLIND' ? app.blindResumeUrl : app.resumeUrl;
-    const fileId = extractDriveFileId(stored);
-    if (!fileId) return null;
-    return { kind: 'drive', fileId };
+    return applicationResumeSource(assignment.application, visibility);
   }
   const uploaded = assignment?.memberResume || assignment?.externalResume;
   if (uploaded) {

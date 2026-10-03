@@ -16,6 +16,9 @@ export const GUARD_TABLE = Object.freeze([
   // guardFor takes the first match, so a sub-prefix of /api/admin goes above it.
   // index.js mounts routes/emailHealth.js behind requireAuth, requireAdmin.
   { prefix: '/api/admin/email-health', allowed: ['ADMIN'], severity: 'CRITICAL' },
+  // routes/applicationDocuments.js: requireAdmin on both video-uploads routes.
+  // Above the router's own mixed-gate row further down.
+  { prefix: '/api/application-documents/video-uploads', allowed: ['ADMIN'], severity: 'CRITICAL' },
   // routes/admin.js L137 router.use(requireAuth, requireAdmin); every other
   // /api/admin mount in index.js is itself behind requireAdmin.
   { prefix: '/api/admin', allowed: ['ADMIN'], severity: 'CRITICAL' },

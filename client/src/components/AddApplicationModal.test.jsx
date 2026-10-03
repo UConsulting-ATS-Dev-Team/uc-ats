@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AddApplicationModal from './AddApplicationModal';
 import api from '../utils/api';
-import { uploadApplicationVideo } from '../utils/applicationVideoUpload';
+import { discardApplicationVideo, uploadApplicationVideo } from '../utils/applicationVideoUpload';
 
 vi.mock('../utils/api', () => ({
   default: { post: vi.fn() },
@@ -13,6 +13,7 @@ vi.mock('../utils/api', () => ({
 vi.mock('../utils/applicationVideoUpload', async (importOriginal) => ({
   ...(await importOriginal()),
   uploadApplicationVideo: vi.fn(),
+  discardApplicationVideo: vi.fn(),
 }));
 
 const pdf = (name) => new File(['%PDF-1.4'], name, { type: 'application/pdf' });
@@ -20,8 +21,8 @@ const video = (name = 'pitch.mov') => new File(['video'], name, { type: 'video/q
 
 const renderModal = () => {
   const props = { isOpen: true, onClose: vi.fn(), onSuccess: vi.fn() };
-  render(<AddApplicationModal {...props} />);
-  return props;
+  const view = render(<AddApplicationModal {...props} />);
+  return { ...props, close: () => view.rerender(<AddApplicationModal {...props} isOpen={false} />) };
 };
 
 // Everything the form requires except the files.
@@ -90,7 +91,8 @@ describe('AddApplicationModal', () => {
     submit();
 
     await waitFor(() => expect(props.onSuccess).toHaveBeenCalled());
-    expect(uploadApplicationVideo).toHaveBeenCalledWith(file, expect.any(Function));
+    expect(uploadApplicationVideo).toHaveBeenCalledWith(file, expect.any(Function), expect.any(AbortSignal));
+    expect(discardApplicationVideo).not.toHaveBeenCalled();
     expect(api.post.mock.calls[0][1].get('videoDocumentId')).toBe('doc-1.mov');
   });
 
@@ -121,6 +123,58 @@ describe('AddApplicationModal', () => {
 
     await screen.findByText('The video upload was interrupted.');
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('does not create the application when the form is closed mid-upload', async () => {
+    const user = userEvent.setup();
+    const modal = renderModal();
+    await fillRequired(user);
+    await user.upload(screen.getByLabelText('Resume (PDF) *'), pdf('resume.pdf'));
+    await user.upload(screen.getByLabelText(/^Video/), video());
+    let finishUpload;
+    let signal;
+    uploadApplicationVideo.mockImplementation((file, onProgress, uploadSignal) => {
+      signal = uploadSignal;
+      return new Promise((resolve) => { finishUpload = resolve; });
+    });
+    submit();
+    await waitFor(() => expect(uploadApplicationVideo).toHaveBeenCalled());
+
+    modal.close();
+    expect(signal.aborted).toBe(true);
+    finishUpload('doc-late.mov');
+
+    await waitFor(() => expect(discardApplicationVideo).toHaveBeenCalledWith('doc-late.mov'));
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('discards an uploaded video when the form is closed after a failed save', async () => {
+    const user = userEvent.setup();
+    const modal = renderModal();
+    await fillRequired(user);
+    await user.upload(screen.getByLabelText('Resume (PDF) *'), pdf('resume.pdf'));
+    await user.upload(screen.getByLabelText(/^Video/), video());
+    api.post.mockRejectedValueOnce(new Error('Failed to create application'));
+    submit();
+    await screen.findByText('Failed to create application');
+
+    modal.close();
+    expect(discardApplicationVideo).toHaveBeenCalledWith('doc-1.mov');
+  });
+
+  it('locks the form while it is being sent', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await fillRequired(user);
+    await user.upload(screen.getByLabelText('Resume (PDF) *'), pdf('resume.pdf'));
+    await user.upload(screen.getByLabelText(/^Video/), video());
+    uploadApplicationVideo.mockImplementation(() => new Promise(() => {}));
+    submit();
+
+    await waitFor(() => expect(screen.getByLabelText('Resume (PDF) *')).toBeDisabled());
+    expect(screen.getByLabelText('First Name *')).toBeDisabled();
+    // Closing is still possible: it is what cancels the upload.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
   });
 
   it('asks for a resume', async () => {

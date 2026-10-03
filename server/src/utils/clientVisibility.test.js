@@ -201,6 +201,47 @@ describe('resolveResumeSource', () => {
     expect(resolveResumeSource(applicantAssignment({ blindResumeUrl: '' }), 'BLIND')).toBeNull();
   });
 
+  // An admin adding an application by hand uploads both files, so neither URL
+  // is a Drive link.
+  describe('for an application whose resumes were uploaded', () => {
+    const DOC = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
+    const uploaded = (overrides = {}) =>
+      applicantAssignment({
+        resumeUrl: '/api/resume-uploads/up-1/file',
+        blindResumeUrl: `/api/application-documents/${DOC}.pdf/file`,
+        resumeUploads: [{ sourceUrl: '/api/resume-uploads/up-1/file', storagePath: 'resumes/app-1/up-1.pdf' }],
+        ...overrides
+      });
+
+    it('serves the uploaded blind resume to a BLIND client', () => {
+      expect(resolveResumeSource(uploaded(), 'BLIND')).toEqual({
+        kind: 'local',
+        storagePath: `application-documents/${DOC}.pdf`
+      });
+      expect(isViewable(uploaded(), 'BLIND')).toBe(true);
+    });
+
+    it('serves the uploaded resume at BASIC and FULL', () => {
+      for (const visibility of ['BASIC', 'FULL']) {
+        expect(resolveResumeSource(uploaded(), visibility)).toEqual({
+          kind: 'local',
+          storagePath: 'resumes/app-1/up-1.pdf'
+        });
+      }
+    });
+
+    it('is not available when the upload row was not loaded or does not match', () => {
+      expect(resolveResumeSource(uploaded({ resumeUploads: undefined }), 'FULL')).toBeNull();
+      expect(resolveResumeSource(uploaded({ resumeUploads: [{ sourceUrl: '/api/resume-uploads/other/file', storagePath: 'resumes/x/y.pdf' }] }), 'FULL')).toBeNull();
+      expect(isViewable(uploaded({ resumeUploads: [] }), 'FULL')).toBe(false);
+    });
+
+    it('never serves a video as a blind resume', () => {
+      const assignment = uploaded({ blindResumeUrl: `/api/application-documents/${DOC}.mp4/file` });
+      expect(resolveResumeSource(assignment, 'BLIND')).toBeNull();
+    });
+  });
+
   it('refuses a member resume for a BLIND client', () => {
     expect(resolveResumeSource(memberAssignment(), 'BLIND')).toBeNull();
   });

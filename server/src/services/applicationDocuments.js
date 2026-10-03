@@ -11,9 +11,9 @@
 // The regular resume is not one of these. It is a ResumeUpload, so replacing it
 // later keeps its version history (routes/resumeUploads.js).
 //
-// A document's id is `<uuid>.<extension>`. The extension is the content type, so
-// nothing has to remember it, and a fresh uuid per upload means a document's
-// bytes never change: its size can be remembered for good.
+// A document's id is `<uuid>.<extension>` (utils/applicationDocumentIds.js), and
+// a fresh uuid per upload means a document's bytes never change: its size can be
+// remembered for good.
 //
 // A video is far too large to pass through this server (/api goes through
 // Vercel's proxy, and an upload held in memory would not fit on the instance), so
@@ -26,45 +26,16 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import supabase, { isSupabaseAvailable } from '../supabaseClient.js';
 import { putResume, removeResume, LOCAL_STORAGE_ROOT, RESUME_BUCKET } from './resumeStorage.js';
+import {
+  parseDocumentId,
+  documentUrl,
+  videoExtension,
+  VIDEO_EXTENSIONS,
+} from '../utils/applicationDocumentIds.js';
 
-const CONTENT_TYPES = Object.freeze({
-  pdf: 'application/pdf',
-  mp4: 'video/mp4',
-  mov: 'video/quicktime',
-  m4v: 'video/x-m4v',
-  webm: 'video/webm',
-});
+export { parseDocumentId, documentUrl, videoExtension, VIDEO_EXTENSIONS };
 
-export const VIDEO_EXTENSIONS = Object.freeze(['mp4', 'mov', 'm4v', 'webm']);
 export const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
-
-const DOCUMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.([a-z0-9]+)$/;
-
-/**
- * What a document id says about itself, or null when it is not one of ours.
- * Every id reaching storage goes through here, so a path can never be built
- * from anything but a uuid and a known extension.
- */
-export function parseDocumentId(id) {
-  const match = typeof id === 'string' ? DOCUMENT_ID.exec(id) : null;
-  const contentType = match ? CONTENT_TYPES[match[1]] : null;
-  if (!contentType) return null;
-  return {
-    id,
-    contentType,
-    isVideo: VIDEO_EXTENSIONS.includes(match[1]),
-    key: `application-documents/${id}`,
-  };
-}
-
-/** The URL stored on the application, and the one the document is served at. */
-export const documentUrl = (id) => `/api/application-documents/${id}/file`;
-
-/** `Interview.MOV` -> `mov`; null for anything that is not a video we accept. */
-export function videoExtension(fileName) {
-  const ext = path.extname(String(fileName || '')).slice(1).toLowerCase();
-  return VIDEO_EXTENSIONS.includes(ext) ? ext : null;
-}
 
 const notConfigured = () => {
   const error = new Error('File storage is not configured. Please contact the recruitment team.');
@@ -173,7 +144,7 @@ export async function openDocument(id, range) {
   return fs.createReadStream(absolute, range ? { start: range.start, end: range.end } : {});
 }
 
-/** Best-effort removal, for an upload whose application was never created. */
+/** Best-effort removal, for an upload no application ended up naming. */
 export async function removeDocument(id) {
   const document = parseDocumentId(id);
   if (!document) return;

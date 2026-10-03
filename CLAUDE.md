@@ -309,6 +309,14 @@ The system follows a **recruiting cycle-based workflow**:
   straight to Supabase Storage, and the manual route is given `videoDocumentId`, which it
   checks is really in storage. Playback reads it back in 4 MB ranges like a Drive video.
   Limit 500 MB here; the Supabase project's own upload limit applies first if it is lower.
+- A sealed application's documents are sealed with it (423 for staff without an exec
+  unlock). The unlock is a header a signed link cannot carry, so it is checked when the
+  link is signed, and a request arriving on that link is not asked again.
+- Closing the form mid-upload aborts the upload and creates nothing. A video uploaded for
+  a save that failed is removed when the form closes
+  (`DELETE /api/application-documents/video-uploads/:id`, which refuses one in use).
+- The partner portal streams an uploaded resume or blind resume from storage
+  (`applicationResumeSource` in `utils/clientVisibility.js`), not only Drive files.
 - Video upload needs Supabase configured (503 `STORAGE_NOT_CONFIGURED` otherwise); there
   is no local-disk fallback for it. PDFs fall back to disk outside production as resumes do.
 - `scripts/transcode-videos.js` only understands `/api/files/<id>` URLs, so it reports an

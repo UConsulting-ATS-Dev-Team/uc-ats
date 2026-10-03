@@ -53,6 +53,11 @@ describe('evaluateGuardBypass', () => {
     expect(ok('CANDIDATE', '/api/application-documents/:token/file')).toBeNull();
   });
 
+  it('answers the video upload ticket from its own admin-only row', () => {
+    expect(ok('MEMBER', '/api/application-documents/video-uploads')?.severity).toBe('CRITICAL');
+    expect(ok('ADMIN', '/api/application-documents/video-uploads')).toBeNull();
+  });
+
   it('ignores prefixes with public routes', () => {
     expect(ok('ANON', '/api/applications/test-google-api')).toBeNull();
     expect(ok('ANON', '/api/auth/login')).toBeNull();

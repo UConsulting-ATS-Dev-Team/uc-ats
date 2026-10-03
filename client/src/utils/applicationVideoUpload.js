@@ -24,9 +24,13 @@ export function videoProblem(file) {
 }
 
 // XMLHttpRequest rather than fetch, which cannot report upload progress.
-function sendToStorage(url, file, contentType, onProgress) {
+function sendToStorage(url, file, contentType, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    const aborted = () => new DOMException('The video upload was cancelled.', 'AbortError');
+    if (signal?.aborted) return reject(aborted());
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+    xhr.onabort = () => reject(aborted());
     xhr.open('PUT', url);
     xhr.setRequestHeader('Content-Type', contentType);
     xhr.upload.onprogress = (event) => {
@@ -45,13 +49,22 @@ function sendToStorage(url, file, contentType, onProgress) {
 
 /**
  * Upload `file` and resolve with its document id. `onProgress` is called with
- * a fraction from 0 to 1.
+ * a fraction from 0 to 1. Aborting `signal` stops the upload and rejects with
+ * an AbortError.
  */
-export async function uploadApplicationVideo(file, onProgress) {
+export async function uploadApplicationVideo(file, onProgress, signal) {
   const { documentId, uploadUrl, contentType } = await apiClient.post('/application-documents/video-uploads', {
     fileName: file.name,
     sizeBytes: file.size,
   });
-  await sendToStorage(uploadUrl, file, contentType, onProgress);
+  await sendToStorage(uploadUrl, file, contentType, onProgress, signal);
   return documentId;
+}
+
+/**
+ * Remove an uploaded video no application ended up naming. Best-effort: the
+ * server refuses one that is in use, and a failure only leaves a stray file.
+ */
+export function discardApplicationVideo(documentId) {
+  return apiClient.delete(`/application-documents/video-uploads/${documentId}`).catch(() => {});
 }

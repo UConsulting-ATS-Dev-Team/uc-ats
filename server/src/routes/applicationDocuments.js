@@ -10,8 +10,10 @@ import {
   documentUrl,
   openDocument,
   parseDocumentId,
+  removeDocument,
 } from '../services/applicationDocuments.js';
 import { isStaff, ownApplicationWhere } from '../utils/applicationOwnership.js';
+import { isApplicationLocked, sendRecordLocked } from '../utils/lockedRecords.js';
 
 const router = express.Router();
 
@@ -23,22 +25,50 @@ const linkedDocument = (req) => {
 
 router.use(acceptDocumentLink(linkedDocument), requireAuth);
 
-// The same rule routes/files.js applies to a Drive file: staff may open a
-// document some application names, an applicant only one their own application
-// names. An uploaded document no application points at is served to nobody.
-async function authorizeDocumentAccess(id, user) {
+const referencedBy = (id) => {
   const url = documentUrl(id);
-  const referenced = { OR: [{ blindResumeUrl: url }, { videoUrl: url }] };
+  return { OR: [{ blindResumeUrl: url }, { videoUrl: url }] };
+};
 
-  if (isStaff(user)) {
-    return Boolean(await prisma.application.findFirst({ where: referenced, select: { id: true } }));
+// A request that arrived on a signed link rather than a sign-in.
+const cameByLink = (req) => !req.headers.authorization && typeof req.query.access === 'string';
+
+// Staff may open a document some application names, an applicant only one their
+// own application names. An uploaded document no application points at is
+// served to nobody.
+//
+// A sealed application's documents are sealed with it: staff need an executive
+// unlock. The unlock travels as a header, which a signed link cannot carry, so
+// it is checked when the link is signed and a request arriving on that link is
+// not asked again. The link lasts 15 minutes; an unlock lasts 30.
+//
+// Answers 'ok', 'forbidden' or 'locked'.
+async function documentAccess(req, id) {
+  const referenced = referencedBy(id);
+
+  if (isStaff(req.user)) {
+    const application = await prisma.application.findFirst({ where: referenced, select: { id: true } });
+    if (!application) return 'forbidden';
+    if (!cameByLink(req) && (await isApplicationLocked(req, application.id))) return 'locked';
+    return 'ok';
   }
 
-  const owned = ownApplicationWhere(user);
-  if (!owned) return false;
-  return Boolean(
-    await prisma.application.findFirst({ where: { AND: [owned, referenced] }, select: { id: true } })
-  );
+  const owned = ownApplicationWhere(req.user);
+  if (!owned) return 'forbidden';
+  const application = await prisma.application.findFirst({
+    where: { AND: [owned, referenced] },
+    select: { id: true },
+  });
+  return application ? 'ok' : 'forbidden';
+}
+
+// Sends the refusal and answers false when the caller may not open the document.
+async function allowDocument(req, res, id) {
+  const access = await documentAccess(req, id);
+  if (access === 'ok') return true;
+  if (access === 'locked') sendRecordLocked(res);
+  else res.status(403).json({ error: 'Forbidden' });
+  return false;
 }
 
 // POST /api/application-documents/video-uploads
@@ -60,6 +90,23 @@ router.post('/video-uploads', requireAdmin, async (req, res) => {
   }
 });
 
+// DELETE /api/application-documents/video-uploads/:documentId
+// The form was closed, or another video chosen, after this one was uploaded.
+// Only a video no application names is removed.
+router.delete('/video-uploads/:documentId', requireAdmin, async (req, res) => {
+  try {
+    const document = parseDocumentId(req.params.documentId);
+    if (!document?.isVideo) return res.status(404).json({ error: 'Document not found' });
+    const inUse = await prisma.application.findFirst({ where: referencedBy(document.id), select: { id: true } });
+    if (inUse) return res.status(409).json({ error: 'This video belongs to an application.' });
+    await removeDocument(document.id);
+    res.json({ removed: true });
+  } catch (error) {
+    console.error('[DELETE /api/application-documents/video-uploads/:documentId]', error);
+    res.status(500).json({ error: 'Failed to remove the video' });
+  }
+});
+
 // POST /api/application-documents/:documentId/link
 // A short-lived link that opens the file below in a new tab or a <video>
 // (services/documentLinks.js). Same access rule as the file.
@@ -67,9 +114,7 @@ router.post('/:documentId/link', async (req, res) => {
   try {
     const document = parseDocumentId(req.params.documentId);
     if (!document) return res.status(404).json({ error: 'Document not found' });
-    if (!(await authorizeDocumentAccess(document.id, req.user))) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
+    if (!(await allowDocument(req, res, document.id))) return;
     res.json({ access: signDocumentLink(`application-document:${document.id}`, req.user.id) });
   } catch (error) {
     console.error('[POST /api/application-documents/:documentId/link]', error);
@@ -79,14 +124,14 @@ router.post('/:documentId/link', async (req, res) => {
 
 // GET /api/application-documents/:documentId/file
 // A video asks for this once per range, each answered with at most 4 MB
-// (services/byteRange.js); a PDF is small enough to arrive whole.
+// (services/byteRange.js); a PDF is small enough to arrive whole. A request
+// with no Range gets the whole file, as /api/files does: every player in the
+// app asks in ranges, and RFC 9110 leaves no way to answer a plain GET in part.
 router.get('/:documentId/file', async (req, res) => {
   try {
     const document = parseDocumentId(req.params.documentId);
     if (!document) return res.status(404).json({ error: 'Document not found' });
-    if (!(await authorizeDocumentAccess(document.id, req.user))) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
+    if (!(await allowDocument(req, res, document.id))) return;
 
     const size = await documentSize(document.id);
     if (size === null) return res.status(404).json({ error: 'Document file not found' });

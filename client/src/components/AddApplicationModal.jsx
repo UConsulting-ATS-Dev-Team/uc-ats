@@ -2,7 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
-import { uploadApplicationVideo, videoProblem, VIDEO_ACCEPT, MAX_VIDEO_BYTES } from '../utils/applicationVideoUpload';
+import {
+  discardApplicationVideo,
+  uploadApplicationVideo,
+  videoProblem,
+  VIDEO_ACCEPT,
+  MAX_VIDEO_BYTES
+} from '../utils/applicationVideoUpload';
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const megabytes = (bytes) => Math.round(bytes / (1024 * 1024));
@@ -37,13 +43,28 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
   // The video already in storage, so a retry after a failed save does not send
   // the same file again.
   const uploadedVideoRef = useRef(null);
+  // Aborted when the form closes, so a submit still uploading does not go on
+  // to create the application.
+  const submitRef = useRef(null);
+
+  const discardUploadedVideo = () => {
+    if (uploadedVideoRef.current) discardApplicationVideo(uploadedVideoRef.current.documentId);
+    uploadedVideoRef.current = null;
+  };
   const [loading, setLoading] = useState(false);
+  // True while the application itself is being created. That request cannot be
+  // taken back, so the form cannot be closed until it answers.
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   // Closing unmounts the file inputs, so they come back empty. Forget the files
   // with them, or a reopened form would send one its inputs no longer show.
+  // That includes a video already uploaded for a save that then failed.
   useEffect(() => {
-    if (!isOpen) setFiles(EMPTY_FILES);
+    if (isOpen) return;
+    submitRef.current?.abort();
+    setFiles(EMPTY_FILES);
+    discardUploadedVideo();
   }, [isOpen]);
 
   const handleInputChange = (e) => {
@@ -79,6 +100,8 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    const submit = new AbortController();
+    submitRef.current = submit;
 
     try {
       // Validate required fields
@@ -108,11 +131,21 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
       let videoDocumentId = null;
       if (files.video) {
         if (uploadedVideoRef.current?.file !== files.video) {
+          // A different video than the one uploaded for an earlier attempt.
+          discardUploadedVideo();
           setVideoProgress(0);
-          const documentId = await uploadApplicationVideo(files.video, setVideoProgress);
+          const documentId = await uploadApplicationVideo(files.video, setVideoProgress, submit.signal);
+          if (submit.signal.aborted) {
+            // Closed just as the upload finished.
+            discardApplicationVideo(documentId);
+            return;
+          }
           uploadedVideoRef.current = { file: files.video, documentId };
+          setVideoProgress(null);
         }
         videoDocumentId = uploadedVideoRef.current.documentId;
+      } else {
+        discardUploadedVideo();
       }
 
       const body = new FormData();
@@ -125,17 +158,21 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
       if (files.blindResume) body.append('blindResume', files.blindResume);
       if (videoDocumentId) body.append('videoDocumentId', videoDocumentId);
 
+      setSaving(true);
       await apiClient.post('/applications/manual', body);
+      // The application names the video now; closing must not discard it.
+      uploadedVideoRef.current = null;
       onSuccess();
       onClose();
 
       // Reset form
       setFormData(EMPTY_FORM);
       setFiles(EMPTY_FILES);
-      uploadedVideoRef.current = null;
     } catch (err) {
-      setError(err.message || 'Failed to create application');
+      // Closing the form is what aborts an upload; there is nobody to tell.
+      if (err.name !== 'AbortError') setError(err.message || 'Failed to create application');
     } finally {
+      setSaving(false);
       setLoading(false);
       setVideoProgress(null);
     }
@@ -148,7 +185,7 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
       <div className="modal-content">
         <div className="modal-header">
           <h2>Add New Application</h2>
-          <button className="close-btn" onClick={onClose}>
+          <button className="close-btn" onClick={onClose} disabled={saving}>
             <XMarkIcon className="close-icon" />
           </button>
         </div>
@@ -160,6 +197,9 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
         )}
 
         <form onSubmit={handleSubmit} className="application-form">
+          {/* Nothing can be edited while it is being sent: the submit already
+              holds the values and files it started with. */}
+          <fieldset disabled={loading} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="form-section">
             <h3>Personal Information</h3>
             <div className="form-row">
@@ -421,7 +461,6 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
                 name="video"
                 accept={VIDEO_ACCEPT}
                 onChange={handleFileChange}
-                disabled={loading}
               />
               {videoProgress !== null && (
                 <progress
@@ -434,8 +473,10 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
             </div>
           </div>
 
+          </fieldset>
+
           <div className="form-actions">
-            <button type="button" onClick={onClose} className="cancel-btn">
+            <button type="button" onClick={onClose} disabled={saving} className="cancel-btn">
               Cancel
             </button>
             <button type="submit" disabled={loading} className="submit-btn">
