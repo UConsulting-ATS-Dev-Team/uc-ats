@@ -724,7 +724,6 @@
 
 .staging-table .col-rank { width: 52px; }
 .staging-table .col-score { width: 120px; }
-.staging-table .col-grading { width: 120px; }
 .staging-table .col-events { width: 100px; }
 .staging-table .col-decision { width: 170px; }
 .staging-table .col-actions { width: 96px; }
@@ -841,7 +840,6 @@
 }
 
 .staging-pill--success { background: var(--status-success-bg); color: var(--status-success-text); }
-.staging-pill--warning { background: var(--status-warning-bg); color: var(--status-warning-text); }
 
 .staging-decision-cell {
   display: flex;

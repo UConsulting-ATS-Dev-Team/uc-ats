@@ -56,7 +56,6 @@ import StagingLiveVoteSetupDialog from '../components/staging/StagingLiveVoteSet
 import RubricEditorDialog from '../components/staging/RubricEditorDialog';
 import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditorDialog';
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
-import { hasCoverLetter as hasCoverLetterSubmission } from '../utils/coverLetter';
 import { stagingMax, useDocumentRubrics } from '../utils/documentRubrics';
 import { rankByScore } from '../utils/stagingRank';
 
@@ -160,38 +159,6 @@ const stagingAPI = {
   async fetchEvaluationSummaries(applicationIds) {
     return await apiClient.post('/admin/applications/evaluation-summaries', { applicationIds });
   }
-};
-
-const buildGradingMap = (adminApplications) => {
-  const gradingMap = {};
-
-  (adminApplications || []).forEach(app => {
-    const hasResume = Boolean(app.resumeUrl);
-    const hasCoverLetter = hasCoverLetterSubmission(app);
-    const hasVideo = Boolean(app.videoUrl);
-
-    const hasResumeScore = Boolean(app.hasResumeScore);
-    const hasCoverLetterScore = Boolean(app.hasCoverLetterScore);
-    const hasVideoScore = Boolean(app.hasVideoScore);
-
-    let gradingComplete = true;
-
-    if (hasResume && !hasResumeScore) gradingComplete = false;
-    if (hasCoverLetter && !hasCoverLetterScore) gradingComplete = false;
-    if (hasVideo && !hasVideoScore) gradingComplete = false;
-
-    gradingMap[app.candidateId] = {
-      complete: gradingComplete,
-      hasResume,
-      hasCoverLetter,
-      hasVideo,
-      hasResumeScore,
-      hasCoverLetterScore,
-      hasVideoScore
-    };
-  });
-
-  return gradingMap;
 };
 
 // Decision options
@@ -313,35 +280,6 @@ const AttendanceDisplay = ({ attendance, events }) => {
   );
 };
 
-const GradingStatusDisplay = ({ gradingData }) => {
-  if (!gradingData) {
-    return <span className="staging-zero">No data</span>;
-  }
-
-  const { complete, hasResume, hasCoverLetter, hasVideo, hasResumeScore, hasCoverLetterScore, hasVideoScore } = gradingData;
-  const line = (has, scored, label) => (has ? (scored ? `✓ ${label} scored` : `⏳ ${label} pending`) : `✗ No ${label.toLowerCase()}`);
-  const tooltipText = [
-    line(hasResume, hasResumeScore, 'Resume'),
-    line(hasCoverLetter, hasCoverLetterScore, 'Short answer'),
-    line(hasVideo, hasVideoScore, 'Video')
-  ].join('\n');
-  const missing = [
-    hasResume && !hasResumeScore,
-    hasCoverLetter && !hasCoverLetterScore,
-    hasVideo && !hasVideoScore
-  ].filter(Boolean).length;
-
-  return (
-    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tooltipText}</span>} arrow>
-      {complete ? (
-        <span className="staging-pill staging-pill--success">Graded</span>
-      ) : (
-        <span className="staging-pill staging-pill--warning">{missing} to grade</span>
-      )}
-    </Tooltip>
-  );
-};
-
 export default function Staging() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -367,7 +305,6 @@ export default function Staging() {
   const [loading, setLoading] = useState(true);
   const initialCacheRef = useRef(null);
   const [currentCycle, setCurrentCycle] = useState(null);
-  const [gradingCompleteByCandidate, setGradingCompleteByCandidate] = useState({});
   const [perRoundDecisions, setPerRoundDecisions] = useState({
     resume: {},
     coffee: {},
@@ -673,7 +610,6 @@ export default function Staging() {
     setReviewTeams(data.reviewTeamsData || []);
     setPerRoundDecisions(data.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} });
     setLiveVoteResults(data.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS);
-    setGradingCompleteByCandidate(data.gradingMap || {});
 
     setPagination(prev => ({
       ...prev,
@@ -720,8 +656,7 @@ export default function Staging() {
       eventsData: snapshot.events || [],
       reviewTeamsData: snapshot.reviewTeams || [],
       perRoundDecisions: snapshot.perRoundDecisions || { resume: {}, coffee: {}, firstRound: {}, final: {} },
-      liveVoteResults: snapshot.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS,
-      gradingMap: buildGradingMap(adminApplicationsData)
+      liveVoteResults: snapshot.liveVoteResults || EMPTY_LIVE_VOTE_RESULTS
     };
   }, []);
 
@@ -1917,7 +1852,6 @@ export default function Staging() {
                 <col className="col-rank" />
                 <col />
                 <col className="col-score" />
-                <col className="col-grading" />
                 <col className="col-events" />
                 <col className="col-decision" />
                 <col className="col-actions" />
@@ -1931,7 +1865,6 @@ export default function Staging() {
                   </th>
                   <th>Candidate</th>
                   <th>Score</th>
-                  <th>Grading</th>
                   <th>Events</th>
                   <th>Decision</th>
                   <th><span className="visually-hidden">Actions</span></th>
@@ -1969,9 +1902,6 @@ export default function Staging() {
                       </td>
                       <td data-label="Score">
                         <ScoreDisplay score={scoreOf(candidate)} maxScore={currentTab === 0 ? stagingMax(rubricData) : 10} />
-                      </td>
-                      <td data-label="Grading">
-                        <GradingStatusDisplay gradingData={gradingCompleteByCandidate[candidate.id]} />
                       </td>
                       <td data-label="Events">
                         <AttendanceDisplay attendance={candidate.attendance} events={events} />
