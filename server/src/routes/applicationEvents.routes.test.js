@@ -107,7 +107,6 @@ function install({ events, rsvps, attendance }) {
     if (where.candidateId && row.candidateId !== where.candidateId) return false;
     if (typeof where.eventId === 'string' && row.eventId !== where.eventId) return false;
     if (where.eventId?.in && !where.eventId.in.includes(row.eventId)) return false;
-    if (where.event?.cycleId && !byCycle(where.event.cycleId).some((ev) => ev.id === row.eventId)) return false;
     return true;
   };
   prisma.application.findUnique.mockResolvedValue(application);
@@ -174,6 +173,18 @@ describe('GET /api/applications/:id/events', () => {
     console.log(`queries per request by event count: ${JSON.stringify(counts)}`);
     expect(new Set(Object.values(counts)).size).toBe(1);
     expect(counts[50]).toBeLessThanOrEqual(5);
+  });
+
+  // (eventId, candidateId) is the only index on either table, so a lookup by
+  // candidate alone would scan every row the candidate has.
+  it('looks RSVPs and check-ins up by event id, which the unique index covers', async () => {
+    install(seed(3));
+    await get();
+    for (const model of [prisma.eventRsvp, prisma.eventAttendance]) {
+      expect(model.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { candidateId: 'cand-1', eventId: { in: ['ev-0', 'ev-1', 'ev-2'] } },
+      }));
+    }
   });
 
   it('answers an empty list for an application with no candidate, as before', async () => {

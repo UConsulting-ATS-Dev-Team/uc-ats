@@ -1023,11 +1023,8 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     const cycleStartDate = application.cycle?.startDate ? new Date(application.cycle.startDate) : null;
     const cycleEndDate = application.cycle?.endDate ? new Date(application.cycle.endDate) : null;
 
-    // One round trip for everything: the cycle's events, and the candidate's RSVPs
-    // and check-ins to any of them, matched up in memory below. This used to ask
-    // about RSVP and attendance once per event, 2N queries for N events.
-    const inCycle = { candidateId, event: { cycleId: application.cycleId } };
-    const [events, rsvps, attendance, meetingAttendance] = await Promise.all([
+    // The cycle's events and the Get to Know UC signup, in parallel.
+    const [events, meetingAttendance] = await Promise.all([
       prisma.events.findMany({
         where: { cycleId: application.cycleId },
         orderBy: { eventStartDate: 'asc' },
@@ -1039,8 +1036,6 @@ router.get('/:id/events', requireAuth, async (req, res) => {
           eventLocation: true
         }
       }),
-      prisma.eventRsvp.findMany({ where: inCycle, select: { eventId: true } }),
-      prisma.eventAttendance.findMany({ where: inCycle, select: { eventId: true } }),
       cycleStartDate
         ? prisma.meetingSignup.findFirst({
             where: {
@@ -1065,6 +1060,20 @@ router.get('/:id/events', requireAuth, async (req, res) => {
           })
         : null
     ]);
+
+    // Then the candidate's RSVPs and check-ins for those events, two queries in
+    // all, matched up in memory below. This used to ask once per event, 2N
+    // queries for N events. Filtering on the event ids, not the cycle, keeps the
+    // lookup on the (eventId, candidateId) unique index, the only index these
+    // tables have.
+    const eventIds = events.map((event) => event.id);
+    const ofCandidate = { candidateId, eventId: { in: eventIds } };
+    const [rsvps, attendance] = eventIds.length > 0
+      ? await Promise.all([
+          prisma.eventRsvp.findMany({ where: ofCandidate, select: { eventId: true } }),
+          prisma.eventAttendance.findMany({ where: ofCandidate, select: { eventId: true } })
+        ])
+      : [[], []];
 
     const rsvpedEventIds = new Set(rsvps.map((row) => row.eventId));
     const attendedEventIds = new Set(attendance.map((row) => row.eventId));
