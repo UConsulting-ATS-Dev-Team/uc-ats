@@ -59,6 +59,7 @@ import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
 import ImessageSendDialog from '../components/communications/ImessageSendDialog';
 import { Sms as SmsIcon } from '@mui/icons-material';
+import DelibLaunchControl, { DelibStatusChip, useDelibStatuses } from '../components/reviewDelib/DelibLaunchControl';
 
 // Draggable Application Component
 function DraggableApplication({ application, teamId, onRemove, onClick, isDragging, editMode }) {
@@ -215,6 +216,7 @@ export default function ReviewTeams() {
   const [reminderResult, setReminderResult] = useState({});
   // The team being messaged over iMessage, if any. Admin-only.
   const [textingTeam, setTextingTeam] = useState(null);
+  const { byGroup: delibStatuses, refresh: refreshDelibStatuses } = useDelibStatuses(user?.role === 'ADMIN');
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -779,7 +781,13 @@ export default function ReviewTeams() {
                 <PencilIcon style={{ width: '1rem', height: '1rem' }} />
               </IconButton>
             </Stack>
-            <Stack direction="row" alignItems="center" spacing={1}>
+            <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+              {user.role === 'ADMIN' && (
+                <>
+                  <DelibStatusChip status={delibStatuses[team.id]} />
+                  <DelibLaunchControl team={team} status={delibStatuses[team.id]} onChanged={refreshDelibStatuses} />
+                </>
+              )}
               {user.role === 'ADMIN' && (
                 <Button
                   size="small"

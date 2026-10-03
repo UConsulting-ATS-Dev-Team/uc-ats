@@ -33,7 +33,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
 import apiClient from '../utils/api';
-import { signedDocumentTarget, toSameOriginDocumentUrl } from '../utils/documentUrl';
+import useDocumentPreview from '../hooks/useDocumentPreview';
 import { coverLetterLabel } from '../utils/coverLetter';
 import {
   aggregationText,
@@ -76,9 +76,6 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [existingScore, setExistingScore] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [previewError, setPreviewError] = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [mobileTab, setMobileTab] = useState(0);
 
   // Resizable columns state. The rubric needs roughly a third of the width to
@@ -92,10 +89,6 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
   // starts a new session, and a save answers only the session it began in, so
   // it never clears, flags or closes the form that is open now.
   const sessionRef = useRef(0);
-  const videoRetriesRef = useRef(0);
-  // Bumped each time the preview loads a document, so a link renewal still in
-  // flight for an earlier one cannot touch the preview shown now.
-  const previewGenRef = useRef(0);
   const closeTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(closeTimerRef.current), []);
 
@@ -249,142 +242,21 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     }
   }, [open, application?.candidateId, documentType]);
 
-  // Build authenticated preview URL for document
-  useEffect(() => {
-    let localUrl;
-    let cancelled = false;
-    videoRetriesRef.current = 0;
-    previewGenRef.current += 1;
-    const loadPreview = async () => {
-      setPreviewError(null);
-      setPreviewUrl(null);
-      setPreviewLoading(false);
-
-      // Determine the URL field based on document type
-      const urlField = documentType === 'resume' ? 'resumeUrl'
-        : documentType === 'coverLetter' ? 'coverLetterUrl'
-        : 'videoUrl';
-
-      const documentUrl = application?.[urlField];
-      if (!open || !documentUrl) return;
-
-      setPreviewLoading(true);
-
-      const fileUrl = toSameOriginDocumentUrl(documentUrl);
-
-      // A video streams from a signed link instead of arriving whole. /api goes
-      // through Vercel's proxy, which cuts a long response off part way; that was
-      // "The download stopped before the file finished". <video> asks for the
-      // file in ranges, each one a short response.
-      const signed = documentType === 'video' ? signedDocumentTarget(documentUrl) : null;
-      if (signed) {
-        try {
-          const { access } = await apiClient.post(signed.linkEndpoint);
-          if (!cancelled) setPreviewUrl(signed.open(access));
-        } catch (e) {
-          console.error('Failed to sign video preview link:', e);
-          if (!cancelled) setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
-        } finally {
-          if (!cancelled) setPreviewLoading(false);
-        }
-        return;
-      }
-
-      try {
-        const resp = await fetch(fileUrl, {
-          headers: {
-            Authorization: `Bearer ${token || apiClient.token || localStorage.getItem('token')}`,
-          },
-        });
-        if (!resp.ok) {
-          const txt = await resp.text();
-          let reason = resp.statusText;
-          try { reason = JSON.parse(txt).error || reason; } catch { /* not JSON */ }
-          throw new Error(`The server answered ${resp.status}: ${reason}`);
-        }
-        let blob;
-        try {
-          blob = await resp.blob();
-        } catch (e) {
-          // Headers arrived, the body did not: the connection dropped part way
-          // through a large file.
-          throw new Error(`The download stopped before the file finished (${e.message})`);
-        }
-        localUrl = URL.createObjectURL(blob);
-        setPreviewUrl(localUrl);
-      } catch (e) {
-        console.error(`Failed to load ${documentType} preview:`, e);
-        setPreviewError(
-          e instanceof TypeError
-            ? `Could not reach the server (${e.message})`
-            : e.message || `Failed to load ${documentType} preview`
-        );
-      } finally {
-        setPreviewLoading(false);
-      }
-    };
-
-    loadPreview();
-    return () => {
-      cancelled = true;
-      if (localUrl) URL.revokeObjectURL(localUrl);
-    };
-  }, [open, application?.resumeUrl, application?.coverLetterUrl, application?.videoUrl, token, documentType]);
-
-  // A streamed video re-requests its link with every range, and the link lasts
-  // 15 minutes, so a grader who leaves the modal open can see it stop. The first
-  // error re-signs and resumes where it was; a second one is reported.
-  const handleVideoError = async (event) => {
-    const video = event.currentTarget;
-    const target = signedDocumentTarget(application?.videoUrl);
-    if (!target || videoRetriesRef.current >= 1) {
-      setPreviewUrl(null);
-      setPreviewError(
-        'The video could not be played here. The browser may not support its format; try opening it in a new tab.'
-      );
-      return;
-    }
-    videoRetriesRef.current += 1;
-    const resumeAt = video.currentTime;
-    const generation = previewGenRef.current;
-    try {
-      const { access } = await apiClient.post(target.linkEndpoint);
-      if (generation !== previewGenRef.current) return;
-      video.src = target.open(access);
-      video.currentTime = resumeAt;
-    } catch (e) {
-      if (generation !== previewGenRef.current) return;
-      setPreviewUrl(null);
-      setPreviewError(`Could not open the video: ${e.serverMessage || e.message}`);
-    }
-  };
-
-  const [openTabError, setOpenTabError] = useState(null);
-  useEffect(() => { setOpenTabError(null); }, [open, documentType, application?.id]);
-
-  const openDocumentInNewTab = async () => {
-    const documentUrl = application?.[config.urlField];
-    const target = signedDocumentTarget(documentUrl);
-    if (!target) {
-      window.open(documentUrl, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    setOpenTabError(null);
-    // Opened inside the click, before the await, or a popup blocker eats it.
-    const tab = window.open('', '_blank');
-    try {
-      const { access } = await apiClient.post(target.linkEndpoint);
-      if (!tab) {
-        setOpenTabError('Your browser blocked the new tab. Allow pop-ups for this site and try again.');
-        return;
-      }
-      tab.opener = null;
-      tab.location.href = target.open(access);
-    } catch (e) {
-      tab?.close();
-      setOpenTabError(e.serverMessage || e.message || `Could not open the ${documentType}.`);
-    }
-  };
+  // The document beside the rubric: a PDF in a frame, a video streamed from a signed link.
+  const {
+    previewUrl,
+    loading: previewLoading,
+    error: previewError,
+    openTabError,
+    onVideoError: handleVideoError,
+    onVideoLoaded,
+    openInNewTab: openDocumentInNewTab
+  } = useDocumentPreview({
+    url: application?.[config.urlField],
+    kind: documentType === 'video' ? 'video' : 'pdf',
+    enabled: open,
+    token
+  });
 
   const loadExistingScore = async () => {
     try {
@@ -606,7 +478,7 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
                       // frame takes several ranges to reach.
                       preload="auto"
                       onError={handleVideoError}
-                      onLoadedData={() => { videoRetriesRef.current = 0; }}
+                      onLoadedData={onVideoLoaded}
                       style={{
                         width: '100%',
                         height: '100%',

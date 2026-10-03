@@ -17,6 +17,7 @@ import { ExecUnlockProvider } from './context/ExecUnlockContext';
 import { DataProvider } from './context/DataContext';
 import { CelebrationProvider } from './context/CelebrationContext';
 import { LiveVoteProvider } from './context/LiveVoteContext';
+import { ReviewDelibProvider } from './context/ReviewDelibContext';
 import CandidateManagement from './pages/CandidateManagement';
 import CycleManagement from './pages/CycleManagement';
 import ForgotPassword from './pages/ForgotPassword';
@@ -36,6 +37,7 @@ import FinalRoundInterviewInterface from './pages/FinalRoundInterviewInterface';
 import Candidates from './pages/Candidates';
 import Staging from './pages/Staging';
 import LiveVote from './pages/LiveVote';
+import ReviewDelib from './pages/ReviewDelib';
 import Cases from './pages/Cases';
 import TalentPoolPartnerNetwork from './pages/TalentPoolPartnerNetwork';
 import CaseTagging from './pages/CaseTagging';
@@ -461,6 +463,15 @@ export const AppRoutes = () => {
           </StaffRoute>
         }
       />
+
+      <Route
+        path="/review-delib/:sessionId"
+        element={
+          <StaffRoute>
+            <ReviewDelib />
+          </StaffRoute>
+        }
+      />
       
       <Route
         path="/interviews/:id"
@@ -754,7 +765,9 @@ export default function App() {
         <DataProvider>
           <CelebrationProvider>
             <LiveVoteProvider>
-              <AppRoutes />
+              <ReviewDelibProvider>
+                <AppRoutes />
+              </ReviewDelibProvider>
             </LiveVoteProvider>
           </CelebrationProvider>
         </DataProvider>
