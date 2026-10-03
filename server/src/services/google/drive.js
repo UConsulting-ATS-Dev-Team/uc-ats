@@ -100,13 +100,15 @@ export async function uploadFile({ name, folderId, body, mimeType = 'text/csv' }
   }
 }
 
-// Get metadata for a Google Drive file (name, mimeType, size)
+// Get metadata for a Google Drive file (name, mimeType, size, and the
+// md5Checksum / modifiedTime that services/documentValidators.js turns into an
+// ETag and Last-Modified)
 export async function getFileMetadata(fileId) {
   try {
     const drive = await getDriveClient();
     const res = await drive.files.get({
       fileId,
-      fields: 'id, name, mimeType, size',
+      fields: 'id, name, mimeType, size, md5Checksum, modifiedTime',
       supportsAllDrives: true // Required for shared drives
     });
     return res.data;

@@ -3,8 +3,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Dialog } from '@mui/material';
 import DocumentPreviewModal from './DocumentPreviewModal';
+import apiClient from '../utils/api';
+import { clearDocumentLinks } from '../utils/documentLinks';
 
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ token: 't' }) }));
+vi.mock('../utils/api', () => ({ default: { post: vi.fn(), token: 't' } }));
 
 describe('DocumentPreviewModal', () => {
   it('renders on <body>, outside whatever card opened it', () => {
@@ -72,5 +75,21 @@ describe('DocumentPreviewModal', () => {
     render(<DocumentPreviewModal kind="text" title="Preview" text="Hello" onClose={onClose} />);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // A video used to be downloaded whole before it could start. It now streams in
+  // ranges from a signed link, as the grading modal's does.
+  it('streams a video from a signed link instead of downloading it', async () => {
+    clearDocumentLinks();
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('a video must not be fetched whole'))));
+    apiClient.post.mockResolvedValue({ access: 'tok.en' });
+
+    render(<DocumentPreviewModal src="https://uconsultingats.com/api/files/vid/pdf" kind="video" title="Video" onClose={() => {}} />);
+
+    await waitFor(() => expect(document.querySelector('video')).not.toBeNull());
+    expect(document.querySelector('video').getAttribute('src')).toBe('/api/files/vid/pdf?access=tok.en');
+    expect(apiClient.post).toHaveBeenCalledWith('/files/vid/link');
+    expect(fetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
