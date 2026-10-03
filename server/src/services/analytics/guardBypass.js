@@ -16,6 +16,9 @@ export const GUARD_TABLE = Object.freeze([
   // guardFor takes the first match, so a sub-prefix of /api/admin goes above it.
   // index.js mounts routes/emailHealth.js behind requireAuth, requireAdmin.
   { prefix: '/api/admin/email-health', allowed: ['ADMIN'], severity: 'CRITICAL' },
+  // routes/applicationDocuments.js: requireAdmin on both video-uploads routes.
+  // Above the router's own mixed-gate row further down.
+  { prefix: '/api/application-documents/video-uploads', allowed: ['ADMIN'], severity: 'CRITICAL' },
   // routes/admin.js L137 router.use(requireAuth, requireAdmin); every other
   // /api/admin mount in index.js is itself behind requireAdmin.
   { prefix: '/api/admin', allowed: ['ADMIN'], severity: 'CRITICAL' },
@@ -50,6 +53,8 @@ export const GUARD_TABLE = Object.freeze([
   { prefix: '/api/member', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/cases', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/files', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
+  // routes/applicationDocuments.js: requireAuth, then staff-or-owner per document
+  { prefix: '/api/application-documents', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/users', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
 ]);
 

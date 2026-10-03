@@ -49,6 +49,13 @@ describe('evaluateGuardBypass', () => {
     expect(ok('CANDIDATE', '/api/member/events')).toBeNull();
     expect(ok('ANON', '/api/member/events')?.severity).toBe('WARN');
     expect(ok('ANON', '/api/cases/:id')?.severity).toBe('WARN');
+    expect(ok('ANON', '/api/application-documents/:token/file')?.severity).toBe('WARN');
+    expect(ok('CANDIDATE', '/api/application-documents/:token/file')).toBeNull();
+  });
+
+  it('answers the video upload ticket from its own admin-only row', () => {
+    expect(ok('MEMBER', '/api/application-documents/video-uploads')?.severity).toBe('CRITICAL');
+    expect(ok('ADMIN', '/api/application-documents/video-uploads')).toBeNull();
   });
 
   it('ignores prefixes with public routes', () => {

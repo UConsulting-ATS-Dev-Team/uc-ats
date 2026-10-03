@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import prisma from '../prismaClient.js';
-import { putResume, getResume, removeResume } from '../services/resumeStorage.js';
+import { putResume, getResume, removeResume, resumeUploadLocation } from '../services/resumeStorage.js';
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { isOwnedBy, isStaff } from '../utils/applicationOwnership.js';
@@ -239,8 +239,7 @@ router.post(
       }
 
       const uploadId = crypto.randomUUID();
-      const relativePath = path.posix.join('resumes', application.id, `${uploadId}.pdf`);
-      const servedUrl = `/api/resume-uploads/${uploadId}/file`;
+      const { relativePath, servedUrl } = resumeUploadLocation(application.id, uploadId);
 
       await putResume(relativePath, req.file.buffer);
       writtenPath = relativePath;

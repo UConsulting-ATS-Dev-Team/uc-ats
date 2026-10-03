@@ -1,4 +1,6 @@
 import express from 'express';
+import multer from 'multer';
+import crypto from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 import { getFormQuestions, getResponses } from '../services/google/forms.js';
@@ -8,8 +10,19 @@ import { resolveCycleForRequest } from '../services/activeCycle.js';
 import { claimLumaGuestsForCandidate } from '../services/luma/ingestGuests.js';
 import { getCycleEventParticipation, getCycleReferrals } from '../services/applicationParticipation.js';
 import { applicationParamGuard, redactLockedApplications } from '../utils/lockedRecords.js';
+import { putResume, removeResume, resumeUploadLocation, storageErrorResponse } from '../services/resumeStorage.js';
+import {
+  documentSize,
+  documentUrl,
+  parseDocumentId,
+  removeDocument,
+  storePdfDocument,
+} from '../services/applicationDocuments.js';
 
 const router = express.Router();
+
+export const MAX_MANUAL_PDF_BYTES = 10 * 1024 * 1024;
+const MANUAL_PDF_LABELS = { resume: 'The resume', blindResume: 'The blind resume' };
 
 // Every `:id` in this router is an application. A sealed one answers 423, and
 // staff cannot write to their own. Param handlers run when a route matches, so
@@ -144,10 +157,46 @@ router.get('/:id/events', requireAdminOrMember);
 router.all('/:id/referral', requireAdminOrMember);
 router.all('/:id/referrals', requireAdminOrMember);
 
-// Create manual application
-router.post('/manual', requireAdmin, async (req, res) => {
+// The two PDFs an admin may attach while adding an application by hand. Held in
+// memory so nothing is stored until the rest of the form has been checked.
+const manualDocuments = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_MANUAL_PDF_BYTES, files: 2 },
+  fileFilter(req, file, cb) {
+    if (file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new Error(`${MANUAL_PDF_LABELS[file.fieldname] || 'That file'} must be a PDF`));
+  },
+}).fields([
+  { name: 'resume', maxCount: 1 },
+  { name: 'blindResume', maxCount: 1 },
+]);
+
+// Multer's own failures (too large, not a PDF) answer here; left to the error
+// handler they would read as a 500. A JSON body passes straight through.
+const acceptManualDocuments = (req, res, next) =>
+  manualDocuments(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: `${MANUAL_PDF_LABELS[err.field] || 'Each file'} must be smaller than ${Math.round(MAX_MANUAL_PDF_BYTES / (1024 * 1024))}MB`,
+      });
+    }
+    return res.status(400).json({ error: err.message || 'Upload failed' });
+  });
+
+// A multipart field arrives as text, a JSON one as itself.
+const asBoolean = (value) => value === true || value === 'true';
+const isPdf = (file) => file.buffer.subarray(0, 5).equals(Buffer.from('%PDF-'));
+
+// Create manual application. Takes JSON, or multipart when it carries files:
+// `resume` and `blindResume` (PDFs) in place of `resumeUrl` / `blindResumeUrl`.
+// A video is uploaded first (POST /api/application-documents/video-uploads) and
+// named here as `videoDocumentId`.
+router.post('/manual', requireAdmin, acceptManualDocuments, async (req, res) => {
+  // Files stored for this request, removed again if the application is not created.
+  const stored = [];
   try {
-    
+
     const {
       firstName,
       lastName,
@@ -163,17 +212,20 @@ router.post('/manual', requireAdmin, async (req, res) => {
       major2,
       gender,
       isFirstGeneration,
-      resumeUrl,
       headshotUrl,
       coverLetterUrl,
       shortAnswer,
-      videoUrl,
+      videoDocumentId,
       responseID,
       rawResponses
     } = req.body;
+    let { resumeUrl, blindResumeUrl, videoUrl } = req.body;
+
+    const resumeFile = req.files?.resume?.[0];
+    const blindResumeFile = req.files?.blindResume?.[0];
 
     // Validate required fields
-    const requiredFields = { firstName, lastName, email, studentId, phoneNumber, graduationYear, cumulativeGpa, major1, resumeUrl, headshotUrl };
+    const requiredFields = { firstName, lastName, email, studentId, phoneNumber, graduationYear, cumulativeGpa, major1, resumeUrl: resumeFile || resumeUrl, headshotUrl };
     const missingFields = Object.entries(requiredFields)
       .filter(([key, value]) => {
         // Special handling for cumulativeGpa - 0 is a valid value
@@ -183,20 +235,37 @@ router.post('/manual', requireAdmin, async (req, res) => {
         // For other fields, check if they're falsy or empty strings
         return !value || (typeof value === 'string' && value.trim() === '');
       })
-      .map(([key]) => key);
+      .map(([key]) => (key === 'resumeUrl' ? 'resume' : key));
 
     if (missingFields.length > 0) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: `Missing required fields: ${missingFields.join(', ')}`
       });
+    }
+
+    // Trust the bytes, not the declared content type.
+    for (const file of [resumeFile, blindResumeFile]) {
+      if (file && !isPdf(file)) {
+        return res.status(400).json({ error: `${MANUAL_PDF_LABELS[file.fieldname]} is not a readable PDF` });
+      }
+    }
+
+    if (videoDocumentId) {
+      // The id arrives in a request body, so it need not be one this server
+      // issued, or one whose upload ever finished.
+      const video = parseDocumentId(videoDocumentId);
+      if (!video?.isVideo || (await documentSize(video.id)) === null) {
+        return res.status(400).json({ error: 'The video did not finish uploading. Please choose it again.' });
+      }
+      videoUrl = documentUrl(video.id);
     }
 
     // Get the active recruiting cycle
     const activeCycle = await resolveCycleForRequest(prisma, req);
 
     if (!activeCycle) {
-      return res.status(400).json({ 
-        error: 'No active recruiting cycle found. Please create an active cycle first.' 
+      return res.status(400).json({
+        error: 'No active recruiting cycle found. Please create an active cycle first.'
       });
     }
 
@@ -217,29 +286,59 @@ router.post('/manual', requireAdmin, async (req, res) => {
       });
     }
 
+    // The id is chosen here because an uploaded resume is filed under it.
+    const applicationId = crypto.randomUUID();
+    let resumeUpload = null;
+
+    if (resumeFile) {
+      const uploadId = crypto.randomUUID();
+      const { relativePath, servedUrl } = resumeUploadLocation(applicationId, uploadId);
+      await putResume(relativePath, resumeFile.buffer);
+      stored.push(() => removeResume(relativePath));
+      resumeUrl = servedUrl;
+      // The resume's first version, so a later replacement keeps this one.
+      resumeUpload = {
+        id: uploadId,
+        applicationId,
+        storagePath: relativePath,
+        sourceUrl: servedUrl,
+        originalName: resumeFile.originalname || null,
+        sizeBytes: resumeFile.size,
+        uploadedById: req.user.id,
+      };
+    }
+
+    if (blindResumeFile) {
+      const documentId = await storePdfDocument(blindResumeFile.buffer);
+      stored.push(() => removeDocument(documentId));
+      blindResumeUrl = documentUrl(documentId);
+    }
+
     // Create the application
     const applicationData = {
+      id: applicationId,
       status: 'SUBMITTED',
-      responseID,
+      responseID: responseID || `manual-${applicationId}`,
       email,
       firstName,
       lastName,
       studentId,
       phoneNumber,
       graduationYear,
-      isTransferStudent: isTransferStudent || false,
+      isTransferStudent: asBoolean(isTransferStudent),
       priorCollegeYears,
       cumulativeGpa: parseFloat(cumulativeGpa),
       major1,
       major2,
       gender,
-      isFirstGeneration: isFirstGeneration || false,
+      isFirstGeneration: asBoolean(isFirstGeneration),
       resumeUrl,
+      blindResumeUrl: blindResumeUrl || null,
       headshotUrl,
       coverLetterUrl,
       shortAnswer: shortAnswer?.trim() || null,
       videoUrl,
-      rawResponses: rawResponses || {},
+      rawResponses: rawResponses && typeof rawResponses === 'object' ? rawResponses : {},
       cycleId: activeCycle.id,
       candidateId: candidate.id
     };
@@ -251,9 +350,11 @@ router.post('/manual', requireAdmin, async (req, res) => {
       applicationData.majorGpa = 0.00;
     }
 
-    const application = await prisma.application.create({
-      data: applicationData
-    });
+    const [application] = await prisma.$transaction([
+      prisma.application.create({ data: applicationData }),
+      ...(resumeUpload ? [prisma.resumeUpload.create({ data: resumeUpload })] : []),
+    ]);
+    stored.length = 0;
 
     // Same as form sync: Luma registrations nobody could place are this
     // applicant's now. Best-effort - the application is already saved.
@@ -265,8 +366,13 @@ router.post('/manual', requireAdmin, async (req, res) => {
 
     res.status(201).json(application);
   } catch (error) {
+    // Don't leave orphaned files behind if the application was not created. An
+    // uploaded video is kept: the form still holds its id for the retry.
+    await Promise.all(stored.map((remove) => remove().catch(() => {})));
+    const storageFault = storageErrorResponse(error);
+    if (storageFault) return res.status(storageFault.status).json(storageFault.body);
     console.error('Error creating manual application:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to create application',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });

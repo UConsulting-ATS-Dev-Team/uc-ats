@@ -73,6 +73,12 @@ describe('signedDocumentTarget', () => {
     expect(target.open('t')).toBe('/api/resume-uploads/up-1/file?access=t');
   });
 
+  it('signs a blind resume or video uploaded with a manual application', () => {
+    const target = signedDocumentTarget('/api/application-documents/doc-1.mp4/file');
+    expect(target.linkEndpoint).toBe('/application-documents/doc-1.mp4/link');
+    expect(target.open('t')).toBe('/api/application-documents/doc-1.mp4/file?access=t');
+  });
+
   it('leaves anything else to a plain link', () => {
     expect(signedDocumentTarget('https://drive.google.com/file/d/abc/view')).toBeNull();
     expect(signedDocumentTarget('/api/applications/abc')).toBeNull();

@@ -35,11 +35,17 @@ import {
   toCsv
 } from '../utils/clientResumeQuery.js';
 
-// The two directories an uploaded resume can legitimately live in. A resolved
+// The directories an uploaded resume can legitimately live in. A resolved
 // path must sit under one of them: `storagePath` comes out of the database, and
 // this is the check that keeps a malformed or tampered value from reading its
 // way out of the storage tree.
-const UPLOADED_RESUME_PREFIXES = ['member-resumes/', 'external-resumes/'];
+const UPLOADED_RESUME_PREFIXES = [
+  'member-resumes/',
+  'external-resumes/',
+  // An application's uploaded resume, and its uploaded blind resume.
+  'resumes/',
+  'application-documents/'
+];
 
 const router = express.Router();
 
@@ -62,7 +68,12 @@ const ASSIGNMENT_INCLUDE = {
       cumulativeGpa: true,
       majorGpa: true,
       resumeUrl: true,
-      blindResumeUrl: true
+      blindResumeUrl: true,
+      // Where the current resume is stored when it was uploaded, not a Drive file.
+      resumeUploads: {
+        where: { supersededAt: null, storagePath: { not: null } },
+        select: { sourceUrl: true, storagePath: true }
+      }
     }
   },
   memberResume: {
