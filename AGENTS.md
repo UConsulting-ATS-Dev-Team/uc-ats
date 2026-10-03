@@ -67,8 +67,10 @@ mechanical findings.
 
 A PR has no Vercel preview: only `main` deploys (see "Vercel deploys `main` only" in
 CLAUDE.md). For the `/before-and-after` captures, take the before from the live site and
-the after from a local run (`npm run dev`). A local `.env` is the production database, so
-only look: do not save, send or upload anything while capturing. When a change cannot be
+the after from a local run. A local `.env` is the production database, so start it with
+Site Analytics off, or every page you open is recorded there as a real visit:
+`ANALYTICS_DISABLED=1 VITE_ANALYTICS_DISABLED=1 npm run dev`. Then only look: do not
+save, send or upload anything while capturing. When a change cannot be
 shown without writing, say so in the PR and leave the captures out.
 
 ## Commands and checks
