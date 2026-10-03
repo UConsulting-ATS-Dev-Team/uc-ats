@@ -296,4 +296,24 @@ describe('Staging table', () => {
     await screen.findByText(/Could not save the decision for Alice Example/);
     expect(select.value).toBe('');
   });
+
+  it('keeps a newer pick when an older save fails after it', async () => {
+    let failFirst;
+    apiClient.post
+      .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
+      .mockResolvedValueOnce({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    fireEvent.change(select, { target: { value: 'no' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+
+    failFirst(new Error('network down'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(select.value).toBe('no');
+    expect(screen.queryByText(/Could not save the decision/)).not.toBeInTheDocument();
+  });
 });

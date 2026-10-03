@@ -5,13 +5,13 @@
 // name. Ties share a rank and the next one skips (1, 2, 2, 4), so a rank always
 // says how many people scored strictly higher.
 //
-// A score of 0 is unranked. Staging reads a missing score as 0 (an ungraded
-// application, or an interview with no evaluations yet), and a room full of
-// people tied at last place says nothing.
+// A missing score (null or undefined) is unranked: no grades yet, or no
+// interview evaluations. Zero is a real score - an interview where everyone
+// said No averages to 0 - and ranks like any other.
 export function rankByScore(ids, scoreOf) {
   const scored = ids
-    .map((id) => ({ id, score: Number(scoreOf(id)) || 0 }))
-    .filter((entry) => entry.score > 0)
+    .map((id) => ({ id, score: scoreOf(id) }))
+    .filter((entry) => typeof entry.score === 'number' && Number.isFinite(entry.score))
     .sort((a, b) => b.score - a.score);
 
   const ranks = new Map();

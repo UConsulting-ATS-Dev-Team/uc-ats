@@ -228,7 +228,7 @@ const initials = (candidate) =>
   `${candidate.firstName?.[0] || ''}${candidate.lastName?.[0] || ''}`.toUpperCase() || '?';
 
 const ScoreDisplay = ({ score, maxScore = 10 }) => {
-  if (!score) {
+  if (score == null) {
     return <span className="staging-zero">—</span>;
   }
   const percentage = Math.min((score / maxScore) * 100, 100);
@@ -755,8 +755,10 @@ export default function Staging() {
     await refreshStagingData();
   };
 
+  // Null, not 0, when there is nothing to score: an all-NO interview averages to a
+  // real 0, and that candidate has been seen and must still rank.
   const calculateRankingScore = (evaluations) => {
-    if (!evaluations || evaluations.length === 0) return 0;
+    if (!evaluations || evaluations.length === 0) return null;
     
     const decisionScores = {
       'YES': 4,
@@ -772,7 +774,7 @@ export default function Staging() {
       decisionScores.hasOwnProperty(evaluation.decision)
     );
     
-    if (evaluationsWithDecisions.length === 0) return 0;
+    if (evaluationsWithDecisions.length === 0) return null;
     
     const totalScore = evaluationsWithDecisions.reduce((sum, evaluation) => {
       return sum + decisionScores[evaluation.decision];
@@ -782,7 +784,7 @@ export default function Staging() {
   };
 
   const calculateFirstRoundRankingScore = (evaluations) => {
-    if (!evaluations || evaluations.length === 0) return 0;
+    if (!evaluations || evaluations.length === 0) return null;
     
     const evaluationsWithScores = evaluations.filter(evaluation => 
       evaluation.behavioralTotal !== null && 
@@ -829,11 +831,12 @@ export default function Staging() {
     return adminApp?.id || candidate.id;
   };
 
-  // Helper function to get the appropriate score based on the current tab
+  // A candidate's score in a round, or null when they have none yet. Resume Review's
+  // total includes event points, so 0 there means nothing graded and no events.
   const getScoreForTab = (candidate, tab) => {
     if (tab === 0) {
       // Resume Review: use document scores
-      return candidate.scores?.overall || 0;
+      return candidate.scores?.overall || null;
     } else if (tab === 1) {
       // Coffee Chat: use evaluation summaries
       const appId = appIdFor(candidate);
@@ -841,7 +844,7 @@ export default function Staging() {
       if (summary?.evaluations?.length > 0) {
         return calculateRankingScore(summary.evaluations);
       }
-      return 0;
+      return null;
     } else if (tab === 2) {
       // First Round: use first round evaluation summaries
       const appId = appIdFor(candidate);
@@ -849,7 +852,7 @@ export default function Staging() {
       if (summary?.evaluations?.length > 0) {
         return calculateFirstRoundRankingScore(summary.evaluations);
       }
-      return 0;
+      return null;
     } else if (tab === 3) {
       // Final Round: use final round evaluation summaries
       const appId = appIdFor(candidate);
@@ -857,9 +860,9 @@ export default function Staging() {
       if (summary?.evaluations?.length > 0) {
         return calculateRankingScore(summary.evaluations);
       }
-      return 0;
+      return null;
     }
-    return candidate.scores?.overall || 0;
+    return candidate.scores?.overall || null;
   };
 
   const fetchCoffeeChatInterviews = async () => {
@@ -1315,12 +1318,19 @@ export default function Staging() {
     return { graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown };
   }
 
+  // Picks per candidate and round, counting up, so a failed save can tell whether a
+  // newer pick has been made since it was sent.
+  const decisionPickSeqRef = useRef({});
+
   // Optimistic: the pick shows at once and is put back if the save fails. There is
   // no forced reload afterwards - the save bumps the change token, so the next poll
   // (within STAGING_POLL_INTERVAL_MS) brings the server's copy, instead of every
   // click re-reading the whole snapshot.
   const handleInlineDecisionChange = async (item, value, tabIndex = currentTab) => {
     const phase = tabToPhase(tabIndex);
+    const key = `${phase}:${item.id}`;
+    const pick = (decisionPickSeqRef.current[key] || 0) + 1;
+    decisionPickSeqRef.current[key] = pick;
     const previous = perRoundDecisions[phase]?.[item.id] || '';
     const setDecision = (decision) => setPerRoundDecisions(prev => ({
       ...prev,
@@ -1333,12 +1343,19 @@ export default function Staging() {
       stagingCache.invalidate();
     } catch (error) {
       console.error('Error saving inline decision:', error);
+      // A newer pick owns the cell now; its own save decides what it shows.
+      // Rolling back to `previous` here would overwrite it.
+      if (decisionPickSeqRef.current[key] !== pick) return;
       setDecision(previous);
       setSnackbar({
         open: true,
         message: `Could not save the decision for ${item.firstName} ${item.lastName}. It has been put back.`,
         severity: 'error'
       });
+      // `previous` can itself be an earlier pick whose save also failed, so take
+      // the server's word for it. A failed save moves no change token, so the
+      // poll alone would never correct it.
+      fetchCandidates().catch(() => {});
     }
   };
 
@@ -1369,7 +1386,9 @@ export default function Staging() {
     tabFilteredCandidates.forEach(candidate => scores.set(candidate.id, getScoreForTab(candidate, currentTab)));
     return scores;
   }, [tabFilteredCandidates, currentTab, adminAppIndex, evaluationSummaries, evaluationSummariesFirstRound, evaluationSummariesFinal]);
-  const scoreOf = (candidate) => scoreById.get(candidate.id) ?? 0;
+  const scoreOf = (candidate) => scoreById.get(candidate.id) ?? null;
+  // For sorting: no score yet goes below a real 0.
+  const sortScoreOf = (candidate) => scoreOf(candidate) ?? -1;
 
   const { ranks, rankedCount } = useMemo(
     () => rankByScore(tabFilteredCandidates.map(candidate => candidate.id), id => scoreById.get(id)),
@@ -1490,7 +1509,7 @@ export default function Staging() {
     switch (sortConfig.field) {
       case 'score': {
         // desc = high scores first (default), asc = low scores first
-        const diff = scoreOf(a) - scoreOf(b);
+        const diff = sortScoreOf(a) - sortScoreOf(b);
         return multiplier * diff;
       }
       case 'name': {
@@ -1531,7 +1550,7 @@ export default function Staging() {
         return multiplier * diff;
       }
       default: {
-        const diff = scoreOf(a) - scoreOf(b);
+        const diff = sortScoreOf(a) - sortScoreOf(b);
         return multiplier * diff;
       }
     }
