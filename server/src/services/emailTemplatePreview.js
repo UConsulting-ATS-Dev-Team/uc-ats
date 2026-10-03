@@ -124,6 +124,15 @@ const TRANSACTIONAL = [
     args: [SAMPLE_CANDIDATE, SAMPLE_EVENT, SAMPLE_EVENT_DATE, SAMPLE_LOCATION],
   },
   {
+    key: 'application-received',
+    label: 'Application received',
+    description: 'Confirms a candidate\'s application arrived and tells them next steps are coming.',
+    audience: 'Candidate',
+    category: 'Applications',
+    trigger: 'Sent when form sync files a new application.',
+    args: [SAMPLE_CANDIDATE, SAMPLE_CYCLE],
+  },
+  {
     key: 'application-acceptance',
     label: 'Application advanced',
     description: 'Tells a candidate their written application moved forward.',

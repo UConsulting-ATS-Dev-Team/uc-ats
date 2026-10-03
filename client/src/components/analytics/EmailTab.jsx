@@ -6,6 +6,7 @@ import { SectionTitle, SortableTable, StatTile, TrendChart } from './parts';
 
 const CATEGORY_LABELS = {
   ACCOUNT: 'Account',
+  APPLICATION_RECEIVED: 'Application received',
   APPLICATION_DECISION: 'Application decisions',
   OFFER_LETTER: 'Offer letters',
   EVENT: 'Events',

@@ -28,6 +28,7 @@ import apiClient from '../../utils/api';
 // needs no change here.
 const CATEGORY_LABELS = {
   ACCOUNT: 'Account',
+  APPLICATION_RECEIVED: 'Application received',
   APPLICATION_DECISION: 'Decision',
   OFFER_LETTER: 'Offer letter',
   EVENT: 'Event',

@@ -83,6 +83,26 @@ const ATTENDANCE_CONFIRMATION = {
 // Applications
 // ---------------------------------------------------------------------------
 
+const APPLICATION_RECEIVED = {
+  mergeFields: ['candidateName', 'cycleName'],
+  fields: [
+    line('subject', 'Subject', 'We Received Your Application - {{cycleName}}'),
+    line('heading', 'Heading', 'We Received Your Application'),
+    line('greeting', 'Greeting', 'Dear {{candidateName}},'),
+    block(
+      'intro',
+      'Opening',
+      'Thank you for applying to UConsulting! We received your application for the **{{cycleName}}** cycle.'
+    ),
+    block(
+      'outro',
+      'Closing',
+      'You will hear from us shortly about whether you have moved on to the next round. We will also be sending out next steps, which will explain the interview process and any other important details.\n\nStay tuned!'
+    ),
+    signOff(RECRUITMENT_TEAM),
+  ],
+};
+
 const APPLICATION_ACCEPTANCE = {
   mergeFields: ['candidateName', 'cycleName'],
   fields: [
@@ -755,6 +775,7 @@ const DECISION_TEMPLATE_ENTRIES = Object.fromEntries(
 const TRANSACTIONAL_TEMPLATES = {
   'rsvp-confirmation': RSVP_CONFIRMATION,
   'attendance-confirmation': ATTENDANCE_CONFIRMATION,
+  'application-received': APPLICATION_RECEIVED,
   'application-acceptance': APPLICATION_ACCEPTANCE,
   'application-rejection': APPLICATION_REJECTION,
   'offer-letter': OFFER_LETTER,

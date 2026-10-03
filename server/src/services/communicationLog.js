@@ -5,6 +5,7 @@ import prisma from '../prismaClient.js';
 // the admin filter has something to offer and so spellings stay consistent.
 export const COMMUNICATION_CATEGORIES = [
   'ACCOUNT',              // verification, password reset and its confirmation
+  'APPLICATION_RECEIVED', // "we received your application", sent by form sync
   'APPLICATION_DECISION', // accept / reject at any round
   'OFFER_LETTER',
   'EVENT',                // RSVP and attendance confirmations

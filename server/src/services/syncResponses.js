@@ -6,6 +6,7 @@ import { cycleFormIds } from '../utils/formUtils.js'
 import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
+import { sendApplicationReceivedEmail } from './emailNotifications.js'
 
 /**
  * The candidate whose email this is, resolved so the answer never depends on
@@ -283,6 +284,18 @@ export default async function syncFormResponses() {
           }
         } catch (lumaError) {
           console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
+        }
+
+        // Tell the applicant it arrived. Only the run whose create succeeded
+        // gets here, so overlapping syncs on several servers still send one
+        // copy. The address is the one they typed on this form, not the
+        // candidate's, which may be an older one. sendApplicationReceivedEmail
+        // never throws; a failed send is in the communications log.
+        if (emailFromForm) {
+          const applicantName = [dbRecord.firstName, dbRecord.lastName].filter(Boolean).join(' ')
+            || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ')
+            || 'Applicant';
+          await sendApplicationReceivedEmail(emailFromForm, applicantName, activeCycle.name, { cycleId: activeCycle.id });
         }
 
       } catch (error) {

@@ -945,6 +945,9 @@ current version and the only one "Apply Here" links to; sync reads every link in
 Configured via environment variables `EMAIL_USER` and `EMAIL_PASS` (Gmail app-specific password).
 
 Key notification types in [emailNotifications.js](server/src/services/emailNotifications.js):
+- Application received (`application-received`): sent by form sync right after it saves a
+  new application, to the address typed on the form. Only the run whose create succeeded
+  sends it, so overlapping syncs send one copy and a failed insert sends none.
 - Password reset emails
 - Event reminder emails (upcoming events, RSVPs)
 - Interview assignment notifications (future)
