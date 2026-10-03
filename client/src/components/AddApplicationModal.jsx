@@ -1,32 +1,50 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
+import { uploadApplicationVideo, videoProblem, VIDEO_ACCEPT, MAX_VIDEO_BYTES } from '../utils/applicationVideoUpload';
+
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+const megabytes = (bytes) => Math.round(bytes / (1024 * 1024));
+
+const EMPTY_FORM = {
+  firstName: '',
+  lastName: '',
+  email: '',
+  studentId: '',
+  phoneNumber: '',
+  graduationYear: '',
+  isTransferStudent: false,
+  priorCollegeYears: '',
+  cumulativeGpa: '',
+  majorGpa: '',
+  major1: '',
+  major2: '',
+  gender: '',
+  isFirstGeneration: false,
+  headshotUrl: '',
+  coverLetterUrl: '',
+  shortAnswer: ''
+};
+
+const EMPTY_FILES = { resume: null, blindResume: null, video: null };
 
 export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    studentId: '',
-    phoneNumber: '',
-    graduationYear: '',
-    isTransferStudent: false,
-    priorCollegeYears: '',
-    cumulativeGpa: '',
-    majorGpa: '',
-    major1: '',
-    major2: '',
-    gender: '',
-    isFirstGeneration: false,
-    resumeUrl: '',
-    headshotUrl: '',
-    coverLetterUrl: '',
-    shortAnswer: '',
-    videoUrl: ''
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [files, setFiles] = useState(EMPTY_FILES);
+  // Fraction of the video sent so far; null when no upload is running.
+  const [videoProgress, setVideoProgress] = useState(null);
+  // The video already in storage, so a retry after a failed save does not send
+  // the same file again.
+  const uploadedVideoRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Closing unmounts the file inputs, so they come back empty. Forget the files
+  // with them, or a reopened form would send one its inputs no longer show.
+  useEffect(() => {
+    if (!isOpen) setFiles(EMPTY_FILES);
+  }, [isOpen]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -36,6 +54,27 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
     }));
   };
 
+  const handleFileChange = (e) => {
+    const { name } = e.target;
+    const file = e.target.files?.[0] || null;
+    setError(null);
+
+    let problem = null;
+    if (file && name === 'video') {
+      problem = videoProblem(file);
+    } else if (file) {
+      const label = name === 'resume' ? 'The resume' : 'The blind resume';
+      if (file.type !== 'application/pdf') problem = `${label} must be a PDF`;
+      else if (file.size > MAX_PDF_BYTES) problem = `${label} must be smaller than ${megabytes(MAX_PDF_BYTES)}MB`;
+    }
+
+    if (problem) {
+      setError(problem);
+      e.target.value = '';
+    }
+    setFiles(prev => ({ ...prev, [name]: problem ? null : file }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -43,12 +82,14 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
 
     try {
       // Validate required fields
-      const requiredFields = ['firstName', 'lastName', 'email', 'studentId', 'phoneNumber', 'graduationYear', 'cumulativeGpa', 'major1', 'resumeUrl', 'headshotUrl'];
+      const requiredFields = ['firstName', 'lastName', 'email', 'studentId', 'phoneNumber', 'graduationYear', 'cumulativeGpa', 'major1', 'headshotUrl'];
       const missingFields = requiredFields.filter(field => {
         const value = formData[field];
         return !value || (typeof value === 'string' && value.trim() === '') || (typeof value === 'number' && isNaN(value));
       });
       
+      if (!files.resume) missingFields.push('resume');
+
       if (missingFields.length > 0) {
         setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
         setLoading(false);
@@ -62,51 +103,41 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
         return;
       }
 
-      // Convert GPA to decimal format
-      const applicationData = {
-        ...formData,
-        cumulativeGpa: parseFloat(formData.cumulativeGpa),
-        responseID: `manual-${Date.now()}`, // Generate unique response ID
-        rawResponses: {} // Empty object for manual applications
-      };
-
-      // Handle majorGpa - send 0.00 if empty, otherwise parse the value
-      if (formData.majorGpa && formData.majorGpa !== '') {
-        applicationData.majorGpa = parseFloat(formData.majorGpa);
-      } else {
-        applicationData.majorGpa = 0.00;
+      // The video goes to storage first, straight from the browser; the
+      // application then names it.
+      let videoDocumentId = null;
+      if (files.video) {
+        if (uploadedVideoRef.current?.file !== files.video) {
+          setVideoProgress(0);
+          const documentId = await uploadApplicationVideo(files.video, setVideoProgress);
+          uploadedVideoRef.current = { file: files.video, documentId };
+        }
+        videoDocumentId = uploadedVideoRef.current.documentId;
       }
 
-      await apiClient.post('/applications/manual', applicationData);
+      const body = new FormData();
+      Object.entries(formData).forEach(([key, value]) => body.append(key, value));
+      body.set('cumulativeGpa', parseFloat(formData.cumulativeGpa));
+      // Major GPA is sent as 0.00 when left empty
+      body.set('majorGpa', formData.majorGpa !== '' ? parseFloat(formData.majorGpa) : 0.00);
+      body.append('responseID', `manual-${Date.now()}`); // Generate unique response ID
+      body.append('resume', files.resume);
+      if (files.blindResume) body.append('blindResume', files.blindResume);
+      if (videoDocumentId) body.append('videoDocumentId', videoDocumentId);
+
+      await apiClient.post('/applications/manual', body);
       onSuccess();
       onClose();
-      
+
       // Reset form
-      setFormData({
-        firstName: '',
-        lastName: '',
-        email: '',
-        studentId: '',
-        phoneNumber: '',
-        graduationYear: '',
-        isTransferStudent: false,
-        priorCollegeYears: '',
-        cumulativeGpa: '',
-        majorGpa: '',
-        major1: '',
-        major2: '',
-        gender: '',
-        isFirstGeneration: false,
-        resumeUrl: '',
-        headshotUrl: '',
-        coverLetterUrl: '',
-        shortAnswer: '',
-        videoUrl: ''
-      });
+      setFormData(EMPTY_FORM);
+      setFiles(EMPTY_FILES);
+      uploadedVideoRef.current = null;
     } catch (err) {
       setError(err.message || 'Failed to create application');
     } finally {
       setLoading(false);
+      setVideoProgress(null);
     }
   };
 
@@ -325,14 +356,25 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
           <div className="form-section">
             <h3>Application Materials</h3>
             <div className="form-group">
-              <label htmlFor="resumeUrl">Resume URL *</label>
+              <label htmlFor="resume">Resume (PDF) *</label>
               <input
-                type="url"
-                id="resumeUrl"
-                name="resumeUrl"
-                value={formData.resumeUrl}
-                onChange={handleInputChange}
+                type="file"
+                id="resume"
+                name="resume"
+                accept="application/pdf"
+                onChange={handleFileChange}
                 required
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="blindResume">Blind Resume (PDF)</label>
+              <input
+                type="file"
+                id="blindResume"
+                name="blindResume"
+                accept="application/pdf"
+                onChange={handleFileChange}
               />
             </div>
 
@@ -360,25 +402,35 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label htmlFor="shortAnswer">Short Answer</label>
+              <label htmlFor="shortAnswer">Short Answer Response</label>
               <textarea
                 id="shortAnswer"
                 name="shortAnswer"
                 rows={5}
                 value={formData.shortAnswer}
                 onChange={handleInputChange}
+                placeholder="Paste the applicant's response"
               />
             </div>
 
             <div className="form-group">
-              <label htmlFor="videoUrl">Video URL</label>
+              <label htmlFor="video">Video (up to {megabytes(MAX_VIDEO_BYTES)}MB)</label>
               <input
-                type="url"
-                id="videoUrl"
-                name="videoUrl"
-                value={formData.videoUrl}
-                onChange={handleInputChange}
+                type="file"
+                id="video"
+                name="video"
+                accept={VIDEO_ACCEPT}
+                onChange={handleFileChange}
+                disabled={loading}
               />
+              {videoProgress !== null && (
+                <progress
+                  value={videoProgress}
+                  max={1}
+                  aria-label="Video upload progress"
+                  style={{ width: '100%', marginTop: '0.5rem' }}
+                />
+              )}
             </div>
           </div>
 
@@ -387,7 +439,9 @@ export default function AddApplicationModal({ isOpen, onClose, onSuccess }) {
               Cancel
             </button>
             <button type="submit" disabled={loading} className="submit-btn">
-              {loading ? 'Creating...' : 'Create Application'}
+              {videoProgress !== null && videoProgress < 1
+                ? `Uploading video ${Math.round(videoProgress * 100)}%`
+                : loading ? 'Creating...' : 'Create Application'}
             </button>
           </div>
         </form>

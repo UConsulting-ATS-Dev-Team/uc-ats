@@ -50,6 +50,8 @@ export const GUARD_TABLE = Object.freeze([
   { prefix: '/api/member', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/cases', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/files', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
+  // routes/applicationDocuments.js: requireAuth, then staff-or-owner per document
+  { prefix: '/api/application-documents', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
   { prefix: '/api/users', allowed: ['ADMIN', 'MEMBER', 'CANDIDATE', 'TALENT', 'CLIENT'], severity: 'WARN' },
 ]);
 

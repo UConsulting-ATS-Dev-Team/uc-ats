@@ -19,7 +19,8 @@ const STORAGE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../
 // Supabase bucket both slows them down and leaves fixture-named objects
 // ("app-1") sitting in production storage.
 const stored = new Map();
-vi.mock('../services/resumeStorage.js', () => ({
+vi.mock('../services/resumeStorage.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   putResume: vi.fn(async (key, buffer) => { stored.set(key, buffer); }),
   getResume: vi.fn(async (key) => stored.get(key) ?? null),
   removeResume: vi.fn(async (key) => { stored.delete(key); }),

@@ -33,10 +33,12 @@ export function toSameOriginDocumentUrl(url) {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
-// Documents served behind sign-in: a Drive file, or a replacement resume.
+// Documents served behind sign-in: a Drive file, an uploaded resume, or a blind
+// resume or video uploaded with a manually added application.
 const SIGNED_PATHS = [
   /^\/api(\/files\/[^/?#]+)\/(?:pdf|image)$/,
   /^\/api(\/resume-uploads\/[^/?#]+)\/file$/,
+  /^\/api(\/application-documents\/[^/?#]+)\/file$/,
 ];
 
 /**

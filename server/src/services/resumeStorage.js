@@ -35,6 +35,7 @@ export const LOCAL_STORAGE_ROOT = path.join(__dirname, '../../storage');
 // nothing here may be fetched by URL, only streamed through a route that has
 // already decided the caller is allowed to see it.
 const BUCKET = 'resumes';
+export const RESUME_BUCKET = BUCKET;
 
 let bucketReady = false;
 
@@ -125,6 +126,15 @@ export const getResume = async (key) => {
   if (!fs.existsSync(absolute)) return null;
   return fsPromises.readFile(absolute);
 };
+
+/**
+ * Where one version of an application's resume is kept, and the URL it is
+ * served at (routes/resumeUploads.js).
+ */
+export const resumeUploadLocation = (applicationId, uploadId) => ({
+  relativePath: path.posix.join('resumes', applicationId, `${uploadId}.pdf`),
+  servedUrl: `/api/resume-uploads/${uploadId}/file`,
+});
 
 /** True when the resume can actually be served. */
 export const resumeExists = async (key) => (await getResume(key)) !== null;

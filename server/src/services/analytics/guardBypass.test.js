@@ -49,6 +49,8 @@ describe('evaluateGuardBypass', () => {
     expect(ok('CANDIDATE', '/api/member/events')).toBeNull();
     expect(ok('ANON', '/api/member/events')?.severity).toBe('WARN');
     expect(ok('ANON', '/api/cases/:id')?.severity).toBe('WARN');
+    expect(ok('ANON', '/api/application-documents/:token/file')?.severity).toBe('WARN');
+    expect(ok('CANDIDATE', '/api/application-documents/:token/file')).toBeNull();
   });
 
   it('ignores prefixes with public routes', () => {
