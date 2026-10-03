@@ -99,6 +99,17 @@ describe('EditApplicationModal resume upload', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
   });
 
+  it('holds Upload PDF while an Update is in flight', async () => {
+    api.put.mockReturnValue(new Promise(() => {}));
+    renderModal();
+
+    await userEvent.upload(screen.getByLabelText('Resume *'), pdf());
+    await userEvent.click(screen.getByRole('button', { name: 'Update Application' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Upload PDF' })).toBeDisabled());
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('refuses a file over 10 MB when it is chosen', async () => {
     renderModal();
     const big = pdf();

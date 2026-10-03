@@ -100,7 +100,8 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
   };
 
   const handleResumeUpload = async () => {
-    if (!resumeFile) return;
+    // An Update in flight carries the old link; uploading under it would be undone.
+    if (!resumeFile || loading) return;
     setResumeUploading(true);
     setResumeError('');
     setResumeNotice('');
@@ -438,7 +439,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
                   type="button"
                   className="submit-btn"
                   onClick={handleResumeUpload}
-                  disabled={!resumeFile || resumeUploading}
+                  disabled={!resumeFile || resumeUploading || loading}
                   data-track="Upload replacement resume"
                 >
                   {resumeUploading ? 'Uploading...' : 'Upload PDF'}
