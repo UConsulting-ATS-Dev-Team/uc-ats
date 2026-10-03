@@ -131,6 +131,10 @@ npm run setup-candidate-relations
 
 # One-time mailing-list import (dry run; add --apply to upload to Drive)
 npm run import-mailing-list -- <csv>
+
+# Fold a candidate's duplicate applications in a cycle into one
+# (dry run; add --apply to merge; --cycle=<id> for a cycle other than the candidate one)
+npm run merge-duplicate-applications
 ```
 
 #### Mailing-list import
@@ -786,6 +790,42 @@ The system follows a **recruiting cycle-based workflow**:
   see that candidate's history. It is the ownership check that has to be fixed; no choice
   of candidate resolution closes it, because both directions of the conflict leak through
   the same door.
+
+**One application per candidate per cycle:**
+- People submit twice: once to a replaced form and again to the new one, or the same form
+  twice. Sync used to dedupe only by Google's response id, so each became a second
+  `Application`, Staging showed the person twice, and their decisions, comments,
+  evaluations and signups split across the two rows. The rule now lives in
+  [server/src/services/applicationResubmissions.js](server/src/services/applicationResubmissions.js);
+  form sync and the cleanup script both call it and neither decides anything itself.
+- Once the candidate is resolved, sync looks for their application in the cycle. If there
+  is one, the response is folded into it: no second row, no second receipt, no referral or
+  Luma claim (those ran for the first submission). New responses are processed oldest
+  first, so two unseen submissions from one person fold in the order they were sent.
+- A resubmission **replaces** the answers (every column `transformFormResponse` produces)
+  only when it is later than the one on file and review has not started: round `1` or
+  none, `SUBMITTED`, `approved` null, no decision in any round, record not sealed. The
+  write is conditional on those, so a decision landing mid-sync stops it. Otherwise it is
+  **only recorded**: the application keeps its answers, because a reviewer must never find
+  the resume they scored swapped underneath them.
+- `Application.supersededResponseIds` holds every response a row absorbed or ignored;
+  `responseID` is the one whose answers it holds. Sync treats both as already filed. A
+  replacement clears optional answers the new response left out, so an old
+  `blindResumeUrl` (a form upload, not derived) never outlives the resume it matches.
+- Duplicates made before this are folded by
+  `npm run merge-duplicate-applications` (`scripts/merge-duplicate-applications.js`).
+  Dry run is the default and reads only, and works before the `supersededResponseIds`
+  migration is applied; `--apply` writes. It touches one cycle (`--cycle=<id>`, default
+  the candidate cycle) and keeps the oldest row, with the latest submission's answers and
+  every review field merged onto it. A group is skipped whole, and listed, when that means
+  choosing between two people's work: different values for one review field, dependent
+  rows a unique constraint would merge (one evaluator on both rows of an interview), a
+  portal resume history on a row whose answers are not kept, or a sealed candidate.
+- **A new table with an application id must be added to `APPLICATION_DEPENDENTS`** in the
+  same change, with its unique constraints. The merge re-points those tables and then
+  deletes the duplicate, so a missing one is orphaned or cascade-deleted.
+  `applicationResubmissions.schema.test.js` fails when `schema.prisma` has one the list
+  lacks, and `--apply` refuses to start when the live database does.
 
 **Site analytics:**
 - Administration → Site Analytics (`/admin/analytics`): speed per user type, errors, and

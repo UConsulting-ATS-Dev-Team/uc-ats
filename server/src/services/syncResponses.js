@@ -7,6 +7,7 @@ import { resolveCandidateCycle } from './activeCycle.js'
 import { claimReferralsForCandidate } from './referrals.js'
 import { claimLumaGuestsForCandidate } from './luma/ingestGuests.js'
 import { sendApplicationReceipts } from './applicationReceipts.js'
+import { applyResubmission, RESUBMISSION_ACTIONS } from './applicationResubmissions.js'
 
 /**
  * The candidate whose email this is, resolved so the answer never depends on
@@ -83,6 +84,48 @@ async function resolveCandidate({ studentId, email }) {
 
 const RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+// What applyResubmission needs to know about the application already on file.
+const RESUBMISSION_SELECT = {
+  id: true,
+  responseID: true,
+  supersededResponseIds: true,
+  submittedAt: true,
+  resumeUrl: true,
+  status: true,
+  currentRound: true,
+  approved: true,
+  resumeDecision: true,
+  coffeeChatDecision: true,
+  firstRoundDecision: true,
+  finalRoundDecision: true
+};
+
+const URL_FIELDS = ['resumeUrl', 'coverLetterUrl', 'videoUrl', 'headshotUrl'];
+const URL_PREFIXES_TO_STRIP = ['http://localhost:3001', 'http://localhost:5173', 'https://uconsultingats.com', 'https://www.uconsultingats.com'];
+
+/**
+ * The record as it is stored, whether it creates an application or replaces
+ * one's answers: undefined values dropped (Prisma rejects them), and file URLs
+ * made relative so a row never carries a localhost or production origin.
+ */
+function sanitizeRecord(dbRecord) {
+  const record = { ...dbRecord };
+  Object.keys(record).forEach(key => {
+    if (record[key] === undefined) delete record[key];
+  });
+  URL_FIELDS.forEach(field => {
+    if (record[field]) {
+      for (const prefix of URL_PREFIXES_TO_STRIP) {
+        if (record[field].startsWith(prefix)) {
+          record[field] = record[field].replace(prefix, '');
+          break;
+        }
+      }
+    }
+  });
+  return record;
+}
+
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
@@ -122,19 +165,27 @@ export default async function syncFormResponses() {
       }
     }
 
-    // Get existing response IDs
+    // Every response already on file: each application's own, plus the ones it
+    // absorbed or ignored as a resubmission from the same person
+    // (applicationResubmissions.js). Without the second half a resubmission
+    // that was only recorded would be new again on every run.
     const existingResponseIds = new Set(
       (await prisma.application.findMany({
-        select: { responseID: true }
-      })).map(r => r.responseID)
+        select: { responseID: true, supersededResponseIds: true }
+      })).flatMap(r => [r.responseID, ...(r.supersededResponseIds || [])])
     )
     
-    // Filter out responses that are already in the database
-    const newResponses = responses.filter(response => !existingResponseIds.has(response.responseId))
+    // Filter out responses that are already in the database, oldest first, so
+    // two unseen submissions from one person fold in the order they were sent.
+    const submitTime = (response) => Date.parse(response.createTime) || 0;
+    const newResponses = responses
+      .filter(response => !existingResponseIds.has(response.responseId))
+      .sort((a, b) => submitTime(a) - submitTime(b))
     
     console.log(`Found ${newResponses.length} new responses to process`);
     
     let successCount = 0;
+    let resubmissionCount = 0;
     const filedResponseIDs = [];
     let errorCount = 0;
     
@@ -214,37 +265,43 @@ export default async function syncFormResponses() {
           console.log(`Linked application to existing candidate id=${candidate.id} (${candidate.firstName} ${candidate.lastName})`);
         }
 
+        const record = sanitizeRecord(dbRecord);
+
+        // One application per candidate per cycle. Someone who already applied
+        // and submits again (a replaced form, or the same form twice) is folded
+        // into the application they have; applicationResubmissions.js decides
+        // whether the new answers replace the old ones or are only recorded.
+        // Either way there is no second row, and nothing below runs again: the
+        // receipt, referral and Luma claims all happened for the first one.
+        const [existingApplication] = await prisma.application.findMany({
+          where: { candidateId: candidate.id, cycleId: activeCycle.id },
+          select: RESUBMISSION_SELECT,
+          orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+          take: 1
+        });
+        if (existingApplication) {
+          const outcome = await prisma.$transaction((tx) => applyResubmission(tx, {
+            existing: existingApplication,
+            incoming: record,
+            candidateLocked: Boolean(candidate.recordsLockedAt)
+          }));
+          console.log(
+            outcome.action === RESUBMISSION_ACTIONS.REPLACE
+              ? `Resubmission ${record.responseID} replaced the answers on application id=${outcome.applicationId} (candidate id=${candidate.id}); ${existingApplication.responseID} kept as superseded`
+              : `Resubmission ${record.responseID} recorded on application id=${outcome.applicationId} (candidate id=${candidate.id}) without changing it: ${outcome.reason}`
+          );
+          resubmissionCount++;
+          continue;
+        }
+
         // Create application with candidate connection
         const dataToCreate = {
-          ...dbRecord,
+          ...record,
           candidateId: candidate.id,
           currentRound: '1', // Set to Resume Review round for new applications
           ...(activeCycle ? { cycleId: activeCycle.id } : {})
         };
 
-        // Remove undefined values to avoid Prisma validation errors
-        Object.keys(dataToCreate).forEach(key => {
-          if (dataToCreate[key] === undefined) {
-            delete dataToCreate[key];
-          }
-        });
-
-        // Sanitize any file URLs to ensure they are relative (prevent localhost URLs in production)
-        const urlFields = ['resumeUrl', 'coverLetterUrl', 'videoUrl', 'headshotUrl'];
-        const urlPrefixesToStrip = ['http://localhost:3001', 'http://localhost:5173', 'https://uconsultingats.com', 'https://www.uconsultingats.com'];
-        urlFields.forEach(field => {
-          if (dataToCreate[field]) {
-            for (const prefix of urlPrefixesToStrip) {
-              if (dataToCreate[field].startsWith(prefix)) {
-                dataToCreate[field] = dataToCreate[field].replace(prefix, '');
-                break;
-              }
-            }
-          }
-        });
-
-        // Ensure we do not duplicate by responseID (already filtered), but also guard
-        // against the same candidate submitting twice by cycle with the same responseID
         await prisma.application.create({ data: dataToCreate });
         successCount++;
         filedResponseIDs.push(dataToCreate.responseID);
@@ -296,7 +353,7 @@ export default async function syncFormResponses() {
       }
     }
     
-    console.log(`Sync complete: ${successCount} processed successfully, ${errorCount} errored`);
+    console.log(`Sync complete: ${successCount} processed successfully, ${resubmissionCount} folded into an existing application, ${errorCount} errored`);
 
     // "We received your application" for everything this sync and recent
     // ones filed. Not awaited: a slow SES must not hold up server startup,
