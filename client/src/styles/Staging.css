@@ -775,7 +775,7 @@
   color: var(--text-secondary);
 }
 
-.staging-page .applicant-cell { gap: 0.625rem; min-width: 0; }
+.staging-page .applicant-cell { gap: 0.875rem; min-width: 0; }
 .staging-name-block { min-width: 0; }
 .staging-name-block .applicant-name,
 .staging-name-block .applicant-email {
@@ -786,10 +786,12 @@
 
 .staging-avatar {
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   object-fit: cover;
+  /* Headshots are framed head-and-shoulders: keep the face, not the chest. */
+  object-position: 50% 20%;
   border: 1px solid var(--border-light);
 }
 
@@ -799,7 +801,7 @@
   justify-content: center;
   background: var(--bg-gray-light);
   color: var(--text-tertiary);
-  font-size: 0.75rem;
+  font-size: 1rem;
   font-weight: 600;
 }
 
