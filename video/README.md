@@ -14,6 +14,7 @@ camera, a cursor and headlines. It does not rebuild the UI.
 | `final-round-setup-members` | Setting Up Your Final Round (members only) |
 | `final-round-setup` | Setting Up a Final Round (admins and members, for recruitment committees) |
 | `final-round-conduct` | Running a Final Round |
+| `review-delibs` | Running a Review Team Delib (admins run it; the team follows along) |
 
 ## Rebuild one
 
