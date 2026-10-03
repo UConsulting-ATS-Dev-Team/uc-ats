@@ -229,3 +229,161 @@ describe('Staging sync', () => {
     expect(screen.getByText('Alice Example')).toBeInTheDocument();
   });
 });
+
+describe('Staging table', () => {
+  const scored = (id, firstName, overall) => ({ ...candidate(id, firstName), scores: { overall } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stagingCache.invalidate();
+    apiClient.get.mockImplementation(snapshot({
+      candidates: [scored('c1', 'Alice', 18), scored('c2', 'Bob', 20), scored('c3', 'Cara', 18), scored('c4', 'Dan', 0)],
+      snapshotVersion: 300,
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    stagingCache.invalidate();
+  });
+
+  const rankOf = (name) => screen.getByText(name).closest('tr').querySelector('.staging-rank').textContent;
+
+  it('numbers each row by score rank, ties sharing one, unscored left blank', async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    expect(rankOf('Bob Example')).toBe('1');
+    expect(rankOf('Alice Example')).toBe('2');
+    expect(rankOf('Cara Example')).toBe('2');
+    expect(rankOf('Dan Example')).toBe('—');
+  });
+
+  it('keeps the score rank when the list is sorted by name', async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'name' } });
+
+    expect(rankOf('Bob Example')).toBe('1');
+    expect(rankOf('Cara Example')).toBe('2');
+  });
+
+  it('shows a decision at once and saves it without re-reading the snapshot', async () => {
+    apiClient.post.mockResolvedValue({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    const reads = snapshotCallCount();
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+
+    expect(select.value).toBe('yes');
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/admin/save-decision', {
+      candidateId: 'c1', decision: 'yes', phase: 'resume',
+    }));
+    expect(snapshotCallCount()).toBe(reads);
+  });
+
+  it('puts the decision back and says so when the save fails', async () => {
+    apiClient.post.mockRejectedValue(new Error('network down'));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'no' } });
+
+    await screen.findByText(/Could not save the decision for Alice Example/);
+    expect(select.value).toBe('');
+  });
+
+  it('sends a newer pick only after the earlier save settles, and keeps it when that save fails', async () => {
+    let failFirst;
+    apiClient.post
+      .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
+      .mockResolvedValueOnce({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+    fireEvent.change(select, { target: { value: 'no' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(select.value).toBe('no');
+
+    failFirst(new Error('network down'));
+
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    expect(apiClient.post).toHaveBeenLastCalledWith('/admin/save-decision', {
+      candidateId: 'c1', decision: 'no', phase: 'resume',
+    });
+    expect(select.value).toBe('no');
+    expect(screen.queryByText(/Could not save the decision/)).not.toBeInTheDocument();
+  });
+
+  const confirmProcessAll = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /process all decisions/i }));
+    fireEvent.change(await screen.findByLabelText('Type PROCESS to confirm'), { target: { value: 'PROCESS' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    const buttons = screen.getAllByRole('button', { name: /process all decisions/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+  };
+  const processCalls = () => apiClient.post.mock.calls.filter(([endpoint]) => endpoint === '/admin/process-decisions');
+
+  it('waits for a queued decision to save before processing', async () => {
+    let finishSave;
+    apiClient.post.mockImplementation((endpoint) => (endpoint === '/admin/save-decision'
+      ? new Promise((resolve) => { finishSave = resolve; })
+      : Promise.resolve({})));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    fireEvent.change(screen.getByLabelText('Decision for Alice Example'), { target: { value: 'yes' } });
+    await waitFor(() => expect(finishSave).toBeDefined());
+    await confirmProcessAll();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(processCalls()).toHaveLength(0);
+
+    finishSave({ success: true });
+    await waitFor(() => expect(processCalls()).toHaveLength(1));
+  });
+
+  it('processes nothing when a queued decision fails to save', async () => {
+    let failSave;
+    apiClient.post.mockImplementation((endpoint) => (endpoint === '/admin/save-decision'
+      ? new Promise((_, reject) => { failSave = reject; })
+      : Promise.resolve({})));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    fireEvent.change(screen.getByLabelText('Decision for Alice Example'), { target: { value: 'yes' } });
+    await waitFor(() => expect(failSave).toBeDefined());
+    await confirmProcessAll();
+    failSave(new Error('network down'));
+
+    await screen.findByText(/A decision did not save, so nothing was processed/);
+    expect(processCalls()).toHaveLength(0);
+  });
+
+  it('skips a pick replaced before its turn to save', async () => {
+    let finishFirst;
+    apiClient.post
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+    fireEvent.change(select, { target: { value: 'maybe_yes' } });
+    fireEvent.change(select, { target: { value: 'no' } });
+    finishFirst({ success: true });
+
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    expect(apiClient.post.mock.calls.map(([, body]) => body.decision)).toEqual(['yes', 'no']);
+    expect(select.value).toBe('no');
+  });
+});
