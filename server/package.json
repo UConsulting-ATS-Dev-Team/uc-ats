@@ -17,7 +17,8 @@
     "update-schema-relations": "node scripts/update-schema-relations.js",
     "setup-candidate-relations": "node scripts/setup-candidate-relations.js",
     "sync-member-linkedin": "node scripts/syncMemberLinkedin.js",
-    "import-mailing-list": "node scripts/import-mailing-list-csv.js"
+    "import-mailing-list": "node scripts/import-mailing-list-csv.js",
+    "transcode-videos": "node scripts/transcode-videos.js"
   },
   "keywords": [],
   "author": "",
