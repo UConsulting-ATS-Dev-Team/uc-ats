@@ -279,6 +279,14 @@ describe('mapping file', () => {
     ]);
   });
 
+  it('reverts from a repointing row alone, which is all a run killed mid-write leaves', () => {
+    const row = { applicationId: 'a1', originalFileId: 'o1', originalUrl: '/api/files/o1/pdf', newFileId: 'n1', newUrl: '/api/files/n1/pdf' };
+    const expected = [row];
+    expect(planRevert([{ ...row, status: MAPPING_STATUS.REPOINTING }])).toEqual(expected);
+    // The usual pair, intent then result, is still one application.
+    expect(planRevert([{ ...row, status: MAPPING_STATUS.REPOINTING }, { ...row, status: MAPPING_STATUS.REPOINTED }])).toEqual(expected);
+  });
+
   it('round-trips: what the writer records, the revert plan reads', () => {
     const file = path.join(dir, 'rt.jsonl');
     const writer = createMappingWriter(file);

@@ -23,7 +23,7 @@ vi.mock('./videoTranscode.js', async (importOriginal) => ({
 
 const { DriveStepError, groupByVideoFile, processVideoFile, runPool } = await import('./videoTranscodeBatch.js');
 
-const MOV = { id: 'orig1', name: 'IMG_0001.MOV', mimeType: 'video/quicktime', size: '48000000', parents: ['folderA'] };
+const MOV = { id: 'orig1', name: 'IMG_0001.MOV', mimeType: 'video/quicktime', size: '48000000', md5Checksum: 'md5A', parents: ['folderA'] };
 const app = (id, fileId = 'orig1', origin = '') => ({ id, videoUrl: `${origin}/api/files/${fileId}/pdf` });
 
 function stubDrive(overrides = {}) {
@@ -103,10 +103,10 @@ describe('processVideoFile --apply', () => {
   });
 
   it('reuses a copy an interrupted run uploaded, after checking it, instead of transcoding again', async () => {
-    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', mimeType: 'video/mp4', size: '15000000' }]) });
+    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', mimeType: 'video/mp4', size: '15000000', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: 'md5A' } }]) });
     const repoint = vi.fn(async () => {});
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint });
-    expect(drive.listFilesByAppProperty).toHaveBeenCalledWith({ folderId: 'folderA', key: 'transcodedFrom', value: 'orig1' });
+    expect(drive.listFilesByAppProperty).toHaveBeenCalledWith({ folderId: 'folderA', key: 'transcodedFrom', value: 'orig1', fields: 'id, name, mimeType, size, appProperties' });
     expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1', 'webOld']);
     // Checked against the source's length like a fresh copy.
     expect(verifyWebCopy).toHaveBeenCalledWith(expect.stringMatching(/\.web\.mp4$/), { sourceDurationSec: 5 });
@@ -120,7 +120,7 @@ describe('processVideoFile --apply', () => {
     const drive = stubDrive({
       listFilesByAppProperty: vi.fn(async () => [
         { id: 'notVideo', mimeType: 'application/pdf' },
-        { id: 'broken', mimeType: 'video/mp4' },
+        { id: 'broken', mimeType: 'video/mp4', appProperties: { transcodedFromMd5: 'md5A' } },
       ]),
     });
     verifyWebCopy
@@ -133,6 +133,50 @@ describe('processVideoFile --apply', () => {
     expect(drive.uploadFile).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ status: 'repointed', newFileId: 'web1', action: 'transcode' });
     expect(result.reason).toMatch(/did not reuse notVideo \(type is application\/pdf\), broken \(not web-ready/);
+  });
+
+  it('does not reuse a copy made from an earlier version of the original, or one it cannot place', async () => {
+    const drive = stubDrive({
+      listFilesByAppProperty: vi.fn(async () => [
+        { id: 'stale', mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig1', transcodedFromMd5: 'md5Before' } },
+        { id: 'untagged', mimeType: 'video/mp4', appProperties: { transcodedFrom: 'orig1' } },
+      ]),
+    });
+    const repoint = vi.fn(async () => {});
+    const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint });
+    // Neither is even downloaded: the tag settles it.
+    expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1']);
+    expect(transcodeVideo).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 'repointed', newFileId: 'web1', action: 'transcode' });
+    expect(result.reason).toMatch(/did not reuse stale \(made from an earlier version of the original\), untagged \(cannot tell which version/);
+  });
+
+  it('tags a new copy with the original id and its checksum', async () => {
+    const drive = stubDrive();
+    await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint: vi.fn(async () => {}) });
+    expect(drive.uploadFile.mock.calls[0][0].appProperties).toEqual({ transcodedFrom: 'orig1', transcodedFromMd5: 'md5A' });
+  });
+
+  it('records a repointing row before each database write', async () => {
+    const order = [];
+    const record = vi.fn(async (row) => { order.push(`record ${row.applicationId} ${row.status}`); });
+    const repoint = vi.fn(async ({ applicationId }) => { order.push(`repoint ${applicationId}`); });
+    await processVideoFile({ fileId: 'orig1', applications: [app('a1'), app('a2')], apply: true, scratchDir, drive: stubDrive(), repoint, record });
+    expect(order).toEqual(['record a1 repointing', 'repoint a1', 'record a2 repointing', 'repoint a2']);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      applicationId: 'a1', originalFileId: 'orig1', originalUrl: '/api/files/orig1/pdf', newFileId: 'web1', newUrl: '/api/files/web1/pdf',
+    }));
+  });
+
+  it('does not repoint an application whose rollback record could not be written', async () => {
+    const record = vi.fn(async (row) => { if (row.applicationId === 'a1') throw new Error('ENOSPC'); });
+    const repoint = vi.fn(async () => {});
+    const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1'), app('a2')], apply: true, scratchDir, drive: stubDrive(), repoint, record });
+    expect(repoint).toHaveBeenCalledTimes(1);
+    expect(repoint).toHaveBeenCalledWith(expect.objectContaining({ applicationId: 'a2' }));
+    expect(result.status).toBe('failed');
+    expect(result.rows.map((r) => [r.applicationId, r.status])).toEqual([['a1', 'failed'], ['a2', 'repointed']]);
+    expect(result.rows[0].reason).toMatch(/could not write the rollback record \(ENOSPC\)/);
   });
 
   it('does not upload a copy that fails its check', async () => {
@@ -221,6 +265,53 @@ describe('runPool', () => {
     expect(peak).toBe(3);
     expect(seen.sort()).toEqual(groups(7).map((g) => g.fileId).sort());
     expect(outcome).toEqual({ processed: 7, notStarted: 0, stopReason: null });
+  });
+
+  it('counts --limit in files that needed work, so finished ones are passed over', async () => {
+    // Two files an earlier run finished, then five that still need a copy.
+    const started = [];
+    const outcome = await runPool({
+      groups: groups(7),
+      concurrency: 2,
+      limit: 3,
+      processOne: async (g) => {
+        started.push(g.fileId);
+        await new Promise((r) => setTimeout(r, 2));
+        return ['f0', 'f1'].includes(g.fileId) ? { status: 'skipped', driveConfirmed: true } : { status: 'repointed', driveConfirmed: true };
+      },
+      onResult: () => {},
+    });
+    expect(started).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
+    expect(outcome).toEqual({ processed: 5, notStarted: 2, stopReason: null });
+  });
+
+  it('never works on more than --limit files at once, and counts a failure as one', async () => {
+    let running = 0;
+    let peak = 0;
+    const outcome = await runPool({
+      groups: groups(6),
+      concurrency: 3,
+      limit: 2,
+      processOne: async (g) => {
+        running += 1; peak = Math.max(peak, running);
+        await new Promise((r) => setTimeout(r, 2));
+        running -= 1;
+        if (g.fileId === 'f0') throw new Error('ffmpeg');
+        return { status: 'repointed', driveConfirmed: true };
+      },
+      onResult: () => {},
+    });
+    expect(peak).toBe(2);
+    expect(outcome).toEqual({ processed: 2, notStarted: 4, stopReason: null });
+  });
+
+  it('finishes when every file is a skip and the limit is never reached', async () => {
+    const outcome = await runPool({
+      groups: groups(5), concurrency: 3, limit: 1,
+      processOne: async () => ({ status: 'skipped', driveConfirmed: true }),
+      onResult: () => {},
+    });
+    expect(outcome).toEqual({ processed: 5, notStarted: 0, stopReason: null });
   });
 
   it('stops after repeated Drive failures and leaves the rest unstarted', async () => {

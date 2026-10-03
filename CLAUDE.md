@@ -141,7 +141,11 @@ original as `<name>.web.mp4`, and repoints `Application.videoUrl` at it. Dry run
 default (`--probe` downloads to decide for real); `--apply` writes; `--revert=<jsonl>`
 undoes it. Needs `ffmpeg`/`ffprobe` on PATH. Originals are never deleted. Every run
 appends to `scripts/output/video-transcode-<timestamp>.jsonl`, which is what `--revert`
-reads. What needs work and the ffmpeg command live in
+reads; a `repointing` row is written before each database write, so a run killed
+mid-write can still be reverted. `--limit=N` counts files that still needed a copy, so
+repeating it works through the cycle in batches. A copy left by an interrupted run is
+reused only if it was made from the original as it is now (matching `md5Checksum`).
+What needs work and the ffmpeg command live in
 [server/src/services/videoTranscode.js](server/src/services/videoTranscode.js); the
 per-file steps in [videoTranscodeBatch.js](server/src/services/videoTranscodeBatch.js).
 
