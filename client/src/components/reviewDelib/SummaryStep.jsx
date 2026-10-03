@@ -16,7 +16,14 @@ function describe(change) {
   return `${change.graderName}’s ${doc} score: ${from} → ${to}`;
 }
 
-export default function SummaryStep({ changes, team, isAdmin, ended }) {
+export default function SummaryStep({ changes, error, onRetry, team, isAdmin, ended }) {
+  if (!changes && error) {
+    return (
+      <Alert severity="error" action={<Button color="inherit" onClick={onRetry}>Try again</Button>}>
+        Could not load what changed: {error.serverMessage || error.message}
+      </Alert>
+    );
+  }
   if (!changes) {
     return (
       <Stack alignItems="center" sx={{ py: 8 }}>
@@ -43,10 +50,11 @@ export default function SummaryStep({ changes, team, isAdmin, ended }) {
             ? `${plural(changes.changes.length, 'change')} on ${plural(byCandidate.size, 'candidate')}. They are already live on Staging.`
             : 'No scores or decisions were changed in this session.'}
         </Typography>
-        {open && (open.outlierGrades > 0 || open.missing > 0 || open.undecided > 0) && (
+        {open && (open.outlierGrades > 0 || open.splits > 0 || open.missing > 0 || open.undecided > 0) && (
           <Alert severity="info" sx={{ mt: 2 }}>
             Still open: {[
               open.outlierGrades ? plural(open.outlierGrades, 'outlier grade') : null,
+              open.splits ? plural(open.splits, 'split') : null,
               open.missing ? plural(open.missing, 'missing grade') : null,
               open.undecided ? `${plural(open.undecided, 'candidate')} without a decision` : null
             ].filter(Boolean).join(', ')}.

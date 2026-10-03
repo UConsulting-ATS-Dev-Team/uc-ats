@@ -385,6 +385,33 @@ describe('navigate', () => {
   });
 });
 
+describe('a walkthrough candidate sealed mid-session', () => {
+  const seal = (candidateId) => { db.candidates.find((row) => row.id === candidateId).recordsLockedAt = new Date(); };
+
+  it('opens Outliers on the first one still available', async () => {
+    const sessionId = await launched();
+    seal('c1');
+    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS' });
+    expect(state.session.currentApplicationId).toBe('app2');
+  });
+
+  it('is skipped by Next instead of blocking it', async () => {
+    const sessionId = await launched();
+    await setThreshold({ client: db, sessionId, user: as('admin1'), thresholdPct: 0.1 }); // app1, app2, app5
+    await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS' });
+    seal('c2');
+    const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', applicationId: 'app2' });
+    expect(state.session.currentApplicationId).toBe('app5');
+  });
+
+  it('stops being served on its card at once, cache or no cache', async () => {
+    const sessionId = await launched();
+    await getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') }); // warms the team cache
+    seal('c1');
+    await rejects(getCandidateCard({ client: db, sessionId, applicationId: 'app1', user: as('admin1') }), 423, 'RECORD_LOCKED');
+  });
+});
+
 describe('setThreshold', () => {
   it('adds newly qualifying candidates to the end of the walkthrough', async () => {
     const sessionId = await launched();

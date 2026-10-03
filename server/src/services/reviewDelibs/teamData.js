@@ -3,6 +3,7 @@ import { DOCUMENT_TYPES, getRubrics } from '../documentRubrics.js';
 import { getGroupMemberUsers, groupMemberUserInclude } from '../../utils/groupMembers.js';
 import { sealedRowPredicate } from '../../utils/lockedRecords.js';
 import { hasCoverLetter } from '../../utils/coverLetter.js';
+import { isOwnedBy } from '../../utils/applicationOwnership.js';
 import { normalizeRow } from './teamStats.js';
 
 // Reads what teamStats.js computes over: every review team in the cycle, their
@@ -64,6 +65,8 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId }) {
         assignedCandidates: {
           select: {
             id: true,
+            email: true,
+            studentId: true,
             applications: {
               where: { cycleId },
               orderBy: { submittedAt: 'desc' },
@@ -82,12 +85,23 @@ export async function loadTeamInput({ client = prisma, groupId, cycleId }) {
     }))
   ]);
 
+  // Staff never grade their own application, so a member is not owed a grade
+  // on it. Matched the way the grading routes refuse it (isOwnedBy), which needs
+  // each member's student ID as well as their address.
+  const memberIds = [...new Set(groups.flatMap((group) => getGroupMemberUsers(group).map((user) => user.id)))];
+  const staff = memberIds.length
+    ? await client.user.findMany({ where: { id: { in: memberIds } }, select: { id: true, email: true, studentId: true } })
+    : [];
+
   const candidates = [];
   for (const group of groups) {
+    const members = staff.filter((user) => getGroupMemberUsers(group).some((member) => member.id === user.id));
     for (const candidate of group.assignedCandidates) {
       const application = candidate.applications[0];
       if (!application) continue;
+      const owned = { ...application, candidate: { email: candidate.email, studentId: candidate.studentId } };
       candidates.push({
+        excludedGraderIds: members.filter((user) => isOwnedBy(owned, user)).map((user) => user.id),
         candidateId: candidate.id,
         applicationId: application.id,
         groupId: group.id,

@@ -64,6 +64,17 @@ describe('ReviewDelibProvider', () => {
     expect(navigate).toHaveBeenCalledWith('/review-delib/s2');
   });
 
+  it('keeps a way back to the list after "Not now" when several are running', async () => {
+    currentUser = { id: 'a1', role: 'ADMIN' };
+    reviewDelibApi.active.mockResolvedValue({ sessions: [alpha, beta] });
+    render(<ReviewDelibProvider><div /></ReviewDelibProvider>);
+    await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
+    await waitFor(() => expect(screen.queryByText('2 review team deliberations are running')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show the review team deliberations that are running' }));
+    expect(await screen.findByText('2 review team deliberations are running')).toBeInTheDocument();
+  });
+
   it('never checks for a candidate, and stays off the session page itself', async () => {
     currentUser = { id: 'u2', role: 'USER' };
     const { unmount } = render(<ReviewDelibProvider><div /></ReviewDelibProvider>);

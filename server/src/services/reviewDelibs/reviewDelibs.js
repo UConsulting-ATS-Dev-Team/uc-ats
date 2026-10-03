@@ -120,6 +120,32 @@ async function teamApplication(tx, session, where, user, { forWrite = false } = 
   return application;
 }
 
+/**
+ * The walkthrough keeps its launch order, but a candidate in it can be sealed
+ * or moved to another team mid-session. Rather than stop the admin at that
+ * entry, carry on past it in the direction they were going (forward unless
+ * the request is before the candidate on screen). Null when no candidate in
+ * the walkthrough can be shown any more.
+ */
+async function nextAvailable(tx, session, order, requested, current) {
+  const candidates = await tx.application.findMany({
+    where: { id: { in: order }, cycleId: session.cycleId, candidate: { assignedGroupId: session.groupId } },
+    select: { id: true }
+  });
+  const sealed = await sealedApplicationIds(candidates.map((row) => row.id), tx);
+  const available = new Set(candidates.map((row) => row.id).filter((id) => !sealed.has(id)));
+
+  const from = order.indexOf(requested);
+  const step = current && order.indexOf(current) > from ? -1 : 1;
+  for (let i = from; i >= 0 && i < order.length; i += step) {
+    if (available.has(order[i])) return order[i];
+  }
+  // Nothing further that way. Mid-walkthrough, stay on the card on screen;
+  // opening the step, take any candidate that can still be shown.
+  if (current && available.has(current)) return current;
+  return order.find((id) => available.has(id)) ?? null;
+}
+
 function normalizeThreshold(value) {
   if (value === undefined || value === null || value === '') return DEFAULT_THRESHOLD_PCT;
   const number = Number(value);
@@ -309,12 +335,13 @@ export async function navigate({ client = prisma, sessionId, user, step, applica
     let target = null;
     if (step === 'OUTLIERS') {
       const order = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
-      target = applicationId ?? order[0] ?? null;
-      if (target && !order.includes(target)) throw fail(400, 'That candidate is not in the outlier walkthrough', 'NOT_IN_WALKTHROUGH');
+      const requested = applicationId ?? order[0] ?? null;
+      if (requested && !order.includes(requested)) throw fail(400, 'That candidate is not in the outlier walkthrough', 'NOT_IN_WALKTHROUGH');
+      target = requested && await nextAvailable(tx, session, order, requested, session.currentApplicationId);
     } else if (step === 'ALL' && applicationId) {
       target = applicationId;
+      await teamApplication(tx, session, { id: target }, user);
     }
-    if (target) await teamApplication(tx, session, { id: target }, user);
 
     await tx.reviewDelibSession.update({
       where: { id: sessionId },
@@ -578,6 +605,11 @@ export async function getCandidateCard({ client = prisma, sessionId, application
   const session = await loadForViewer(client, sessionId, user);
   const participants = await client.reviewDelibParticipant.findMany({ where: { sessionId }, select: { userId: true, leftAt: true } });
   assertJoined(session, participants, user);
+
+  // Against the database, not the cached bundle: sealing a record or moving the
+  // candidate to another team bumps nothing here, and the card is everything
+  // about them. 404 off the team, 423 sealed.
+  await teamApplication(client, session, { id: applicationId }, user);
 
   const { input, stats } = await teamBundle(client, session);
   const candidate = input.candidates.find((entry) => entry.applicationId === applicationId && entry.groupId === session.groupId);

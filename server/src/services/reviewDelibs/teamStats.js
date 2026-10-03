@@ -141,11 +141,26 @@ export function docAverages(rows) {
 
 /**
  * Everyone who graded the team's candidates, plus team members who graded
- * nothing. Bias is the mean of (score - others' mean) over the same documents,
- * so a grader who drew a strong pile is not called generous for it.
+ * nothing. Bias ("lean") is the mean of (score - the team members' mean) over
+ * the same documents, so a grader who drew a strong pile is not called generous
+ * for it. Only team members count as the comparison: the page calls this a
+ * lean against teammates, and an admin's grade on the same document is not a
+ * teammate's. Outlier and split flags still compare against every grader.
  */
-export function graderSummaries(rows, members) {
+export function graderSummaries(rows, members, maxByType = {}) {
   const memberIds = new Set(members.map((member) => member.id));
+  const teammatesOn = new Map();
+  for (const row of rows) {
+    if (!memberIds.has(row.evaluatorId) || row.effective === null) continue;
+    const key = docKey(row.candidateId, row.type);
+    if (!teammatesOn.has(key)) teammatesOn.set(key, []);
+    teammatesOn.get(key).push(row);
+  }
+  const leanOf = (row) => {
+    const others = (teammatesOn.get(docKey(row.candidateId, row.type)) || []).filter((other) => other.scoreId !== row.scoreId);
+    if (!others.length || row.effective === null) return null;
+    return row.effective - mean(others.map((other) => other.effective));
+  };
   const graders = new Map(members.map((member) => [member.id, { id: member.id, name: member.name, onTeam: true }]));
   for (const row of rows) {
     if (!row.evaluatorId || graders.has(row.evaluatorId)) continue;
@@ -159,13 +174,10 @@ export function graderSummaries(rows, members) {
     for (const type of DOCUMENT_TYPES) {
       const ofType = mine.filter((row) => row.type === type);
       graded[type] = ofType.length;
-      const compared = ofType.filter((row) => row.deviation !== null);
-      bias[type] = compared.length
-        ? {
-          points: round(mean(compared.map((row) => row.deviation))),
-          pct: round(mean(compared.map((row) => row.deviationPct)), 4),
-          docs: compared.length
-        }
+      const leans = ofType.map(leanOf).filter((lean) => lean !== null);
+      const max = maxByType[type] || 1;
+      bias[type] = leans.length
+        ? { points: round(mean(leans)), pct: round(mean(leans) / max, 4), docs: leans.length }
         : null;
     }
     const outliers = mine.filter((row) => row.isOutlier);
@@ -219,16 +231,21 @@ export function teamComparison({ averages, teamOf, groupId, groups, maxByType })
   return result;
 }
 
-/** What the team still owes: grades members have not given, documents with one grade, and missing decisions. */
+/**
+ * What the team still owes: grades members have not given, documents with one
+ * grade, and missing decisions. A member is never owed a grade on their own
+ * application (`candidate.excludedGraderIds`): the grading routes refuse it.
+ */
 export function completeness({ candidates, memberIds, rows }) {
   const missing = [];
   const singleGrader = [];
   for (const candidate of candidates) {
+    const excluded = new Set(candidate.excludedGraderIds || []);
     for (const type of DOCUMENT_TYPES) {
       if (!candidate.hasDoc[type]) continue;
       const docRows = rows.filter((row) => row.candidateId === candidate.candidateId && row.type === type);
       const graded = new Set(docRows.map((row) => row.evaluatorId));
-      const absent = memberIds.filter((id) => !graded.has(id));
+      const absent = memberIds.filter((id) => !graded.has(id) && !excluded.has(id));
       if (absent.length) missing.push({ applicationId: candidate.applicationId, type, memberIds: absent });
       if (docRows.length === 1) singleGrader.push({ applicationId: candidate.applicationId, type });
     }
@@ -365,15 +382,15 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
   const averageOf = new Map(averages.map((entry) => [docKey(entry.candidateId, entry.type), entry]));
 
   const table = team.map((candidate) => {
-    const base = {
+    // A sealed row is a name and nothing else, like redactApplication's.
+    const identity = {
       applicationId: candidate.applicationId,
       candidateId: candidate.candidateId,
       name: candidate.name,
-      major: candidate.major,
-      year: candidate.year,
       locked: Boolean(candidate.locked)
     };
-    if (candidate.locked) return base;
+    if (candidate.locked) return identity;
+    const base = { ...identity, major: candidate.major, year: candidate.year };
 
     const mine = teamRows.filter((row) => row.candidateId === candidate.candidateId);
     const perDoc = {};
@@ -406,7 +423,7 @@ export function computeTeamStats({ groupId, thresholdPct = DEFAULT_THRESHOLD_PCT
   });
 
   const openTable = table.filter((row) => !row.locked);
-  const graders = graderSummaries(teamRows, members);
+  const graders = graderSummaries(teamRows, members, maxByType);
   const comparison = teamComparison({ averages, teamOf, groupId, groups, maxByType });
   const gaps = completeness({ candidates: open, memberIds: members.map((member) => member.id), rows: teamRows });
   const counts = {

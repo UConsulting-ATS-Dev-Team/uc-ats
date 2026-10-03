@@ -122,6 +122,15 @@ describe('graderSummaries', () => {
     expect(summaries.d.bias.resume).toBe(null);
   });
 
+  it('measures lean against teammates only, not graders from outside the team', () => {
+    // Two teammates agree on 10; an admin's 2 must not make them look generous.
+    const rows = annotateOutliers([row('c1', 'a', 'resume', 10), row('c1', 'b', 'resume', 10), row('c1', 'admin', 'resume', 2)], { maxByType: MAX });
+    const summaries = Object.fromEntries(graderSummaries(rows, [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], MAX).map((entry) => [entry.id, entry]));
+    expect(summaries.a.bias.resume).toEqual({ points: 0, pct: 0, docs: 1 });
+    expect(summaries.b.bias.resume.points).toBe(0);
+    expect(summaries.admin.bias.resume.points).toBe(-8);
+  });
+
   it('lists a grader from outside the team, marked as such', () => {
     const rows = annotateOutliers([row('c1', 'a', 'resume', 5), row('c1', 'admin', 'resume', 6)], { maxByType: MAX });
     const summaries = graderSummaries(rows, [{ id: 'a', name: 'A' }]);
@@ -166,6 +175,15 @@ describe('completeness', () => {
     expect(gaps.missingCount).toBe(3); // b on resume, a and b on video; no cover letter to grade
     expect(gaps.singleGrader).toEqual([{ applicationId: 'app1', type: 'resume' }]);
     expect(gaps.undecided).toEqual(['app1']);
+  });
+
+  it("does not owe a member a grade on their own application", () => {
+    const candidates = [{
+      candidateId: 'c1', applicationId: 'app1', hasDoc: { resume: true, coverLetter: false, video: false },
+      resumeDecision: 'yes', excludedGraderIds: ['b']
+    }];
+    const gaps = completeness({ candidates, memberIds: ['a', 'b'], rows: [row('c1', 'a', 'resume', 5)] });
+    expect(gaps.missingCount).toBe(0);
   });
 });
 
@@ -247,9 +265,9 @@ describe('computeTeamStats', () => {
     ]
   });
 
-  it('keeps a sealed candidate as a bare row, out of every number', () => {
+  it('keeps a sealed candidate as a name only, out of every number', () => {
     const sealed = stats.candidates.find((entry) => entry.candidateId === 'c3');
-    expect(sealed).toEqual({ applicationId: 'app-c3', candidateId: 'c3', name: 'c3', major: undefined, year: undefined, locked: true });
+    expect(Object.keys(sealed).sort()).toEqual(['applicationId', 'candidateId', 'locked', 'name']);
     expect(stats.counts.candidates).toBe(3);
     expect(stats.counts.sealed).toBe(1);
   });

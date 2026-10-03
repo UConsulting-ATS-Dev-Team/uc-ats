@@ -35,9 +35,12 @@ const pulse = {
   '@media (prefers-reduced-motion: reduce)': { animation: 'none' }
 };
 
-export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, onJoin, onDismiss }) {
+export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, onJoin, onDismiss, onReopen }) {
   const [first] = sessions;
   const single = sessions.length === 1;
+  const title = single
+    ? isAdmin ? `${first.groupName} deliberation started` : 'Your review team deliberation has started'
+    : isAdmin ? `${sessions.length} review team deliberations are running` : `${sessions.length} of your review teams are deliberating`;
 
   return (
     <>
@@ -51,9 +54,7 @@ export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, o
       >
         <DialogTitle id="review-delib-prompt-title" sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={pulse} aria-hidden="true" />
-          {isAdmin
-            ? single ? `${first.groupName} deliberation started` : `${sessions.length} review team deliberations are running`
-            : 'Your review team deliberation has started'}
+          {title}
         </DialogTitle>
         <DialogContent>
           {single ? (
@@ -90,12 +91,15 @@ export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, o
         </DialogActions>
       </Dialog>
 
-      {!promptOpen && single && (
+      {!promptOpen && (
         <Fab
           variant="extended"
           color="warning"
-          onClick={() => onJoin(first)}
-          aria-label={first.joined ? 'Return to the review team deliberation' : 'Join the review team deliberation'}
+          // With several running, the pill reopens the list rather than picking one.
+          onClick={single ? () => onJoin(first) : onReopen}
+          aria-label={single
+            ? first.joined ? 'Return to the review team deliberation' : 'Join the review team deliberation'
+            : 'Show the review team deliberations that are running'}
           sx={{
             position: 'fixed',
             right: 24,
@@ -107,7 +111,9 @@ export default function ReviewDelibJoinPrompt({ sessions, promptOpen, isAdmin, o
           }}
         >
           <GroupsIcon />
-          {first.joined ? `Back to ${first.groupName}` : `Join ${first.groupName} delib`}
+          {!single
+            ? `${sessions.length} delibs running`
+            : first.joined ? `Back to ${first.groupName}` : `Join ${first.groupName} delib`}
         </Fab>
       )}
     </>

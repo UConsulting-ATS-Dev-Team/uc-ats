@@ -93,7 +93,12 @@ export default function ReviewDelib() {
       <>
         <DelibHeader state={state} connected={delib.connected} onLeave={leave} />
 
-        {!team && step !== 'SUMMARY' && (
+        {!team && step !== 'SUMMARY' && delib.teamError && (
+          <Alert severity="error" action={<Button color="inherit" onClick={delib.reloadTeam}>Try again</Button>}>
+            Could not load the team’s numbers: {delib.teamError.serverMessage || delib.teamError.message}
+          </Alert>
+        )}
+        {!team && step !== 'SUMMARY' && !delib.teamError && (
           <Stack alignItems="center" sx={{ py: 8 }}><CircularProgress /></Stack>
         )}
 
@@ -137,7 +142,14 @@ export default function ReviewDelib() {
         )}
 
         {step === 'SUMMARY' && (
-          <SummaryStep changes={delib.changes} team={team} isAdmin={user?.role === 'ADMIN'} ended={ended} />
+          <SummaryStep
+            changes={delib.changes}
+            error={delib.changesError}
+            onRetry={delib.reloadChanges}
+            team={team}
+            isAdmin={user?.role === 'ADMIN'}
+            ended={ended}
+          />
         )}
 
         {isHost && !ended && (

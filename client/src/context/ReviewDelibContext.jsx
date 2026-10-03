@@ -75,9 +75,12 @@ function ReviewDelibJoinOverlay({ sessions, isAdmin }) {
   // Keyed on the set of sessions, so a new team starting brings the prompt back.
   const key = sessions.map((session) => session.id).sort().join(',');
   const [dismissed, setDismissed] = useState(() => (key ? readDismissed(key) : false));
+  // The corner pill's "show me the list again", with several running.
+  const [reopened, setReopened] = useState(false);
 
   useEffect(() => {
     setDismissed(key ? readDismissed(key) : false);
+    setReopened(false);
   }, [key]);
 
   if (!sessions.length || previewActive || location.pathname.startsWith('/review-delib/')) return null;
@@ -89,18 +92,20 @@ function ReviewDelibJoinOverlay({ sessions, isAdmin }) {
       // Storage unavailable: the prompt may come back after a reload.
     }
     setDismissed(true);
+    setReopened(false);
   };
 
   return (
     <ReviewDelibJoinPrompt
       sessions={sessions}
       isAdmin={isAdmin}
-      promptOpen={sessions.some((session) => !session.joined) && !dismissed}
+      promptOpen={reopened || (sessions.some((session) => !session.joined) && !dismissed)}
       onJoin={(session) => {
         dismiss();
         navigate(`/review-delib/${session.id}`);
       }}
       onDismiss={dismiss}
+      onReopen={() => setReopened(true)}
     />
   );
 }

@@ -21,10 +21,15 @@ const QUIET_CODES = new Set(['STALE_NAV', 'SESSION_ENDED']);
 
 const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
-/** Fetches `load()` whenever `key` changes, keeping only the answer to the latest request. */
+/**
+ * Fetches `load()` whenever `key` changes, keeping only the answer to the
+ * latest request. An error belongs to the `load` that raised it (one candidate's
+ * card), so switching to another candidate does not show the last one's error
+ * while the new one loads, but a refetch of the same one keeps it up.
+ */
 function useKeyedFetch(load, key, enabled) {
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const [failure, setFailure] = useState(null);
   const requestRef = useRef(0);
 
   const run = useCallback(async () => {
@@ -34,18 +39,19 @@ function useKeyedFetch(load, key, enabled) {
       const result = await load();
       if (request === requestRef.current) {
         setData(result);
-        setError(null);
+        setFailure(null);
       }
     } catch (e) {
-      if (request === requestRef.current) setError(e);
+      if (request === requestRef.current) setFailure({ load, error: e });
     }
   }, [load, enabled]);
+  const error = failure && failure.load === load ? failure.error : null;
 
   useEffect(() => {
     if (!enabled) {
       requestRef.current += 1;
       setData(null);
-      setError(null);
+      setFailure(null);
       return;
     }
     run();
@@ -67,9 +73,15 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   const endedRef = useRef(false);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  // The page stays mounted when the URL moves to another session, so a reply
+  // for the previous one can still arrive. Versions are per session and say
+  // nothing across two of them; the session id does.
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
 
   const accept = useCallback((next) => {
     if (!next?.version && next?.version !== 0) return;
+    if (next.session?.id && next.session.id !== sessionRef.current) return;
     if (versionRef.current != null && next.version < versionRef.current) return;
     versionRef.current = next.version;
     endedRef.current = next.session?.status === 'ENDED';
@@ -81,18 +93,30 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   }, []);
 
   const join = useCallback(async () => {
+    const id = sessionId;
+    const stale = () => sessionRef.current !== id;
     try {
-      accept(await reviewDelibApi.join(sessionId));
+      const joined = await reviewDelibApi.join(id);
+      if (stale()) {
+        // Joined a session the viewer has already left behind.
+        reviewDelibApi.leave(id);
+        return;
+      }
+      accept(joined);
       joinedRef.current = true;
       setReady(true);
     } catch (error) {
+      if (stale()) return;
       if (error?.code === 'SESSION_ENDED') {
         // Too late to join, but the summary is still worth showing.
         try {
-          accept(await reviewDelibApi.state(sessionId));
+          const ended = await reviewDelibApi.state(id);
+          if (stale()) return;
+          accept(ended);
           setReady(true);
           return;
         } catch {
+          if (stale()) return;
           // fall through to the fatal error below
         }
       }
@@ -177,17 +201,20 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
     return () => clearInterval(timer);
   }, [ready, state?.session?.status]);
 
+  // Keyed on the session too: two sessions can be at the same version.
   const loadTeam = useCallback(() => reviewDelibApi.team(sessionId), [sessionId]);
-  const team = useKeyedFetch(loadTeam, `${version}:${teamTick}`, ready && version !== null);
+  const team = useKeyedFetch(loadTeam, `${sessionId}:${version}:${teamTick}`, ready && version !== null);
 
+  // The open card refreshes on the same tick as the team view: a grade saved
+  // outside the session, or a record sealed, changes no version.
   const loadCard = useCallback(
     () => reviewDelibApi.candidate(sessionId, currentApplicationId),
     [sessionId, currentApplicationId]
   );
-  const card = useKeyedFetch(loadCard, `${currentApplicationId}:${version}`, ready && Boolean(currentApplicationId));
+  const card = useKeyedFetch(loadCard, `${sessionId}:${currentApplicationId}:${version}:${teamTick}`, ready && Boolean(currentApplicationId));
 
   const loadChanges = useCallback(() => reviewDelibApi.changes(sessionId), [sessionId]);
-  const changes = useKeyedFetch(loadChanges, version, ready && step === 'SUMMARY');
+  const changes = useKeyedFetch(loadChanges, `${sessionId}:${version}`, ready && step === 'SUMMARY');
 
   // --- Admin actions --------------------------------------------------------
 
@@ -225,6 +252,10 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
     card: card.data && card.data.applicationId === currentApplicationId ? card.data : null,
     cardError: card.error,
     changes: changes.data,
+    changesError: changes.error,
+    // Nothing polls after a session ends, so a failed load needs a way to try again.
+    reloadTeam: team.reload,
+    reloadChanges: changes.reload,
     error: fatal,
     loading: !ready && !fatal,
     connected,
