@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { google } from 'googleapis';
 import { getGoogleAuthClient } from './auth.js';
 
@@ -56,17 +58,27 @@ export async function getFileStream(fileId, { range } = {}) {
   }
 }
 
+// Write a whole Drive file to `destPath`, streaming, so a large video never sits
+// in memory. Resolves with the number of bytes written.
+export async function downloadFile(fileId, destPath) {
+  const stream = await getFileStream(fileId);
+  await pipeline(stream, fs.createWriteStream(destPath));
+  return (await fs.promises.stat(destPath)).size;
+}
+
 // Create a new file in a Drive folder from an in-memory string or a stream.
 // `folderId` is required: without a parent, Drive silently files the upload in
 // the service account's own My Drive, where nobody on the team can see it.
-export async function uploadFile({ name, folderId, body, mimeType = 'text/csv' }) {
+// `appProperties` are private key/value tags only this app can read, used to
+// find a file again by what it was made from rather than by its name.
+export async function uploadFile({ name, folderId, body, mimeType = 'text/csv', appProperties }) {
   if (!name) throw new Error('uploadFile requires a file name');
   if (!folderId) throw new Error('uploadFile requires a folderId');
 
   try {
     const drive = await getDriveClient();
     const res = await drive.files.create({
-      requestBody: { name, parents: [folderId], mimeType },
+      requestBody: { name, parents: [folderId], mimeType, ...(appProperties ? { appProperties } : {}) },
       media: { mimeType, body },
       fields: 'id, name, webViewLink, parents',
       supportsAllDrives: true // Required for shared drives
@@ -100,13 +112,28 @@ export async function uploadFile({ name, folderId, body, mimeType = 'text/csv' }
   }
 }
 
-// Get metadata for a Google Drive file (name, mimeType, size)
-export async function getFileMetadata(fileId) {
+// Files in `folderId` tagged with appProperties[key] === value, not trashed.
+export async function listFilesByAppProperty({ folderId, key, value, fields = 'id, name, mimeType, size' }) {
+  const quote = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const drive = await getDriveClient();
+  const res = await drive.files.list({
+    q: `'${quote(folderId)}' in parents and trashed = false and appProperties has { key='${quote(key)}' and value='${quote(value)}' }`,
+    fields: `files(${fields})`,
+    pageSize: 10,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  return res.data.files || [];
+}
+
+// Get metadata for a Google Drive file (name, mimeType, size by default; pass
+// `fields` for more, e.g. parents)
+export async function getFileMetadata(fileId, { fields = 'id, name, mimeType, size' } = {}) {
   try {
     const drive = await getDriveClient();
     const res = await drive.files.get({
       fileId,
-      fields: 'id, name, mimeType, size',
+      fields,
       supportsAllDrives: true // Required for shared drives
     });
     return res.data;

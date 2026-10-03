@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeftIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
 import LockedRecord from '../components/LockedRecord';
@@ -245,7 +246,7 @@ export default function CandidateDetail() {
         <div className="candidate-profile">
           {candidate.applications && candidate.applications.length > 0 && candidate.applications[0].headshotUrl ? (
             <AuthenticatedImage
-              src={candidate.applications[0].headshotUrl}
+              src={headshotSrc(candidate.applications[0].headshotUrl, 120)}
               alt={displayInfo.name}
               className="candidate-avatar-large"
               style={{

@@ -1,6 +1,7 @@
 import { useState, useLayoutEffect, useCallback, useMemo } from 'react';
 import PersonIcon from '@mui/icons-material/Person';
 import AuthenticatedImage from './AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 
 const ALPHANUM = /[A-Za-z0-9]/;
 const LETTER = /[A-Za-z]/;
@@ -21,6 +22,12 @@ export const getDisplayName = (firstName, lastName) => {
 };
 
 const isValidImageUrl = (url) => typeof url === 'string' && url.trim().length > 0;
+
+// The lists draw this avatar at 64 px at most (4rem).
+const AVATAR_PX = 64;
+
+/** What CandidateAvatar fetches for a headshot, so a list can preload exactly that. */
+export const candidateAvatarSrc = (headshotUrl) => headshotSrc(headshotUrl, AVATAR_PX);
 
 const CandidateAvatar = ({
   applicant,
@@ -61,7 +68,7 @@ const CandidateAvatar = ({
 
   return (
     <AuthenticatedImage
-      src={headshotUrl}
+      src={candidateAvatarSrc(headshotUrl)}
       alt={displayName}
       className={className}
       style={imageStyle}

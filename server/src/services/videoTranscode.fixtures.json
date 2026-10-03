@@ -1,0 +1,199 @@
+{
+  "iphoneMov": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (source.mov)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "hevc",
+        "codec_type": "video",
+        "profile": "Main",
+        "width": 1080,
+        "height": 1920,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "5.000000",
+      "size": "160895",
+      "bit_rate": "257432",
+      "tags": {
+        "major_brand": "qt  "
+      }
+    }
+  },
+  "nonFaststartMp4": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (slow.mp4)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_type": "video",
+        "profile": "High",
+        "width": 1280,
+        "height": 720,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "3.000000",
+      "size": "77052",
+      "bit_rate": "205472",
+      "tags": {
+        "major_brand": "isom"
+      }
+    }
+  },
+  "goodMp4": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (good.mp4)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_type": "video",
+        "profile": "High",
+        "width": 1280,
+        "height": 720,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "3.000000",
+      "size": "77052",
+      "bit_rate": "205472",
+      "tags": {
+        "major_brand": "isom"
+      }
+    }
+  },
+  "uhdMp4": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (4k.mp4)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_type": "video",
+        "profile": "Constrained Baseline",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "1.000000",
+      "size": "246085",
+      "bit_rate": "1968680",
+      "tags": {
+        "major_brand": "isom"
+      }
+    }
+  },
+  "rotatedMov": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (rotated.mov)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_type": "video",
+        "profile": "Constrained Baseline",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "side_data_list": [
+          {
+            "side_data_type": "Display Matrix",
+            "rotation": 90
+          }
+        ]
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "1.000000",
+      "size": "93010",
+      "bit_rate": "744080",
+      "tags": {
+        "major_brand": "qt  "
+      }
+    }
+  },
+  "hdrMov": {
+    "source": "ffprobe -show_format -show_streams of a clip generated with ffmpeg testsrc (hdr.mov)",
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "hevc",
+        "codec_type": "video",
+        "profile": "Main 10",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p10le",
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1",
+        "color_transfer": "arib-std-b67"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0"
+      }
+    ],
+    "format": {
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "duration": "3.000000",
+      "size": "87106",
+      "bit_rate": "232282",
+      "tags": {
+        "major_brand": "qt  "
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { Avatar } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import AuthenticatedImage from '../AuthenticatedImage';
 import { getInitials } from '../CandidateAvatar';
+import { headshotSrc } from '../../utils/headshotUrl';
 
 // A round headshot that falls back to initials when there is no photo or it
 // fails to load, instead of AuthenticatedImage's "Photo unavailable" box.
@@ -21,7 +22,7 @@ export default function Headshot({ src, name = '', size = 40, sx }) {
     >
       {src && !failed ? (
         <AuthenticatedImage
-          src={src}
+          src={headshotSrc(src, size)}
           alt={name}
           onError={onError}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}

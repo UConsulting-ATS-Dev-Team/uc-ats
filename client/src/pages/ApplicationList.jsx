@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
-import CandidateAvatar from '../components/CandidateAvatar';
+import CandidateAvatar, { candidateAvatarSrc } from '../components/CandidateAvatar';
 import MemberAvatar from '../components/MemberAvatar';
 import ImageCache from '../utils/imageCache';
 import AddApplicationModal from '../components/AddApplicationModal';
@@ -116,7 +116,7 @@ export default function ApplicationList() {
     if (applicants.length > 0) {
       const imageUrls = applicants
         .filter(applicant => typeof applicant.headshotUrl === 'string' && applicant.headshotUrl.trim() !== '')
-        .map(applicant => applicant.headshotUrl);
+        .map(applicant => candidateAvatarSrc(applicant.headshotUrl));
 
       if (imageUrls.length > 0) {
         console.log(`Preloading ${imageUrls.length} profile images...`);
