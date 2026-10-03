@@ -6,6 +6,7 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import AccessControl from '../components/AccessControl';
 import EditCandidateModal from '../components/EditCandidateModal';
 import LockedRecord from '../components/LockedRecord';
+import CandidateCommunications from '../components/communications/CandidateCommunications';
 import { useAuth } from '../context/AuthContext';
 import { useExecUnlock } from '../context/ExecUnlockContext';
 import { isRecordLockedError } from '../utils/recordLock';
@@ -349,6 +350,8 @@ export default function CandidateDetail() {
             <p><strong>Candidate ID:</strong> {candidate.id}</p>
           </div>
         </div>
+
+        {isAdmin && <CandidateCommunications candidateId={candidate.id} />}
       </div>
 
       {/* Edit Candidate Modal */}

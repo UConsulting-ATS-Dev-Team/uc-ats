@@ -10,6 +10,7 @@ import EditCandidateModal from '../components/EditCandidateModal';
 import { useCandidates } from '../hooks/useCandidates';
 import { isPointEligibleEvent } from '../utils/pointEvents';
 import Pagination from '../components/Pagination';
+import { CATEGORY_LABELS, labelFor } from '../components/communications/communicationLabels';
 import '../styles/CandidateList.css';
 
 export default function CandidateList() {
@@ -116,6 +117,20 @@ export default function CandidateList() {
   const [deletingCandidate, setDeletingCandidate] = useState(null);
 
   const isAdmin = user?.role === 'ADMIN';
+
+  // Who we last wrote to and how often, for the cards on this page. One
+  // request per page; admin only, like the communications log it reads.
+  const [commsSummary, setCommsSummary] = useState({});
+  const candidateIdsKey = candidates.map((c) => c.id).join(',');
+  useEffect(() => {
+    if (!isAdmin || !candidateIdsKey) return undefined;
+    let cancelled = false;
+    apiClient
+      .post('/admin/candidate-communications/summary', { candidateIds: candidateIdsKey.split(',') })
+      .then((summary) => { if (!cancelled) setCommsSummary(summary || {}); })
+      .catch((err) => console.error('Error loading communications summary:', err));
+    return () => { cancelled = true; };
+  }, [isAdmin, candidateIdsKey]);
 
   // Fetch cycles and events separately (they don't change often)
   useEffect(() => {
@@ -380,6 +395,13 @@ export default function CandidateList() {
                       <p className="candidate-date">
                         Added: {formatDate(candidate.createdAt || candidate.applications?.[0]?.submittedAt)}
                       </p>
+                      {isAdmin && commsSummary[candidate.id] && (
+                        <p className="candidate-date">
+                          {commsSummary[candidate.id].latest
+                            ? `Last message: ${labelFor(CATEGORY_LABELS, commsSummary[candidate.id].latest.category)}, ${formatDate(commsSummary[candidate.id].latest.sentAt)} · ${commsSummary[candidate.id].total} total`
+                            : 'No messages sent yet'}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="candidate-status">
