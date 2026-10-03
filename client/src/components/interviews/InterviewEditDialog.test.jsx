@@ -87,6 +87,39 @@ describe('InterviewEditDialog', () => {
     });
   });
 
+  it('loads session times in Pacific, whatever zone the browser is in', async () => {
+    // 17:00Z on January 15 is 9 AM PST.
+    openDialog();
+    expect(await screen.findByLabelText(/^start$/i)).toHaveValue('09:00');
+    expect(screen.getByLabelText(/^end$/i)).toHaveValue('10:00');
+    expect(screen.getByLabelText(/^day$/i)).toHaveValue('2027-01-15');
+  });
+
+  it('saves session times as Pacific', async () => {
+    openDialog();
+    const seats = await screen.findByLabelText(/^seats$/i);
+    await userEvent.clear(seats);
+    await userEvent.type(seats, '6');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(apiClient.patch).toHaveBeenCalledWith(
+        '/admin/interviews/slots/slot-1',
+        expect.objectContaining({ startTime: '2027-01-15T17:00:00.000Z', endTime: '2027-01-15T18:00:00.000Z' })
+      );
+    });
+  });
+
+  it('refuses a session with a blank time instead of keeping the old one quietly', async () => {
+    openDialog();
+    setValue(await screen.findByLabelText(/^start$/i), '');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(/give the session a day, a start time and an end time/i)).toBeInTheDocument();
+    expect(apiClient.patch).not.toHaveBeenCalled();
+    expect(screen.queryByText(/session updated/i)).not.toBeInTheDocument();
+  });
+
   it('will not save a session until something changes', async () => {
     openDialog();
     expect(await screen.findByRole('button', { name: /^save$/i })).toBeDisabled();

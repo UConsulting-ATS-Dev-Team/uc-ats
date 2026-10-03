@@ -38,7 +38,13 @@ import { formatDay, formatTimeRange, fromPacificInput, toPacificInput } from '..
 const asLocalInput = toPacificInput;
 const asTimeInput = (value) => toPacificInput(value).slice(11);
 const asDayInput = (value) => toPacificInput(value).slice(0, 10);
-const asInstant = (day, time) => fromPacificInput(`${day}T${time}`)?.toISOString();
+// Throws rather than returning nothing: the request would drop an undefined
+// time, keep the old one, and still report the edit as saved.
+const asInstant = (day, time) => {
+  const instant = fromPacificInput(`${day}T${time}`);
+  if (!instant) throw new Error('Give the session a day, a start time and an end time.');
+  return instant.toISOString();
+};
 
 export default function InterviewEditDialog({ open, interview, onClose, onSaved }) {
   const [details, setDetails] = useState(null);
