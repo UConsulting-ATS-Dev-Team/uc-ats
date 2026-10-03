@@ -45,6 +45,7 @@ import apiClient from '../utils/api';
 import usePolling, { POLL_STATUS, POLL_NO_CHANGE } from '../hooks/usePolling';
 import stagingCache from '../utils/stagingCache';
 import AuthenticatedImage from '../components/AuthenticatedImage';
+import { headshotSrc } from '../utils/headshotUrl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AccessControl from '../components/AccessControl';
 import { useAuth } from '../context/AuthContext';
@@ -1947,7 +1948,7 @@ export default function Staging() {
                       <td data-label="Candidate" data-no-track>
                         <div className="applicant-cell">
                           <AuthenticatedImage
-                            src={candidate.headshotUrl}
+                            src={headshotSrc(candidate.headshotUrl, 56)}
                             alt={name}
                             className="staging-avatar"
                             fallback={<div className="staging-avatar staging-avatar--initials">{initials(candidate)}</div>}

@@ -263,6 +263,14 @@ The system follows a **recruiting cycle-based workflow**:
   grading video is therefore never downloaded whole: the preview streams it, and
   `/api/files/:id/pdf` answers `Range` with slices of at most 4 MB
   ([server/src/services/byteRange.js](server/src/services/byteRange.js)).
+- Headshots are drawn as avatars from a small copy: `/api/files/:id/image?size=256` (or
+  `640`) is a WebP whose short edge is that size, rendered on first request and kept in
+  memory ([server/src/services/headshotThumbnails.js](server/src/services/headshotThumbnails.js));
+  no `size` is the original. The client picks the size with `headshotSrc(url, cssPx)`
+  ([client/src/utils/headshotUrl.js](client/src/utils/headshotUrl.js)), and a list that
+  preloads headshots must preload that same URL. A bare `<img src>` carries no session
+  and gets a 401, so draw headshots with `AuthenticatedImage`, `CandidateAvatar` or
+  `liveVote/Headshot`.
 
 **Sealed recruiting records:**
 - `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and
