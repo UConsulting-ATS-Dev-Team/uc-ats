@@ -6,6 +6,7 @@ import {
   parseThumbnailSize,
   renderThumbnail,
   readStreamToBuffer,
+  looksLikeReadableImage,
   getHeadshotThumbnail,
   clearHeadshotThumbnailCache,
   renderSlotsForTest,
@@ -73,6 +74,23 @@ describe('renderThumbnail', () => {
   });
 });
 
+const HEIC_HEAD = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(16)]);
+
+describe('looksLikeReadableImage', () => {
+  it('knows the formats sharp decodes', async () => {
+    for (const format of ['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif']) {
+      const buf = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#000' } })[format]().toBuffer();
+      expect(looksLikeReadableImage(buf.subarray(0, 12)), format).toBe(true);
+    }
+  });
+
+  it('refuses HEIC and PDF, the two that turn up as headshots', () => {
+    expect(looksLikeReadableImage(HEIC_HEAD)).toBe(false);
+    expect(looksLikeReadableImage(Buffer.from('%PDF-1.7\n%abcdef'))).toBe(false);
+    expect(looksLikeReadableImage(Buffer.from('short'))).toBe(false);
+  });
+});
+
 describe('readStreamToBuffer', () => {
   it('reads the whole stream', async () => {
     const buf = await readStreamToBuffer(Readable.from([Buffer.from('ab'), Buffer.from('cd')]));
@@ -80,7 +98,7 @@ describe('readStreamToBuffer', () => {
   });
 
   it('gives up past the limit instead of holding a huge file in memory', async () => {
-    expect(await readStreamToBuffer(Readable.from([Buffer.alloc(10), Buffer.alloc(10)]), 15)).toBeNull();
+    expect(await readStreamToBuffer(Readable.from([Buffer.alloc(10), Buffer.alloc(10)]), { limit: 15 })).toBeNull();
   });
 });
 
@@ -92,7 +110,7 @@ describe('getHeadshotThumbnail', () => {
     const first = await getHeadshotThumbnail('file-1', 256, { download });
     const second = await getHeadshotThumbnail('file-1', 256, { download });
 
-    expect(first.kind).toBe('thumbnail');
+    expect(first.contentType).toBe('image/webp');
     expect(download).toHaveBeenCalledTimes(1);
     expect(download).toHaveBeenCalledWith('file-1');
     expect(second.body.equals(first.body)).toBe(true);
@@ -116,16 +134,21 @@ describe('getHeadshotThumbnail', () => {
     expect(large.body.length).toBeGreaterThan(small.body.length);
   });
 
-  it('hands back the original it downloaded when it cannot read it, and never downloads it again', async () => {
-    const heic = Buffer.from('not an image');
-    const download = vi.fn(async () => Readable.from([heic]));
+  it('stops reading a HEIC after its first bytes, and does not open it again', async () => {
+    const rest = vi.fn(() => Buffer.alloc(1024 * 1024));
+    // The second chunk is only produced if somebody reads past the first.
+    const heic = () => Readable.from((function* () { yield HEIC_HEAD; yield rest(); })());
+    const download = vi.fn(async () => heic());
 
-    const first = await getHeadshotThumbnail('heic', 256, { download });
-    expect(first.kind).toBe('original');
-    expect(first.body.equals(heic)).toBe(true);
-    // Later requests stream the original themselves; nothing is downloaded here.
+    expect(await getHeadshotThumbnail('heic', 256, { download })).toBeNull();
     expect(await getHeadshotThumbnail('heic', 256, { download })).toBeNull();
     expect(download).toHaveBeenCalledTimes(1);
+    expect(rest).not.toHaveBeenCalled();
+  });
+
+  it('answers null for a file that claims to be a JPEG but does not decode', async () => {
+    const download = vi.fn(async () => Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...Buffer.alloc(40)])]));
+    expect(await getHeadshotThumbnail('corrupt', 256, { download })).toBeNull();
   });
 
   it('runs at most the slot limit of renders at once, even as slots free up', async () => {

@@ -78,10 +78,35 @@ export async function renderThumbnail(buffer, size) {
   }
 }
 
-/** Read a stream into one Buffer, giving up past `limit` bytes. */
-export async function readStreamToBuffer(stream, limit = MAX_SOURCE_BYTES) {
+const ascii = (buf, at, text) => buf.toString('latin1', at, at + text.length) === text;
+
+/**
+ * Do these first bytes start a format sharp's prebuilt binaries decode?
+ * JPEG, PNG, GIF, WebP, TIFF and AVIF. Notably not HEIC (iPhone photos) or PDF,
+ * which are the two kinds of "headshot" that turn up in practice.
+ */
+export function looksLikeReadableImage(head) {
+  if (!head || head.length < 12) return false;
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return true; // JPEG
+  if (head.readUInt32BE(0) === 0x89504e47) return true; // PNG
+  if (ascii(head, 0, 'GIF8')) return true;
+  if (ascii(head, 0, 'RIFF') && ascii(head, 8, 'WEBP')) return true;
+  if (ascii(head, 0, 'II*\0') || ascii(head, 0, 'MM\0*')) return true; // TIFF
+  if (ascii(head, 4, 'ftyp') && (ascii(head, 8, 'avif') || ascii(head, 8, 'avis'))) return true;
+  return false;
+}
+
+const SNIFF_BYTES = 12;
+
+/**
+ * Read a stream into one Buffer. Gives up, closing the stream, past `limit`
+ * bytes or when `accept(firstBytes)` refuses what the file starts with, so a
+ * file that will not be decoded costs one chunk rather than a whole download.
+ */
+export async function readStreamToBuffer(stream, { limit = MAX_SOURCE_BYTES, accept } = {}) {
   const chunks = [];
   let total = 0;
+  let checked = !accept;
   for await (const chunk of stream) {
     total += chunk.length;
     if (total > limit) {
@@ -89,7 +114,15 @@ export async function readStreamToBuffer(stream, limit = MAX_SOURCE_BYTES) {
       return null;
     }
     chunks.push(chunk);
+    if (!checked && total >= SNIFF_BYTES) {
+      checked = true;
+      if (!accept(Buffer.concat(chunks))) {
+        stream.destroy?.();
+        return null;
+      }
+    }
   }
+  if (!checked && !accept(Buffer.concat(chunks))) return null;
   return Buffer.concat(chunks);
 }
 
@@ -149,14 +182,14 @@ function recall(key) {
 }
 
 /**
- * One file at one size, as one of:
+ * The thumbnail of one file at one size, `{ body, contentType }`, or null when
+ * the caller should serve the original instead: not a format sharp reads (an
+ * iPhone HEIC, a PDF uploaded as a photo), or too large to decode.
  *
- * - `{ kind: 'thumbnail', body, contentType }`
- * - `{ kind: 'original', body }`: sharp could not read it (an iPhone HEIC, a
- *   PDF uploaded as a photo). The original was downloaded to find that out, so
- *   it is handed back for the caller to serve rather than fetched twice.
- * - `null`: serve the original from Drive. The file is too large to decode, or
- *   an earlier request already found it unreadable.
+ * The format is judged from the first bytes, and the download stops there, so
+ * serving a HEIC's original afterwards does not fetch it twice. Only a file
+ * that claims a readable format and then fails to decode costs a second
+ * download, once. Nothing is kept in memory for the caller to send.
  *
  * `download(fileId)` returns a readable stream of the original. It is passed in
  * so this module never decides where files live or who may read them: the
@@ -174,13 +207,12 @@ export function getHeadshotThumbnail(fileId, size, { download }) {
   if (inFlight.has(key)) return inFlight.get(key);
 
   const pending = withRenderSlot(async () => {
-    const original = await readStreamToBuffer(await download(fileId));
+    const original = await readStreamToBuffer(await download(fileId), { accept: looksLikeReadableImage });
     if (!original) return null;
-    const thumbnail = await renderThumbnail(original, size);
-    return thumbnail ? { kind: 'thumbnail', ...thumbnail } : { kind: 'original', body: original };
+    return renderThumbnail(original, size);
   })
     .then((result) => {
-      if (result?.kind === 'thumbnail') remember(key, result);
+      if (result) remember(key, result);
       else if (unrenderable.size < MAX_UNRENDERABLE) unrenderable.add(key);
       return result;
     })

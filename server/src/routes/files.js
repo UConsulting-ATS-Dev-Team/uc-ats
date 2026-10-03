@@ -143,20 +143,14 @@ router.get('/:fileId/image', async (req, res) => {
     }
 
     if (size) {
-      const result = await getHeadshotThumbnail(fileId, size, { download: (id) => getFileStream(id) });
-      if (result?.kind === 'thumbnail') {
-        res.setHeader('Content-Type', result.contentType);
+      const thumbnail = await getHeadshotThumbnail(fileId, size, { download: (id) => getFileStream(id) });
+      if (thumbnail) {
+        res.setHeader('Content-Type', thumbnail.contentType);
         res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
-        return res.send(result.body);
+        return res.send(thumbnail.body);
       }
-      // Not an image sharp can read (an iPhone HEIC, say): the original, as
-      // before thumbnails existed. Already downloaded on the first such request.
-      if (result?.kind === 'original') {
-        const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
-        res.setHeader('Content-Type', meta?.mimeType || 'image/jpeg');
-        res.setHeader('Cache-Control', IMAGE_CACHE_CONTROL);
-        return res.send(result.body);
-      }
+      // Not an image sharp can read (an iPhone HEIC, say): stream the original,
+      // exactly as before thumbnails existed.
     }
 
     const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));

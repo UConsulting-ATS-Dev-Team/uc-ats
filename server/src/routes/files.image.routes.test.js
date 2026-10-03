@@ -114,7 +114,7 @@ describe('a thumbnail', () => {
   });
 
   it('falls back to the original when the file is not something sharp can read', async () => {
-    const heic = Buffer.from('....ftypheic not decodable here');
+    const heic = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(64)]);
     getFileStream.mockImplementation(async () => Readable.from([heic]));
 
     getFileMetadata.mockResolvedValue({ name: 'IMG_0001.HEIC', mimeType: 'image/heic' });
@@ -125,9 +125,9 @@ describe('a thumbnail', () => {
       expect(res.headers.get('content-type')).toBe('image/heic');
       expect(Buffer.from(await res.arrayBuffer()).equals(heic)).toBe(true);
     }
-    // Once per request, never twice in one: the first request serves the copy
-    // it downloaded trying to resize it.
-    expect(getFileStream).toHaveBeenCalledTimes(2);
+    // The first request reads the first bytes to learn it is a HEIC, then
+    // streams it; the second goes straight to streaming.
+    expect(getFileStream).toHaveBeenCalledTimes(3);
   });
 });
 
