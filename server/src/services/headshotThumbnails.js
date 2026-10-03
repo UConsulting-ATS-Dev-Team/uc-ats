@@ -18,6 +18,13 @@
 
 import sharp from 'sharp';
 
+// libvips keeps its own cache of decoded pixels (50 MB by default) and a worker
+// pool per CPU, all outside the Node heap where nothing here can see or bound
+// it. Thumbnails are cached below, as finished WebP, so its cache only holds
+// originals nobody asks for twice.
+sharp.cache(false);
+sharp.concurrency(1);
+
 /**
  * Short-edge sizes the route will render.
  *
@@ -34,7 +41,14 @@ const WEBP_QUALITY = 82;
  * Originals larger than this are not decoded: the route streams them as it
  * always has. The largest headshot on record is 9.5 MB.
  */
-export const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
+export const MAX_SOURCE_BYTES = 12 * 1024 * 1024;
+
+/**
+ * Nor are images with more pixels than this, whatever the file's size: a PNG
+ * decodes to 4 bytes a pixel however small it compressed. 50 MP covers a 48 MP
+ * phone photo.
+ */
+const MAX_SOURCE_PIXELS = 50_000_000;
 
 /** About 1,500 thumbnails at 256 px, or a few hundred at 640. */
 const CACHE_MAX_BYTES = 32 * 1024 * 1024;
@@ -42,10 +56,11 @@ const CACHE_MAX_BYTES = 32 * 1024 * 1024;
 /**
  * Drive downloads and resizes run at most this many at a time. A list page
  * asks for every applicant's headshot at once, and with a cold cache each one
- * holds its whole original in memory until it is resized; unbounded, 300 of
- * them is 240 MB on a 512 MB instance.
+ * holds its whole original in memory until it is resized, plus the decoded
+ * pixels while it is. At 12 a cold page added about 260 MB and took the 512 MB
+ * instance down; at 2 the rest wait their turn holding nothing.
  */
-const MAX_CONCURRENT_RENDERS = 12;
+const MAX_CONCURRENT_RENDERS = 2;
 
 /** `?size=` as a number from THUMBNAIL_SIZES, null when absent, false when not allowed. */
 export function parseThumbnailSize(raw) {
@@ -67,7 +82,7 @@ export function parseThumbnailSize(raw) {
  */
 export async function renderThumbnail(buffer, size) {
   try {
-    const body = await sharp(buffer, { failOn: 'none' })
+    const body = await sharp(buffer, { failOn: 'none', limitInputPixels: MAX_SOURCE_PIXELS })
       .rotate()
       .resize(size, size, { fit: 'outside', withoutEnlargement: true })
       .webp({ quality: WEBP_QUALITY })
