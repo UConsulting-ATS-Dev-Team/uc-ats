@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import apiClient from '../utils/api';
 import { clearOnboardingCache } from '../utils/onboardingStatus';
 import { clearDocumentLinks } from '../utils/documentLinks';
+import ImageCache from '../utils/imageCache';
 
 const AuthContext = createContext(null);
 
@@ -139,6 +140,7 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('token');
     clearOnboardingCache();
     clearDocumentLinks();
+    ImageCache.clearCache();
     setToken(null);
     setUser(null);
     apiClient.setToken(null);

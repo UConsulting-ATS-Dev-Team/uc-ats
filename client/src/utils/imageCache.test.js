@@ -33,6 +33,36 @@ describe('ImageCache', () => {
     expect(ImageCache.isImageCached('/api/files/abc123/image')).toBe(true);
   });
 
+  it('keeps one sign-in\'s images: a different token starts from empty and fetches again', async () => {
+    const src = '/api/files/abc123/image';
+    await ImageCache.loadImage(src, 'token-a');
+    await ImageCache.loadImage(src, 'token-a');
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    global.URL.createObjectURL.mockReturnValue('blob:for-b');
+    expect(await ImageCache.loadImage(src, 'token-b')).toBe('blob:for-b');
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer token-b');
+    expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+  });
+
+  it('does not put back an image whose fetch was still running when the cache was cleared', async () => {
+    const src = '/api/files/abc123/image';
+    let finish;
+    fetch.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({
+        ok: true, status: 200, statusText: 'OK',
+        headers: new Map([['content-type', 'image/png']]),
+        blob: () => Promise.resolve(new Blob(['image-data'], { type: 'image/png' })),
+      });
+    }));
+    const pending = ImageCache.loadImage(src, 'token-a');
+    ImageCache.clearCache(); // sign-out
+    finish();
+    expect(await pending).toBe('blob:mock-url');
+    expect(ImageCache.isImageCached(src)).toBe(false);
+  });
+
   it('rejects a missing or blank URL', async () => {
     await expect(ImageCache.loadImage('', 'test-token')).rejects.toThrow('Invalid image source');
     await expect(ImageCache.loadImage('   ', 'test-token')).rejects.toThrow('Invalid image source');

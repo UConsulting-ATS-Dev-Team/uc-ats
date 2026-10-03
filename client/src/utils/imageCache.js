@@ -5,6 +5,12 @@ const loadingPromises = new Map();
 // Cache for blob URLs to prevent memory leaks
 const blobUrlCache = new Map();
 
+// The sign-in the cached images were fetched with. An image is only as visible
+// as the account that loaded it, so a different token starts from empty; and a
+// fetch still in the air when that happens must not put its answer back.
+let cacheToken = null;
+let generation = 0;
+
 class ImageCache {
   static isValidImageUrl(url) {
     if (typeof url !== 'string' || !url.trim()) {
@@ -41,6 +47,12 @@ class ImageCache {
       throw new Error('Invalid image source');
     }
 
+    if ((token || null) !== cacheToken) {
+      this.clearCache();
+      cacheToken = token || null;
+    }
+    const startedIn = generation;
+
     // Return cached image if available
     if (imageCache.has(src)) {
       return imageCache.get(src);
@@ -57,10 +69,14 @@ class ImageCache {
 
     try {
       const blobUrl = await loadingPromise;
-      imageCache.set(src, blobUrl);
+      // Kept only for the sign-in that asked. The caller still gets its image.
+      if (startedIn === generation) {
+        blobUrlCache.set(src, blobUrl);
+        imageCache.set(src, blobUrl);
+      }
       return blobUrl;
     } finally {
-      loadingPromises.delete(src);
+      if (loadingPromises.get(src) === loadingPromise) loadingPromises.delete(src);
     }
   }
 
@@ -99,13 +115,7 @@ class ImageCache {
       throw new Error(`Non-image blob type: ${blob.type}`);
     }
 
-    const blobUrl = URL.createObjectURL(blob);
-
-    // Store blob URL for cleanup
-    blobUrlCache.set(src, blobUrl);
-    imageCache.set(src, blobUrl);
-
-    return blobUrl;
+    return URL.createObjectURL(blob);
   }
 
   static getCachedImage(src) {
@@ -129,6 +139,8 @@ class ImageCache {
     imageCache.clear();
     loadingPromises.clear();
     blobUrlCache.clear();
+    cacheToken = null;
+    generation += 1;
   }
 
   static preloadImages(imageUrls, token) {

@@ -26,7 +26,11 @@ export async function getFileStream(fileId, { range } = {}) {
       responseType: 'stream',
       ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
     });
-    
+
+    // Drive says how long the body is before sending any of it. Carried on the
+    // stream so a reader with a size limit can stop without downloading.
+    const length = Number(res.headers?.['content-length']);
+    if (Number.isFinite(length) && length > 0) res.data.contentLength = length;
     return res.data;
   } catch (error) {
     // Enhanced error logging
