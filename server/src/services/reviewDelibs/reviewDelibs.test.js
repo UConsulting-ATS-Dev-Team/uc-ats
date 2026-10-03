@@ -336,6 +336,14 @@ describe('who can watch', () => {
     await rejects(getState({ client: db, sessionId, user: as('m1') }), 403, 'NOT_ON_TEAM');
   });
 
+  it('cuts off a removed member at once, even with their state cached', async () => {
+    const sessionId = await launched();
+    await joinSession({ client: db, sessionId, user: as('m1') });
+    await getState({ client: db, sessionId, user: as('m1') }); // the state read is cached for a second
+    db.groupRows.find((group) => group.id === 'g1').memberOne = null;
+    await rejects(getState({ client: db, sessionId, user: as('m1') }), 403, 'NOT_ON_TEAM');
+  });
+
   it('shows each person only the sessions they may join', async () => {
     await launched('g1');
     await launched('g2');
@@ -402,6 +410,16 @@ describe('a walkthrough candidate sealed mid-session', () => {
     seal('c2');
     const state = await navigate({ client: db, sessionId, user: as('admin1'), step: 'OUTLIERS', applicationId: 'app2' });
     expect(state.session.currentApplicationId).toBe('app5');
+  });
+
+  it('drops to a name in the team view at once, cache or no cache', async () => {
+    const sessionId = await launched();
+    const before = await getTeamView({ client: db, sessionId, user: as('admin1') }); // warms the team cache
+    expect(before.candidates.find((row) => row.applicationId === 'app1').locked).toBe(false);
+    seal('c1');
+    const after = await getTeamView({ client: db, sessionId, user: as('admin1') });
+    expect(Object.keys(after.candidates.find((row) => row.applicationId === 'app1')).sort())
+      .toEqual(['applicationId', 'candidateId', 'locked', 'name']);
   });
 
   it('stops being served on its card at once, cache or no cache', async () => {

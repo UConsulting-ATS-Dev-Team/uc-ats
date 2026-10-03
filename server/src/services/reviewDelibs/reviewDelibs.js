@@ -167,8 +167,24 @@ export function clearCaches() {
   stateCache.clear();
 }
 
+/**
+ * Who is on the team's list right now and which of them are sealed, as a
+ * string. Sealing a record or moving a candidate bumps no session version, so
+ * the team cache is also keyed on this, read fresh every time: a seal or a move
+ * is never served from a bundle built before it.
+ */
+async function teamFingerprint(client, session) {
+  const applications = await client.application.findMany({
+    where: { cycleId: session.cycleId, candidate: { assignedGroupId: session.groupId } },
+    select: { id: true }
+  });
+  const ids = applications.map((row) => row.id).sort();
+  const sealed = await sealedApplicationIds(ids, client);
+  return ids.map((id) => (sealed.has(id) ? `${id}*` : id)).join(',');
+}
+
 async function teamBundle(client, session, now = Date.now()) {
-  const key = `${session.version}:${session.thresholdPct}`;
+  const key = `${session.version}:${session.thresholdPct}:${await teamFingerprint(client, session)}`;
   const cached = teamCache.get(session.id);
   if (cached && cached.key === key && now - cached.at <= TEAM_CACHE_TTL_MS) return cached.bundle;
 
@@ -526,7 +542,12 @@ export async function getState({ client = prisma, sessionId, user, now = Date.no
     stateCache.set(sessionId, { version: session.version, raw, at: now });
   }
 
-  if (!canWatch(raw.group, user)) {
+  // Membership from the database, not the cached read: removing someone from a
+  // team bumps no session version. Admins always pass, so only members pay.
+  const group = isAdmin(user)
+    ? raw.group
+    : await client.groups.findUnique({ where: { id: raw.groupId }, include: groupMemberUserInclude });
+  if (!canWatch(group, user)) {
     throw fail(403, `This deliberation is for ${groupName(raw.group)}`, 'NOT_ON_TEAM', { groupName: groupName(raw.group) });
   }
   assertJoined(raw, raw.participants, user);
