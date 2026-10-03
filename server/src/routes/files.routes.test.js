@@ -265,6 +265,73 @@ describe('range requests', () => {
   });
 });
 
+// The browser keeps a video's ranges only when they carry a validator, and a
+// copy it holds past max-age is confirmed with a 304 rather than sent again
+// (services/documentValidators.js).
+describe('caching a document', () => {
+  const MD5 = '9e107d9d372bb6826bd81d3542a419d6';
+  const request = (headers = {}, user = admin) =>
+    fetch(`http://localhost:${port}/api/files/${FILE_ID}/pdf`, {
+      headers: { Authorization: `Bearer ${tokenFor(user)}`, ...headers },
+    });
+
+  beforeEach(() => {
+    prisma.application.findFirst.mockResolvedValue({ id: 'app-1' });
+    getFileMetadata.mockResolvedValue({
+      name: 'video.mov', mimeType: 'video/quicktime', size: '100',
+      md5Checksum: MD5, modifiedTime: '2026-09-20T18:04:11.000Z',
+    });
+  });
+
+  it('marks every range private, with an ETag and Last-Modified from Drive', async () => {
+    const res = await request({ Range: 'bytes=0-9' });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('cache-control')).toBe('private, max-age=3600');
+    expect(res.headers.get('etag')).toBe(`"${MD5}"`);
+    expect(res.headers.get('last-modified')).toBe('Sun, 20 Sep 2026 18:04:11 GMT');
+  });
+
+  it('answers 304 with no body when the browser already has this version', async () => {
+    const res = await request({ 'If-None-Match': `"${MD5}"`, Range: 'bytes=0-9' });
+    expect(res.status).toBe(304);
+    expect(res.headers.get('etag')).toBe(`"${MD5}"`);
+    expect(getFileStream).not.toHaveBeenCalled();
+  });
+
+  it('asks Drive afresh before confirming a copy, rather than trusting remembered metadata', async () => {
+    await request({ Range: 'bytes=0-9' });
+    // Edited in place: Drive now reports a new checksum.
+    getFileMetadata.mockResolvedValue({ name: 'video.mov', mimeType: 'video/quicktime', size: '100', md5Checksum: 'aaaa' });
+    const res = await request({ 'If-None-Match': `"${MD5}"`, Range: 'bytes=0-9' });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('etag')).toBe('"aaaa"');
+
+    // The ranges after it carry the new version too, not the remembered one.
+    const next = await request({ Range: 'bytes=10-19' });
+    expect(next.headers.get('etag')).toBe('"aaaa"');
+  });
+
+  it('sends the bytes when the browser holds a different version', async () => {
+    const res = await request({ 'If-None-Match': '"something-else"', Range: 'bytes=0-9' });
+    expect(res.status).toBe(206);
+    expect(getFileStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks access before answering 304', async () => {
+    prisma.application.findFirst.mockResolvedValue(null);
+    const res = await request({ 'If-None-Match': `"${MD5}"` }, candidate);
+    expect(res.status).toBe(403);
+  });
+
+  it('sends no validator for a file Drive gives no checksum (a Google Docs export)', async () => {
+    getFileMetadata.mockResolvedValue({ name: 'doc', mimeType: 'application/pdf' });
+    const res = await request({ 'If-None-Match': '*' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('etag')).toBeNull();
+    expect(res.headers.get('last-modified')).toBeNull();
+  });
+});
+
 // Every range of a video used to repeat the access check and the Drive metadata
 // call, ~0.65 s before Drive sent a byte (services/documentStreamCache.js).
 describe('the ranges of one viewing', () => {

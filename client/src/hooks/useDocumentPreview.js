@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import apiClient from '../utils/api';
 import { signedDocumentTarget, toSameOriginDocumentUrl } from '../utils/documentUrl';
+import { getDocumentLink } from '../utils/documentLinks';
 
 // Showing one application document in the page: a PDF as a blob URL for an
 // <iframe>, a video as a signed link a <video> streams from.
@@ -8,7 +9,9 @@ import { signedDocumentTarget, toSameOriginDocumentUrl } from '../utils/document
 // A video never arrives whole. /api goes through Vercel's proxy, which cuts a
 // long response off part way ("The download stopped before the file
 // finished"); <video> asks for the file in ranges, each one a short response,
-// through a 15-minute link from POST /files/:id/link.
+// through a 15-minute link from POST /files/:id/link. The link is reused while
+// it lasts (utils/documentLinks.js), so reopening a video reads the ranges the
+// browser already cached instead of downloading it again.
 //
 // Used by the grading modal and the review team deliberation card.
 
@@ -38,7 +41,7 @@ export default function useDocumentPreview({ url, kind, enabled = true, token })
       const signed = kind === 'video' ? signedDocumentTarget(url) : null;
       if (signed) {
         try {
-          const { access } = await apiClient.post(signed.linkEndpoint);
+          const access = await getDocumentLink(signed.linkEndpoint);
           if (!cancelled) setPreviewUrl(signed.open(access));
         } catch (e) {
           console.error('Failed to sign video preview link:', e);
@@ -104,7 +107,8 @@ export default function useDocumentPreview({ url, kind, enabled = true, token })
     const resumeAt = video.currentTime;
     const generation = generationRef.current;
     try {
-      const { access } = await apiClient.post(target.linkEndpoint);
+      // Fresh: the link the video was using is the one that just failed.
+      const access = await getDocumentLink(target.linkEndpoint, { fresh: true });
       if (generation !== generationRef.current) return;
       video.src = target.open(access);
       video.currentTime = resumeAt;
@@ -127,7 +131,7 @@ export default function useDocumentPreview({ url, kind, enabled = true, token })
     // Opened inside the click, before the await, or a popup blocker eats it.
     const tab = window.open('', '_blank');
     try {
-      const { access } = await apiClient.post(target.linkEndpoint);
+      const access = await getDocumentLink(target.linkEndpoint);
       if (!tab) {
         setOpenTabError('Your browser blocked the new tab. Allow pop-ups for this site and try again.');
         return;

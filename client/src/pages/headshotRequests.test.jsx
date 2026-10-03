@@ -88,7 +88,7 @@ describe("the members' Applications page", () => {
 // so a headshot cannot come back through a renamed variable.
 const REVIEWED_BARE_IMAGES = {
   'components/AuthenticatedImage.jsx': ['imageUrl'], // a blob: URL it fetched with the session
-  'components/DocumentPreviewModal.jsx': ['blobUrl'], // a blob: URL
+  'components/DocumentPreviewModal.jsx': ['previewUrl'], // a blob: URL useDocumentPreview fetched with the session (only a video gets a signed link)
   'components/CycleOfferLetterDialog.jsx': ['signaturePreview'], // a local data/blob preview
   'components/UConsultingLogo.jsx': ['logoSrc'], // a bundled asset
   'components/case/CasePageImage.jsx': ['imageUrl'], // a blob: URL it fetched with the session

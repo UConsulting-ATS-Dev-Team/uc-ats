@@ -107,8 +107,15 @@ const SNIFF_BYTES = 12;
  * Read a stream into one Buffer. Gives up, closing the stream, past `limit`
  * bytes or when `accept(firstBytes)` refuses what the file starts with, so a
  * file that will not be decoded costs one chunk rather than a whole download.
+ * A stream that states its length (`contentLength`, set by getFileStream) and
+ * is over the limit is closed before any of it is read, so an oversized
+ * original is downloaded once, by the caller serving it, not twice.
  */
 export async function readStreamToBuffer(stream, { limit = MAX_SOURCE_BYTES, accept } = {}) {
+  if (stream.contentLength > limit) {
+    stream.destroy?.();
+    return null;
+  }
   const chunks = [];
   let total = 0;
   let checked = !accept;

@@ -116,6 +116,23 @@ describe('readStreamToBuffer', () => {
   });
 });
 
+describe('readStreamToBuffer with a stated length', () => {
+  it('closes a stream that says it is over the limit without reading any of it', async () => {
+    let read = 0;
+    const stream = Readable.from((async function* chunks() { read += 1; yield Buffer.alloc(10); })());
+    stream.contentLength = 20;
+    expect(await readStreamToBuffer(stream, { limit: 15 })).toBeNull();
+    expect(read).toBe(0);
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it('reads one that says it fits', async () => {
+    const stream = Readable.from([Buffer.from('abcd')]);
+    stream.contentLength = 4;
+    expect((await readStreamToBuffer(stream, { limit: 15 })).toString()).toBe('abcd');
+  });
+});
+
 describe('getHeadshotThumbnail', () => {
   it('downloads once and serves repeats from memory', async () => {
     const original = await photo(800, 1000);

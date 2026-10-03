@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useRef } from 'react';
 import { Modal } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
 import { useIsMobile } from '../hooks/useResponsive';
-import { toSameOriginDocumentUrl } from '../utils/documentUrl';
+import useDocumentPreview from '../hooks/useDocumentPreview';
 
 const overlayStyle = {
   position: 'fixed',
@@ -41,44 +41,16 @@ const contentStyle = {
 };
 
 // kind 'text' shows `text` as written (an application's short answer) and
-// fetches nothing; every other kind loads `src` as an authenticated file.
+// fetches nothing. A video streams from a signed link, in ranges, the same way
+// the grading modal's does; it used to be downloaded whole before it could
+// start, and again on every open. A PDF or image still loads as a blob.
 export default function DocumentPreviewModal({ src, kind, title, text, onClose }) {
-  const [blobUrl, setBlobUrl] = useState(null);
-  const [error, setError] = useState(null);
   const videoRef = useRef(null);
   const { token } = useAuth();
   const isMobile = useIsMobile();
-  
-  useEffect(() => {
-    if (kind === 'text') return undefined;
-    let localUrl;
-    const load = async () => {
-      try {
-        const fetchUrl = toSameOriginDocumentUrl(src);
-        const resp = await fetch(fetchUrl, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (!resp.ok) {
-          const txt = await resp.text();
-          console.error('Fetch error:', txt);
-          throw new Error(`${resp.status} ${resp.statusText} - ${txt}`);
-        }
-        const blob = await resp.blob();
-
-        localUrl = URL.createObjectURL(blob);
-        setBlobUrl(localUrl);
-      } catch (e) {
-        console.error('Document load error:', e);
-        setError(e.message || 'Failed to load document');
-      }
-    };
-    load();
-    return () => {
-      if (localUrl) URL.revokeObjectURL(localUrl);
-    };
-  }, [src, token, kind]);
+  const preview = useDocumentPreview({ url: src, kind, enabled: kind !== 'text', token });
+  const { previewUrl, onVideoError, onVideoLoaded } = preview;
+  const error = preview.error || (!src ? 'There is no document to preview.' : null);
 
   // An MUI Modal, which renders on <body> and takes part in MUI's stack of modals.
   // <body>: the overlay is position: fixed, and fixed positions against the nearest
@@ -107,62 +79,38 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
             {kind !== 'text' && error && (
               <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>
             )}
-            {kind !== 'text' && !error && !blobUrl && (
+            {kind !== 'text' && !error && !previewUrl && (
               <div style={{ padding: 16 }}>Loading preview…</div>
             )}
-            {kind !== 'text' && !error && blobUrl && (
+            {kind !== 'text' && !error && previewUrl && (
               kind === 'pdf' ? (
                 <iframe
                   title={title || 'Document preview'}
-                  src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+                  src={`${previewUrl}#toolbar=0&navpanes=0&scrollbar=0`}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                 />
               ) : kind === 'video' ? (
                 <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
                   <video
                     ref={videoRef}
-                    src={blobUrl}
+                    src={previewUrl}
                     controls
                     preload="auto"
                     style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
-                    onLoadedData={() => {
-                      console.log('Video loaded successfully');
-                      // Try to play the video
-                      if (videoRef.current) {
-                        videoRef.current.play().catch(err => {
-                          console.log('Autoplay prevented, user can click play:', err);
-                        });
-                      }
+                    onLoadedData={(event) => {
+                      onVideoLoaded(event);
+                      // Opened on purpose, so start playing; a browser that
+                      // blocks autoplay leaves the controls to the viewer.
+                      videoRef.current?.play().catch(() => {});
                     }}
-                    onError={(e) => {
-                      console.error('Video playback error:', e, videoRef.current?.error);
-                      const error = videoRef.current?.error;
-                      let errorMsg = 'Failed to play video.';
-                      if (error) {
-                        switch (error.code) {
-                          case error.MEDIA_ERR_ABORTED:
-                            errorMsg = 'Video playback was aborted.';
-                            break;
-                          case error.MEDIA_ERR_NETWORK:
-                            errorMsg = 'Network error while loading video.';
-                            break;
-                          case error.MEDIA_ERR_DECODE:
-                            errorMsg = 'Video format not supported or corrupted.';
-                            break;
-                          case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                            errorMsg = 'Video format not supported.';
-                            break;
-                        }
-                      }
-                      setError(errorMsg);
-                    }}
+                    onError={onVideoError}
                   >
                     Your browser does not support the video tag.
                   </video>
                 </div>
               ) : (
                 <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-                  <img src={blobUrl} alt={title || 'Image preview'} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                  <img src={previewUrl} alt={title || 'Image preview'} style={{ maxWidth: '100%', maxHeight: '100%' }} />
                 </div>
               )
             )}

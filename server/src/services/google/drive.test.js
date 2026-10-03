@@ -151,9 +151,9 @@ describe('listFilesByAppProperty', () => {
 describe('getFileMetadata fields', () => {
   beforeEach(() => filesGet.mockReset().mockResolvedValue({ data: { id: 'x' } }));
 
-  it('keeps the old default and lets a caller ask for more', async () => {
+  it('asks for the validator fields by default and lets a caller ask for others', async () => {
     await getFileMetadata('x');
-    expect(filesGet.mock.calls[0][0].fields).toBe('id, name, mimeType, size');
+    expect(filesGet.mock.calls[0][0].fields).toBe('id, name, mimeType, size, md5Checksum, modifiedTime');
     await getFileMetadata('x', { fields: 'id, parents' });
     expect(filesGet.mock.calls[1][0].fields).toBe('id, parents');
   });

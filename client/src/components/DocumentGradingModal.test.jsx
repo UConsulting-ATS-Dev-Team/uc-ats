@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import DocumentGradingModal from './DocumentGradingModal';
+import { clearDocumentLinks } from '../utils/documentLinks';
 import apiClient from '../utils/api';
 
 vi.mock('../context/AuthContext', () => ({
@@ -353,6 +354,7 @@ describe('the video preview', () => {
 
   beforeEach(() => {
     vi.unstubAllGlobals();
+    clearDocumentLinks();
     mockServer();
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('a video must not be fetched whole'))));
   });
@@ -365,6 +367,21 @@ describe('the video preview', () => {
     expect(videoElement().getAttribute('src')).toBe('/api/files/vid/pdf?access=tok.en');
     expect(apiClient.post).toHaveBeenCalledWith('/files/vid/link');
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reuses the link when the same video is opened again, so the browser cache answers', async () => {
+    const exp = Math.floor(Date.now() / 1000) + 15 * 60;
+    const access = `h.${btoa(JSON.stringify({ exp }))}.s`;
+    apiClient.post.mockResolvedValue({ access });
+    const first = renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+    const src = videoElement().getAttribute('src');
+    first.unmount();
+
+    renderWithVideo();
+    await waitFor(() => expect(videoElement()).not.toBeNull());
+    expect(videoElement().getAttribute('src')).toBe(src);
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
   });
 
   it('says why when the link cannot be signed', async () => {

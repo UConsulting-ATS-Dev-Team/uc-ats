@@ -271,6 +271,14 @@ The system follows a **recruiting cycle-based workflow**:
   grading video is therefore never downloaded whole: the preview streams it, and
   `/api/files/:id/pdf` answers `Range` with slices of at most 4 MB
   ([server/src/services/byteRange.js](server/src/services/byteRange.js)).
+- A link is reused while it has 3+ minutes left
+  ([client/src/utils/documentLinks.js](client/src/utils/documentLinks.js), kept in
+  sessionStorage under the sign-in it was issued to), so reopening a video uses the same URL
+  and Chrome answers its ranges from cache. Every signed-link open goes through
+  `getDocumentLink`; a direct `POST /link` makes a new URL and misses the cache. `/pdf` also
+  sends Drive's `md5Checksum` as `ETag` and answers a matching `If-None-Match` with 304
+  ([documentValidators.js](server/src/services/documentValidators.js)), so a copy past its
+  hour is confirmed rather than sent again.
 - Headshots are drawn as avatars from a small copy: `/api/files/:id/image?size=256` (or
   `640`) is a WebP whose short edge is that size, rendered on first request and kept in
   memory ([server/src/services/headshotThumbnails.js](server/src/services/headshotThumbnails.js));

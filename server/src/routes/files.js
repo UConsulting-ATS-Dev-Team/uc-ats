@@ -3,7 +3,8 @@ import { getFileStream, getFileMetadata } from '../services/google/drive.js';
 import { requireAuth } from '../middleware/auth.js';
 import { acceptDocumentLink, signDocumentLink } from '../services/documentLinks.js';
 import { parseByteRange } from '../services/byteRange.js';
-import { rememberFileAccess, rememberFileMetadata } from '../services/documentStreamCache.js';
+import { documentValidators, etagMatches } from '../services/documentValidators.js';
+import { rememberFileAccess, rememberFileMetadata, refreshFileMetadata } from '../services/documentStreamCache.js';
 import { getHeadshotThumbnail, parseThumbnailSize, THUMBNAIL_SIZES } from '../services/headshotThumbnails.js';
 import prisma from '../prismaClient.js';
 
@@ -189,7 +190,14 @@ router.get('/:fileId/pdf', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const meta = await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
+    // A browser asking "has it changed?" gets Drive's current answer, not the
+    // remembered one: a file edited in place within the cache's five minutes
+    // would otherwise be confirmed as unchanged. The fresh answer replaces the
+    // remembered one, so later ranges agree with it. Revalidation is rare (after
+    // an hour of max-age), so the extra Drive call costs little.
+    const meta = req.headers['if-none-match']
+      ? await refreshFileMetadata(fileId, () => getFileMetadata(fileId))
+      : await rememberFileMetadata(fileId, () => getFileMetadata(fileId));
     // Drive reports size as a decimal string; missing for Google Docs exports.
     const size = meta?.size != null ? Number(meta.size) : NaN;
     // Videos (stored behind this route too) arrive as a series of ranges; see
@@ -198,8 +206,22 @@ router.get('/:fileId/pdf', async (req, res) => {
 
     res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
+    // Private: the answer depends on who asked. An hour outlasts the signed link a
+    // video URL carries (15 minutes), so a cached range is good for as long as the
+    // URL that names it can be reused (client/src/utils/documentLinks.js).
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (Number.isFinite(size)) res.setHeader('Accept-Ranges', 'bytes');
+
+    // A browser whose copy has gone stale gets a 304 instead of the bytes
+    // (services/documentValidators.js). If-Range is not checked: a Drive file id
+    // keeps its bytes, and the full 200 a mismatch calls for is a response the
+    // proxy would cut off.
+    const { etag, lastModified } = documentValidators(meta);
+    if (etag) res.setHeader('ETag', etag);
+    if (lastModified) res.setHeader('Last-Modified', lastModified);
+    if (etagMatches(req.headers['if-none-match'], etag)) {
+      return res.status(304).end();
+    }
 
     if (range === 'unsatisfiable') {
       res.setHeader('Content-Range', `bytes */${size}`);

@@ -5,6 +5,12 @@ const loadingPromises = new Map();
 // Cache for blob URLs to prevent memory leaks
 const blobUrlCache = new Map();
 
+// The sign-in the cached images were fetched with. An image is only as visible
+// as the account that loaded it, so a different token starts from empty; and a
+// fetch still in the air when that happens must not put its answer back.
+let cacheToken = null;
+let generation = 0;
+
 class ImageCache {
   static isValidImageUrl(url) {
     if (typeof url !== 'string' || !url.trim()) {
@@ -41,6 +47,12 @@ class ImageCache {
       throw new Error('Invalid image source');
     }
 
+    if ((token || null) !== cacheToken) {
+      this.clearCache();
+      cacheToken = token || null;
+    }
+    const startedIn = generation;
+
     // Return cached image if available
     if (imageCache.has(src)) {
       return imageCache.get(src);
@@ -51,16 +63,27 @@ class ImageCache {
       return loadingPromises.get(src);
     }
 
-    // Create new loading promise
-    const loadingPromise = this.fetchImage(src, token);
+    // One promise for everyone waiting on this image, so each of them gets the
+    // same answer, including "the sign-in changed".
+    const loadingPromise = (async () => {
+      const blobUrl = await this.fetchImage(src, token);
+      // The cache was emptied while this was in the air: the sign-in that asked
+      // is gone, so the image is neither kept nor shown, and its blob is freed
+      // here because nothing else holds it to free later.
+      if (startedIn !== generation) {
+        URL.revokeObjectURL(blobUrl);
+        throw new Error('Image request outlived its sign-in');
+      }
+      blobUrlCache.set(src, blobUrl);
+      imageCache.set(src, blobUrl);
+      return blobUrl;
+    })();
     loadingPromises.set(src, loadingPromise);
 
     try {
-      const blobUrl = await loadingPromise;
-      imageCache.set(src, blobUrl);
-      return blobUrl;
+      return await loadingPromise;
     } finally {
-      loadingPromises.delete(src);
+      if (loadingPromises.get(src) === loadingPromise) loadingPromises.delete(src);
     }
   }
 
@@ -99,13 +122,7 @@ class ImageCache {
       throw new Error(`Non-image blob type: ${blob.type}`);
     }
 
-    const blobUrl = URL.createObjectURL(blob);
-
-    // Store blob URL for cleanup
-    blobUrlCache.set(src, blobUrl);
-    imageCache.set(src, blobUrl);
-
-    return blobUrl;
+    return URL.createObjectURL(blob);
   }
 
   static getCachedImage(src) {
@@ -129,6 +146,8 @@ class ImageCache {
     imageCache.clear();
     loadingPromises.clear();
     blobUrlCache.clear();
+    cacheToken = null;
+    generation += 1;
   }
 
   static preloadImages(imageUrls, token) {

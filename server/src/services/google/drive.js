@@ -26,7 +26,11 @@ export async function getFileStream(fileId, { range } = {}) {
       responseType: 'stream',
       ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
     });
-    
+
+    // Drive says how long the body is before sending any of it. Carried on the
+    // stream so a reader with a size limit can stop without downloading.
+    const length = Number(res.headers?.['content-length']);
+    if (Number.isFinite(length) && length > 0) res.data.contentLength = length;
     return res.data;
   } catch (error) {
     // Enhanced error logging
@@ -126,9 +130,10 @@ export async function listFilesByAppProperty({ folderId, key, value, fields = 'i
   return res.data.files || [];
 }
 
-// Get metadata for a Google Drive file (name, mimeType, size by default; pass
-// `fields` for more, e.g. parents)
-export async function getFileMetadata(fileId, { fields = 'id, name, mimeType, size' } = {}) {
+// Get metadata for a Google Drive file. The default fields are name, mimeType,
+// size, and the md5Checksum / modifiedTime that services/documentValidators.js
+// turns into an ETag and Last-Modified; pass `fields` for others, e.g. parents.
+export async function getFileMetadata(fileId, { fields = 'id, name, mimeType, size, md5Checksum, modifiedTime' } = {}) {
   try {
     const drive = await getDriveClient();
     const res = await drive.files.get({
