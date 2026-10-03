@@ -1295,6 +1295,14 @@ const application = await prisma.application.findUnique({
 
 ## Git Workflow Notes
 
+**Vercel deploys `main` only.** `client/vercel.json` turns off automatic deployments for
+every other branch (`deploymentEnabled`), so a PR gets no preview URL. Every push to every
+branch used to build a preview, and on 2026-10-03 that used up the plan's 100 deployments
+a day: Vercel then refused production deploys of `main` too, for 24 hours. A branch that
+matches several patterns deploys if any one of them is `true`, which is how `main`
+survives the two catch-alls (`*` does not match a branch name with a slash; `**` does).
+To preview one branch, add it there as `true`.
+
 Modified files in current session:
 - [server/src/utils/eventDataMapper.js](server/src/utils/eventDataMapper.js) - Event response mapping logic
 
