@@ -323,6 +323,50 @@ describe('Staging table', () => {
     expect(screen.queryByText(/Could not save the decision/)).not.toBeInTheDocument();
   });
 
+  const confirmProcessAll = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /process all decisions/i }));
+    fireEvent.change(await screen.findByLabelText('Type PROCESS to confirm'), { target: { value: 'PROCESS' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    const buttons = screen.getAllByRole('button', { name: /process all decisions/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+  };
+  const processCalls = () => apiClient.post.mock.calls.filter(([endpoint]) => endpoint === '/admin/process-decisions');
+
+  it('waits for a queued decision to save before processing', async () => {
+    let finishSave;
+    apiClient.post.mockImplementation((endpoint) => (endpoint === '/admin/save-decision'
+      ? new Promise((resolve) => { finishSave = resolve; })
+      : Promise.resolve({})));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    fireEvent.change(screen.getByLabelText('Decision for Alice Example'), { target: { value: 'yes' } });
+    await waitFor(() => expect(finishSave).toBeDefined());
+    await confirmProcessAll();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(processCalls()).toHaveLength(0);
+
+    finishSave({ success: true });
+    await waitFor(() => expect(processCalls()).toHaveLength(1));
+  });
+
+  it('processes nothing when a queued decision fails to save', async () => {
+    let failSave;
+    apiClient.post.mockImplementation((endpoint) => (endpoint === '/admin/save-decision'
+      ? new Promise((_, reject) => { failSave = reject; })
+      : Promise.resolve({})));
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    fireEvent.change(screen.getByLabelText('Decision for Alice Example'), { target: { value: 'yes' } });
+    await waitFor(() => expect(failSave).toBeDefined());
+    await confirmProcessAll();
+    failSave(new Error('network down'));
+
+    await screen.findByText(/A decision did not save, so nothing was processed/);
+    expect(processCalls()).toHaveLength(0);
+  });
+
   it('skips a pick replaced before its turn to save', async () => {
     let finishFirst;
     apiClient.post

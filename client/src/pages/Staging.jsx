@@ -626,6 +626,25 @@ export default function Staging() {
   // snapshot of this mount lands, which is what makes that first poll always fetch.
   const lastChangeTokenRef = useRef(null);
 
+  // Picks per candidate and round, counting up, so a save can tell whether a newer
+  // pick has been made since. Saves for one candidate and round go out one at a time
+  // (decisionSaveChainRef holds the last one until it settles), so the server
+  // applies them in the order they were picked; sent together, Yes could land
+  // after No. Processing waits on the chain too - see waitForDecisionSaves.
+  const decisionPickSeqRef = useRef({});
+  const decisionSaveChainRef = useRef({});
+
+  // Resolves once every decision save for the phase has settled, true only if all
+  // of them saved. Processing reads decisions from the server, so it must not run
+  // while a pick the page already shows is still queued.
+  const waitForDecisionSaves = async (phase) => {
+    const pending = Object.entries(decisionSaveChainRef.current)
+      .filter(([key]) => key.startsWith(`${phase}:`))
+      .map(([, save]) => save);
+    const results = await Promise.allSettled(pending);
+    return results.every(result => result.status === 'fulfilled');
+  };
+
   const fetchStagingData = useCallback(async (signal) => {
     const { changeToken } = await stagingAPI.fetchVersion({ signal });
 
@@ -1166,6 +1185,15 @@ export default function Staging() {
     try {
       setPushAllLoading(true);
 
+      if (!(await waitForDecisionSaves(tabToPhase(currentTab)))) {
+        setSnackbar({
+          open: true,
+          message: 'A decision did not save, so nothing was processed. Check the decisions and try again.',
+          severity: 'error'
+        });
+        return;
+      }
+
       let result;
       if (currentTab === 1) {
         result = await stagingAPI.processCoffeeDecisions();
@@ -1318,13 +1346,6 @@ export default function Staging() {
     return { graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown };
   }
 
-  // Picks per candidate and round, counting up, so a save can tell whether a newer
-  // pick has been made since. Saves for one candidate and round go out one at a time
-  // (decisionSaveChainRef holds the last one), so the server applies them in the
-  // order they were picked; sent together, Yes could land after No.
-  const decisionPickSeqRef = useRef({});
-  const decisionSaveChainRef = useRef({});
-
   // Optimistic: the pick shows at once and is put back if the save fails. There is
   // no forced reload afterwards - the save bumps the change token, so the next poll
   // (within STAGING_POLL_INTERVAL_MS) brings the server's copy, instead of every
@@ -1348,11 +1369,18 @@ export default function Staging() {
       // instead, so this one is never sent.
       .then(() => (isLatest() ? stagingAPI.saveDecision(item.id, value, phase) : null));
     decisionSaveChainRef.current[key] = save;
+    // Drop a settled save so the chain only ever holds work still in flight. A
+    // failure has been rolled back by then, so it must not hold up processing.
+    const release = () => {
+      if (decisionSaveChainRef.current[key] === save) delete decisionSaveChainRef.current[key];
+    };
 
     try {
       await save;
+      release();
       stagingCache.invalidate();
     } catch (error) {
+      release();
       console.error('Error saving inline decision:', error);
       // A newer pick owns the cell now; its own save decides what it shows.
       // Rolling back to `previous` here would overwrite it.
