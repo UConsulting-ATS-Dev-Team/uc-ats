@@ -41,8 +41,9 @@ export const STATUS_STYLES = {
 export const STATUS_LABELS = Object.fromEntries(Object.entries(STATUS_STYLES).map(([k, v]) => [k, v.label]));
 
 // A send takes seconds. A SENDING row this old was cut off - the server
-// stopped between the claim and the send's result - and is retried as a new
-// attempt, so this row stays as the record of the one that did not finish.
+// stopped between the claim and the send's result. A later attempt, if the
+// sender made one, is its own row; this one stays as the record of the try
+// that did not finish.
 const INTERRUPTED_AFTER_MS = 10 * 60 * 1000;
 
 export function statusStyleFor(row, now = Date.now()) {

@@ -245,7 +245,7 @@ describe('summarizeDelivery', () => {
     const { checks, totals } = summarizeDelivery({ DELIVERED: 100 }, { interrupted: 2 });
     expect(totals.interrupted).toBe(2);
     expect(byKey(checks).sendFailures.status).toBe(STATUS.WARN);
-    expect(byKey(checks).sendFailures.detail).toBe('2 sends interrupted before SES answered, then retried.');
+    expect(byKey(checks).sendFailures.detail).toBe('2 sends interrupted before SES answered.');
   });
 
   it('still says SES accepted every message when nothing failed or was interrupted', () => {
