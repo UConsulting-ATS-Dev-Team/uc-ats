@@ -129,6 +129,59 @@ describe('DocumentGradingModal', () => {
     })));
   });
 
+  // One modal serves every row. A grader who closes one document and opens the
+  // next leaves the first one's score lookup in flight, and it can answer last.
+  describe('a score lookup for a document the grader has left', () => {
+    const other = { ...application, candidateId: 'cand-2', studentId: '456' };
+    const graded = { scoreOne: 2, scoreTwo: null, scoreThree: null, notes: 'earlier grade' };
+
+    // Each lookup answers only when the test says so, in the order it chooses.
+    function heldLookups() {
+      const answer = {};
+      apiClient.get.mockImplementation((url) => {
+        if (url === '/document-rubrics') return Promise.resolve(rubricsResponse);
+        const match = /^\/review-teams\/video-score\/([^?]+)/.exec(url);
+        if (match) return new Promise((resolve) => { answer[match[1]] = resolve; });
+        return Promise.resolve(null);
+      });
+      apiClient.post.mockResolvedValue({});
+      return answer;
+    }
+
+    const openFirstThenSecond = async () => {
+      const answer = heldLookups();
+      const view = render(<DocumentGradingModal open onClose={vi.fn()} application={application} documentType="video" />);
+      await waitFor(() => expect(answer['cand-1']).toBeTypeOf('function'));
+      view.rerender(<DocumentGradingModal open onClose={vi.fn()} application={other} documentType="video" />);
+      await waitFor(() => expect(answer['cand-2']).toBeTypeOf('function'));
+      return answer;
+    };
+
+    it('does not put that score in the form now open, or save it', async () => {
+      const answer = await openFirstThenSecond();
+      await act(async () => { answer['cand-2'](null); });
+      fireEvent.change(await screen.findByLabelText('Presence on camera'), { target: { value: '4' } });
+
+      await act(async () => { answer['cand-1'](graded); });
+      expect(screen.getByLabelText('Presence on camera')).toHaveValue('4');
+
+      fireEvent.click(screen.getByRole('button', { name: /save score/i }));
+      await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
+        '/review-teams/video-score',
+        expect.objectContaining({ candidateId: 'cand-2', scoreOne: 4, notes: '' })
+      ));
+    });
+
+    it('keeps the form waiting for its own lookup when the earlier one answers first', async () => {
+      const answer = await openFirstThenSecond();
+      await act(async () => { answer['cand-1'](graded); });
+      expect(screen.queryByLabelText('Presence on camera')).not.toBeInTheDocument();
+
+      await act(async () => { answer['cand-2'](null); });
+      expect(await screen.findByLabelText('Presence on camera')).toHaveValue('');
+    });
+  });
+
   describe('saving and closing', () => {
     const renderWith = (props) => render(
       <DocumentGradingModal open application={application} documentType="video" {...props} />

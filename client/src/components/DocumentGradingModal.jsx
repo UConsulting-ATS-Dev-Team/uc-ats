@@ -238,7 +238,12 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
       setNotes('');
       setError(null);
       setSuccess(false);
-      loadExistingScore();
+      // The grader can close this document and open another before the lookup
+      // answers. An answer for a document they have left is dropped, or its
+      // score would land in the form open now and be saved against it.
+      let current = true;
+      loadExistingScore(() => current);
+      return () => { current = false; };
     }
   }, [open, application?.candidateId, documentType]);
 
@@ -258,10 +263,11 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     token
   });
 
-  const loadExistingScore = async () => {
+  const loadExistingScore = async (isCurrent) => {
     try {
       setLoading(true);
       const response = await apiClient.get(config.getScoreEndpoint(application.candidateId, application.cycleId));
+      if (!isCurrent()) return;
       if (response) {
         setExistingScore(response);
         setScores({
@@ -279,7 +285,8 @@ const DocumentGradingModal = ({ open, onClose, onSaved, application, documentTyp
     } catch (err) {
       console.error('Error loading existing score:', err);
     } finally {
-      setLoading(false);
+      // Only the lookup for the open document may show the form.
+      if (isCurrent()) setLoading(false);
     }
   };
 
