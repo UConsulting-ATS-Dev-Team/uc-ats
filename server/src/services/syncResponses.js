@@ -81,6 +81,14 @@ async function resolveCandidate({ studentId, email }) {
   return { candidate, emailTaken: Boolean(byEmail && candidate && byEmail.id !== candidate.id) };
 }
 
+// sendApplicationReceivedEmail never throws; a failed send is recorded in the
+// communications log.
+async function sendReceipts(receipts, cycle) {
+  for (const { email, name } of receipts) {
+    await sendApplicationReceivedEmail(email, name, cycle.name, { cycleId: cycle.id });
+  }
+}
+
 export default async function syncFormResponses() {
   try {
     console.log('Fetching new responses from Google Forms...');
@@ -133,6 +141,7 @@ export default async function syncFormResponses() {
     console.log(`Found ${newResponses.length} new responses to process`);
     
     let successCount = 0;
+    const receipts = [];
     let errorCount = 0;
     
     for (const response of newResponses) {
@@ -286,16 +295,15 @@ export default async function syncFormResponses() {
           console.error(`Failed to link Luma registrations for candidate id=${candidate.id}:`, lumaError);
         }
 
-        // Tell the applicant it arrived. Only the run whose create succeeded
-        // gets here, so overlapping syncs on several servers still send one
-        // copy. The address is the one they typed on this form, not the
-        // candidate's, which may be an older one. sendApplicationReceivedEmail
-        // never throws; a failed send is in the communications log.
+        // Queue the "we received your application" email. Only the run whose
+        // create succeeded gets here, so overlapping syncs on several servers
+        // still send one copy. The address is the one they typed on this form,
+        // not the candidate's, which may be an older one.
         if (emailFromForm) {
           const applicantName = [dbRecord.firstName, dbRecord.lastName].filter(Boolean).join(' ')
             || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ')
             || 'Applicant';
-          await sendApplicationReceivedEmail(emailFromForm, applicantName, activeCycle.name, { cycleId: activeCycle.id });
+          receipts.push({ email: emailFromForm, name: applicantName });
         }
 
       } catch (error) {
@@ -305,6 +313,15 @@ export default async function syncFormResponses() {
     }
     
     console.log(`Sync complete: ${successCount} processed successfully, ${errorCount} errored`);
+
+    // Sent after the loop and not awaited: a slow SES must not hold up the
+    // next application, or server startup, which awaits the first sync.
+    // One at a time, so a large backlog stays under the SES send rate.
+    if (receipts.length > 0) {
+      sendReceipts(receipts, activeCycle).catch((error) => {
+        console.error('Failed to send application received emails:', error);
+      });
+    }
     
   } catch (error) {
     console.error('Error syncing form responses:', error)

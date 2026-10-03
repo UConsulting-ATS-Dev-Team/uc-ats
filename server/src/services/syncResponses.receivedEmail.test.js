@@ -66,6 +66,17 @@ describe('application received email', () => {
       .toBeLessThan(sendApplicationReceivedEmail.mock.invocationCallOrder[0]);
   });
 
+  it('does not wait for mail before filing the next application or returning', async () => {
+    getResponses.mockResolvedValue([{ responseId: 'r-1' }, { responseId: 'r-2' }]);
+    sendApplicationReceivedEmail.mockImplementation(() => new Promise(() => {}));
+
+    await syncFormResponses();
+
+    expect(prisma.application.create).toHaveBeenCalledTimes(2);
+    // The second receipt waits behind the first, which never finishes.
+    expect(sendApplicationReceivedEmail).toHaveBeenCalledTimes(1);
+  });
+
   it('sends nothing when the application fails to save', async () => {
     prisma.application.create.mockRejectedValue(new Error('Unique constraint failed on responseID'));
 
