@@ -46,7 +46,7 @@ describe('ImageCache', () => {
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
   });
 
-  it('does not put back an image whose fetch was still running when the cache was cleared', async () => {
+  it('drops and frees an image whose fetch was still running when the cache was cleared', async () => {
     const src = '/api/files/abc123/image';
     let finish;
     fetch.mockImplementationOnce(() => new Promise((resolve) => {
@@ -59,8 +59,10 @@ describe('ImageCache', () => {
     const pending = ImageCache.loadImage(src, 'token-a');
     ImageCache.clearCache(); // sign-out
     finish();
-    expect(await pending).toBe('blob:mock-url');
+    await expect(pending).rejects.toThrow('outlived its sign-in');
     expect(ImageCache.isImageCached(src)).toBe(false);
+    // Nothing holds the blob any more, so it is freed rather than leaked.
+    expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
   });
 
   it('rejects a missing or blank URL', async () => {

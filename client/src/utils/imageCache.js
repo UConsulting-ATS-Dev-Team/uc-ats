@@ -63,18 +63,25 @@ class ImageCache {
       return loadingPromises.get(src);
     }
 
-    // Create new loading promise
-    const loadingPromise = this.fetchImage(src, token);
+    // One promise for everyone waiting on this image, so each of them gets the
+    // same answer, including "the sign-in changed".
+    const loadingPromise = (async () => {
+      const blobUrl = await this.fetchImage(src, token);
+      // The cache was emptied while this was in the air: the sign-in that asked
+      // is gone, so the image is neither kept nor shown, and its blob is freed
+      // here because nothing else holds it to free later.
+      if (startedIn !== generation) {
+        URL.revokeObjectURL(blobUrl);
+        throw new Error('Image request outlived its sign-in');
+      }
+      blobUrlCache.set(src, blobUrl);
+      imageCache.set(src, blobUrl);
+      return blobUrl;
+    })();
     loadingPromises.set(src, loadingPromise);
 
     try {
-      const blobUrl = await loadingPromise;
-      // Kept only for the sign-in that asked. The caller still gets its image.
-      if (startedIn === generation) {
-        blobUrlCache.set(src, blobUrl);
-        imageCache.set(src, blobUrl);
-      }
-      return blobUrl;
+      return await loadingPromise;
     } finally {
       if (loadingPromises.get(src) === loadingPromise) loadingPromises.delete(src);
     }
