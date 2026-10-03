@@ -28,6 +28,9 @@ export const AUDIO_BITRATE = '128k';
 export const WEB_SUFFIX = '.web.mp4';
 /** appProperties key on a web copy, holding the original's Drive id. */
 export const TRANSCODED_FROM_KEY = 'transcodedFrom';
+// The original's md5Checksum when the copy was made. An original replaced in
+// place keeps its id, so the id alone cannot say a leftover copy is current.
+export const TRANSCODED_FROM_MD5_KEY = 'transcodedFromMd5';
 
 // A little slack over 30, because variable-frame-rate phone video reports
 // averages like 30.02.
@@ -336,6 +339,9 @@ export async function verifyWebCopy(filePath, { sourceDurationSec } = {}) {
 // --- Mapping file -------------------------------------------------------------
 
 export const MAPPING_STATUS = Object.freeze({
+  // Written before the database write, so a run killed between the write and
+  // its `repointed` row still leaves a record to revert from.
+  REPOINTING: 'repointing',
   REPOINTED: 'repointed',
   REVERTED: 'reverted',
   SKIPPED: 'skipped',
@@ -383,12 +389,15 @@ export function readMappingRows(filePath) {
  * What a revert has to do: for each application a run repointed, put
  * `originalUrl` back, but only while videoUrl still reads `newUrl` (checked by
  * the caller at write time). An application repointed twice in one file is
- * reverted to its first original. Rows that were not repoints are ignored.
+ * reverted to its first original. A `repointing` row counts as well as a
+ * `repointed` one: it is all a run killed mid-write leaves, and where the write
+ * never happened the caller finds videoUrl already on the original and skips it.
+ * Other rows are ignored.
  */
 export function planRevert(rows) {
   const byApplication = new Map();
   for (const row of rows) {
-    if (row.status !== MAPPING_STATUS.REPOINTED) continue;
+    if (row.status !== MAPPING_STATUS.REPOINTED && row.status !== MAPPING_STATUS.REPOINTING) continue;
     if (!row.applicationId || !row.originalUrl || !row.newUrl) continue;
     const seen = byApplication.get(row.applicationId);
     byApplication.set(row.applicationId, seen

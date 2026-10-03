@@ -9,12 +9,15 @@
 // Originals are never modified or deleted: a web copy is a new file, and the only
 // write anywhere else is the application's videoUrl.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import {
   DECISION,
   MAPPING_STATUS,
   TRANSCODED_FROM_KEY,
+  TRANSCODED_FROM_MD5_KEY,
   WEB_SUFFIX,
   decideTranscode,
   inspectVideo,
@@ -26,7 +29,8 @@ import {
   webCopyName,
 } from './videoTranscode.js';
 
-const METADATA_FIELDS = 'id, name, mimeType, size, parents, appProperties, trashed';
+const METADATA_FIELDS = 'id, name, mimeType, size, md5Checksum, parents, appProperties, trashed';
+const COPY_FIELDS = 'id, name, mimeType, size, appProperties';
 
 /** Marks an error as Drive's, so the pool can count Drive failures apart from ffmpeg's. */
 export class DriveStepError extends Error {
@@ -76,8 +80,12 @@ const rowsFor = (applications, fields) => applications.map((application) => ({
  * Repoints each application from its current videoUrl to the same URL with
  * `newFileId`. One `repoint` call per application, so one failure does not undo
  * the others; each comes back as its own row.
+ *
+ * `record` is handed a `repointing` row before each write. If it cannot be
+ * recorded the write is not made: a repoint with no row to revert from is the
+ * one thing a run must not leave behind.
  */
-async function repointAll({ applications, originalFileId, newFileId, repoint, fields }) {
+async function repointAll({ applications, originalFileId, newFileId, repoint, record, fields }) {
   const rows = [];
   for (const application of applications) {
     const newUrl = replaceFileId(application.videoUrl, newFileId);
@@ -89,6 +97,12 @@ async function repointAll({ applications, originalFileId, newFileId, repoint, fi
       newUrl,
       ...fields,
     };
+    try {
+      await record?.({ ...base, status: MAPPING_STATUS.REPOINTING });
+    } catch (error) {
+      rows.push({ ...base, status: MAPPING_STATUS.FAILED, reason: `not repointed: could not write the rollback record (${error.message})` });
+      continue;
+    }
     try {
       await repoint({ applicationId: application.id, fromUrl: application.videoUrl, toUrl: newUrl });
       rows.push({ ...base, status: MAPPING_STATUS.REPOINTED });
@@ -108,7 +122,7 @@ async function repointAll({ applications, originalFileId, newFileId, repoint, fi
  * probe anyway, to report the real decision rather than a guess from metadata.
  */
 export async function processVideoFile({
-  fileId, applications, apply = false, probe = false, scratchDir, tools = {}, drive, repoint,
+  fileId, applications, apply = false, probe = false, scratchDir, tools = {}, drive, repoint, record,
 }) {
   const result = (status, reason, fields = {}) => ({
     fileId,
@@ -148,16 +162,14 @@ export async function processVideoFile({
   // An earlier run may have uploaded a copy and then stopped before repointing.
   // Such a copy is checked like a new one (below) and reused if it passes.
   const existing = await driveStep('lookup', () => drive.listFilesByAppProperty({
-    folderId, key: TRANSCODED_FROM_KEY, value: fileId,
+    folderId, key: TRANSCODED_FROM_KEY, value: fileId, fields: COPY_FIELDS,
   }));
 
   if (!apply && !probe) {
-    const guess = existing.length
-      ? `web copy ${existing[0].id} already uploaded; would check it and repoint to it`
-      : meta.mimeType === 'video/quicktime'
-        ? 'QuickTime; would transcode or remux'
-        : `${meta.mimeType}; needs a probe to decide (--probe)`;
-    return result(MAPPING_STATUS.PLANNED, guess, known);
+    const what = meta.mimeType === 'video/quicktime'
+      ? 'QuickTime; would transcode or remux'
+      : `${meta.mimeType}; needs a probe to decide (--probe)`;
+    return result(MAPPING_STATUS.PLANNED, `${what}${leftoverNote(existing, meta.md5Checksum)}`, known);
   }
 
   fs.mkdirSync(scratchDir, { recursive: true });
@@ -166,6 +178,10 @@ export async function processVideoFile({
   const outputPath = path.join(scratchDir, `${safeId}${WEB_SUFFIX}`);
   try {
     await driveStep('download', () => drive.downloadFile(fileId, sourcePath));
+    // The checksum of the bytes this run will actually transcode, not the one
+    // Drive reported before the download: an original replaced in between is
+    // then compared, and tagged, as what it now is.
+    const sourceMd5 = await md5OfFile(sourcePath);
 
     let decision;
     try {
@@ -177,19 +193,18 @@ export async function processVideoFile({
     const sourceDurationSec = decision.info.durationSec;
     if (action === DECISION.SKIP) return result(MAPPING_STATUS.SKIPPED, decision.reason, { ...known, action });
     if (!apply) {
-      const reuse = existing.length ? `; web copy ${existing[0].id} already uploaded, would check it first` : '';
-      return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${reuse}`, { ...known, action });
+      return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${leftoverNote(existing, sourceMd5)}`, { ...known, action });
     }
 
     const rejected = [];
     for (const copy of existing) {
-      const problems = await checkExistingCopy({ copy, drive, outputPath, sourceDurationSec });
+      const problems = await checkExistingCopy({ copy, drive, outputPath, sourceDurationSec, sourceMd5 });
       if (problems.length) {
         rejected.push(`${copy.id} (${problems.join('; ')})`);
         continue;
       }
       const fields = { originalBytes, newBytes: (await fs.promises.stat(outputPath)).size, durationMs: 0, action: 'reuse' };
-      const rows = await repointAll({ applications, originalFileId: fileId, newFileId: copy.id, repoint, fields });
+      const rows = await repointAll({ applications, originalFileId: fileId, newFileId: copy.id, repoint, record, fields });
       return summarize(rows, { ...known, ...fields, newFileId: copy.id, reason: 'reused a web copy from an earlier run' });
     }
     const passedOver = rejected.length ? `; did not reuse ${rejected.join(', ')}` : '';
@@ -214,11 +229,11 @@ export async function processVideoFile({
       folderId,
       body: fs.createReadStream(outputPath),
       mimeType: 'video/mp4',
-      appProperties: { [TRANSCODED_FROM_KEY]: fileId },
+      appProperties: { [TRANSCODED_FROM_KEY]: fileId, [TRANSCODED_FROM_MD5_KEY]: sourceMd5 },
     }));
 
     const fields = { originalBytes, newBytes, durationMs, action };
-    const rows = await repointAll({ applications, originalFileId: fileId, newFileId: uploaded.id, repoint, fields });
+    const rows = await repointAll({ applications, originalFileId: fileId, newFileId: uploaded.id, repoint, record, fields });
     return summarize(rows, { ...known, ...fields, newFileId: uploaded.id, reason: `${decision.reason}${passedOver}` });
   } finally {
     await fs.promises.rm(sourcePath, { force: true });
@@ -226,14 +241,48 @@ export async function processVideoFile({
   }
 }
 
+const md5OfFile = async (filePath) => {
+  const hash = crypto.createHash('md5');
+  await pipeline(fs.createReadStream(filePath), hash);
+  return hash.digest('hex');
+};
+
 /**
- * Why an earlier run's copy cannot be reused, or [] if it can: it must be an MP4
- * that passes the same check as a fresh copy, at the source's length. Anyone with
- * folder access could have replaced or retagged it since. Downloads it to
- * `outputPath`, which the caller overwrites or removes.
+ * Why a leftover copy's tag rules it out, or null if the tag allows a reuse: it
+ * must be an MP4 tagged with the checksum of the original as it is now (an
+ * original replaced in place keeps its id).
  */
-async function checkExistingCopy({ copy, drive, outputPath, sourceDurationSec }) {
-  if (copy.mimeType && copy.mimeType !== 'video/mp4') return [`type is ${copy.mimeType}`];
+function tagProblem(copy, sourceMd5) {
+  if (copy.mimeType && copy.mimeType !== 'video/mp4') return `type is ${copy.mimeType}`;
+  const madeFrom = copy.appProperties?.[TRANSCODED_FROM_MD5_KEY];
+  if (!sourceMd5 || !madeFrom) return 'cannot tell which version of the original it was made from';
+  if (madeFrom !== sourceMd5) return 'made from another version of the original';
+  return null;
+}
+
+/**
+ * What a dry run can say about leftover copies without downloading them: which
+ * one a real run would check, or that none can be reused. `sourceMd5` is Drive's
+ * reported checksum on a metadata-only run, so this is what `--apply` would find
+ * unless the original changes first.
+ */
+function leftoverNote(existing, sourceMd5) {
+  if (!existing.length) return '';
+  const candidate = existing.find((copy) => !tagProblem(copy, sourceMd5));
+  return candidate
+    ? `; leftover web copy ${candidate.id} matches this original, would reuse it if it passes its check`
+    : `; leftover web ${existing.length === 1 ? 'copy' : 'copies'} ${existing.map((copy) => `${copy.id} (${tagProblem(copy, sourceMd5)})`).join(', ')} would not be reused`;
+}
+
+/**
+ * Why an earlier run's copy cannot be reused, or [] if it can: its tag must
+ * allow it (tagProblem), and it must pass the same check as a fresh copy, at the
+ * source's length. Anyone with folder access could have replaced or retagged it
+ * since. Downloads it to `outputPath`, which the caller overwrites or removes.
+ */
+async function checkExistingCopy({ copy, drive, outputPath, sourceDurationSec, sourceMd5 }) {
+  const tag = tagProblem(copy, sourceMd5);
+  if (tag) return [tag];
   await driveStep('download', () => drive.downloadFile(copy.id, outputPath));
   try {
     return (await verifyWebCopy(outputPath, { sourceDurationSec })).problems;
@@ -262,15 +311,37 @@ function summarize(rows, fields) {
  * same way); work already started finishes. A result counts as finishing its
  * Drive calls when it carries `driveConfirmed`.
  * `onResult(group, result | null, error | null)` is called as each one ends.
+ *
+ * `limit` caps the files that count toward it, as `countsTowardLimit(result,
+ * error)` decides once each ends, not the files looked at. So with the default,
+ * a file skipped because it needs nothing does not use the limit up, and a
+ * second `--limit=3` run moves on to the next three instead of re-reading the
+ * first. A file in flight holds a place until it ends, so no more than `limit`
+ * are ever worked on.
  */
-export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, processOne, onResult }) {
+export async function runPool({
+  groups, concurrency = 2, maxDriveFailures = 3, limit = Infinity,
+  countsTowardLimit = (result) => result?.status !== MAPPING_STATUS.SKIPPED,
+  processOne, onResult,
+}) {
   let next = 0;
   let consecutiveDriveFailures = 0;
   let stopReason = null;
+  let counted = 0;
+  let inFlight = 0;
+  let waiting = [];
+  const wake = () => { const resolvers = waiting; waiting = []; resolvers.forEach((resolve) => resolve()); };
   const done = { processed: 0, notStarted: 0 };
 
   const worker = async () => {
-    while (!stopReason && next < groups.length) {
+    while (!stopReason && next < groups.length && counted < limit) {
+      if (counted + inFlight >= limit) {
+        // Every remaining place is held by a file in flight. One of them may
+        // turn out to be a skip and hand its place back, so wait and look again.
+        await new Promise((resolve) => waiting.push(resolve));
+        continue;
+      }
+      inFlight += 1;
       const group = groups[next++];
       let outcome = null;
       let failure = null;
@@ -290,9 +361,13 @@ export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, p
           }
         }
       }
+      inFlight -= 1;
+      if (countsTowardLimit(outcome, failure)) counted += 1;
+      wake();
       done.processed += 1;
       await onResult(group, outcome, failure);
     }
+    wake();
   };
 
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, groups.length)) }, worker));

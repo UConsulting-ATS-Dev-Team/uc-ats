@@ -14,7 +14,8 @@
 // Options:
 //   --cycle=<id>          cycle to work on (default: the admin-active cycle)
 //   --only=<appId>        just this application, whatever its cycle
-//   --limit=N             at most N Drive files this run
+//   --limit=N             at most N Drive files that still need a copy this run
+//                         (ones already done are passed over, not counted)
 //   --concurrency=N       files at once, 1-3 (default 2)
 //   --max-drive-failures=N  stop after N Drive failures in a row (default 3)
 //   --scratch=<dir>       where downloads and copies go while working
@@ -165,11 +166,10 @@ async function run() {
   }
   const withVideo = applications.filter((a) => a.videoUrl);
   const { groups, unparsed } = groupByVideoFile(withVideo);
-  const selected = groups.slice(0, limit);
 
   console.log(cycle ? `Cycle: ${cycle.name} (${cycle.id})` : `Application: ${only}`);
   console.log(`Applications with a video: ${withVideo.length} (${groups.length} Drive files)`);
-  if (selected.length < groups.length) console.log(`This run: the first ${selected.length} (--limit)`);
+  if (limit < groups.length) console.log(`This run: up to ${limit} that still need a copy (--limit)`);
   console.log(apply ? `Applying, ${concurrency} at a time. Scratch: ${scratchDir}`
     : `Dry run: nothing is uploaded or written to the database. ${probe ? 'Downloading to probe each file.' : 'Metadata only; add --probe to download and decide for real.'}`);
   console.log(`Mapping: ${mappingPath}\n`);
@@ -186,16 +186,19 @@ async function run() {
   const counts = {};
   let index = 0;
   const pool = await runPool({
-    groups: selected,
+    groups,
     concurrency,
     maxDriveFailures,
+    limit,
     processOne: (group) => processVideoFile({
       fileId: group.fileId, applications: group.applications, apply, probe, scratchDir, tools, drive, repoint,
+      // The rollback record goes to disk before each database write.
+      record: (row) => writer.append(row),
     }),
     onResult: (group, result, error) => {
       index += 1;
       const who = group.applications.map(label).join(', ');
-      const prefix = `[${index}/${selected.length}]`;
+      const prefix = `[${index}/${groups.length}]`;
       if (error) {
         counts.failed = (counts.failed || 0) + group.applications.length;
         for (const a of group.applications) {
@@ -225,6 +228,9 @@ async function run() {
   for (const [status, n] of Object.entries(counts)) console.log(`${status}: ${n}`);
   if (totals.originalBytes) {
     console.log(`Bytes for repointed videos: ${formatBytes(totals.originalBytes)} -> ${formatBytes(totals.newBytes)} (${Math.round((100 * totals.newBytes) / totals.originalBytes)}%)`);
+  }
+  if (!pool.stopReason && pool.notStarted) {
+    console.log(`\n${pool.notStarted} file(s) not looked at (--limit reached). Re-run to continue; finished files are passed over.`);
   }
   if (pool.stopReason) {
     console.log(`\nSTOPPED: ${pool.stopReason}. ${pool.notStarted} file(s) not started. Fix Drive access and re-run; finished files are skipped.`);
