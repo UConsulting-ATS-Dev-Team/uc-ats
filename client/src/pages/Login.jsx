@@ -32,7 +32,7 @@ const Login = () => {
   const location = useLocation();
   const { login, loginWithGoogle, user, loading } = useAuth();
   const sessionEnded = location.state?.sessionEnded;
-  const sessionNotice = Object.hasOwn(SESSION_ENDED_NOTICES, sessionEnded ?? '')
+  const sessionNotice = Object.prototype.hasOwnProperty.call(SESSION_ENDED_NOTICES, sessionEnded ?? '')
     ? SESSION_ENDED_NOTICES[sessionEnded]
     : null;
 
