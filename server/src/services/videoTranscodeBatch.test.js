@@ -102,14 +102,37 @@ describe('processVideoFile --apply', () => {
     expect(drive.downloadFile).not.toHaveBeenCalled();
   });
 
-  it('reuses a copy an interrupted run uploaded, instead of transcoding again', async () => {
-    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', size: '15000000' }]) });
+  it('reuses a copy an interrupted run uploaded, after checking it, instead of transcoding again', async () => {
+    const drive = stubDrive({ listFilesByAppProperty: vi.fn(async () => [{ id: 'webOld', mimeType: 'video/mp4', size: '15000000' }]) });
     const repoint = vi.fn(async () => {});
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint });
     expect(drive.listFilesByAppProperty).toHaveBeenCalledWith({ folderId: 'folderA', key: 'transcodedFrom', value: 'orig1' });
-    expect(drive.downloadFile).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: 'repointed', newFileId: 'webOld', action: 'reuse' });
+    expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1', 'webOld']);
+    // Checked against the source's length like a fresh copy.
+    expect(verifyWebCopy).toHaveBeenCalledWith(expect.stringMatching(/\.web\.mp4$/), { sourceDurationSec: 5 });
+    expect(transcodeVideo).not.toHaveBeenCalled();
+    expect(drive.uploadFile).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: 'repointed', newFileId: 'webOld', action: 'reuse', driveConfirmed: true });
     expect(repoint).toHaveBeenCalledWith({ applicationId: 'a1', fromUrl: '/api/files/orig1/pdf', toUrl: '/api/files/webOld/pdf' });
+  });
+
+  it('makes a fresh copy when the tagged one is not an MP4 or fails its check', async () => {
+    const drive = stubDrive({
+      listFilesByAppProperty: vi.fn(async () => [
+        { id: 'notVideo', mimeType: 'application/pdf' },
+        { id: 'broken', mimeType: 'video/mp4' },
+      ]),
+    });
+    verifyWebCopy
+      .mockResolvedValueOnce({ problems: ['not web-ready: index at the end'], info: {}, boxes: [] })
+      .mockResolvedValue({ problems: [], info: {}, boxes: [] });
+    const repoint = vi.fn(async () => {});
+    const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint });
+    expect(drive.downloadFile.mock.calls.map((c) => c[0])).toEqual(['orig1', 'broken']);
+    expect(transcodeVideo).toHaveBeenCalledTimes(1);
+    expect(drive.uploadFile).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 'repointed', newFileId: 'web1', action: 'transcode' });
+    expect(result.reason).toMatch(/did not reuse notVideo \(type is application\/pdf\), broken \(not web-ready/);
   });
 
   it('does not upload a copy that fails its check', async () => {
@@ -215,21 +238,27 @@ describe('runPool', () => {
     expect(outcome.stopReason).toMatch(/3 Drive failures in a row/);
   });
 
-  it('does not count ffmpeg or other failures towards the Drive stop, and a success resets it', async () => {
-    const script = ['drive', 'drive', 'ok', 'drive', 'drive', 'other', 'drive', 'drive', 'ok'];
-    let i = 0;
-    const outcome = await runPool({
-      groups: groups(script.length),
-      concurrency: 1,
-      maxDriveFailures: 3,
-      processOne: async () => {
-        const step = script[i++];
-        if (step === 'drive') throw new DriveStepError('metadata', new Error('x'));
-        if (step === 'other') throw new Error('ffmpeg');
-        return { status: 'repointed' };
-      },
-      onResult: () => {},
-    });
-    expect(outcome).toEqual({ processed: script.length, notStarted: 0, stopReason: null });
+  it('resets the Drive count only on a file that got through Drive, not on skips or other errors', async () => {
+    const run = async (script) => {
+      let i = 0;
+      return runPool({
+        groups: groups(script.length),
+        concurrency: 1,
+        maxDriveFailures: 3,
+        processOne: async () => {
+          const step = script[i++];
+          if (step === 'drive') throw new DriveStepError('metadata', new Error('x'));
+          if (step === 'other') throw new Error('ffmpeg');
+          if (step === 'skip') return { status: 'skipped' };
+          return { status: 'repointed', driveConfirmed: true };
+        },
+        onResult: () => {},
+      });
+    };
+    expect(await run(['drive', 'drive', 'ok', 'drive', 'drive', 'ok', 'drive']))
+      .toEqual({ processed: 7, notStarted: 0, stopReason: null });
+    const interleaved = await run(['drive', 'skip', 'drive', 'other', 'drive', 'ok', 'ok']);
+    expect(interleaved.stopReason).toMatch(/3 Drive failures/);
+    expect(interleaved.notStarted).toBe(2);
   });
 });

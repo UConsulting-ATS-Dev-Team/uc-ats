@@ -310,6 +310,13 @@ export async function transcodeVideo({ input, output, decision, canTonemap }) {
 }
 
 /**
+ * How far a copy's length may drift from the source's: 2%, but never under a
+ * quarter second, which AAC priming and frame-rate conversion can add on their own
+ * (a 5 s test clip came out 5.067 s).
+ */
+export const lengthTolerance = (sourceDurationSec) => Math.max(0.25, sourceDurationSec * 0.02);
+
+/**
  * Checks a finished copy before anything is uploaded: what `decideTranscode`
  * would skip, and close to the source's length. `problems` empty means good.
  */
@@ -320,7 +327,7 @@ export async function verifyWebCopy(filePath, { sourceDurationSec } = {}) {
   if (decision.action !== DECISION.SKIP) problems.push(`not web-ready: ${decision.reason}`);
   if (decision.info.brand === 'qt') problems.push('still a QuickTime file');
   const duration = decision.info.durationSec;
-  if (sourceDurationSec && duration && Math.abs(duration - sourceDurationSec) > Math.max(1, sourceDurationSec * 0.02)) {
+  if (sourceDurationSec && duration && Math.abs(duration - sourceDurationSec) > lengthTolerance(sourceDurationSec)) {
     problems.push(`length ${duration.toFixed(1)}s differs from the source's ${sourceDurationSec.toFixed(1)}s`);
   }
   return { problems, info: decision.info, boxes };

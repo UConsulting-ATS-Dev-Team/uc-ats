@@ -13,6 +13,7 @@ import {
   decideTranscode,
   isFaststart,
   isWebCopyName,
+  lengthTolerance,
   parseFileUrl,
   planRevert,
   readMappingRows,
@@ -285,5 +286,13 @@ describe('mapping file', () => {
     expect(planRevert(readMappingRows(file))).toEqual([
       { applicationId: 'a1', originalFileId: 'o1', originalUrl: '/api/files/o1/pdf', newFileId: 'n1', newUrl: '/api/files/n1/pdf' },
     ]);
+  });
+});
+
+describe('lengthTolerance', () => {
+  it('is 2% of the source, with a quarter-second floor for short clips', () => {
+    expect(lengthTolerance(5)).toBe(0.25);
+    expect(lengthTolerance(60)).toBeCloseTo(1.2);
+    expect(lengthTolerance(120)).toBeCloseTo(2.4);
   });
 });

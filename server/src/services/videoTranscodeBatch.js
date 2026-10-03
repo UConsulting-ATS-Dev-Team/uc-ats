@@ -114,6 +114,8 @@ export async function processVideoFile({
     fileId,
     status,
     reason,
+    // A dry-run answer means every Drive call it needed worked.
+    driveConfirmed: status === MAPPING_STATUS.PLANNED,
     ...fields,
     rows: fields.rows || rowsFor(applications, {
       originalFileId: fileId,
@@ -142,24 +144,17 @@ export async function processVideoFile({
   }
 
   // An earlier run may have uploaded a copy and then stopped before repointing.
-  // That copy was verified before upload, so use it rather than make another.
+  // Such a copy is checked like a new one (below) and reused if it passes.
   const existing = await driveStep('lookup', () => drive.listFilesByAppProperty({
     folderId, key: TRANSCODED_FROM_KEY, value: fileId,
   }));
-  if (existing.length) {
-    const copy = existing[0];
-    const fields = { originalBytes, newBytes: copy.size != null ? Number(copy.size) : null, durationMs: 0, action: 'reuse' };
-    if (!apply) {
-      return result(MAPPING_STATUS.PLANNED, `web copy ${copy.id} already uploaded; would repoint to it`, { ...known, ...fields, newFileId: copy.id });
-    }
-    const rows = await repointAll({ applications, originalFileId: fileId, newFileId: copy.id, repoint, fields });
-    return summarize(rows, { ...known, ...fields, newFileId: copy.id, reason: 'reused a web copy from an earlier run' });
-  }
 
   if (!apply && !probe) {
-    const guess = meta.mimeType === 'video/quicktime'
-      ? 'QuickTime; would transcode or remux'
-      : `${meta.mimeType}; needs a probe to decide (--probe)`;
+    const guess = existing.length
+      ? `web copy ${existing[0].id} already uploaded; would check it and repoint to it`
+      : meta.mimeType === 'video/quicktime'
+        ? 'QuickTime; would transcode or remux'
+        : `${meta.mimeType}; needs a probe to decide (--probe)`;
     return result(MAPPING_STATUS.PLANNED, guess, known);
   }
 
@@ -177,8 +172,25 @@ export async function processVideoFile({
       return result(MAPPING_STATUS.FAILED, `ffprobe could not read it: ${error.message}`, known);
     }
     const action = decision.action;
+    const sourceDurationSec = decision.info.durationSec;
     if (action === DECISION.SKIP) return result(MAPPING_STATUS.SKIPPED, decision.reason, { ...known, action });
-    if (!apply) return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}`, { ...known, action });
+    if (!apply) {
+      const reuse = existing.length ? `; web copy ${existing[0].id} already uploaded, would check it first` : '';
+      return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${reuse}`, { ...known, action });
+    }
+
+    const rejected = [];
+    for (const copy of existing) {
+      const problems = await checkExistingCopy({ copy, drive, outputPath, sourceDurationSec });
+      if (problems.length) {
+        rejected.push(`${copy.id} (${problems.join('; ')})`);
+        continue;
+      }
+      const fields = { originalBytes, newBytes: (await fs.promises.stat(outputPath)).size, durationMs: 0, action: 'reuse' };
+      const rows = await repointAll({ applications, originalFileId: fileId, newFileId: copy.id, repoint, fields });
+      return summarize(rows, { ...known, ...fields, newFileId: copy.id, reason: 'reused a web copy from an earlier run' });
+    }
+    const passedOver = rejected.length ? `; did not reuse ${rejected.join(', ')}` : '';
 
     let durationMs;
     try {
@@ -186,12 +198,12 @@ export async function processVideoFile({
         input: sourcePath, output: outputPath, decision, canTonemap: tools.canTonemap,
       }));
     } catch (error) {
-      return result(MAPPING_STATUS.FAILED, `ffmpeg failed: ${error.message}`, { ...known, action });
+      return result(MAPPING_STATUS.FAILED, `ffmpeg failed: ${error.message}${passedOver}`, { ...known, action });
     }
 
-    const check = await verifyWebCopy(outputPath, { sourceDurationSec: decision.info.durationSec });
+    const check = await verifyWebCopy(outputPath, { sourceDurationSec });
     if (check.problems.length) {
-      return result(MAPPING_STATUS.FAILED, `copy failed its check: ${check.problems.join('; ')}`, { ...known, action, durationMs });
+      return result(MAPPING_STATUS.FAILED, `copy failed its check: ${check.problems.join('; ')}${passedOver}`, { ...known, action, durationMs });
     }
     const newBytes = (await fs.promises.stat(outputPath)).size;
 
@@ -205,10 +217,26 @@ export async function processVideoFile({
 
     const fields = { originalBytes, newBytes, durationMs, action };
     const rows = await repointAll({ applications, originalFileId: fileId, newFileId: uploaded.id, repoint, fields });
-    return summarize(rows, { ...known, ...fields, newFileId: uploaded.id, reason: decision.reason });
+    return summarize(rows, { ...known, ...fields, newFileId: uploaded.id, reason: `${decision.reason}${passedOver}` });
   } finally {
     await fs.promises.rm(sourcePath, { force: true });
     await fs.promises.rm(outputPath, { force: true });
+  }
+}
+
+/**
+ * Why an earlier run's copy cannot be reused, or [] if it can: it must be an MP4
+ * that passes the same check as a fresh copy, at the source's length. Anyone with
+ * folder access could have replaced or retagged it since. Downloads it to
+ * `outputPath`, which the caller overwrites or removes.
+ */
+async function checkExistingCopy({ copy, drive, outputPath, sourceDurationSec }) {
+  if (copy.mimeType && copy.mimeType !== 'video/mp4') return [`type is ${copy.mimeType}`];
+  await driveStep('download', () => drive.downloadFile(copy.id, outputPath));
+  try {
+    return (await verifyWebCopy(outputPath, { sourceDurationSec })).problems;
+  } catch (error) {
+    return [`ffprobe could not read it: ${error.message}`];
   }
 }
 
@@ -218,6 +246,8 @@ function summarize(rows, fields) {
     ...fields,
     fileId: rows[0]?.originalFileId,
     status: failed.length ? MAPPING_STATUS.FAILED : MAPPING_STATUS.REPOINTED,
+    // The upload (or the reused copy's download) worked, whatever the database said.
+    driveConfirmed: true,
     reason: failed.length ? failed.map((row) => row.reason).join('; ') : fields.reason,
     rows,
   };
@@ -225,8 +255,10 @@ function summarize(rows, fields) {
 
 /**
  * Runs `processOne` over `groups`, `concurrency` at a time, in order. Stops taking
- * new work after `maxDriveFailures` Drive failures in a row (a revoked share or an
- * exhausted quota fails every file the same way); work already started finishes.
+ * new work after `maxDriveFailures` Drive failures with no file getting through
+ * Drive in between (a revoked share or an exhausted quota fails every file the
+ * same way); work already started finishes. A result counts as getting through
+ * when it carries `driveConfirmed`.
  * `onResult(group, result | null, error | null)` is called as each one ends.
  */
 export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, processOne, onResult }) {
@@ -242,7 +274,10 @@ export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, p
       let failure = null;
       try {
         outcome = await processOne(group);
-        consecutiveDriveFailures = 0;
+        // Only a file that got all the way through Drive shows Drive is working
+        // again. A skip or an ffmpeg failure between two Drive errors says
+        // nothing about Drive, so it does not reset the count.
+        if (outcome?.driveConfirmed) consecutiveDriveFailures = 0;
       } catch (error) {
         failure = error;
         if (error instanceof DriveStepError) {
@@ -250,8 +285,6 @@ export async function runPool({ groups, concurrency = 2, maxDriveFailures = 3, p
           if (consecutiveDriveFailures >= maxDriveFailures && !stopReason) {
             stopReason = `${consecutiveDriveFailures} Drive failures in a row (last: ${error.message})`;
           }
-        } else {
-          consecutiveDriveFailures = 0;
         }
       }
       done.processed += 1;
