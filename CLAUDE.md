@@ -131,6 +131,10 @@ npm run setup-candidate-relations
 
 # One-time mailing-list import (dry run; add --apply to upload to Drive)
 npm run import-mailing-list -- <csv>
+
+# Fold a candidate's duplicate applications in a cycle into one
+# (dry run; add --apply to merge; --cycle=<id> for a cycle other than the candidate one)
+npm run merge-duplicate-applications
 ```
 
 #### Web copies of application videos
@@ -806,6 +810,77 @@ The system follows a **recruiting cycle-based workflow**:
   see that candidate's history. It is the ownership check that has to be fixed; no choice
   of candidate resolution closes it, because both directions of the conflict leak through
   the same door.
+
+**One application per candidate per cycle:**
+- People submit twice: once to a replaced form and again to the new one, or the same form
+  twice. Sync used to dedupe only by Google's response id, so each became a second
+  `Application`, Staging showed the person twice, and their decisions, comments,
+  evaluations and signups split across the two rows. The rule now lives in
+  [server/src/services/applicationResubmissions.js](server/src/services/applicationResubmissions.js);
+  form sync and the cleanup script both call it and neither decides anything itself.
+- Once the candidate is resolved, sync hands the response to `fileSubmission`, which takes
+  `pg_advisory_xact_lock(hashtext(candidateId|cycleId))`, reads the candidate's
+  application in the cycle inside the lock, and then either creates it or folds the
+  response into it, all in one transaction. Every server runs sync on the same tick, and
+  without the lock two first submissions from one person could both create. A folded
+  response gets no second row, no referral or Luma claim (those ran for the first
+  submission), and no second receipt. New responses are processed oldest first.
+- **An identity conflict is never folded.** When the UID resolves to one candidate and the
+  address belongs to another (`emailTaken` in `resolveCandidate`), the response is filed
+  as its own application, as before, and a warning is logged. It may be someone else's
+  submission under a mistyped UID; a duplicate an admin can see beats an application lost
+  into the wrong person's row.
+- A resubmission **replaces** the answers (every column `transformFormResponse` produces)
+  only when it is later than the one on file and review has not started. Review has
+  started when any review field is written (round past `1`, status past `SUBMITTED`,
+  `approved`, any decision), when a resume, cover letter or video score exists for the
+  candidate in the cycle (a cycle-less legacy score counts if written after the
+  submission), when any `APPLICATION_DEPENDENTS` row points at the application (comment,
+  flag, evaluation, case or client assignment, signup, live vote, decision email, review
+  deliberation), or when the record is sealed. `resume_uploads` does not count: a portal
+  resume replacement is the candidate's own act. The advisory lock does not stop a
+  reviewer, so before `findReviewEvidence` reads this, `applyResubmission` takes
+  `SELECT ... FOR UPDATE` on the application row and then the candidate row (always that
+  order). A score, comment, flag, evaluation, assignment or signup inserted meanwhile
+  needs FOR KEY SHARE on one of those rows for its foreign key, so it waits until the
+  replacement commits. `decision_messages`, `review_delib_changes` and
+  `review_delib_sessions` have no foreign key and are not held back; that gap is
+  accepted. The write is still conditional on the review fields, so a decision written
+  before the row lock is seen. Otherwise the response is **only recorded**: the
+  application keeps its answers, because a reviewer must never find the resume they
+  scored swapped underneath them.
+- `Application.supersededResponseIds` holds every response a row absorbed or ignored;
+  `responseID` is the one whose answers it holds. Sync treats both as already filed, and
+  writes to it only with `push`. A replacement clears optional answers the new response
+  left out, so an old `blindResumeUrl` (a form upload, not derived) never outlives the
+  resume it matches. When a replacement lands on an application filed earlier in the same
+  run, the receipt sweep's response id follows it, so that receipt still goes out once.
+- Duplicates made before this are folded by
+  `npm run merge-duplicate-applications` (`scripts/merge-duplicate-applications.js`).
+  Dry run is the default and reads only; `--apply` writes. It touches one cycle
+  (`--cycle=<id>`, default the candidate cycle), keeps the oldest row, and merges every
+  review field onto it. Whose answers it keeps is `chooseContent`, and the dry run prints
+  which branch decided:
+  - a. Rows with review of their own (a written review field, or any dependent row other
+    than `resume_uploads`). One: its answers. Several: the latest of them.
+  - b. Otherwise, if documents were graded, the latest submission made before the first
+    score's `createdAt` (the version graders opened), or the oldest row if every
+    submission came after it.
+  - c. Otherwise the latest submission.
+- A group is skipped whole, and listed, when merging means choosing between two people's
+  work or might fold in someone else: different values for one review field
+  (`REVIEW_CONFLICT`), dependent rows a unique constraint would merge
+  (`UNIQUE_COLLISION`), a portal resume history on a row whose answers are not kept
+  (`RESUME_VERSIONS`), a client resume assignment on such a row (`CLIENT_RESUME`, since
+  the client PDF route reads the linked application's resume), a row submitted under an
+  address that is another candidate's `Candidate.email`, compared with `emailIdentityKey`
+  (`IDENTITY_CONFLICT`), or a sealed candidate (`RECORD_LOCKED`).
+- **A new table with an application id must be added to `APPLICATION_DEPENDENTS`** in the
+  same change, with its unique constraints. The merge re-points those tables and then
+  deletes the duplicate, so a missing one is orphaned or cascade-deleted. It also counts
+  as review evidence unless it is the candidate's own data.
+  `applicationResubmissions.schema.test.js` fails when `schema.prisma` has one the list
+  lacks, and `--apply` refuses to start when the live database does.
 
 **Site analytics:**
 - Administration → Site Analytics (`/admin/analytics`): speed per user type, errors, and

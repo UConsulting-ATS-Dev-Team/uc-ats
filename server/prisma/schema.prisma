@@ -283,6 +283,11 @@ model Application {
   id                    String                          @id @default(uuid())
   status                ApplicationStatus               @default(SUBMITTED)
   responseID            String                          @unique
+  // Form responses from the same candidate in the same cycle that this row
+  // absorbed or ignored (services/applicationResubmissions.js). `responseID` is
+  // the response whose answers the row currently holds. Sync treats every id
+  // here as already filed, so a resubmission never becomes a second row.
+  supersededResponseIds String[]                        @default([])
   submittedAt           DateTime                        @default(now())
   email                 String
   firstName             String

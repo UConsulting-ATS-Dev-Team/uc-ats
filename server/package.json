@@ -18,6 +18,7 @@
     "setup-candidate-relations": "node scripts/setup-candidate-relations.js",
     "sync-member-linkedin": "node scripts/syncMemberLinkedin.js",
     "import-mailing-list": "node scripts/import-mailing-list-csv.js",
+    "merge-duplicate-applications": "node scripts/merge-duplicate-applications.js",
     "transcode-videos": "node scripts/transcode-videos.js"
   },
   "keywords": [],
