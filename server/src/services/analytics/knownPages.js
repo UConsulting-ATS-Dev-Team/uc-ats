@@ -60,6 +60,7 @@ export const KNOWN_PAGES = Object.freeze([
   '/privacy',
   '/profile',
   '/reset-password',
+  '/review-delib/:id',
   '/review-teams',
   '/signup',
   '/staging',
