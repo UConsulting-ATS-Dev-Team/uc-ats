@@ -133,6 +133,18 @@ npm run setup-candidate-relations
 npm run import-mailing-list -- <csv>
 ```
 
+#### Web copies of application videos
+
+`scripts/transcode-videos.js` (`npm run transcode-videos`) gives each video in a cycle
+an H.264/AAC MP4 with its index first, at most 720p and 30 fps, uploaded beside the
+original as `<name>.web.mp4`, and repoints `Application.videoUrl` at it. Dry run by
+default (`--probe` downloads to decide for real); `--apply` writes; `--revert=<jsonl>`
+undoes it. Needs `ffmpeg`/`ffprobe` on PATH. Originals are never deleted. Every run
+appends to `scripts/output/video-transcode-<timestamp>.jsonl`, which is what `--revert`
+reads. What needs work and the ffmpeg command live in
+[server/src/services/videoTranscode.js](server/src/services/videoTranscode.js); the
+per-file steps in [videoTranscodeBatch.js](server/src/services/videoTranscodeBatch.js).
+
 #### Mailing-list import
 
 The recruiting-interest mailing list is being retired. Its export is deduped

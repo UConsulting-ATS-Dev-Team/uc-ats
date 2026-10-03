@@ -1010,100 +1010,98 @@ router.get('/:id/events', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    if (!application.cycleId) {
-      return res.json({ events: [], totalPoints: 0 });
-    }
-
-    // Get all events for this cycle
-    const events = await prisma.events.findMany({
-      where: { cycleId: application.cycleId },
-      orderBy: { eventStartDate: 'asc' },
-      select: {
-        id: true,
-        eventName: true,
-        eventStartDate: true,
-        eventEndDate: true,
-        eventLocation: true
-      }
-    });
-
-    // Get RSVP and attendance status for the candidate
+    // No cycle or no candidate means nothing to look up: the RSVP and attendance
+    // rows are keyed on the candidate, and there is no Get to Know UC either.
     const candidateId = application.candidateId;
-    if (!candidateId) {
+    if (!application.cycleId || !candidateId) {
       return res.json({ events: [], totalPoints: 0 });
     }
 
-    const eventsWithStatus = await Promise.all(
-      events.map(async (event) => {
-        // Check RSVP status
-        const rsvp = await prisma.eventRsvp.findFirst({
-          where: {
-            eventId: event.id,
-            candidateId: candidateId
-          }
-        });
-
-        // Check attendance status
-        const attendance = await prisma.eventAttendance.findFirst({
-          where: {
-            eventId: event.id,
-            candidateId: candidateId
-          }
-        });
-
-        return {
-          ...event,
-          rsvpStatus: rsvp ? 'RSVPed' : 'Not RSVPed',
-          attendanceStatus: attendance ? 'Attended' : 'Not Attended',
-          points: attendance ? 1 : 0
-        };
-      })
-    );
-
-    // Add "Get to Know UC" meeting attendance as a special event
-    // Only count meetings within the current cycle's date range
-    // If the cycle has no start date, we cannot determine which meetings belong to this cycle,
-    // so we don't count any GTKUC attendance to avoid crediting old meetings
+    // Get to Know UC only counts inside the cycle's dates. Without a start date there
+    // is no telling which meetings belong to this cycle, so none are counted rather
+    // than crediting old ones.
     const cycleStartDate = application.cycle?.startDate ? new Date(application.cycle.startDate) : null;
     const cycleEndDate = application.cycle?.endDate ? new Date(application.cycle.endDate) : null;
 
-    if (cycleStartDate) {
-      const meetingAttendance = await prisma.meetingSignup.findFirst({
-        where: {
-          studentId: application.candidate?.studentId || application.studentId,
-          attended: true,
-          slot: {
-            startTime: {
-              gte: cycleStartDate,
-              ...(cycleEndDate && { lte: cycleEndDate })
-            }
-          }
-        },
-        include: {
-          slot: {
+    // The cycle's events and the Get to Know UC signup, in parallel.
+    const [events, meetingAttendance] = await Promise.all([
+      prisma.events.findMany({
+        where: { cycleId: application.cycleId },
+        orderBy: { eventStartDate: 'asc' },
+        select: {
+          id: true,
+          eventName: true,
+          eventStartDate: true,
+          eventEndDate: true,
+          eventLocation: true
+        }
+      }),
+      cycleStartDate
+        ? prisma.meetingSignup.findFirst({
+            where: {
+              studentId: application.candidate?.studentId || application.studentId,
+              attended: true,
+              slot: {
+                startTime: {
+                  gte: cycleStartDate,
+                  ...(cycleEndDate && { lte: cycleEndDate })
+                }
+              }
+            },
             include: {
-              member: {
-                select: { fullName: true, profileImage: true }
+              slot: {
+                include: {
+                  member: {
+                    select: { fullName: true, profileImage: true }
+                  }
+                }
               }
             }
-          }
-        }
-      });
+          })
+        : null
+    ]);
 
-      if (meetingAttendance) {
-        eventsWithStatus.push({
-          id: 'meeting-' + meetingAttendance.id,
-          eventName: 'Get to Know UC',
-          eventStartDate: meetingAttendance.slot.startTime,
-          eventEndDate: meetingAttendance.slot.endTime,
-          eventLocation: meetingAttendance.slot.location,
-          rsvpStatus: 'RSVPed',
-          attendanceStatus: 'Attended',
-          points: 1,
-          isMeeting: true,
-          memberName: meetingAttendance.slot.member.fullName
-        });
-      }
+    // Then the candidate's RSVPs and check-ins for those events, two queries in
+    // all, matched up in memory below. This used to ask once per event, 2N
+    // queries for N events. Filtering on the event ids, not the cycle, keeps the
+    // lookup on the (eventId, candidateId) unique index, the only index these
+    // tables have.
+    const eventIds = events.map((event) => event.id);
+    const ofCandidate = { candidateId, eventId: { in: eventIds } };
+    const [rsvps, attendance] = eventIds.length > 0
+      ? await Promise.all([
+          prisma.eventRsvp.findMany({ where: ofCandidate, select: { eventId: true } }),
+          prisma.eventAttendance.findMany({ where: ofCandidate, select: { eventId: true } })
+        ])
+      : [[], []];
+
+    const rsvpedEventIds = new Set(rsvps.map((row) => row.eventId));
+    const attendedEventIds = new Set(attendance.map((row) => row.eventId));
+
+    const eventsWithStatus = events.map((event) => {
+      const attended = attendedEventIds.has(event.id);
+      return {
+        ...event,
+        rsvpStatus: rsvpedEventIds.has(event.id) ? 'RSVPed' : 'Not RSVPed',
+        attendanceStatus: attended ? 'Attended' : 'Not Attended',
+        points: attended ? 1 : 0
+      };
+    });
+
+    // "Get to Know UC" meeting attendance shows as one more event.
+    if (meetingAttendance) {
+      eventsWithStatus.push({
+        id: 'meeting-' + meetingAttendance.id,
+        eventName: 'Get to Know UC',
+        eventStartDate: meetingAttendance.slot.startTime,
+        eventEndDate: meetingAttendance.slot.endTime,
+        eventLocation: meetingAttendance.slot.location,
+        rsvpStatus: 'RSVPed',
+        attendanceStatus: 'Attended',
+        points: 1,
+        isMeeting: true,
+        memberName: meetingAttendance.slot.member.fullName
+      });
     }
 
     const totalPoints = eventsWithStatus.reduce((sum, event) => sum + event.points, 0);
