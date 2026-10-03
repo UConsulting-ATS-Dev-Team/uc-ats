@@ -90,4 +90,28 @@ describe('AllCandidatesTable', () => {
     await userEvent.hover(within(rankCell).getByText('1'));
     expect(await screen.findByRole('tooltip')).toHaveTextContent('1st of 240 scored');
   });
+
+  it('keeps unranked and ungraded rows last whichever way a column sorts', async () => {
+    const rows = [
+      { ...candidates[0], applicationId: 'n1', name: 'Nobody Graded', total: null, overall: null, rank: null, perDoc: { resume: doc(null), coverLetter: doc(null), video: doc(null) } },
+      { ...candidates[0], overall: 12, rank: 2 },
+      { ...candidates[1], overall: 15, rank: 1 },
+      candidates[2]
+    ];
+    render(<AllCandidatesTable candidates={rows} rankedCount={2} canOpen={false} onOpen={vi.fn()} />);
+    const first = ['Blair HighMath', 'Alex LowEcon'];
+
+    for (const column of ['Rank', 'Overall', 'Docs total', 'Resume']) {
+      await userEvent.click(screen.getByRole('button', { name: column }));
+      const once = names();
+      await userEvent.click(screen.getByRole('button', { name: column }));
+      const twice = names();
+      for (const order of [once, twice]) {
+        expect(order.slice(-2)).toEqual(['Nobody GradedEcon', 'Casey Sealed']);
+      }
+      // The two directions are each other's reverse among the scored rows.
+      expect([...once.slice(0, 2)].reverse()).toEqual(twice.slice(0, 2));
+      expect([once.slice(0, 2), twice.slice(0, 2)]).toContainEqual(first);
+    }
+  });
 });

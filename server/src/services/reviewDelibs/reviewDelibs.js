@@ -307,6 +307,9 @@ export async function leaveSession({ client = prisma, sessionId, user }) {
   nudgeReviewDelib(sessionId, { version, kind: 'presence' });
 }
 
+// How many times setThreshold reads the scores before applying what it has.
+const THRESHOLD_ATTEMPTS = 3;
+
 /**
  * Changes what counts as an outlier, and the walkthrough with it (see
  * rethresholdWalkthrough): raising it drops candidates who no longer qualify,
@@ -314,29 +317,44 @@ export async function leaveSession({ client = prisma, sessionId, user }) {
  * resolved by an override stays. Each viewer's own place in the walkthrough is
  * theirs to keep; the page moves anyone whose candidate was dropped.
  *
- * The scores are read before taking the lock, which is held only to apply them
- * to the list as it stands, so two threshold changes each apply their own. An
- * override landing between the read and the lock can leave one entry stale
- * until the next change.
+ * The cycle's scores are read outside the lock, so the lock is held only to
+ * apply them, and optimistically: every override, decision and threshold change
+ * bumps the session's version, so if it moved between the read and the lock,
+ * the read is thrown away and done again. After THRESHOLD_ATTEMPTS the last
+ * read is applied regardless; a deliberation is not busy enough for that to
+ * matter, and the next change corrects it.
  */
 export async function setThreshold({ client = prisma, sessionId, user, thresholdPct }) {
   const threshold = normalizeThreshold(thresholdPct);
-  const head = await loadHead(client, sessionId);
-  const input = await loadTeamInput({ client, groupId: head.groupId, cycleId: head.cycleId, participation: false });
-  const stats = computeTeamStats({ ...input, thresholdPct: threshold });
 
-  const { version } = await lock(client, sessionId, async (tx, session) => {
-    assertActive(session);
-    await assertHost(tx, session, user);
-    const before = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
-    await tx.reviewDelibSession.update({
-      where: { id: sessionId },
-      data: { thresholdPct: threshold, outlierApplicationIds: rethresholdWalkthrough(stats, before) }
-    });
-  });
+  for (let attempt = 1; ; attempt += 1) {
+    const head = await loadHead(client, sessionId);
+    const input = await loadTeamInput({ client, groupId: head.groupId, cycleId: head.cycleId, participation: false });
+    const stats = computeTeamStats({ ...input, thresholdPct: threshold });
+    const stale = new Error('The deliberation changed while its scores were read');
 
-  nudgeReviewDelib(sessionId, { version, kind: 'control' });
-  return getState({ client, sessionId, user });
+    let version;
+    try {
+      ({ version } = await lock(client, sessionId, async (tx, session) => {
+        assertActive(session);
+        await assertHost(tx, session, user);
+        // withVersionLock has already bumped the row, so what it was is one less.
+        if (session.version - 1 !== head.version && attempt < THRESHOLD_ATTEMPTS) throw stale;
+        const before = Array.isArray(session.outlierApplicationIds) ? session.outlierApplicationIds : [];
+        await tx.reviewDelibSession.update({
+          where: { id: sessionId },
+          data: { thresholdPct: threshold, outlierApplicationIds: rethresholdWalkthrough(stats, before) }
+        });
+      }));
+    } catch (error) {
+      // Throwing rolls the transaction back, bump included.
+      if (error === stale) continue;
+      throw error;
+    }
+
+    nudgeReviewDelib(sessionId, { version, kind: 'control' });
+    return getState({ client, sessionId, user });
+  }
 }
 
 /**

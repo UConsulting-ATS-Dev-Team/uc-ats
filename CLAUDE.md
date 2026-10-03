@@ -564,8 +564,9 @@ The system follows a **recruiting cycle-based workflow**:
   and appends newly qualifying ones; so raising it drops candidates and lowering it adds them.
   An entry still counts if its *graded* scores qualify, so one an override resolved stays.
   Sealed or moved candidates are left in. The scores are read before the session lock, which
-  is held only to apply them to the list as it stands, so an override landing in between can
-  leave one entry stale until the next change.
+  is held only to apply them to the list as it stands. If the session's version moved in
+  between (an override, decision or other threshold change), the read is redone, up to three
+  attempts; the third is applied regardless.
 - On the page, `walkthroughPosition` in
   [client/src/utils/reviewDelib.js](client/src/utils/reviewDelib.js) keeps a viewer on the
   Outliers step on a candidate the walkthrough lists: the first when they arrive or the list

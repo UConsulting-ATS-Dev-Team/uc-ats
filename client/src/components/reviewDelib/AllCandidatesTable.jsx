@@ -19,16 +19,17 @@ import { DOC_LABELS, DOC_TYPES, ordinal, score } from '../../utils/reviewDelib';
 // Step 3: every candidate the team graded. Clicking a row opens it below, for
 // you only.
 
+// null is "nothing to sort by" (ungraded, unranked) and goes last in both directions.
 const SORTERS = {
   name: (row) => row.name.toLowerCase(),
   // A row from before overall existed sorts by its documents total.
-  overall: (row) => row.overall ?? row.total ?? -Infinity,
-  // Negated so "descending" is best first, like the other columns; unranked last.
-  rank: (row) => (row.rank ? -row.rank : -Infinity),
-  total: (row) => row.total ?? -Infinity,
-  resume: (row) => row.perDoc?.resume?.avg ?? -Infinity,
-  coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? -Infinity,
-  video: (row) => row.perDoc?.video?.avg ?? -Infinity,
+  overall: (row) => row.overall ?? row.total ?? null,
+  // Negated so "descending" is best first, like the other columns.
+  rank: (row) => (row.rank ? -row.rank : null),
+  total: (row) => row.total ?? null,
+  resume: (row) => row.perDoc?.resume?.avg ?? null,
+  coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? null,
+  video: (row) => row.perDoc?.video?.avg ?? null,
   flags: (row) => row.outlierCount * 10 + row.splitDocs
 };
 
@@ -42,6 +43,7 @@ export default function AllCandidatesTable({ candidates, rankedCount, currentApp
       if (Boolean(a.locked) !== Boolean(b.locked)) return a.locked ? 1 : -1;
       const x = key(a);
       const y = key(b);
+      if ((x === null) !== (y === null)) return x === null ? 1 : -1;
       if (x === y) return a.name.localeCompare(b.name);
       return (x < y ? -1 : 1) * (sort.desc ? -1 : 1);
     });

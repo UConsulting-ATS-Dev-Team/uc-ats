@@ -521,6 +521,36 @@ describe('setThreshold', () => {
     expect(nudgeReviewDelib).toHaveBeenCalledWith(sessionId, expect.objectContaining({ kind: 'control' }));
   });
 
+  // An override (or any other change) committing after the scores were read
+  // but before the lock: the version moves, so the read is done again.
+  const changeDuringRead = (change) => async (args) => {
+    const input = await inputFrom(db)(args);
+    change();
+    db.tables.reviewDelibSession[0].version += 1;
+    return input;
+  };
+
+  it('reads the scores again when the session changed while they were read', async () => {
+    const sessionId = await launched(); // app1, app2
+    vi.mocked(loadTeamInput).mockClear();
+    // 13 / 6 / 6 is an outlier at 50%; the stale read still has 4 / 6 / 6.
+    vi.mocked(loadTeamInput).mockImplementationOnce(changeDuringRead(() => { scoreOf('c5', 'm1').adminScore = 13; }));
+
+    const state = await threshold(sessionId, 0.5);
+    expect(loadTeamInput).toHaveBeenCalledTimes(2);
+    expect(state.session.outlierApplicationIds).toEqual(['app1', 'app5']);
+  });
+
+  it('applies its third read even if the session moved again, rather than retrying forever', async () => {
+    const sessionId = await launched();
+    vi.mocked(loadTeamInput).mockClear();
+    vi.mocked(loadTeamInput).mockImplementation(changeDuringRead(() => {}));
+
+    const state = await threshold(sessionId, 0.5);
+    expect(loadTeamInput).toHaveBeenCalledTimes(3);
+    expect(state.session).toMatchObject({ thresholdPct: 0.5, outlierApplicationIds: ['app1'] });
+  });
+
   it('is admin only, and needs the admin to have joined', async () => {
     const sessionId = await launched();
     await joinSession({ client: db, sessionId, user: as('m1') });
