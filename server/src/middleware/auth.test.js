@@ -54,27 +54,27 @@ describe('requireAuth', () => {
     const { res, next } = await run(`Bearer ${tokenFor(activeUser.id, { expiresIn: -10 })}`);
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);
-    expect(res.body).toEqual({ error: 'Invalid token', code: 'SESSION_INVALID' });
+    expect(res.body).toEqual({ error: 'Invalid token', code: 'SESSION_INVALID', reason: 'expired' });
     expect(consoleError).not.toHaveBeenCalled();
   });
 
   it('answers a malformed token with SESSION_INVALID and still logs it', async () => {
     const { res } = await run('Bearer not-a-jwt');
     expect(res.statusCode).toBe(401);
-    expect(res.body).toEqual({ error: 'Invalid token', code: 'SESSION_INVALID' });
+    expect(res.body).toEqual({ error: 'Invalid token', code: 'SESSION_INVALID', reason: 'invalid' });
     expect(consoleError).toHaveBeenCalledWith('Auth middleware error:', expect.any(Error));
   });
 
   it('answers a deleted user with SESSION_INVALID', async () => {
     const { res } = await run(`Bearer ${tokenFor('gone')}`);
     expect(res.statusCode).toBe(401);
-    expect(res.body).toEqual({ error: 'User not found', code: 'SESSION_INVALID' });
+    expect(res.body).toEqual({ error: 'User not found', code: 'SESSION_INVALID', reason: 'not-found' });
   });
 
   it('answers a deactivated user with SESSION_INVALID', async () => {
     const { res } = await run(`Bearer ${tokenFor(deactivatedUser.id)}`);
     expect(res.statusCode).toBe(401);
-    expect(res.body).toEqual({ error: 'Account deactivated', code: 'SESSION_INVALID' });
+    expect(res.body).toEqual({ error: 'Account deactivated', code: 'SESSION_INVALID', reason: 'deactivated' });
   });
 
   it('answers a request with no token with a plain 401 and no code', async () => {

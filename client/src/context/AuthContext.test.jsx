@@ -32,7 +32,9 @@ const jsonResponse = (status, body) => ({
   text: () => Promise.resolve(JSON.stringify(body)),
 });
 
-let sessionDead;
+// The body the server answers every non-verify call with once the session is
+// dead, or null while it is alive.
+let deadSession;
 
 const LogoutButton = () => {
   const { logout, user } = useAuth();
@@ -55,12 +57,10 @@ const renderSignedInAt = async (path) => {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   localStorage.setItem('token', 'live-token');
-  sessionDead = false;
+  deadSession = null;
   globalThis.fetch = vi.fn((url) => {
     if (url === '/api/auth/verify') return Promise.resolve(jsonResponse(200, { user: admin }));
-    if (sessionDead) {
-      return Promise.resolve(jsonResponse(401, { error: 'Invalid token', code: 'SESSION_INVALID' }));
-    }
+    if (deadSession) return Promise.resolve(jsonResponse(401, deadSession));
     return Promise.resolve(jsonResponse(200, {}));
   });
 });
@@ -72,29 +72,56 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const EXPIRED = 'Your session expired. Sign in again to continue.';
+const INACTIVE = /this account is no longer active/i;
+
+const endSession = async (body) => {
+  deadSession = body;
+  await act(async () => {
+    await apiClient.get('/live-votes/active').catch(() => {});
+  });
+};
+
 describe('AuthProvider, when the server ends the session', () => {
-  it('lands on the login page and says why', async () => {
+  it('lands on the login page and says the session expired', async () => {
     await renderSignedInAt('/staging');
 
-    sessionDead = true;
-    await act(async () => {
-      await apiClient.get('/live-votes/active').catch(() => {});
-    });
+    await endSession({ error: 'Invalid token', code: 'SESSION_INVALID', reason: 'expired' });
 
-    expect(await screen.findByText('Your session expired. Sign in again to continue.')).toBeInTheDocument();
+    expect(await screen.findByText(EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(INACTIVE)).not.toBeInTheDocument();
     expect(window.location.pathname).toBe('/login');
-    expect(window.history.state?.usr).toEqual({ sessionExpired: true });
+    expect(window.history.state?.usr).toEqual({ sessionEnded: 'expired' });
     expect(localStorage.getItem('token')).toBeNull();
     expect(apiClient.token).toBeNull();
+  });
+
+  it('reads a missing reason, as an older server sends, as expired', async () => {
+    await renderSignedInAt('/staging');
+
+    await endSession({ error: 'Invalid token', code: 'SESSION_INVALID' });
+
+    expect(await screen.findByText(EXPIRED)).toBeInTheDocument();
+    expect(window.history.state?.usr).toEqual({ sessionEnded: 'expired' });
+  });
+
+  it.each([
+    ['deactivated', 'Account deactivated'],
+    ['not-found', 'User not found'],
+  ])('says the account is no longer active when it was %s', async (reason, error) => {
+    await renderSignedInAt('/staging');
+
+    await endSession({ error, code: 'SESSION_INVALID', reason });
+
+    expect(await screen.findByText(INACTIVE)).toBeInTheDocument();
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+    expect(window.history.state?.usr).toEqual({ sessionEnded: 'inactive' });
   });
 
   it('keeps an ordinary 401 from signing anyone out', async () => {
     await renderSignedInAt('/staging');
 
-    globalThis.fetch.mockImplementation(() => Promise.resolve(jsonResponse(401, { error: 'Invalid token' })));
-    await act(async () => {
-      await apiClient.get('/live-votes/active').catch(() => {});
-    });
+    await endSession({ error: 'Invalid token' });
 
     expect(screen.getByText('staging')).toBeInTheDocument();
     expect(localStorage.getItem('token')).toBe('live-token');
@@ -107,6 +134,7 @@ describe('AuthProvider, when the server ends the session', () => {
 
     expect(await screen.findByRole('heading', { name: 'Sign In' })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/login');
-    expect(screen.queryByText(/session expired/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+    expect(screen.queryByText(INACTIVE)).not.toBeInTheDocument();
   });
 });

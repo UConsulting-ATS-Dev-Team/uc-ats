@@ -113,14 +113,15 @@ export const requireAuth = async (req, res, next) => {
   // SESSION_INVALID is the one signal the client signs out on, so it goes only
   // on answers that mean this token will never work again. A request with no
   // header has no session to end (a bare <img> request lands here), so
-  // 'no-token' carries no code.
+  // 'no-token' carries no code. `reason` says which kind of dead it is, so the
+  // login page can tell an expired session from an account that is gone.
   switch (result.error) {
     case 'no-token':
       return res.status(401).json({ error: 'Authentication required' });
     case 'not-found':
-      return res.status(401).json({ error: 'User not found', code: 'SESSION_INVALID' });
+      return res.status(401).json({ error: 'User not found', code: 'SESSION_INVALID', reason: 'not-found' });
     case 'deactivated':
-      return res.status(401).json({ error: 'Account deactivated', code: 'SESSION_INVALID' });
+      return res.status(401).json({ error: 'Account deactivated', code: 'SESSION_INVALID', reason: 'deactivated' });
     case 'unavailable':
       // Not a 401: the token may be fine, we just could not look the user up.
       console.error('Auth middleware lookup failed:', result.cause);
@@ -132,10 +133,17 @@ export const requireAuth = async (req, res, next) => {
       // A tab left open past its token's expiry keeps polling. That is
       // expected, and logging each one filled server_error_logs with stack
       // traces. Anything else wrong with a token is still worth seeing.
-      if (result.cause?.name !== 'TokenExpiredError') {
+    {
+      const expired = result.cause?.name === 'TokenExpiredError';
+      if (!expired) {
         console.error('Auth middleware error:', result.cause);
       }
-      return res.status(401).json({ error: 'Invalid token', code: 'SESSION_INVALID' });
+      return res.status(401).json({
+        error: 'Invalid token',
+        code: 'SESSION_INVALID',
+        reason: expired ? 'expired' : 'invalid'
+      });
+    }
   }
 };
 

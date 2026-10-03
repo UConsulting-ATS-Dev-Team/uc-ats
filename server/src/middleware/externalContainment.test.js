@@ -10,7 +10,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import externalContainment from './externalContainment.js';
-import { invalidateUserCache } from './auth.js';
+import { requireAuth, invalidateUserCache } from './auth.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -30,6 +30,10 @@ const tokenFor = (user) => jwt.sign({ userId: user.id }, process.env.JWT_SECRET)
 
 let server;
 let port;
+
+// A route behind the real requireAuth, for tests that need to see what the
+// whole chain answers rather than only whether containment let a request by.
+const guardedRoute = vi.fn((req, res) => res.status(200).json({ reached: true }));
 
 const request = (path, { user, rawToken } = {}) => {
   const headers = {};
@@ -65,6 +69,7 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use(externalContainment);
+  app.get('/api/guarded', requireAuth, guardedRoute);
   // Sentinel: anything that gets past containment lands here.
   app.use((req, res) => res.status(200).json({ reached: true, path: req.path }));
   server = app.listen(0);
@@ -169,14 +174,20 @@ describe('externalContainment - transparent to everyone else', () => {
     expect(res.status).toBe(200);
   });
 
-  it('passes a CLIENT through without resolving them when the user lookup fails', async () => {
-    // No user is resolved, so nothing is handed downstream: requireAuth looks
-    // the user up again and answers 503 (or 401) itself. The CLIENT never
-    // reaches a route as a signed-in user.
+  it('never lets a CLIENT reach a route when the user lookup fails', async () => {
+    // Containment resolves no user and falls through, so it hands nothing
+    // downstream. requireAuth looks the user up again, fails the same way, and
+    // answers 503 itself: the route never runs.
     invalidateUserCache(clientUser.id);
     prisma.user.findUnique.mockRejectedValue(new Error("Can't reach database server"));
-    const res = await request('/api/users', { user: clientUser });
-    expect(res.status).toBe(200);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request('/api/guarded', { user: clientUser });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe('AUTH_UNAVAILABLE');
+    expect(guardedRoute).not.toHaveBeenCalled();
   });
 
   it('ignores non-API paths entirely', async () => {

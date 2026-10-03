@@ -15,7 +15,9 @@ class ApiClient {
 
   // Called when the server says the session itself is dead (401 with
   // SESSION_INVALID): an expired token, a deleted or deactivated account.
-  // AuthContext registers it to sign the person out. Pass null to unregister.
+  // AuthContext registers it to sign the person out. It receives the server's
+  // `reason` ('expired' | 'invalid' | 'not-found' | 'deactivated', or undefined
+  // from a server that predates it). Pass null to unregister.
   setSessionExpiredHandler(handler) {
     this.onSessionExpired = handler;
   }
@@ -129,7 +131,8 @@ class ApiClient {
         sentToken === this.token &&
         this.onSessionExpired
       ) {
-        this.onSessionExpired();
+        // reason is absent from an old server; AuthContext reads that as expired.
+        this.onSessionExpired(error.reason);
       }
       throw err;
     }

@@ -14,7 +14,8 @@ const jsonResponse = (status, body) => ({
   text: () => Promise.resolve(JSON.stringify(body)),
 });
 
-const sessionInvalid = () => jsonResponse(401, { error: 'Invalid token', code: 'SESSION_INVALID' });
+const sessionInvalid = (reason = 'expired') =>
+  jsonResponse(401, { error: 'Invalid token', code: 'SESSION_INVALID', reason });
 
 let handler;
 
@@ -41,6 +42,22 @@ describe('apiClient session expiry', () => {
       serverMessage: 'Invalid token',
     });
     expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith('expired');
+  });
+
+  it("passes the server's reason to the handler", async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve(sessionInvalid('deactivated')));
+    await expect(apiClient.get('/live-votes/active')).rejects.toMatchObject({ status: 401 });
+    expect(handler).toHaveBeenCalledWith('deactivated');
+  });
+
+  it('passes undefined when the server sent no reason', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(jsonResponse(401, { error: 'Invalid token', code: 'SESSION_INVALID' }))
+    );
+    await expect(apiClient.get('/live-votes/active')).rejects.toMatchObject({ status: 401 });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(undefined);
   });
 
   it('ignores a 401 without the code, which is what an old server sends', async () => {

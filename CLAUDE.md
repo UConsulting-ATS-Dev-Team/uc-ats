@@ -1054,10 +1054,14 @@ The system follows a **recruiting cycle-based workflow**:
 - `requireAuth` answers an expired or malformed token, a deleted user and a deactivated
   user with `401` + `code: 'SESSION_INVALID'`. That code is the only thing the client
   signs out on (`setSessionExpiredHandler` in [api.js](client/src/utils/api.js), registered
-  by `AuthContext`), landing on `/login` with "Your session expired". It acts only if the
-  failed request carried the token still in use, so a late 401 from an old session never
-  signs out a new one. A 401 without the code changes nothing, which is also how a new
-  client behaves against an old server.
+  by `AuthContext`), landing on `/login` with router state `{ sessionEnded }`. It acts
+  only if the failed request carried the token still in use, so a late 401 from an old
+  session never signs out a new one. A 401 without the code changes nothing, which is
+  also how a new client behaves against an old server.
+- Beside the code, `reason` (`expired`, `invalid`, `not-found`, `deactivated`) picks the
+  login notice: `not-found` and `deactivated` say the account is no longer active, since
+  signing in again cannot help; anything else, including no reason from an older server,
+  says the session expired. `reason` never decides whether to sign out.
 - `no-token` 401s and every `/api/auth/*` 401 (wrong password, `/verify`) carry **no**
   code on purpose: a request with no header has no session to end, and a wrong password
   must never look like a dead session.

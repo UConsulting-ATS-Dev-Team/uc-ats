@@ -147,7 +147,7 @@ export const AuthProvider = ({ children }) => {
     // a transition, so clearing the user outside one renders first, on the old
     // page, where ProtectedRoute answers with its own <Navigate to="/login">.
     // That second navigation carries no state, replaces ours, and loses the
-    // session-expired notice.
+    // signed-out notice.
     startTransition(() => {
       setToken(null);
       setUser(null);
@@ -158,9 +158,14 @@ export const AuthProvider = ({ children }) => {
   const logout = () => signOut();
 
   // The server said this session is over (expired token, account deleted or
-  // deactivated). Sign out the same way, and tell the login page why.
+  // deactivated). Sign out the same way, and tell the login page why: signing
+  // in again fixes an expired session but not an account that is gone. A
+  // missing or unknown reason (an older server) reads as expired.
   useEffect(() => {
-    apiClient.setSessionExpiredHandler(() => signOut({ sessionExpired: true }));
+    apiClient.setSessionExpiredHandler((reason) => {
+      const inactive = reason === 'not-found' || reason === 'deactivated';
+      signOut({ sessionEnded: inactive ? 'inactive' : 'expired' });
+    });
     return () => apiClient.setSessionExpiredHandler(null);
   });
 
