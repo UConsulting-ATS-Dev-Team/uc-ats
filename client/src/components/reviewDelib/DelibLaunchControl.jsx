@@ -18,7 +18,7 @@ import {
 import GroupsIcon from '@mui/icons-material/Groups';
 import usePolling from '../../hooks/usePolling';
 import reviewDelibApi from '../../utils/reviewDelibApi';
-import { supabase } from '../../supabaseClient';
+import { useReviewDelibs } from '../../context/ReviewDelibContext';
 import { STEPS, THRESHOLD_OPTIONS, percent, plural } from '../../utils/reviewDelib';
 
 // Review Teams' side of the deliberations: each team's status, and the button
@@ -26,9 +26,17 @@ import { STEPS, THRESHOLD_OPTIONS, percent, plural } from '../../utils/reviewDel
 
 const POLL_MS = 15000;
 
-/** Every team's delib status in the admin cycle, keyed by team id. Admin only. */
+/**
+ * Every team's delib status in the admin cycle, keyed by team id. Admin only.
+ *
+ * Refetched whenever the set of running sessions changes. That set comes from
+ * ReviewDelibProvider, which already listens on the 'review-delibs' channel;
+ * subscribing here too would fail, because Supabase hands back the same
+ * channel for the same name and a channel can only be subscribed once.
+ */
 export function useDelibStatuses(enabled) {
   const [byGroup, setByGroup] = useState({});
+  const { sessions } = useReviewDelibs();
   const fetcher = useCallback((signal) => reviewDelibApi.groups({ signal }), []);
   const { refresh } = usePolling({
     fetcher,
@@ -38,16 +46,10 @@ export function useDelibStatuses(enabled) {
     onData: (payload) => setByGroup(Object.fromEntries((payload?.groups || []).map((entry) => [entry.groupId, entry])))
   });
 
+  const running = sessions.map((session) => `${session.id}:${session.step}`).sort().join(',');
   useEffect(() => {
-    if (!enabled || !supabase) return undefined;
-    const channel = supabase.channel('review-delibs', { config: { broadcast: { self: false } } });
-    channel.on('broadcast', { event: 'session:changed' }, () => refresh());
-    channel.subscribe();
-    return () => {
-      try { channel.unsubscribe(); } catch { /* already gone */ }
-      try { supabase.removeChannel(channel); } catch { /* already gone */ }
-    };
-  }, [enabled, refresh]);
+    if (enabled) refresh();
+  }, [enabled, running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { byGroup, refresh };
 }

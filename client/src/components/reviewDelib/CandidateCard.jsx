@@ -33,7 +33,7 @@ export function DecisionControl({ value, canEdit, saving, onChange }) {
     );
   }
   return (
-    <FormControl size="small" sx={{ minWidth: 200 }}>
+    <FormControl size="small" sx={{ minWidth: 250 }}>
       <InputLabel id="delib-decision-label">Resume Review decision</InputLabel>
       <Select
         labelId="delib-decision-label"

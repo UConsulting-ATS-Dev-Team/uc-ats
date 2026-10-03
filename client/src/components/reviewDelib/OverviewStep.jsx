@@ -107,6 +107,15 @@ function ComparisonStrip({ type, entry, teamName }) {
   );
 }
 
+/** "0", "5, all low", "3: 2 high, 1 low". */
+function outlierText({ outlierCount, outliersHigh }) {
+  if (!outlierCount) return '0';
+  const low = outlierCount - outliersHigh;
+  if (!low) return `${outlierCount}, all high`;
+  if (!outliersHigh) return `${outlierCount}, all low`;
+  return `${outlierCount}: ${outliersHigh} high, ${low} low`;
+}
+
 const ordinal = (n) => `${n}${['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) || n % 10 > 3 ? 0 : n % 10]}`;
 
 function BiasCell({ bias }) {
@@ -246,7 +255,7 @@ export default function OverviewStep({ team, isHost, onOpenCandidate }) {
                   </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{grader.gradedTotal}</TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: grader.outlierCount ? 700 : 400, color: grader.outlierCount ? 'error.main' : 'text.secondary' }}>
-                    {grader.outlierCount ? `${grader.outlierCount} (${grader.outliersHigh}↑ ${grader.outlierCount - grader.outliersHigh}↓)` : '0'}
+                    {outlierText(grader)}
                   </TableCell>
                   <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>{grader.splitCount}</TableCell>
                   {DOC_TYPES.map((type) => <BiasCell key={type} bias={grader.bias[type]} />)}

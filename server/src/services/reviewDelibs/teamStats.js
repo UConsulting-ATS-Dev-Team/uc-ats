@@ -1,8 +1,11 @@
-import { DOCUMENT_TYPES, formatScore } from '../documentRubrics.js';
-
 // The numbers behind a review team deliberation. Pure: the loader in
 // teamData.js reads the database, this file only does arithmetic, so every rule
 // below is pinned by teamStats.test.js without a database.
+//
+// It imports nothing on purpose. The tutorial capture (video/scripts/flows/
+// review-delibs.mjs) runs it outside the server to compute what the sample
+// team's overview shows, and documentRubrics.js would drag Prisma in with it.
+// DOCUMENT_TYPES and formatScore match the ones there.
 //
 // A grader's score on one document is its *effective* score: the admin override
 // when there is one, otherwise what they graded. That is what Staging ranks on,
@@ -18,6 +21,9 @@ import { DOCUMENT_TYPES, formatScore } from '../documentRubrics.js';
 export const DEFAULT_THRESHOLD_PCT = 0.3;
 export const MIN_THRESHOLD_PCT = 0.1;
 export const MAX_THRESHOLD_PCT = 0.6;
+
+const DOCUMENT_TYPES = Object.freeze(['resume', 'coverLetter', 'video']);
+const formatScore = (value) => String(Math.round(value * 100) / 100);
 
 const MAX_INSIGHTS = 4;
 // Below these, a difference is noise and not worth a line on the overview.
