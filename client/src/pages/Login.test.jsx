@@ -180,3 +180,43 @@ describe('Login, signing in with a password', () => {
     expect(await screen.findByText(/signs in with Google/i)).toBeInTheDocument();
   });
 });
+
+describe('Login, after the server ended the session', () => {
+  const EXPIRED = 'Your session expired. Sign in again to continue.';
+  const INACTIVE = /this account is no longer active/i;
+
+  const renderWithState = (state) =>
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/login', state }]}>
+        <Login />
+      </MemoryRouter>
+    );
+
+  it('says the session expired', () => {
+    renderWithState({ sessionEnded: 'expired' });
+
+    expect(screen.getByText(EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(INACTIVE)).not.toBeInTheDocument();
+  });
+
+  it('says the account is no longer active, not that the session expired', () => {
+    renderWithState({ sessionEnded: 'inactive' });
+
+    expect(screen.getByText(INACTIVE)).toBeInTheDocument();
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+  });
+
+  it('shows nothing for a value it does not know', () => {
+    renderWithState({ sessionEnded: 'toString' });
+
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+    expect(screen.queryByText(INACTIVE)).not.toBeInTheDocument();
+  });
+
+  it('says nothing about a session on an ordinary visit', () => {
+    renderLogin();
+
+    expect(screen.queryByText(/session expired/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(INACTIVE)).not.toBeInTheDocument();
+  });
+});

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, startTransition } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../utils/api';
 import { clearOnboardingCache } from '../utils/onboardingStatus';
@@ -136,16 +136,38 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  // `navigateState` is the router state the login page is opened with.
+  const signOut = (navigateState) => {
     localStorage.removeItem('token');
     clearOnboardingCache();
     clearDocumentLinks();
     ImageCache.clearCache();
-    setToken(null);
-    setUser(null);
     apiClient.setToken(null);
-    navigate('/login');
+    // One transition for all three. BrowserRouter applies every navigation as
+    // a transition, so clearing the user outside one renders first, on the old
+    // page, where ProtectedRoute answers with its own <Navigate to="/login">.
+    // That second navigation carries no state, replaces ours, and loses the
+    // signed-out notice.
+    startTransition(() => {
+      setToken(null);
+      setUser(null);
+      navigate('/login', navigateState ? { state: navigateState } : undefined);
+    });
   };
+
+  const logout = () => signOut();
+
+  // The server said this session is over (expired token, account deleted or
+  // deactivated). Sign out the same way, and tell the login page why: signing
+  // in again fixes an expired session but not an account that is gone. A
+  // missing or unknown reason (an older server) reads as expired.
+  useEffect(() => {
+    apiClient.setSessionExpiredHandler((reason) => {
+      const inactive = reason === 'not-found' || reason === 'deactivated';
+      signOut({ sessionEnded: inactive ? 'inactive' : 'expired' });
+    });
+    return () => apiClient.setSessionExpiredHandler(null);
+  });
 
   const updateUser = (updates) => {
     setUser((prev) => (prev ? { ...prev, ...updates } : updates));

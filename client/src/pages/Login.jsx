@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
   TextField,
@@ -17,12 +17,24 @@ import UConsultingLogo from '../components/UConsultingLogo';
 import { googleSignInEnabled } from '../utils/googleSignIn';
 import { postLoginDestination } from '../utils/postLoginDestination';
 
+// Set by AuthContext when the server ended the session, so the person knows
+// why they are looking at a sign-in form. Any other value shows nothing.
+const SESSION_ENDED_NOTICES = {
+  expired: 'Your session expired. Sign in again to continue.',
+  inactive: 'You were signed out because this account is no longer active. Contact an admin if you think this is a mistake.',
+};
+
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, loginWithGoogle, user, loading } = useAuth();
+  const sessionEnded = location.state?.sessionEnded;
+  const sessionNotice = Object.prototype.hasOwnProperty.call(SESSION_ENDED_NOTICES, sessionEnded ?? '')
+    ? SESSION_ENDED_NOTICES[sessionEnded]
+    : null;
 
   // Redirect if user is already logged in
   useEffect(() => {
@@ -93,6 +105,12 @@ const Login = () => {
             <Typography variant="h4" sx={{ mb: 4 }}>
               Sign In
             </Typography>
+
+            {sessionNotice && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                {sessionNotice}
+              </Alert>
+            )}
 
             {error && (
               <Alert severity="error" sx={{ mb: 3 }}>
