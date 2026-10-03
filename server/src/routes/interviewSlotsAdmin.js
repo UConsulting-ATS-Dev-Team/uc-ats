@@ -39,7 +39,7 @@ import {
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
 import config from '../config.js';
-import { formatEmailDateTime, formatEmailTime } from '../utils/timezoneUtils.js';
+import { formatEmailDateTime, formatEmailTime, utcToLocalInput } from '../utils/timezoneUtils.js';
 
 const router = express.Router();
 
@@ -764,10 +764,9 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
       }
       if (!day) return date;
       // Keep the wall-clock time, change the date: "same schedule, next Tuesday".
-      const target = new Date(`${day}T00:00:00`);
-      if (Number.isNaN(target.getTime())) return null;
-      target.setHours(date.getHours(), date.getMinutes(), 0, 0);
-      return target;
+      // The wall clock is Los Angeles, not the server's zone (UTC on Render).
+      const target = combine(day, utcToLocalInput(date)?.slice(11));
+      return target && !Number.isNaN(target.getTime()) ? target : null;
     };
 
     const updates = [];

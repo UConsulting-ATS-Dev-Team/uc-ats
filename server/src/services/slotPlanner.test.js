@@ -1,14 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { combine, defaultSpecFor, planBlocks, planCadence, planSessions } from './slotPlanner.js';
 
+// Read back in Los Angeles, not in whatever zone the test runner is in. Reading
+// with getHours() passed on a laptop in Pacific time and hid that the server,
+// which runs in UTC, stored 9:00 as 9:00 UTC - 2 AM for everyone using it.
 const hhmm = (date) =>
-  `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(date);
 
 const DAY = '2027-01-15';
 
 describe('combine', () => {
   it('puts a wall-clock time on a calendar day', () => {
     expect(hhmm(combine(DAY, '09:30'))).toBe('09:30');
+  });
+
+  it('reads the time as Los Angeles time, whatever zone the server is in', () => {
+    // January is PST (UTC-8); October is PDT (UTC-7).
+    expect(combine('2027-01-15', '09:00').toISOString()).toBe('2027-01-15T17:00:00.000Z');
+    expect(combine('2026-10-06', '09:00').toISOString()).toBe('2026-10-06T16:00:00.000Z');
+    expect(combine('2026-10-06', '17:00').toISOString()).toBe('2026-10-07T00:00:00.000Z');
   });
 
   it('returns null rather than an Invalid Date', () => {
