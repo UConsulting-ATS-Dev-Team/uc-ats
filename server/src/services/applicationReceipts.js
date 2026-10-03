@@ -1,6 +1,6 @@
 import prisma from '../prismaClient.js';
 import { sendApplicationReceivedEmail } from './emailNotifications.js';
-import { emailIdentityKey } from '../utils/mailingListImport.js';
+import { emailIdentityKey, emailVariants } from '../utils/mailingListImport.js';
 
 /**
  * Who gets the "We Received Your Application" email, and sending it once.
@@ -19,6 +19,17 @@ import { emailIdentityKey } from '../utils/mailingListImport.js';
  * and re-reads the log once it holds it - the meetingHostReminders.js pattern.
  * Whoever comes second finds the lock taken or the first one's row.
  *
+ * The row is written before the send, not after. recordCommunication swallows
+ * a failed write, so a row written only after SES accepted could go missing
+ * and the next sweep would send again. Here a claim that cannot be written
+ * stops the send. The claim starts FAILED ("not sent yet") and sendEmail
+ * overwrites it through the same attemptKey with how the send ended, so a
+ * process killed mid-send leaves a failed attempt to retry, not a gap. Each
+ * attempt has its own key, which is what lets failures count toward
+ * MAX_ATTEMPTS. One duplicate is still possible: SES accepted and the update
+ * to SENT failed. There is no exactly-once across SES and the database, and
+ * MAX_ATTEMPTS bounds it.
+ *
  * Only applications still waiting on a first decision are owed one. Telling
  * someone already advanced or rejected that they "will hear from us shortly"
  * is wrong, so the backfill reports them instead.
@@ -35,10 +46,18 @@ const isWaiting = (app) => WAITING_STATUSES.has(app.status) && (!app.currentRoun
 
 const nameOf = (app) => [app.firstName, app.lastName].filter(Boolean).join(' ') || 'Applicant';
 
-/** { [identityKey]: { done, failures } } for one cycle's receipts. */
-async function receiptHistory(cycleId, client) {
+/**
+ * { [identityKey]: { done, failures } } for one cycle's receipts, or for one
+ * person's when given their address.
+ */
+async function receiptHistory(cycleId, client, email = null) {
   const rows = await client.communicationLog.findMany({
-    where: { category: CATEGORY, cycleId, channel: 'email' },
+    where: {
+      category: CATEGORY,
+      cycleId,
+      channel: 'email',
+      ...(email ? { OR: emailVariants(email).map((v) => ({ recipient: { equals: v, mode: 'insensitive' } })) } : {}),
+    },
     select: { recipient: true, status: true },
   });
   const history = {};
@@ -54,16 +73,22 @@ const stillOwed = (entry) => !entry || (!entry.done && entry.failures < MAX_ATTE
 
 /**
  * Who is owed a receipt, one entry per person. `since` limits it to
- * applications submitted from then on; without it, the whole cycle.
+ * applications submitted from then on, plus any whose `responseIDs` are
+ * listed (sync's own, which can be older than `since` when a response syncs
+ * late); without either, the whole cycle.
  *
  * A person's applications are judged together: the latest one still waiting
  * is the one written to, so an old rejected application does not hide a
  * newer one.
  */
-export async function planApplicationReceipts({ cycle, since = null, client = prisma }) {
+export async function planApplicationReceipts({ cycle, since = null, responseIDs = [], client = prisma }) {
+  const window = [
+    ...(since ? [{ submittedAt: { gte: since } }] : []),
+    ...(responseIDs.length ? [{ responseID: { in: responseIDs } }] : []),
+  ];
   const [applications, history] = await Promise.all([
     client.application.findMany({
-      where: { cycleId: cycle.id, ...(since ? { submittedAt: { gte: since } } : {}) },
+      where: { cycleId: cycle.id, ...(window.length ? { OR: window } : {}) },
       select: { email: true, firstName: true, lastName: true, status: true, currentRound: true, submittedAt: true },
       orderBy: { submittedAt: 'asc' },
     }),
@@ -108,10 +133,29 @@ async function sendUnderLock(cycle, person) {
         await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`application-received:${cycle.id}:${person.key}`})) AS locked`;
       if (!locked) return { ok: false, skipped: true };
 
-      const history = await receiptHistory(cycle.id, tx);
-      if (!stillOwed(history[person.key])) return { ok: false, skipped: true };
+      const entry = (await receiptHistory(cycle.id, tx, person.email))[person.key];
+      if (!stillOwed(entry)) return { ok: false, skipped: true };
 
-      const result = await sendApplicationReceivedEmail(person.email, person.name, cycle.name, { cycleId: cycle.id });
+      // sendEmail scopes the key to the address with `|recipient`; the claim
+      // must match it exactly for the send to overwrite it.
+      const attemptKey = `application-received:${cycle.id}:${person.key}:${(entry?.failures ?? 0) + 1}`;
+      // Committed now, outside the transaction: sendEmail's upsert runs on
+      // its own connection and would wait forever on an uncommitted row.
+      await prisma.communicationLog.create({
+        data: {
+          channel: 'email',
+          category: CATEGORY,
+          trigger: 'AUTOMATED',
+          status: 'FAILED',
+          error: 'Not sent yet: interrupted before the email server accepted it.',
+          recipient: person.email,
+          recipientName: person.name,
+          cycleId: cycle.id,
+          attemptKey: `${attemptKey}|${person.email}`,
+        },
+      });
+
+      const result = await sendApplicationReceivedEmail(person.email, person.name, cycle.name, { cycleId: cycle.id, attemptKey });
       return result?.success === false ? { ok: false, error: result.error } : { ok: true };
     },
     { maxWait: 10 * 1000, timeout: LOCK_TIMEOUT_MS }
@@ -122,8 +166,8 @@ async function sendUnderLock(cycle, person) {
  * Send every receipt still owed, one at a time. `pauseMs` spaces a long run
  * out under the SES send rate. Returns what happened, for the caller to report.
  */
-export async function sendApplicationReceipts({ cycle, since = null, pauseMs = 0, onProgress = null }) {
-  const plan = await planApplicationReceipts({ cycle, since });
+export async function sendApplicationReceipts({ cycle, since = null, responseIDs = [], pauseMs = 0, onProgress = null }) {
+  const plan = await planApplicationReceipts({ cycle, since, responseIDs });
   let sent = 0;
   const failed = [];
 

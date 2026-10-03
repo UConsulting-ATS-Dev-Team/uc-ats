@@ -135,6 +135,7 @@ export default async function syncFormResponses() {
     console.log(`Found ${newResponses.length} new responses to process`);
     
     let successCount = 0;
+    const filedResponseIDs = [];
     let errorCount = 0;
     
     for (const response of newResponses) {
@@ -246,6 +247,7 @@ export default async function syncFormResponses() {
         // against the same candidate submitting twice by cycle with the same responseID
         await prisma.application.create({ data: dataToCreate });
         successCount++;
+        filedResponseIDs.push(dataToCreate.responseID);
 
         // A member may have referred this person by name before they applied.
         // Now that the application is actually on file, those referrals have
@@ -300,10 +302,15 @@ export default async function syncFormResponses() {
     // ones filed. Not awaited: a slow SES must not hold up server startup,
     // which awaits the first sync. Sweeping a window rather than this run's
     // list is what makes that safe - a send lost to a deploy goes out on the
-    // next tick. The window is a week because submittedAt is the form's own
-    // timestamp, and a response can sync days late (an unmapped form version).
+    // next tick. The window is a week of submittedAt, which is the form's own
+    // timestamp; this run's own applications are passed too, so one that
+    // syncs later than that (an unmapped form version) still gets one.
     // applicationReceipts.js owns who is owed one and sending it once.
-    sendApplicationReceipts({ cycle: activeCycle, since: new Date(Date.now() - RECEIPT_WINDOW_MS) })
+    sendApplicationReceipts({
+      cycle: activeCycle,
+      since: new Date(Date.now() - RECEIPT_WINDOW_MS),
+      responseIDs: filedResponseIDs,
+    })
       .catch((error) => console.error('Failed to send application received emails:', error));
     
   } catch (error) {

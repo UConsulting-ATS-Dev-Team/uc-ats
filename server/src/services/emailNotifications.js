@@ -264,13 +264,14 @@ const createApplicationReceivedEmail = async (candidateName, cycleName) => {
   });
 };
 
-export const sendApplicationReceivedEmail = async (candidateEmail, candidateName, cycleName, { cycleId = null } = {}) => {
+export const sendApplicationReceivedEmail = async (candidateEmail, candidateName, cycleName, { cycleId = null, attemptKey = null } = {}) => {
   try {
     const emailContent = await createApplicationReceivedEmail(candidateName, cycleName);
     return await sendEmail(candidateEmail, emailContent.subject, emailContent.html, [], {
       category: 'APPLICATION_RECEIVED',
       recipientName: candidateName,
       cycleId,
+      attemptKey,
     });
   } catch (error) {
     console.error('Error in sendApplicationReceivedEmail:', error);

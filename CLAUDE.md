@@ -952,6 +952,11 @@ Key notification types in [emailNotifications.js](server/src/services/emailNotif
   is the record: a person is owed one until an `APPLICATION_RECEIVED` row for their
   address in that cycle is not `FAILED`, or three have failed. That way a send lost to a
   deploy goes out on the next tick, and servers running at the same moment send one copy.
+  The applications that run filed are passed by id as well, so one that syncs more than a
+  week after it was submitted is still covered. The row is written *before* the send, as
+  a FAILED "not sent yet" claim that `sendEmail` overwrites through its per-attempt
+  `attemptKey`: a claim that cannot be written stops the send, because a row written
+  only afterwards can be lost (`recordCommunication` swallows errors) and cause a resend.
   Only applications still waiting on a first decision (SUBMITTED/UNDER_REVIEW, round 1)
   are owed one.
   People who applied before it existed are sent it with

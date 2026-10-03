@@ -61,8 +61,10 @@ describe('application received email from form sync', () => {
     await syncFormResponses();
 
     expect(sendApplicationReceipts).toHaveBeenCalledTimes(1);
-    const [{ cycle: sweptCycle, since }] = sendApplicationReceipts.mock.calls[0];
+    const [{ cycle: sweptCycle, since, responseIDs }] = sendApplicationReceipts.mock.calls[0];
     expect(sweptCycle).toBe(cycle);
+    // Passed by id as well, for a response that syncs more than a week late.
+    expect(responseIDs).toEqual(['r-1', 'r-2']);
     expect(before - since.getTime()).toBeGreaterThanOrEqual(7 * DAY_MS - 1000);
     expect(before - since.getTime()).toBeLessThanOrEqual(7 * DAY_MS + 1000);
 
