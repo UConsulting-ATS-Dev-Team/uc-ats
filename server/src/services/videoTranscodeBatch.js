@@ -178,10 +178,6 @@ export async function processVideoFile({
   const outputPath = path.join(scratchDir, `${safeId}${WEB_SUFFIX}`);
   try {
     await driveStep('download', () => drive.downloadFile(fileId, sourcePath));
-    // The checksum of the bytes this run will actually transcode, not the one
-    // Drive reported before the download: an original replaced in between is
-    // then compared, and tagged, as what it now is.
-    const sourceMd5 = await md5OfFile(sourcePath);
 
     let decision;
     try {
@@ -192,6 +188,11 @@ export async function processVideoFile({
     const action = decision.action;
     const sourceDurationSec = decision.info.durationSec;
     if (action === DECISION.SKIP) return result(MAPPING_STATUS.SKIPPED, decision.reason, { ...known, action });
+    // The checksum of the bytes this run will actually transcode, not the one
+    // Drive reported before the download: an original replaced in between is
+    // then compared, and tagged, as what it now is. Only read for a file that
+    // needs a copy, so passing over finished ones stays cheap.
+    const sourceMd5 = await md5OfFile(sourcePath);
     if (!apply) {
       return result(MAPPING_STATUS.PLANNED, `would ${action}: ${decision.reason}${leftoverNote(existing, sourceMd5)}`, { ...known, action });
     }

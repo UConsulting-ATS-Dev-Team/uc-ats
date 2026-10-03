@@ -98,6 +98,26 @@ describe('processVideoFile --apply', () => {
     expect(repoint).not.toHaveBeenCalled();
   });
 
+  it('does not read a web-ready download again to hash it, on --apply or --probe', async () => {
+    inspectVideo.mockResolvedValue({ probe: fixtures.goodMp4, boxes: ['ftyp', 'moov', 'free', 'mdat'] });
+    const reads = vi.spyOn(fs, 'createReadStream');
+    try {
+      for (const mode of [{ apply: true }, { probe: true }]) {
+        const drive = stubDrive({ getFileMetadata: vi.fn(async () => ({ ...MOV, name: 'v.mp4', mimeType: 'video/mp4' })) });
+        const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], ...mode, scratchDir, drive, repoint: vi.fn() });
+        expect(result.status).toBe('skipped');
+        expect(drive.downloadFile).toHaveBeenCalledTimes(1);
+      }
+      expect(reads).not.toHaveBeenCalled();
+      // The same spy does see the hash of a file that needs a copy.
+      inspectVideo.mockResolvedValue({ probe: fixtures.iphoneMov, boxes: ['ftyp', 'wide', 'mdat', 'moov'] });
+      await processVideoFile({ fileId: 'orig1', applications: [app('a1')], probe: true, scratchDir, drive: stubDrive(), repoint: vi.fn() });
+      expect(reads).toHaveBeenCalledWith(expect.stringMatching(/\.source$/));
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it('skips a videoUrl that already points at a web copy, before downloading anything', async () => {
     const drive = stubDrive({ getFileMetadata: vi.fn(async () => ({ ...MOV, name: 'IMG_0001.web.mp4', mimeType: 'video/mp4' })) });
     const result = await processVideoFile({ fileId: 'orig1', applications: [app('a1')], apply: true, scratchDir, drive, repoint: vi.fn() });
