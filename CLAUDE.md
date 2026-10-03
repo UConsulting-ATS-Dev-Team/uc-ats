@@ -342,7 +342,10 @@ The system follows a **recruiting cycle-based workflow**:
   admin's Messages app and cannot observe what happens after.
 - A `SENDING` row is a claim written just before a send that must not repeat
   (`applicationReceipts.js`) and overwritten with the outcome. The UI shows one older
-  than 10 minutes as **Interrupted**; it was retried as a new attempt.
+  than 10 minutes as **Interrupted**, and Email Deliverability counts it. The sender
+  retries it as a new row only while it is still owed (three attempts at most, and only
+  while the application awaits a first decision), so an interrupted row is not proof of
+  a retry.
 - Candidates list and Candidate Detail show a person's history (admin only,
   `/api/admin/candidate-communications`,
   [candidateCommunications.js](server/src/services/candidateCommunications.js)). Rows

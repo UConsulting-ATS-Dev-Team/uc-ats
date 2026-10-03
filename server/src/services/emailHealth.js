@@ -484,7 +484,7 @@ export function summarizeDelivery(counts, { awaitingFeedback = 0, eligibleForFee
         ? 'SES accepted every message.'
         : [
             failed ? `${plural(failed, 'message')} never left: SES refused them or could not be reached.` : '',
-            interrupted ? `${plural(interrupted, 'send')} interrupted before SES answered, then retried.` : '',
+            interrupted ? `${plural(interrupted, 'send')} interrupted before SES answered.` : '',
           ].filter(Boolean).join(' ')
     )
   );
