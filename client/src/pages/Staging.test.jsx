@@ -297,7 +297,7 @@ describe('Staging table', () => {
     expect(select.value).toBe('');
   });
 
-  it('keeps a newer pick when an older save fails after it', async () => {
+  it('sends a newer pick only after the earlier save settles, and keeps it when that save fails', async () => {
     let failFirst;
     apiClient.post
       .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
@@ -307,13 +307,39 @@ describe('Staging table', () => {
 
     const select = screen.getByLabelText('Decision for Alice Example');
     fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
     fireEvent.change(select, { target: { value: 'no' } });
-    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(select.value).toBe('no');
 
     failFirst(new Error('network down'));
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    expect(apiClient.post).toHaveBeenLastCalledWith('/admin/save-decision', {
+      candidateId: 'c1', decision: 'no', phase: 'resume',
+    });
     expect(select.value).toBe('no');
     expect(screen.queryByText(/Could not save the decision/)).not.toBeInTheDocument();
+  });
+
+  it('skips a pick replaced before its turn to save', async () => {
+    let finishFirst;
+    apiClient.post
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ success: true });
+    await renderStaging();
+    await screen.findByText('Alice Example');
+
+    const select = screen.getByLabelText('Decision for Alice Example');
+    fireEvent.change(select, { target: { value: 'yes' } });
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+    fireEvent.change(select, { target: { value: 'maybe_yes' } });
+    fireEvent.change(select, { target: { value: 'no' } });
+    finishFirst({ success: true });
+
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(2));
+    expect(apiClient.post.mock.calls.map(([, body]) => body.decision)).toEqual(['yes', 'no']);
+    expect(select.value).toBe('no');
   });
 });

@@ -1318,9 +1318,12 @@ export default function Staging() {
     return { graduationYear: graduationYearBreakdown, gender: genderBreakdown, referral: referralBreakdown };
   }
 
-  // Picks per candidate and round, counting up, so a failed save can tell whether a
-  // newer pick has been made since it was sent.
+  // Picks per candidate and round, counting up, so a save can tell whether a newer
+  // pick has been made since. Saves for one candidate and round go out one at a time
+  // (decisionSaveChainRef holds the last one), so the server applies them in the
+  // order they were picked; sent together, Yes could land after No.
   const decisionPickSeqRef = useRef({});
+  const decisionSaveChainRef = useRef({});
 
   // Optimistic: the pick shows at once and is put back if the save fails. There is
   // no forced reload afterwards - the save bumps the change token, so the next poll
@@ -1338,14 +1341,22 @@ export default function Staging() {
     }));
 
     setDecision(value);
+    const isLatest = () => decisionPickSeqRef.current[key] === pick;
+    const save = (decisionSaveChainRef.current[key] || Promise.resolve())
+      .catch(() => {})
+      // Replaced by a newer pick while waiting its turn: that one will be saved
+      // instead, so this one is never sent.
+      .then(() => (isLatest() ? stagingAPI.saveDecision(item.id, value, phase) : null));
+    decisionSaveChainRef.current[key] = save;
+
     try {
-      await stagingAPI.saveDecision(item.id, value, phase);
+      await save;
       stagingCache.invalidate();
     } catch (error) {
       console.error('Error saving inline decision:', error);
       // A newer pick owns the cell now; its own save decides what it shows.
       // Rolling back to `previous` here would overwrite it.
-      if (decisionPickSeqRef.current[key] !== pick) return;
+      if (!isLatest()) return;
       setDecision(previous);
       setSnackbar({
         open: true,
