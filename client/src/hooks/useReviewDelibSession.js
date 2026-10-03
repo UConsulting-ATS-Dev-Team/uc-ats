@@ -66,7 +66,10 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [hidden, setHidden] = useState(isHidden);
-  const [pendingAction, setPendingAction] = useState(null);
+  // Every action in flight. A set, not one value: an admin can save a second
+  // score before the first returns, and the first finishing must not mark the
+  // second done.
+  const [pending, setPending] = useState(() => new Set());
 
   const versionRef = useRef(null);
   const joinedRef = useRef(false);
@@ -161,7 +164,10 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
     // Never paused: the poll doubles as the presence heartbeat.
     pauseWhenHidden: false,
     interval: hidden ? POLL_MS.hidden : connected ? POLL_MS.realtime : POLL_MS.polling,
-    getVersion: (payload) => payload.version,
+    // No getVersion: usePolling keeps the highest version it has applied for
+    // the life of the page, so after moving from a session at version 50 to
+    // one at 3 it would drop every poll of the new one. `accept` orders
+    // responses per session instead.
     onData: accept,
     onError: (error) => {
       if (error?.code === 'NOT_JOINED') join();
@@ -219,7 +225,7 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
   // --- Admin actions --------------------------------------------------------
 
   const runAction = useCallback(async (name, request) => {
-    setPendingAction(name);
+    setPending((current) => new Set(current).add(name));
     try {
       accept(await request());
       return true;
@@ -228,7 +234,11 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
       refreshRef.current?.();
       return false;
     } finally {
-      setPendingAction(null);
+      setPending((current) => {
+        const next = new Set(current);
+        next.delete(name);
+        return next;
+      });
     }
   }, [accept, report]);
 
@@ -259,7 +269,8 @@ export default function useReviewDelibSession(sessionId, { onError } = {}) {
     error: fatal,
     loading: !ready && !fatal,
     connected,
-    pendingAction,
+    pending,
+    busy: pending.size > 0,
     refresh,
     ...actions
   };

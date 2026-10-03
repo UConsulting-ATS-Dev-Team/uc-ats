@@ -83,7 +83,7 @@ export default function ReviewDelib() {
       card: delib.card,
       error: delib.cardError,
       canEdit: isHost,
-      pendingAction: delib.pendingAction,
+      pending: delib.pending,
       onOverride: delib.override,
       onDecide: delib.decide
     };
@@ -93,9 +93,18 @@ export default function ReviewDelib() {
       <>
         <DelibHeader state={state} connected={delib.connected} onLeave={leave} />
 
-        {!team && step !== 'SUMMARY' && delib.teamError && (
-          <Alert severity="error" action={<Button color="inherit" onClick={delib.reloadTeam}>Try again</Button>}>
-            Could not load the team’s numbers: {delib.teamError.serverMessage || delib.teamError.message}
+        {delib.teamError && (
+          // On every step, the summary included: after a session ends nothing
+          // refreshes on its own, and numbers kept from an earlier load must
+          // not pass for current ones.
+          <Alert
+            severity={team ? 'warning' : 'error'}
+            sx={{ mb: 2 }}
+            action={<Button color="inherit" onClick={delib.reloadTeam}>Try again</Button>}
+          >
+            {team
+              ? 'Could not refresh the team’s numbers. What you see may be out of date.'
+              : `Could not load the team’s numbers: ${delib.teamError.serverMessage || delib.teamError.message}`}
           </Alert>
         )}
         {!team && step !== 'SUMMARY' && !delib.teamError && (
@@ -155,7 +164,7 @@ export default function ReviewDelib() {
         {isHost && !ended && (
           <HostControlBar
             state={state}
-            pendingAction={delib.pendingAction}
+            busy={delib.busy}
             onStep={(next) => delib.navigate(next)}
             onOutlier={(applicationId) => delib.navigate('OUTLIERS', applicationId)}
             onThreshold={delib.setThreshold}

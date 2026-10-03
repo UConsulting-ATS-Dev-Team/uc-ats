@@ -53,6 +53,22 @@ describe('useReviewDelibSession', () => {
     expect(reviewDelibApi.leave).toHaveBeenCalledWith('A');
   });
 
+  it('keeps polling a session at a lower version than the one before it', async () => {
+    reviewDelibApi.join.mockImplementation((id) => Promise.resolve(stateFor(id, id === 'A' ? 50 : 3)));
+    let bVersion = 3;
+    reviewDelibApi.state.mockImplementation((id) => Promise.resolve(stateFor(id, id === 'A' ? 50 : bVersion)));
+
+    const { result, rerender } = renderHook(({ id }) => useReviewDelibSession(id), { initialProps: { id: 'A' } });
+    await waitFor(() => expect(result.current.state?.version).toBe(50));
+    await act(async () => { await result.current.refresh(); }); // a poll of A, at 50
+
+    rerender({ id: 'B' });
+    await waitFor(() => expect(result.current.state?.session.id).toBe('B'));
+    bVersion = 4;
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.state.version).toBe(4);
+  });
+
   it("ignores the old session's join error", async () => {
     const joinA = deferred();
     reviewDelibApi.join.mockImplementation((id) => (id === 'A' ? joinA.promise : Promise.resolve(stateFor('B', 3))));

@@ -28,6 +28,15 @@ describe('AllCandidatesTable', () => {
     expect(screen.getByText('Yes')).toBeInTheDocument();
   });
 
+  it('keeps sealed candidates last when a column sorts ascending', async () => {
+    render(<AllCandidatesTable candidates={candidates} canOpen={false} onOpen={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Total' })); // descending → ascending
+    expect(names()).toEqual(['Alex LowEcon', 'Blair HighMath', 'Casey Sealed']);
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(names().at(-1)).toBe('Casey Sealed');
+  });
+
   it('lets an admin open a candidate for the room, but not a sealed one', async () => {
     const onOpen = vi.fn();
     render(<AllCandidatesTable candidates={candidates} canOpen onOpen={onOpen} />);

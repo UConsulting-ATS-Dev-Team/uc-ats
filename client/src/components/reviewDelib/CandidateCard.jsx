@@ -51,7 +51,7 @@ export function DecisionControl({ value, canEdit, saving, onChange }) {
   );
 }
 
-export default function CandidateCard({ card, error, canEdit, pendingAction, onOverride, onDecide, header }) {
+export default function CandidateCard({ card, error, canEdit, pending, onOverride, onDecide, header }) {
   if (error) {
     const message = error.code === 'RECORD_LOCKED'
       ? 'This candidate’s record is sealed.'
@@ -91,7 +91,7 @@ export default function CandidateCard({ card, error, canEdit, pendingAction, onO
         <DecisionControl
           value={card.resumeDecision}
           canEdit={canEdit}
-          saving={pendingAction === `decide:${card.applicationId}`}
+          saving={pending?.has(`decide:${card.applicationId}`)}
           onChange={(decision) => onDecide(card.applicationId, decision)}
         />
       </Stack>
@@ -117,7 +117,7 @@ export default function CandidateCard({ card, error, canEdit, pendingAction, onO
                           row={row}
                           max={doc.max}
                           canEdit={canEdit}
-                          saving={pendingAction === `override:${row.scoreId}`}
+                          saving={pending?.has(`override:${row.scoreId}`)}
                           onSave={(value) => onOverride(type, row.scoreId, value)}
                         />
                       ))}

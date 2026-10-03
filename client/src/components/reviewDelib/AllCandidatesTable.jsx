@@ -20,11 +20,11 @@ import { DOC_LABELS, DOC_TYPES, score } from '../../utils/reviewDelib';
 
 const SORTERS = {
   name: (row) => row.name.toLowerCase(),
-  total: (row) => (row.locked ? -Infinity : row.total ?? -Infinity),
+  total: (row) => row.total ?? -Infinity,
   resume: (row) => row.perDoc?.resume?.avg ?? -Infinity,
   coverLetter: (row) => row.perDoc?.coverLetter?.avg ?? -Infinity,
   video: (row) => row.perDoc?.video?.avg ?? -Infinity,
-  flags: (row) => (row.locked ? -1 : row.outlierCount * 10 + row.splitDocs)
+  flags: (row) => row.outlierCount * 10 + row.splitDocs
 };
 
 export default function AllCandidatesTable({ candidates, currentApplicationId, canOpen, onOpen }) {
@@ -33,6 +33,8 @@ export default function AllCandidatesTable({ candidates, currentApplicationId, c
   const rows = useMemo(() => {
     const key = SORTERS[sort.by];
     return [...candidates].sort((a, b) => {
+      // Sealed rows have nothing to discuss: last whichever way a column sorts.
+      if (Boolean(a.locked) !== Boolean(b.locked)) return a.locked ? 1 : -1;
       const x = key(a);
       const y = key(b);
       if (x === y) return a.name.localeCompare(b.name);

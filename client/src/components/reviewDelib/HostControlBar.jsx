@@ -17,11 +17,10 @@ import { STEPS, THRESHOLD_OPTIONS, percent } from '../../utils/reviewDelib';
 // What an admin running the session drives it with. Sticks to the bottom of the
 // window so it is in reach from anywhere on a long card.
 
-export default function HostControlBar({ state, pendingAction, onStep, onOutlier, onThreshold, onEnd }) {
+export default function HostControlBar({ state, busy, onStep, onOutlier, onThreshold, onEnd }) {
   const { session } = state;
   const order = session.outlierApplicationIds;
   const position = order.indexOf(session.currentApplicationId);
-  const busy = Boolean(pendingAction);
 
   return (
     <Paper
