@@ -156,7 +156,7 @@ export default function ResumeReuploadSection({ applicationId, onPreview, onRepl
             <li key={version.id || 'original'} className="resume-version">
               <div className="resume-version-meta">
                 <span className="resume-version-label">
-                  {version.originalName || (version.replacedByCandidate ? 'Uploaded resume' : 'Submitted with your application')}
+                  {version.originalName || (version.replacedByCandidate || version.uploadedByStaff ? 'Uploaded resume' : 'Submitted with your application')}
                   {version.uploadedByStaff && ' (uploaded by the recruitment team)'}
                   {version.isCurrent && <span className="resume-version-current">Current</span>}
                 </span>

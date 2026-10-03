@@ -134,14 +134,19 @@ function buildVersions(application, rows) {
     ];
   }
 
+  // Who uploaded a stored file is decided by ownership, not by role: an applicant
+  // who has since become a member still uploaded their own resume. A stored file
+  // with no uploader on record predates admin uploads, so it was the applicant's.
+  const byApplicant = (row) => !row.uploadedBy || isOwnedBy(application, row.uploadedBy);
+
   return rows.map((row) => ({
     id: row.id,
     url: row.sourceUrl,
     originalName: row.originalName,
     sizeBytes: row.sizeBytes,
     uploadedAt: row.uploadedAt,
-    replacedByCandidate: Boolean(row.storagePath),
-    uploadedByStaff: Boolean(row.uploadedBy && isStaff(row.uploadedBy)),
+    replacedByCandidate: Boolean(row.storagePath) && byApplicant(row),
+    uploadedByStaff: Boolean(row.storagePath) && !byApplicant(row),
     isCurrent: row.supersededAt === null,
   }));
 }
@@ -150,7 +155,7 @@ const versionRows = (applicationId) =>
   prisma.resumeUpload.findMany({
     where: { applicationId },
     orderBy: { uploadedAt: 'asc' },
-    include: { uploadedBy: { select: { role: true } } },
+    include: { uploadedBy: { select: { email: true, studentId: true } } },
   });
 
 async function loadApplication(res, applicationId, user) {

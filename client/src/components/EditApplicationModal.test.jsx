@@ -82,6 +82,34 @@ describe('EditApplicationModal resume upload', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('holds Update and Cancel until an upload in flight has finished', async () => {
+    let finish;
+    api.post.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { onClose } = renderModal();
+
+    await userEvent.upload(screen.getByLabelText('Resume *'), pdf());
+    await userEvent.click(screen.getByRole('button', { name: 'Upload PDF' }));
+
+    expect(screen.getByRole('button', { name: 'Update Application' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    finish({ currentResumeUrl: '/api/resume-uploads/v2/file' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update Application' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+
+  it('refuses a file over 10 MB when it is chosen', async () => {
+    renderModal();
+    const big = pdf();
+    Object.defineProperty(big, 'size', { value: 10 * 1024 * 1024 + 1 });
+
+    await userEvent.upload(screen.getByLabelText('Resume *'), big);
+
+    expect(screen.getByText('That file is larger than 10 MB.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upload PDF' })).toBeDisabled();
+  });
+
   it('shows the server\'s reason when an upload is refused and keeps the old link', async () => {
     api.post.mockRejectedValue(new Error('That file is not a readable PDF'));
     renderModal();

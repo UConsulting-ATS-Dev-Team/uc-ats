@@ -3,6 +3,10 @@ import { XMarkIcon } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
 import { GRADUATION_YEARS } from '../utils/graduationYears';
 
+// The server's limit (MAX_RESUME_BYTES), checked here so an oversized file is
+// refused when chosen rather than after it has been sent.
+const MAX_RESUME_BYTES = 10 * 1024 * 1024;
+
 export default function EditApplicationModal({ isOpen, onClose, onSuccess, application }) {
   const [formData, setFormData] = useState({
     firstName: '',
@@ -87,6 +91,11 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
       setResumeError('The resume must be a PDF.');
       return;
     }
+    if (selected && selected.size > MAX_RESUME_BYTES) {
+      setResumeFile(null);
+      setResumeError('That file is larger than 10 MB.');
+      return;
+    }
     setResumeFile(selected);
   };
 
@@ -112,13 +121,17 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
     }
   };
 
+  // Closing and Update both wait for an upload in flight. Update would send the
+  // old link and put it back over the new file; closing would skip the refresh.
   const handleClose = () => {
+    if (resumeUploading) return;
     if (resumeReplaced) onSuccess();
     onClose();
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (resumeUploading) return;
     setLoading(true);
     setError(null);
 
@@ -185,7 +198,7 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
       <div className="modal-content">
         <div className="modal-header">
           <h2>Edit Application</h2>
-          <button className="close-btn" onClick={handleClose}>
+          <button className="close-btn" onClick={handleClose} disabled={resumeUploading}>
             <XMarkIcon className="close-icon" />
           </button>
         </div>
@@ -506,10 +519,10 @@ export default function EditApplicationModal({ isOpen, onClose, onSuccess, appli
           </div>
 
           <div className="form-actions">
-            <button type="button" onClick={handleClose} className="cancel-btn">
+            <button type="button" onClick={handleClose} disabled={resumeUploading} className="cancel-btn">
               Cancel
             </button>
-            <button type="submit" disabled={loading} className="submit-btn">
+            <button type="submit" disabled={loading || resumeUploading} className="submit-btn">
               {loading ? 'Updating...' : 'Update Application'}
             </button>
           </div>

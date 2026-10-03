@@ -381,12 +381,37 @@ describe('POST /api/resume-uploads/applications/:applicationId', () => {
         supersededAt: null,
         originalName: 'fixed.pdf',
         sizeBytes: 10,
-        uploadedBy: { role: 'ADMIN' },
+        uploadedBy: { email: adminUser.email, studentId: null },
       },
     ]);
 
     const res = await request('/api/resume-uploads/applications/app-1', { user: candidateUser });
-    expect((await res.json()).versions[0].uploadedByStaff).toBe(true);
+    expect((await res.json()).versions[0]).toMatchObject({
+      uploadedByStaff: true,
+      replacedByCandidate: false,
+    });
+  });
+
+  it('still counts an upload as the applicant\'s own after they become a member', async () => {
+    prisma.resumeUpload.findMany.mockResolvedValue([
+      {
+        id: 'v2',
+        applicationId: 'app-1',
+        storagePath: 'resumes/app-1/v2.pdf',
+        sourceUrl: '/api/resume-uploads/v2/file',
+        uploadedAt: new Date('2026-09-12T12:00:00Z'),
+        supersededAt: null,
+        originalName: 'mine.pdf',
+        sizeBytes: 10,
+        uploadedBy: { email: candidateUser.email, studentId: candidateUser.studentId },
+      },
+    ]);
+
+    const res = await request('/api/resume-uploads/applications/app-1', { user: candidateUser });
+    expect((await res.json()).versions[0]).toMatchObject({
+      uploadedByStaff: false,
+      replacedByCandidate: true,
+    });
   });
 
   it('refuses an upload after the deadline has passed', async () => {
