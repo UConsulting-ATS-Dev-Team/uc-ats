@@ -16,6 +16,7 @@ describe('evaluateGuardBypass', () => {
     ['TALENT', '/api/my-interview-signups'],
     ['CANDIDATE', '/api/exec-access/status'],
     ['CANDIDATE', '/api/live-votes/active'],
+    ['TALENT', '/api/review-delibs/active'],
     ['CLIENT', '/api/decision-guides'],
     ['ANON', '/api/document-rubrics'],
     ['CANDIDATE', '/api/review-teams/member-applications/1'],
@@ -35,6 +36,7 @@ describe('evaluateGuardBypass', () => {
     ['CANDIDATE', '/api/my-interview-signups/options'],
     ['MEMBER', '/api/exec-access/status'],
     ['ADMIN', '/api/live-votes/active'],
+    ['MEMBER', '/api/review-delibs/active'],
     ['MEMBER', '/api/document-rubrics'],
     ['ADMIN', '/api/master-communications/templates'],
     ['ADMIN', '/api/admin/email-health'],
@@ -84,6 +86,7 @@ describe('isStaffOnlyPath', () => {
   it('is true for staff routers and false for everything else', () => {
     expect(isStaffOnlyPath('/api/admin/x')).toBe(true);
     expect(isStaffOnlyPath('/api/live-votes/x')).toBe(true);
+    expect(isStaffOnlyPath('/api/review-delibs/x')).toBe(true);
     expect(isStaffOnlyPath('/api/client/me')).toBe(false);
     expect(isStaffOnlyPath('/api/member/events')).toBe(false);
     expect(isStaffOnlyPath('/api/auth/login')).toBe(false);

@@ -31,6 +31,8 @@ export const GUARD_TABLE = Object.freeze([
   { prefix: '/api/exec-access', allowed: STAFF, severity: 'CRITICAL' },
   // routes/liveVotes.js L27 router.use(requireAuth, requireAdminOrMember)
   { prefix: '/api/live-votes', allowed: STAFF, severity: 'CRITICAL' },
+  // routes/reviewDelibs.js L27 router.use(requireAuth, requireAdminOrMember)
+  { prefix: '/api/review-delibs', allowed: STAFF, severity: 'CRITICAL' },
   // routes/decisionGuides.js L13 router.use(requireAuth, requireAdminOrMember)
   { prefix: '/api/decision-guides', allowed: STAFF, severity: 'CRITICAL' },
   // routes/documentRubrics.js L12 router.use(requireAuth, requireAdminOrMember)

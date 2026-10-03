@@ -80,3 +80,17 @@ export function nudgeSessionQuestions(interviewId, { at } = {}) {
     at: at instanceof Date ? at.toISOString() : at ?? null
   });
 }
+
+// Review team deliberations. Same content-free shape as the live vote nudges:
+// "session X is now at version N", never a score or a name.
+
+export const reviewDelibChannel = (sessionId) => `review-delib:${sessionId}`;
+export const REVIEW_DELIBS_CHANNEL = 'review-delibs';
+
+export function nudgeReviewDelib(sessionId, { version, kind = 'control' }) {
+  void broadcast(reviewDelibChannel(sessionId), 'state:changed', { sessionId, version, kind });
+}
+
+export function nudgeReviewDelibsGlobal({ sessionId, status }) {
+  void broadcast(REVIEW_DELIBS_CHANNEL, 'session:changed', { sessionId, status });
+}

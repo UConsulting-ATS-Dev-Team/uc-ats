@@ -224,6 +224,8 @@ The system follows a **recruiting cycle-based workflow**:
   RFC 8058 one-click `POST /one-click`
 - `/api/live-votes` - Live vote deliberations and per-round rubrics (ADMIN/MEMBER; running a
   session is admin-only)
+- `/api/review-delibs` - Review team deliberations (admins, plus members of that team; running
+  one is admin-only)
 - `/api/decision-guides` - What each interview decision means, shown to reviewers
   (ADMIN/MEMBER read, admin-only write)
 - `/api/document-rubrics` - The resume / cover letter / video grading rubrics
@@ -501,6 +503,41 @@ The system follows a **recruiting cycle-based workflow**:
 - A decision set in a live vote goes through
   [server/src/services/stagingDecisions.js](server/src/services/stagingDecisions.js), the same
   write as Staging's inline decision picker, so it feeds decision processing unchanged.
+
+**Review team deliberations:**
+- After document grading, admins meet each review team to go over its grades. An admin starts
+  a session from that team's card on Review Teams; the team's members get a join prompt and
+  follow the admin through Overview → Outliers → All candidates → Summary at
+  `/review-delib/:id`. Rules live in
+  [server/src/services/reviewDelibs/reviewDelibs.js](server/src/services/reviewDelibs/reviewDelibs.js);
+  every number is computed in [teamStats.js](server/src/services/reviewDelibs/teamStats.js),
+  which is pure and imports nothing (the tutorial capture runs it outside the server).
+- **Admins and the team's current members can watch.** Membership is re-checked on every
+  request, so someone moved off the team mid-session loses access. Members of other teams get
+  403 `NOT_ON_TEAM` and never see the prompt. A partial unique index allows one ACTIVE session
+  per team; different teams run in parallel.
+- **A grade's score is `adminScore ?? overallScore`**, the same rule Staging ranks on.
+- **An outlier is a grade far from the other graders on the same document**, far meaning at
+  least `thresholdPct` (default 30%) of the document type's max from their mean, and it must
+  be further from them than anyone else's grade. Without that second rule, 2 / 10 / 10 flags
+  the two 10s as well, because the 2 drags their "others' mean" down. When no single grade is
+  furthest (two graders, or 2 / 6 / 10) a wide gap is a **split**. It shows on everyone
+  involved and counts against nobody.
+- The walkthrough order (widest disagreement first) is fixed at launch so resolving one does
+  not reshuffle it; raising the threshold appends newly qualifying candidates.
+- **Edits are ordinary edits.** An override writes only the score row's `adminScore` through
+  `adminScorePatch`; the grader's own score stays, and clearing the override restores it. A
+  decision is `saveRoundDecision` with phase `resume`, the same write as Staging's picker.
+  Both are logged in `review_delib_changes` for the summary and leave an audit comment.
+- **Sealed candidates are identity only, and the exec unlock is ignored** (`sealedRowPredicate`,
+  not `lockedRowPredicate`): one admin's unlock says nothing about who else is on the screen.
+- Concurrency works as in live votes. `withVersionLock`
+  ([server/src/services/versionLock.js](server/src/services/versionLock.js), shared by both)
+  bumps the session's version first and holds the row lock. Clients poll the light state and
+  refetch the team view and the open card when the version moves. Supabase channels are
+  `review-delib:<id>` and `review-delibs`. A channel name can be subscribed once per page, so
+  anything else that wants to know about launches reads `useReviewDelibs()` instead of joining
+  `review-delibs` itself.
 
 **Referrals:**
 - A `Referral` arrives one of two ways, tracked by `Referral.source`. `MANUAL` is added on
