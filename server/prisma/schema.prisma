@@ -102,6 +102,8 @@ model User {
   tutorialCompletions        TutorialCompletion[]
   createdLiveVoteSessions    LiveVoteSession[]               @relation("LiveVoteSessionCreator")
   liveVoteParticipations     LiveVoteParticipant[]           @relation("LiveVoteParticipantUser")
+  createdReviewDelibs        ReviewDelibSession[]            @relation("ReviewDelibCreator")
+  reviewDelibParticipations  ReviewDelibParticipant[]        @relation("ReviewDelibParticipantUser")
   lumaGuests                 LumaGuest[]
 
   @@map("users")
@@ -425,6 +427,7 @@ model RecruitingCycle {
   helpAnnouncements         HelpAnnouncement[]
   tutorialCompletions       TutorialCompletion[]
   liveVoteSessions          LiveVoteSession[]
+  reviewDelibSessions       ReviewDelibSession[]
 
   @@map("recruiting_cycles")
 }
@@ -535,6 +538,7 @@ model Groups {
   groupMembers       GroupMember[]
   resumeScores       ResumeScore[]
   videoScores        VideoScore[]
+  reviewDelibs       ReviewDelibSession[]
 
   @@map("groups")
 }
@@ -2580,4 +2584,83 @@ model EmailEngagementEvent {
   @@index([communicationLogId])
   @@index([category, at])
   @@map("email_engagement_events")
+}
+
+// Review team deliberations: an admin walks one review team through its grades,
+// outliers first, on a screen the team watches live. See
+// services/reviewDelibs/reviewDelibs.js. At most one ACTIVE session per team is
+// a partial unique index in the migration, not expressible here.
+enum ReviewDelibStatus {
+  ACTIVE
+  ENDED
+}
+
+model ReviewDelibSession {
+  id                    String                   @id @default(uuid())
+  groupId               String
+  cycleId               String
+  status                ReviewDelibStatus        @default(ACTIVE)
+  /// OVERVIEW | OUTLIERS | ALL | SUMMARY
+  step                  String                   @default("OVERVIEW")
+  /// The candidate on screen: the outlier card, or the row opened in ALL.
+  currentApplicationId  String?
+  /// The walkthrough order, fixed at launch so resolving an outlier does not reshuffle it.
+  outlierApplicationIds Json                     @default("[]")
+  thresholdPct          Float                    @default(0.3)
+  /// Bumped by every change. Clients poll and compare it.
+  version               Int                      @default(0)
+  createdById           String
+  endedById             String?
+  startedAt             DateTime                 @default(now())
+  endedAt               DateTime?
+  updatedAt             DateTime                 @updatedAt
+  group                 Groups                   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cycle                 RecruitingCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  createdBy             User                     @relation("ReviewDelibCreator", fields: [createdById], references: [id])
+  participants          ReviewDelibParticipant[]
+  changes               ReviewDelibChange[]
+
+  @@index([groupId, status])
+  @@index([cycleId, status])
+  @@map("review_delib_sessions")
+}
+
+model ReviewDelibParticipant {
+  id         String             @id @default(uuid())
+  sessionId  String
+  userId     String
+  joinedAt   DateTime           @default(now())
+  lastSeenAt DateTime           @default(now())
+  leftAt     DateTime?
+  session    ReviewDelibSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user       User               @relation("ReviewDelibParticipantUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, userId])
+  @@index([userId])
+  @@map("review_delib_participants")
+}
+
+/// One edit made in a session: a score override or a Resume Review decision.
+/// Read back, netted, as the session summary.
+model ReviewDelibChange {
+  id            String             @id @default(uuid())
+  sessionId     String
+  userId        String
+  /// SCORE | DECISION
+  kind          String
+  applicationId String
+  candidateId   String
+  /// resume | coverLetter | video, for SCORE
+  docType       String?
+  scoreId       String?
+  evaluatorId   String?
+  fromValue     String?
+  toValue       String?
+  /// The grader's own score, for "was 4, now 8".
+  originalScore Decimal?           @db.Decimal(5, 2)
+  createdAt     DateTime           @default(now())
+  session       ReviewDelibSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("review_delib_changes")
 }

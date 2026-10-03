@@ -7,6 +7,7 @@ import { sealedApplicationIds } from '../utils/lockedRecords.js';
 import { isDecisionValue, phaseLabel, roundForPhase, saveRoundDecision } from './stagingDecisions.js';
 import { PRESENCE_WINDOW_MS, buildState, computeEligible, presentParticipants } from './liveVoteState.js';
 import { nudgeLiveVote, nudgeLiveVotesGlobal } from './realtime.js';
+import { withVersionLock } from './versionLock.js';
 
 // Live vote deliberations on Staging.
 //
@@ -122,22 +123,8 @@ export async function saveRubric({ client = prisma, phase, criteria, user }) {
  * `{ result, version }`. The version bump is the first statement on purpose: it
  * is what takes the lock, and it rolls back with everything else if `fn` throws.
  */
-export async function withSessionLock(client, sessionId, fn) {
-  return client.$transaction(async (tx) => {
-    let session;
-    try {
-      session = await tx.liveVoteSession.update({
-        where: { id: sessionId },
-        data: { version: { increment: 1 } }
-      });
-    } catch (error) {
-      if (error?.code === 'P2025') throw fail(404, 'Live vote not found', 'NOT_FOUND');
-      throw error;
-    }
-    const result = await fn(tx, session);
-    return { result, version: session.version };
-  }, TX_OPTIONS);
-}
+export const withSessionLock = (client, sessionId, fn) =>
+  withVersionLock(client, 'liveVoteSession', sessionId, fn, { notFoundMessage: 'Live vote not found' });
 
 const assertStatus = (session, ...statuses) => {
   if (statuses.includes(session.status)) return;
