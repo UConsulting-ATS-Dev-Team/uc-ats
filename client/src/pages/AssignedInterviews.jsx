@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -22,7 +22,7 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import { headshotSrc } from '../utils/headshotUrl';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
-import { groupsForMember } from '../utils/interviewGroups';
+import { groupRowProps, groupsForMember } from '../utils/interviewGroups';
 import { DecisionGuideButton, DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import { useTutorialGate } from '../components/TutorialGate';
 import { tutorialCategoryForInterviewType } from '../utils/tutorialCategories';
@@ -358,7 +358,7 @@ export default function AssignedInterviews() {
       setCandidateQuestionCount(0);
 
       // Don't load questions here - we'll load them when groups are selected
-      setBehavioralQuestionsConfig([]);
+      clearBehavioralQuestions();
     }, tutorialCategoryForInterviewType(interview?.interviewType));
   };
 
@@ -389,14 +389,26 @@ export default function AssignedInterviews() {
     });
   };
 
+  // Every pick, and closing the picker, starts a new load. A response is applied
+  // only while its load is still the latest, so switching from group A to B
+  // cannot have A's questions land late and be saved as B's.
+  const questionsLoadRef = useRef(0);
+
+  const clearBehavioralQuestions = () => {
+    questionsLoadRef.current += 1;
+    setBehavioralQuestionsConfig([]);
+  };
+
   const loadBehavioralQuestionsForGroups = async (groupIds) => {
     if (groupIds.length === 0) {
-      setBehavioralQuestionsConfig([]);
+      clearBehavioralQuestions();
       return;
     }
 
+    const load = ++questionsLoadRef.current;
     try {
       const configRes = await apiClient.get(`/member/interviews/${selectedInterviewForStart}/config?groupIds=${groupIds.join(',')}`);
+      if (load !== questionsLoadRef.current) return;
       const questionsByGroup = configRes.behavioralQuestions || {};
       
       // Flatten questions from all groups
@@ -407,6 +419,7 @@ export default function AssignedInterviews() {
       
       setBehavioralQuestionsConfig(allQuestions);
     } catch (error) {
+      if (load !== questionsLoadRef.current) return;
       console.warn('Failed to load behavioral questions for groups:', error);
       setBehavioralQuestionsConfig([]);
     }
@@ -467,7 +480,7 @@ export default function AssignedInterviews() {
     setGroupSelectionOpen(false);
     setSelectedInterviewForStart(null);
     setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
+    clearBehavioralQuestions();
     setShowBehavioralQuestionsConfig(false);
   };
 
@@ -509,7 +522,7 @@ export default function AssignedInterviews() {
     setSelectedInterviewForStart(null);
     setGroupSearchTerm('');
     setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
+    clearBehavioralQuestions();
     setShowBehavioralQuestionsConfig(false);
   };
 
@@ -770,19 +783,27 @@ export default function AssignedInterviews() {
                             const isFinalRound = interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_TWO';
                             const isRoundOne = interview?.interviewType === 'ROUND_ONE';
                             const maxGroups = isFinalRound ? 1 : (isRoundOne ? 3 : 3);
-                            const isDisabled = !isSelected && selectedGroups.length >= maxGroups;
-                            
+                            // A one-group round swaps the pick (handleGroupToggle), so
+                            // the other groups stay open rather than needing a deselect.
+                            const isDisabled = !isFinalRound && !isSelected && selectedGroups.length >= maxGroups;
+
                             return (
-                              <div 
-                                key={group.id} 
+                              <div
+                                key={group.id}
                                 className={`group-selection-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}`}
-                                onClick={() => !isDisabled && handleGroupToggle(group.id)}
+                                {...groupRowProps({
+                                  selected: isSelected,
+                                  disabled: isDisabled,
+                                  onToggle: () => handleGroupToggle(group.id)
+                                })}
                               >
                                 <div className="group-checkbox">
                                   <input
                                     type={isFinalRound ? "radio" : "checkbox"}
                                     checked={isSelected}
-                                    onChange={() => !isDisabled && handleGroupToggle(group.id)}
+                                    readOnly
+                                    tabIndex={-1}
+                                    aria-hidden="true"
                                     disabled={isDisabled}
                                   />
                                   <span className="checkmark"></span>

@@ -14,6 +14,7 @@ import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
+import { groupRowProps } from '../utils/interviewGroups';
 import {
   DecisionGuideButton,
   DecisionGuidePanel,
@@ -542,13 +543,19 @@ export default function InterviewInterface() {
                         <div 
                           key={group.id} 
                           className={`group-selection-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''} ${isEvaluated ? 'evaluated' : ''}`}
-                          onClick={() => !isDisabled && handleGroupToggle(group.id)}
+                          {...groupRowProps({
+                            selected: isSelected,
+                            disabled: isDisabled,
+                            onToggle: () => handleGroupToggle(group.id)
+                          })}
                         >
                           <div className="group-checkbox">
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={() => !isDisabled && handleGroupToggle(group.id)}
+                              readOnly
+                              tabIndex={-1}
+                              aria-hidden="true"
                               disabled={isDisabled}
                             />
                             <span className="checkmark"></span>

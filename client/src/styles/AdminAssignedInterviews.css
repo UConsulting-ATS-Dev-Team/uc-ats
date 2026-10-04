@@ -2130,10 +2130,16 @@
   flex-shrink: 0;
 }
 
+/* Drawn only: the row's click is the one toggle. When the input took the click
+   as well, a click on the box toggled the group twice and changed nothing. */
+.group-checkbox input[type="radio"] {
+  pointer-events: none;
+}
+
 .group-checkbox input[type="checkbox"] {
   position: absolute;
   opacity: 0;
-  cursor: pointer;
+  pointer-events: none;
   width: 100%;
   height: 100%;
   margin: 0;
