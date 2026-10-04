@@ -12,6 +12,8 @@ import {
   DialogTitle,
   Divider,
   Grid,
+  IconButton,
+  LinearProgress,
   List,
   ListItem,
   ListItemText,
@@ -27,20 +29,41 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { ArrowBack as ArrowBackIcon, Send as SendIcon } from '@mui/icons-material';
+import { ArrowBack as ArrowBackIcon, Edit as EditIcon, Send as SendIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 
 // Decision emails queued by Process All Decisions on Staging. Nothing here sends
 // on its own: each outcome (advancing, accepted, not moving forward) is reviewed
-// and approved separately.
+// and approved separately. Approving queues them; the server sends them in the
+// background (decisionSendQueue.js), so this page only follows along.
 
 const STATUS_CHIPS = {
   PENDING: { label: 'Ready', color: 'default' },
   EXCLUDED: { label: 'Left out', color: 'default', variant: 'outlined' },
+  QUEUED: { label: 'Queued', color: 'info', variant: 'outlined' },
   SENDING: { label: 'Sending…', color: 'info' },
   SENT: { label: 'Sent', color: 'success' },
-  FAILED: { label: 'Failed', color: 'error' }
+  FAILED: { label: 'Failed', color: 'error' },
+  UNCONFIRMED: { label: 'Unconfirmed', color: 'warning' }
 };
+
+// What SES reported after a SENT, once delivery reports are switched on.
+const DELIVERY_CHIPS = {
+  DELIVERED: { label: 'Delivered', color: 'success' },
+  CLICKED: { label: 'Delivered', color: 'success' },
+  DELAYED: { label: 'Delayed', color: 'warning' },
+  BOUNCED: { label: 'Bounced', color: 'error' },
+  COMPLAINED: { label: 'Marked spam', color: 'error' }
+};
+
+const chipFor = (message) =>
+  (message.status === 'SENT' && DELIVERY_CHIPS[message.delivery?.status]) || STATUS_CHIPS[message.status];
+
+// Same rule as isDeliverableAddress in server/src/services/decisionBatches.js.
+const ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const addressOk = (message) => message.addressOk ?? ADDRESS_PATTERN.test(String(message.email || '').trim());
+const READDRESSABLE = new Set(['PENDING', 'EXCLUDED', 'FAILED']);
+const IN_FLIGHT = new Set(['QUEUED', 'SENDING']);
 
 const MERGE_FIELDS_BY_OUTCOME = {
   ADVANCED: ['firstName', 'lastName', 'fullName', 'cycleName', 'nextRoundName', 'schedulingLink'],
@@ -63,6 +86,8 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
   const [testing, setTesting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [readdressing, setReaddressing] = useState(null);
+  const [newAddress, setNewAddress] = useState('');
 
   // A reload after saving brings the stored wording back in.
   useEffect(() => {
@@ -89,6 +114,11 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
   const ready = messages.filter((message) => message.status === 'PENDING');
   const reviewable = messages.filter((message) => message.status === 'PENDING' || message.status === 'EXCLUDED');
   const everythingSent = messages.length > 0 && reviewable.length === 0 && countBy(messages, 'FAILED') === 0;
+  const unreachable = ready.filter((message) => !addressOk(message));
+  const inFlight = messages.filter((message) => IN_FLIGHT.has(message.status)).length;
+  const unconfirmed = countBy(messages, 'UNCONFIRMED');
+  // Progress over what has been approved: finished one way or another, or still going.
+  const finished = countBy(messages, 'SENT') + countBy(messages, 'FAILED') + unconfirmed;
 
   const run = async (work, successText) => {
     try {
@@ -131,19 +161,40 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
     setSending(true);
     await run(
       () => apiClient.post(`${batchesUrl}/${batchId}/send`, { outcome, expectedCount: ready.length }),
-      (result) => result.failed
-        ? `Sent ${plural(result.sent, 'email')}. ${result.failed} failed - they are marked below and can be retried.`
-        : `Sent ${plural(result.sent, 'email')}.`
+      (result) => `${plural(result.queued, 'email')} queued. They send in the background - you can leave this page.`
     );
     setSending(false);
     setConfirmOpen(false);
   };
 
+  const stopSending = () =>
+    run(
+      () => apiClient.post(`${batchesUrl}/${batchId}/cancel`, { outcome }),
+      (result) => `Stopped. ${plural(result.stopped, 'email')} not yet sent went back to Ready.`
+    );
+
   const retryFailed = () =>
     run(
       () => apiClient.post(`${batchesUrl}/${batchId}/retry`, { outcome }),
-      (result) => `${plural(result.requeued, 'email')} back in the queue. Review and send when ready.`
+      (result) => `${plural(result.requeued, 'email')} back to Ready. Review and send when ready.`
     );
+
+  const resolve = (message, resolution) =>
+    run(
+      () => apiClient.post(`${batchesUrl}/${batchId}/resolve`, { messageIds: [message.id], resolution }),
+      resolution === 'MARK_SENT'
+        ? `${personName(message)} marked as sent.`
+        : `${personName(message)} is back to Ready. Send when you are ready.`
+    );
+
+  const saveAddress = async () => {
+    const target = readdressing;
+    const result = await run(
+      () => apiClient.patch(`${batchesUrl}/${batchId}/messages/${target.id}/email`, { email: newAddress }),
+      `${personName(target)}'s email will go to ${newAddress.trim()}.`
+    );
+    if (result) setReaddressing(null);
+  };
 
   const allIncluded = reviewable.length > 0 && reviewable.every((message) => message.status === 'PENDING');
   const someIncluded = reviewable.some((message) => message.status === 'PENDING') && !allIncluded;
@@ -157,13 +208,15 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
             <Chip size="small" label={`${ready.length} ready`} />
             {countBy(messages, 'SENT') > 0 && <Chip size="small" color="success" label={`${countBy(messages, 'SENT')} sent`} />}
             {countBy(messages, 'FAILED') > 0 && <Chip size="small" color="error" label={`${countBy(messages, 'FAILED')} failed`} />}
-            {countBy(messages, 'SENDING') > 0 && <Chip size="small" color="info" label={`${countBy(messages, 'SENDING')} sending`} />}
+            {unconfirmed > 0 && <Chip size="small" color="warning" label={`${unconfirmed} unconfirmed`} />}
+            {inFlight > 0 && <Chip size="small" color="info" label={`${inFlight} sending`} />}
             {countBy(messages, 'EXCLUDED') > 0 && (
               <Chip size="small" variant="outlined" label={`${countBy(messages, 'EXCLUDED')} left out`} />
             )}
           </Stack>
         </Box>
         <Stack direction="row" gap={1} flexWrap="wrap">
+          {countBy(messages, 'QUEUED') > 0 && <Button color="warning" onClick={stopSending}>Stop sending</Button>}
           {countBy(messages, 'FAILED') > 0 && <Button onClick={retryFailed}>Retry failed</Button>}
           <Button variant="outlined" onClick={sendTest} disabled={testing || dirty || messages.length === 0}>
             {testing ? <CircularProgress size={18} /> : userEmail ? `Send test to ${userEmail}` : 'Send test to me'}
@@ -172,12 +225,37 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
             variant="contained"
             startIcon={<SendIcon />}
             onClick={() => setConfirmOpen(true)}
-            disabled={ready.length === 0 || dirty || sending}
+            disabled={ready.length === 0 || dirty || sending || unreachable.length > 0}
           >
             Approve & send {plural(ready.length, 'email')}
           </Button>
         </Stack>
       </Stack>
+
+      {inFlight > 0 && (
+        <Box sx={{ mt: 2 }}>
+          <LinearProgress variant="determinate" value={(finished / (finished + inFlight)) * 100} />
+          <Typography variant="caption" color="text.secondary">
+            Sending: {plural(inFlight, 'email')} to go. This continues on the server if you close the page, and
+            picks up again on its own after a restart.
+          </Typography>
+        </Box>
+      )}
+
+      {unreachable.length > 0 && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {plural(unreachable.length, 'address')} below cannot receive email. Fix {unreachable.length === 1 ? 'it' : 'them'} with
+          the pencil, or leave {unreachable.length === 1 ? 'it' : 'them'} out, to turn sending back on.
+        </Alert>
+      )}
+
+      {unconfirmed > 0 && (
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          {unconfirmed === 1 ? 'One send was' : `${unconfirmed} sends were`} cut off while the email was being handed to
+          Amazon SES, so nobody can tell whether {unconfirmed === 1 ? 'it' : 'they'} arrived. For each, choose{' '}
+          <strong>Mark sent</strong> if you know it arrived, or <strong>Send again</strong>.
+        </Alert>
+      )}
 
       {dirty && (
         <Alert severity="info" sx={{ mt: 2 }}>
@@ -282,11 +360,32 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
                     <Chip size="small" variant="outlined" label="New account" sx={{ ml: 1 }} />
                   )}
                 </TableCell>
-                <TableCell>{message.email}</TableCell>
                 <TableCell>
-                  <Tooltip title={message.error || ''}>
-                    <Chip size="small" {...STATUS_CHIPS[message.status]} />
+                  {message.email}
+                  {!addressOk(message) && <Chip size="small" color="error" label="Not an address" sx={{ ml: 1 }} />}
+                  {READDRESSABLE.has(message.status) && (
+                    <IconButton
+                      size="small"
+                      aria-label={`Change ${personName(message)}'s email address`}
+                      onClick={() => {
+                        setReaddressing(message);
+                        setNewAddress(message.email);
+                      }}
+                    >
+                      <EditIcon fontSize="inherit" />
+                    </IconButton>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Tooltip title={message.delivery?.error || message.error || ''}>
+                    <Chip size="small" {...chipFor(message)} />
                   </Tooltip>
+                  {message.status === 'UNCONFIRMED' && (
+                    <Stack direction="row" gap={0.5} sx={{ mt: 0.5 }}>
+                      <Button size="small" onClick={() => resolve(message, 'MARK_SENT')}>Mark sent</Button>
+                      <Button size="small" onClick={() => resolve(message, 'SEND_AGAIN')}>Send again</Button>
+                    </Stack>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
@@ -315,6 +414,30 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
           <Button onClick={() => setConfirmOpen(false)} disabled={sending}>Cancel</Button>
           <Button variant="contained" onClick={confirmSend} disabled={sending} startIcon={<SendIcon />}>
             {sending ? <CircularProgress size={18} /> : `Send ${ready.length}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(readdressing)} onClose={() => setReaddressing(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Email address for {readdressing && personName(readdressing)}</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            margin="dense"
+            label="Email"
+            value={newAddress}
+            onChange={(event) => setNewAddress(event.target.value)}
+            error={newAddress.trim() !== '' && !ADDRESS_PATTERN.test(newAddress.trim())}
+          />
+          <Typography variant="caption" color="text.secondary">
+            Changes where this decision email goes. The application keeps the address it was submitted with.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReaddressing(null)}>Cancel</Button>
+          <Button variant="contained" onClick={saveAddress} disabled={!ADDRESS_PATTERN.test(newAddress.trim())}>
+            Save
           </Button>
         </DialogActions>
       </Dialog>
@@ -359,6 +482,16 @@ export default function DecisionBatchPanel({ cycleId, initialBatchId = null, use
       loadBatches();
     }
   }, [batchId, loadBatch, loadBatches]);
+
+  // Follow a send while the server works through it.
+  const sendingNow = Boolean(
+    batch?.groups?.some((group) => group.messages.some((message) => IN_FLIGHT.has(message.status)))
+  );
+  useEffect(() => {
+    if (!sendingNow) return undefined;
+    const timer = setInterval(loadBatch, 3000);
+    return () => clearInterval(timer);
+  }, [sendingNow, loadBatch]);
 
   const noticeBanner = notice && (
     <Alert severity={notice.severity} onClose={() => setNotice(null)} sx={{ mb: 2 }}>{notice.text}</Alert>
@@ -417,8 +550,9 @@ export default function DecisionBatchPanel({ cycleId, initialBatchId = null, use
                 <TableCell>Round</TableCell>
                 <TableCell>By</TableCell>
                 <TableCell align="right">Ready</TableCell>
+                <TableCell align="right">Sending</TableCell>
                 <TableCell align="right">Sent</TableCell>
-                <TableCell align="right">Failed</TableCell>
+                <TableCell align="right">Needs attention</TableCell>
                 <TableCell />
               </TableRow>
             </TableHead>
@@ -429,15 +563,16 @@ export default function DecisionBatchPanel({ cycleId, initialBatchId = null, use
                   <TableCell>{row.roundLabel}</TableCell>
                   <TableCell>{row.processedBy?.fullName || '—'}</TableCell>
                   <TableCell align="right">{row.counts.PENDING}</TableCell>
+                  <TableCell align="right">{(row.counts.QUEUED ?? 0) + row.counts.SENDING}</TableCell>
                   <TableCell align="right">{row.counts.SENT}</TableCell>
-                  <TableCell align="right">{row.counts.FAILED}</TableCell>
+                  <TableCell align="right">{row.counts.FAILED + (row.counts.UNCONFIRMED ?? 0)}</TableCell>
                   <TableCell align="right">
                     <Button
                       size="small"
-                      variant={row.counts.PENDING > 0 ? 'contained' : 'text'}
+                      variant={row.counts.PENDING > 0 || row.counts.UNCONFIRMED > 0 ? 'contained' : 'text'}
                       onClick={() => setBatchId(row.id)}
                     >
-                      {row.counts.PENDING > 0 ? 'Review & send' : 'Open'}
+                      {row.counts.PENDING > 0 ? 'Review & send' : row.counts.UNCONFIRMED > 0 ? 'Resolve' : 'Open'}
                     </Button>
                   </TableCell>
                 </TableRow>

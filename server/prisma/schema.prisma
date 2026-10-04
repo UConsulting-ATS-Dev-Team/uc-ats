@@ -182,9 +182,14 @@ enum DecisionOutcome {
 enum DecisionMessageStatus {
   PENDING
   EXCLUDED
+  /// Approved and waiting for the send worker (services/decisionSendQueue.js).
+  QUEUED
   SENDING
   SENT
   FAILED
+  /// The send was cut off after it may have reached SES. Nobody can tell
+  /// whether it went out, so an admin decides: mark it sent, or send it again.
+  UNCONFIRMED
 }
 
 /// One run of "Process All Decisions" on Staging. Processing changes application
@@ -226,7 +231,12 @@ model DecisionMessage {
   status            DecisionMessageStatus @default(PENDING)
   attempts          Int                   @default(0)
   sentAt            DateTime?
+  /// Who approved the send.
   sentById          String?
+  /// Set when the send is approved; the worker sends nothing before it, and a
+  /// failed attempt moves it later. Null on messages approved before the worker
+  /// existed, which is how recovery tells the two kinds of send apart.
+  nextAttemptAt     DateTime?
   error             String?
   providerMessageId String?
   createdAt         DateTime              @default(now())
@@ -237,6 +247,7 @@ model DecisionMessage {
   /// a second copy.
   @@unique([applicationId, fromRound, outcome])
   @@index([batchId, outcome, status])
+  @@index([status, nextAttemptAt])
   @@map("decision_messages")
 }
 

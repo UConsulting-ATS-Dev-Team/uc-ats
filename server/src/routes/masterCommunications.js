@@ -29,15 +29,19 @@ import {
   COMMUNICATION_STATUSES,
 } from '../services/communicationLog.js';
 import {
+  cancelQueuedDecisionEmails,
   getDecisionBatch,
   listDecisionBatches,
   previewDecisionEmail,
+  queueDecisionEmails,
   requeueFailedDecisionEmails,
-  sendDecisionEmails,
+  resolveUnconfirmedDecisionEmails,
   sendDecisionTest,
   setMessagesExcluded,
+  updateDecisionMessageEmail,
   updateDecisionTemplate,
 } from '../services/decisionBatches.js';
+import { drainDecisionQueue } from '../services/decisionSendQueue.js';
 import {
   listSavedAudiences,
   createSavedAudience,
@@ -187,19 +191,45 @@ router.post('/decision-batches/:id/test', requireAuth, requireAdmin, decisionRou
   (req) => sendDecisionTest({ batchId: req.params.id, outcome: req.body?.outcome, user: req.user })
 ));
 
+// Answers once the emails are queued. The worker sends them, starting now
+// rather than on the next cron tick, and the page follows its progress.
 router.post('/decision-batches/:id/send', requireAuth, requireAdmin, decisionRoute(
   'POST /api/master-communications/decision-batches/:id/send',
-  (req) => sendDecisionEmails({
-    batchId: req.params.id,
-    outcome: req.body?.outcome,
-    expectedCount: req.body?.expectedCount,
-    sentBy: req.user.id,
-  })
+  async (req) => {
+    const result = await queueDecisionEmails({
+      batchId: req.params.id,
+      outcome: req.body?.outcome,
+      expectedCount: req.body?.expectedCount,
+      sentBy: req.user.id,
+    });
+    if (result.queued > 0) drainDecisionQueue();
+    return result;
+  }
+));
+
+router.post('/decision-batches/:id/cancel', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/cancel',
+  (req) => cancelQueuedDecisionEmails({ batchId: req.params.id, outcome: req.body?.outcome })
 ));
 
 router.post('/decision-batches/:id/retry', requireAuth, requireAdmin, decisionRoute(
   'POST /api/master-communications/decision-batches/:id/retry',
   (req) => requeueFailedDecisionEmails({ batchId: req.params.id, outcome: req.body?.outcome })
+));
+
+router.post('/decision-batches/:id/resolve', requireAuth, requireAdmin, decisionRoute(
+  'POST /api/master-communications/decision-batches/:id/resolve',
+  (req) => resolveUnconfirmedDecisionEmails({
+    batchId: req.params.id,
+    messageIds: req.body?.messageIds,
+    resolution: req.body?.resolution,
+    resolvedBy: req.user.id,
+  })
+));
+
+router.patch('/decision-batches/:id/messages/:messageId/email', requireAuth, requireAdmin, decisionRoute(
+  'PATCH /api/master-communications/decision-batches/:id/messages/:messageId/email',
+  (req) => updateDecisionMessageEmail({ batchId: req.params.id, messageId: req.params.messageId, email: req.body?.email })
 ));
 
 router.get('/logs', requireAuth, requireAdmin, async (req, res) => {
