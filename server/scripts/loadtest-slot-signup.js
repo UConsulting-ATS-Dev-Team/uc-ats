@@ -8,12 +8,12 @@
 // Refuses to run against anything but an explicit TEST_DATABASE_URL, because
 // the whole point is to hammer a database until something gives.
 //
-// What it is actually measuring: claimWithFallback holds a serialisable
-// transaction open across several round trips, and every candidate claiming the
-// same session performs the same predicate read. That is the worst case for
-// SSI - each insert conflicts with every concurrent reader - so the questions
-// are whether capacity still holds, how many attempts it costs, and what a
-// candidate sees when the retry budget runs out.
+// What it is actually measuring: every claim on a round serialises on one row
+// lock, so claimWithFallback queues them in memory and books each batch of
+// waiting claims in one transaction. The questions are whether capacity still
+// holds and what every candidate is told. It calls the service directly, with
+// no network between it and Postgres - for what a burst costs over HTTP at
+// production's latency, run the real server against a delayed connection.
 
 import { PrismaClient } from '@prisma/client';
 import { execSync } from 'node:child_process';

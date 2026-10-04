@@ -13,6 +13,7 @@ import {
 } from '../services/emailNotifications.js';
 import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
 import { recordLoginFailed, recordLoginOk } from '../services/analytics/securityEvents.js';
+import { limitConcurrency } from '../utils/limitConcurrency.js';
 import {
   sanitizeExternalSignup,
   createVerificationToken,
@@ -21,6 +22,14 @@ import {
 } from '../utils/externalTalent.js';
 
 const router = express.Router();
+
+// bcryptjs is pure JavaScript at cost 12: about a quarter of a second of this
+// process's only thread per call. When a decision email sends ninety people to
+// sign in at once, letting every call run interleaved means all ninety finish
+// together at the end. Taking them two at a time does the same total work, but
+// the first person in is through in a quarter of a second and the average wait
+// halves.
+const passwordWork = limitConcurrency(2);
 
 /**
  * The user shape every endpoint in this file returns.
@@ -138,7 +147,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await passwordWork(() => bcrypt.hash(password, 12));
 
     // Create user, unverified. The address has been typed, not proved - the
     // same standing a talent-portal signup starts from, and for the same
@@ -251,7 +260,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const isValidPassword = await passwordWork(() => bcrypt.compare(password, user.password));
 
     if (!isValidPassword) {
       refused('wrong_password');
@@ -436,7 +445,7 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired token' });
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    const hashedPassword = await passwordWork(() => bcrypt.hash(newPassword, 12));
 
     await prisma.user.update({
       where: { id: user.id },
@@ -507,7 +516,7 @@ router.post('/register-member', async (req, res) => {
     }
     
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await passwordWork(() => bcrypt.hash(password, 12));
     
     // Create user with MEMBER role
     const user = await prisma.user.create({
@@ -602,7 +611,7 @@ router.post('/register-external', async (req, res) => {
       const user = await prisma.user.update({
         where: { id: existing.id },
         data: {
-          password: await bcrypt.hash(value.password, 12),
+          password: await passwordWork(() => bcrypt.hash(value.password, 12)),
           fullName: value.fullName,
           graduationClass: value.graduationYear,
           emailVerificationToken: token,
@@ -636,7 +645,7 @@ router.post('/register-external', async (req, res) => {
     const user = await prisma.user.create({
       data: {
         email: value.email,
-        password: await bcrypt.hash(value.password, 12),
+        password: await passwordWork(() => bcrypt.hash(value.password, 12)),
         fullName: value.fullName,
         // Four bare digits, not "Spring 2027" - see sanitizeExternalSignup.
         graduationClass: value.graduationYear,

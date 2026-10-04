@@ -156,26 +156,25 @@ export async function checkCanBookSlot(application, slotId, cycleId, client = pr
     return { status: 403, error: 'Interview scheduling is not open for your application.' };
   }
 
-  const slot = await client.interviewSlot.findUnique({
-    where: { id: slotId },
-    select: {
-      id: true,
-      interview: { select: { cycleId: true, interviewType: true, status: true } },
-    },
+  // Asked of the interview rather than the slot: a nested select is a second
+  // query, and this sits in front of every booking. No interview means no slot.
+  const interview = await client.interview.findFirst({
+    where: { slots: { some: { id: slotId } } },
+    select: { cycleId: true, interviewType: true, status: true },
   });
-  if (!slot) return { status: 404, error: 'That time slot no longer exists' };
+  if (!interview) return { status: 404, error: 'That time slot no longer exists' };
 
   // A slot from another cycle is not theirs to take, and saying so precisely
   // would confirm it exists.
-  if (slot.interview.cycleId !== cycleId) {
+  if (interview.cycleId !== cycleId) {
     return { status: 403, error: 'That time slot is not open to you.' };
   }
-  if (['CANCELLED', 'COMPLETED'].includes(slot.interview.status)) {
+  if (['CANCELLED', 'COMPLETED'].includes(interview.status)) {
     return { status: 409, error: 'That interview is no longer taking signups.' };
   }
 
   const eligibleTypes = interviewTypesForRound(application.currentRound);
-  if (!eligibleTypes.includes(slot.interview.interviewType)) {
+  if (!eligibleTypes.includes(interview.interviewType)) {
     return {
       status: 403,
       error: 'That interview is for a round you have not advanced to.',

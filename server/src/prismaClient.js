@@ -9,7 +9,7 @@ const enhanceDatabaseUrl = (url) => {
   const urlObj = new URL(url);
   
   // Optimized settings for Supabase pooler
-  urlObj.searchParams.set('connection_limit', '20');     // Increased for pooler
+  urlObj.searchParams.set('connection_limit', process.env.DATABASE_CONNECTION_LIMIT || '20');
   urlObj.searchParams.set('pool_timeout', '10');         // Reduced for pooler
   urlObj.searchParams.set('connect_timeout', '5');       // Reduced for pooler
   urlObj.searchParams.set('pgbouncer', 'true');          // Enable pgbouncer mode

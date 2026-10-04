@@ -1,11 +1,12 @@
 // Booking, cancelling and moving a candidate's place in an interview slot.
 //
-// Every operation here runs inside a Serializable transaction, and every fact
-// that decides an outcome is read inside it. That is the whole point: capacity
-// cannot be enforced by checking and then writing, because two requests for the
-// last seat both check successfully. Under Serializable, Postgres notices that
-// each insert falls inside the other's predicate read and aborts one, which
-// withSerializableTransaction retries into an honest "this slot is full".
+// Capacity cannot be enforced by checking and then writing, because two requests
+// for the last seat both check successfully. So every operation here that
+// changes who holds a seat first locks the round's sessions (lockRoundSlots /
+// lockRoundOfSlot), then reads every fact that decides the outcome, then writes,
+// all in one transaction. Holding the lock, it is the only writer in that round,
+// and under Read Committed each read after the lock sees everything the
+// previous holder committed.
 //
 // The GTKUC booking route (routes/candidate.js) does check-then-write at Read
 // Committed and can overbook. It predates this and is worth fixing separately;
@@ -15,7 +16,10 @@
 // commits, and only then does anything leave the building - because a retried
 // transaction runs its body again, and an email sent inside one goes twice.
 
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import prisma from '../prismaClient.js';
+import { createKeyedBatchQueue } from '../utils/keyedBatchQueue.js';
 import {
   SlotTransactionError,
   withSerializableTransaction,
@@ -64,51 +68,6 @@ async function loadSlotsWithCounts(tx, interviewId) {
 }
 
 /**
- * Every bookable slot for this round, across sibling interviews.
- *
- * Recruitment models a coffee chat day as two Interview rows - "Coffee Chat -
- * Round 1" in the morning and "Round 2" in the afternoon - rather than as two
- * sittings of one interview. That is a reasonable way to run it, and it is how
- * the real data is shaped, so "the other session a full candidate falls back
- * into" has to be able to cross an interview boundary.
- *
- * Sibling means: same cycle, same interviewType, not cancelled or completed.
- *
- * Reading them inside the caller's transaction is what keeps this safe. Two
- * candidates racing for the last seats of two different interviews each read
- * the other's rows, so Postgres sees the dependency and aborts one - which is
- * also the only thing enforcing "one seat per candidate per round", since a
- * unique index cannot span interviews.
- */
-async function loadRoundSlotsWithCounts(tx, interview) {
-  const siblings = await tx.interview.findMany({
-    where: {
-      cycleId: interview.cycleId,
-      interviewType: interview.interviewType,
-      status: { notIn: ['CANCELLED', 'COMPLETED'] },
-    },
-    select: { id: true },
-  });
-  const interviewIds = siblings.map((row) => row.id);
-  if (!interviewIds.includes(interview.id)) interviewIds.push(interview.id);
-
-  const slots = await tx.interviewSlot.findMany({
-    where: { interviewId: { in: interviewIds } },
-    orderBy: { startTime: 'asc' },
-  });
-  const counts = await tx.interviewSlotSignup.groupBy({
-    by: ['slotId'],
-    where: { interviewId: { in: interviewIds }, status: 'CONFIRMED' },
-    _count: { _all: true },
-  });
-  const byId = new Map(counts.map((row) => [row.slotId, row._count._all]));
-  return {
-    interviewIds,
-    slots: slots.map((slot) => ({ ...slot, confirmedCount: byId.get(slot.id) ?? 0 })),
-  };
-}
-
-/**
  * Lock every session of this round for the rest of the transaction.
  *
  * `FOR UPDATE` on the slot rows, ordered by id. The slot row itself is never
@@ -131,6 +90,62 @@ async function lockRoundSlots(tx, interview) {
     ORDER BY s.id
     FOR UPDATE OF s`;
 }
+
+/**
+ * lockRoundSlots for the round a slot belongs to, found and locked in one
+ * statement.
+ *
+ * Every write that changes who holds a seat - booking, cancelling, moving,
+ * promoting, placing - takes this lock first. Capacity is a count over rows
+ * none of them can lock individually, and Serialisable cannot referee between
+ * a Serialisable writer and the Read Committed booking batch: SSI only sees
+ * transactions that are themselves Serialisable. So they all queue on the same
+ * rows instead, and each reads only after it holds them.
+ *
+ * It must be the transaction's first statement. Under Read Committed each
+ * statement after it reads what is committed by then, which is everything the
+ * previous holder wrote.
+ */
+async function lockRoundOfSlot(tx, slotId) {
+  await tx.$queryRaw`
+    SELECT s.id
+    FROM interview_slots s
+    JOIN interviews i ON i.id = s."interviewId"
+    JOIN (
+      SELECT ri."cycleId", ri."interviewType"
+      FROM interview_slots rs
+      JOIN interviews ri ON ri.id = rs."interviewId"
+      WHERE rs.id = ${slotId}
+    ) target ON target."cycleId" = i."cycleId" AND target."interviewType" = i."interviewType"
+    WHERE i.status NOT IN ('CANCELLED', 'COMPLETED')
+    ORDER BY s.id
+    FOR UPDATE OF s`;
+}
+
+/** lockRoundOfSlot, starting from a signup rather than a slot. */
+async function lockRoundOfSignup(tx, signupId) {
+  await tx.$queryRaw`
+    SELECT s.id
+    FROM interview_slots s
+    JOIN interviews i ON i.id = s."interviewId"
+    JOIN (
+      SELECT ri."cycleId", ri."interviewType"
+      FROM interview_slot_signups su
+      JOIN interview_slots rs ON rs.id = su."slotId"
+      JOIN interviews ri ON ri.id = rs."interviewId"
+      WHERE su.id = ${signupId}
+    ) target ON target."cycleId" = i."cycleId" AND target."interviewType" = i."interviewType"
+    WHERE i.status NOT IN ('CANCELLED', 'COMPLETED')
+    ORDER BY s.id
+    FOR UPDATE OF s`;
+}
+
+/**
+ * Transaction options for anything that holds the round lock. Read Committed,
+ * because the lock is doing the work: under Serialisable a writer that queued
+ * on the lock still reads from a snapshot taken before it got it, and aborts.
+ */
+const ROUND_LOCKED = { isolationLevel: 'ReadCommitted', maxRetries: 5, timeout: 20000, maxWait: 15000 };
 
 /**
  * The rotation group an arriving candidate joins.
@@ -215,7 +230,7 @@ async function drainWaitlist(tx, startSlotId, now) {
         });
       }
 
-      // Conditional claim. Serializable already rules out a concurrent writer,
+      // Conditional claim. The round lock already rules out a concurrent writer,
       // so a zero count means an assumption broke rather than a lost race -
       // throwing rolls the whole transaction back rather than leaving the
       // released seat orphaned.
@@ -264,6 +279,288 @@ async function loadSlotForBooking(tx, slotId) {
 }
 
 /**
+ * Every booking-relevant fact about one round, read once under the round lock.
+ *
+ * A round spans sibling interviews. Recruitment models a coffee chat day as two
+ * Interview rows - "Coffee Chat - Round 1" in the morning and "Round 2" in the
+ * afternoon - rather than as two sittings of one interview, so "the other
+ * session a full candidate falls back into" has to be able to cross an
+ * interview boundary. Sibling means: same cycle, same interviewType, not
+ * cancelled or completed. The round lock is also the only thing enforcing "one
+ * seat per candidate per round", since a unique index cannot span interviews.
+ *
+ * One read per kind of fact rather than one per candidate: the confirmed count
+ * and the group labels come out of a single groupBy, and the existing signups of
+ * every candidate in the batch come out of one query. What a batch costs in
+ * round trips no longer grows with how many people are in it.
+ */
+async function loadRoundState(tx, round, applicationIds) {
+  const interviews = await tx.interview.findMany({
+    where: {
+      cycleId: round.cycleId,
+      interviewType: round.interviewType,
+      status: { notIn: ['CANCELLED', 'COMPLETED'] },
+    },
+    select: { id: true, cycleId: true, title: true, interviewType: true, status: true, location: true },
+  });
+  const interviewIds = interviews.map((row) => row.id);
+  if (interviewIds.length === 0) return { slots: [], existing: [], latestAt: 0 };
+
+  const slotRows = await tx.interviewSlot.findMany({
+    where: { interviewId: { in: interviewIds } },
+    orderBy: { startTime: 'asc' },
+  });
+  const confirmedRows = await tx.interviewSlotSignup.groupBy({
+    by: ['slotId', 'groupLabel'],
+    where: { interviewId: { in: interviewIds }, status: 'CONFIRMED' },
+    _count: { _all: true },
+  });
+  const existing = await tx.interviewSlotSignup.findMany({
+    where: { interviewId: { in: interviewIds }, applicationId: { in: applicationIds }, status: { in: LIVE_STATUSES } },
+    select: SIGNUP_SELECT,
+  });
+  const latest = await tx.interviewSlotSignup.aggregate({
+    where: { interviewId: { in: interviewIds } },
+    _max: { signedUpAt: true, waitlistedAt: true },
+  });
+  const latestAt = Math.max(
+    latest._max.signedUpAt?.getTime() ?? 0,
+    latest._max.waitlistedAt?.getTime() ?? 0
+  );
+
+  const interviewById = new Map(interviews.map((row) => [row.id, row]));
+  const slots = slotRows.map((slot) => {
+    const rows = confirmedRows.filter((row) => row.slotId === slot.id);
+    return {
+      ...slot,
+      interview: interviewById.get(slot.interviewId),
+      confirmedCount: rows.reduce((sum, row) => sum + row._count._all, 0),
+      // The shape nextLabelFrom reads. Kept current as the batch seats people.
+      labelCounts: rows
+        .filter((row) => row.groupLabel != null)
+        .map((row) => ({ groupLabel: row.groupLabel, count: row._count._all })),
+    };
+  });
+  return { slots, existing, latestAt };
+}
+
+/** Seat someone in `slot` in memory, returning the group label they get. */
+function takeSeat(slot) {
+  const groupLabel = nextLabelFrom(slot.labelCounts, slot.groupSize);
+  slot.confirmedCount += 1;
+  if (groupLabel) {
+    const row = slot.labelCounts.find((entry) => entry.groupLabel === groupLabel);
+    if (row) row.count += 1;
+    else slot.labelCounts.push({ groupLabel, count: 1 });
+  }
+  return groupLabel;
+}
+
+/** A row about to be inserted, and the SIGNUP_SELECT view of it callers get back. */
+function plannedSignup(data) {
+  const row = { id: randomUUID(), groupLabel: null, waitlistedAt: null, heldSeatId: null, ...data };
+  const view = {
+    id: row.id,
+    slotId: row.slotId,
+    interviewId: row.interviewId,
+    applicationId: row.applicationId,
+    status: row.status,
+    signedUpAt: row.signedUpAt,
+    waitlistedAt: row.waitlistedAt,
+    heldSeatId: row.heldSeatId,
+    promotedAt: null,
+  };
+  return { row, view };
+}
+
+/**
+ * Decide one claim against the in-memory round state, mutating it.
+ *
+ * The same checks and the same three outcomes as before batching; only where
+ * the facts come from changed. Throws SlotTransactionError for a refusal, which
+ * fails this claim alone.
+ */
+function decideClaim(claim, state, now, rows) {
+  const { applicationId, slotId, at } = claim;
+  const slot = state.slots.find((s) => s.id === slotId);
+  if (!slot) {
+    // Present when the claim was queued, gone now: the slot was deleted, or its
+    // interview was cancelled or completed while the claim waited.
+    throw new SlotTransactionError(409, 'That interview is no longer taking signups.');
+  }
+  const { interview } = slot;
+  if (!isCandidateBookable(slot, now)) {
+    throw new SlotTransactionError(409, 'Signup is not open for that time slot');
+  }
+  if (!canModify(slot.startTime)) {
+    throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
+  }
+
+  // Sibling interviews of the same round count as one pool, so a candidate
+  // cannot hold a seat in "Coffee Chat - Round 1" and another in "Round 2".
+  const existing = state.existing.filter((row) => row.applicationId === applicationId);
+  const confirmedRow = existing.find((row) => row.status === 'CONFIRMED');
+  if (confirmedRow?.slotId === slotId) {
+    throw new SlotTransactionError(409, 'You are already booked into that time slot');
+  }
+  if (confirmedRow) {
+    // Changing an existing booking is a move, not a fresh claim - otherwise we
+    // would cancel first and leave them momentarily seatless.
+    throw new SlotTransactionError(
+      409,
+      'You already have a time for this interview. Change it instead of booking a second one.'
+    );
+  }
+  if (existing.length > 0) {
+    throw new SlotTransactionError(409, 'You already have a pending request for this interview');
+  }
+
+  const keep = (planned) => {
+    rows.push(planned.row);
+    state.existing.push(planned.view);
+    return planned.view;
+  };
+
+  if (hasRoom(slot, slot.confirmedCount)) {
+    const confirmed = keep(
+      plannedSignup({
+        slotId,
+        interviewId: interview.id,
+        applicationId,
+        status: 'CONFIRMED',
+        groupLabel: takeSeat(slot),
+        signedUpAt: at,
+      })
+    );
+    return { outcome: 'CONFIRMED', confirmed, waitlisted: null, slot, interview };
+  }
+
+  const fallback = chooseFallbackSlot(state.slots, slotId, now);
+
+  if (!fallback) {
+    const needsPlacement = keep(
+      plannedSignup({ slotId, interviewId: interview.id, applicationId, status: 'NEEDS_PLACEMENT', signedUpAt: at })
+    );
+    return { outcome: 'NEEDS_PLACEMENT', needsPlacement, slot, interview };
+  }
+
+  // The fallback may live in a sibling interview, so the seat is filed against
+  // that one - the composite foreign key would reject it otherwise.
+  const confirmed = keep(
+    plannedSignup({
+      slotId: fallback.id,
+      interviewId: fallback.interviewId,
+      applicationId,
+      status: 'CONFIRMED',
+      groupLabel: takeSeat(fallback),
+      signedUpAt: at,
+    })
+  );
+  const waitlisted = keep(
+    plannedSignup({
+      slotId,
+      interviewId: interview.id,
+      applicationId,
+      status: 'WAITLISTED',
+      signedUpAt: at,
+      // FCFS for promotion. Each claim's own time, never the batch's: a shared
+      // timestamp would leave nextInLine ordering a batch by random id.
+      waitlistedAt: at,
+      heldSeatId: confirmed.id,
+    })
+  );
+  return { outcome: 'WAITLISTED', confirmed, waitlisted, slot, fallbackSlot: fallback, interview };
+}
+
+/**
+ * Book a batch of claims for one round in one transaction.
+ *
+ * Takes the round lock, reads the round once, decides every claim in arrival
+ * order against that state, and writes every row in one insert. Under the lock
+ * that is a fixed handful of round trips however large the batch.
+ *
+ * Read Committed, with the row lock doing the work. Serialisable here aborts
+ * nearly every claim in a burst: at 200 simultaneous claims it failed 137, and
+ * adding the lock on top made it 162, because a queued transaction whose
+ * snapshot went stale aborts regardless. Under Read Committed a waiter simply
+ * re-reads after acquiring the lock.
+ */
+async function runClaimBatch(round, claims) {
+  return withSerializableTransaction(
+    prisma,
+    async (tx) => {
+      const now = new Date();
+      // Take the round's sessions under a row lock before reading anything
+      // about who is in them. Another server instance has its own queue, so
+      // this lock is what keeps two instances' batches apart.
+      await lockRoundSlots(tx, round);
+      const state = await loadRoundState(tx, round, [...new Set(claims.map((claim) => claim.applicationId))]);
+
+      // Timestamps follow the order seats are handed out in: this batch after
+      // everything already in the round, and claims within it in arrival
+      // order, a millisecond apart. Taken from the round rather than from each
+      // server's clock, so two instances whose batches interleave, or whose
+      // clocks disagree, still leave signedUpAt and waitlistedAt in the order
+      // the lock decided.
+      const firstAt = Math.max(now.getTime(), state.latestAt + 1);
+
+      const rows = [];
+      const outcomes = claims.map((claim, i) => {
+        try {
+          return { value: decideClaim({ ...claim, at: new Date(firstAt + i) }, state, now, rows) };
+        } catch (error) {
+          if (error instanceof SlotTransactionError) return { error };
+          throw error;
+        }
+      });
+      // Held seats sit before the waitlist rows that point at them, though
+      // Postgres checks the self-reference at the end of the statement anyway.
+      if (rows.length > 0) await tx.interviewSlotSignup.createMany({ data: rows });
+      return outcomes;
+    },
+    ROUND_LOCKED
+  );
+}
+
+// Failures that say the database is unreachable or overloaded, not that any one
+// claim is wrong. withSerializableTransaction has already retried them; going
+// round again claim by claim would hold the whole round's queue through a
+// timeout per claim.
+const DATABASE_UNAVAILABLE = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2028', 'P2034']);
+
+/** Could running each claim alone get past this error? Only if a claim caused it. */
+const isClaimSpecific = (error) =>
+  error instanceof Prisma.PrismaClientKnownRequestError && !DATABASE_UNAVAILABLE.has(error.code);
+
+/**
+ * The batch runner the queue calls. A batch that fails on something a claim
+ * caused - say, a unique index tripped by an admin placing that candidate at the
+ * same moment - is retried one claim at a time, so the bad claim fails only
+ * itself. A batch that fails because the database is down fails every claim at
+ * once.
+ */
+async function runClaimBatchIsolatingFailures(_key, claims) {
+  const { round } = claims[0];
+  try {
+    return await runClaimBatch(round, claims);
+  } catch (error) {
+    if (claims.length === 1 || !isClaimSpecific(error)) return claims.map(() => ({ error }));
+    console.error(`[claimWithFallback] batch of ${claims.length} failed; retrying one at a time`, error);
+    const outcomes = [];
+    for (const claim of claims) {
+      try {
+        outcomes.push((await runClaimBatch(round, [claim]))[0]);
+      } catch (single) {
+        outcomes.push({ error: single });
+      }
+    }
+    return outcomes;
+  }
+}
+
+const enqueueClaim = createKeyedBatchQueue(runClaimBatchIsolatingFailures);
+
+/**
  * Book a candidate into the slot they asked for, or the best available fallback.
  *
  * Three outcomes, and the candidate always learns which:
@@ -274,140 +571,33 @@ async function loadSlotForBooking(tx, slotId) {
  *                      do not leave them silently queued with nothing; the row
  *                      is filed, recruitment is emailed, and an admin places
  *                      them by hand.
+ *
+ * Claims for the same round wait their turn in memory and are booked together
+ * (runClaimBatch). Every claim in a round serialises on the round lock anyway,
+ * so a decision email landing in ninety inboxes used to mean ninety
+ * transactions in single file, each holding a pooled connection while it waited
+ * and each paying several network round trips under the lock. Batched, the same
+ * burst is a few transactions.
  */
 export async function claimWithFallback({ applicationId, slotId, cycleId }) {
-  const now = new Date();
+  // Read outside any transaction: this only decides which queue the claim
+  // joins. Everything that decides the outcome is re-read under the lock.
+  // Asked of the interview rather than the slot: a nested select is a second
+  // query, and against a database 25ms away each one is felt.
+  const interview = await prisma.interview.findFirst({
+    where: { slots: { some: { id: slotId } } },
+    select: { cycleId: true, interviewType: true, status: true },
+  });
+  if (!interview) throw new SlotTransactionError(404, 'That time slot no longer exists');
+  if (cycleId && interview.cycleId !== cycleId) {
+    throw new SlotTransactionError(400, 'That interview belongs to a different recruiting cycle');
+  }
+  if (interview.status === 'CANCELLED') {
+    throw new SlotTransactionError(409, 'That interview has been cancelled');
+  }
 
-  return withSerializableTransaction(
-    prisma,
-    async (tx) => {
-    const slot = await loadSlotForBooking(tx, slotId);
-    const { interview } = slot;
-
-    if (cycleId && interview.cycleId !== cycleId) {
-      throw new SlotTransactionError(400, 'That interview belongs to a different recruiting cycle');
-    }
-    if (interview.status === 'CANCELLED') {
-      throw new SlotTransactionError(409, 'That interview has been cancelled');
-    }
-    if (!isCandidateBookable(slot, now)) {
-      throw new SlotTransactionError(409, 'Signup is not open for that time slot');
-    }
-    if (!canModify(slot.startTime)) {
-      throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
-    }
-
-    // Take the round's sessions under a row lock before reading anything about
-    // who is in them.
-    //
-    // Serialisable alone is correct here but not survivable: every claim reads
-    // the same "how many are confirmed" predicate, so under a burst each insert
-    // conflicts with every concurrent reader and Postgres aborts nearly all of
-    // them. Measured at 200 simultaneous claims, 137 exhausted the retry budget
-    // and failed - correct, and useless.
-    //
-    // A lock turns that contention into a queue. Claims wait their turn instead
-    // of racing and losing, which is what a candidate wants: the seat is gone or
-    // it is not, and either answer beats an error. Ordered by id so two claims
-    // touching the same pair of sessions cannot deadlock.
-    await lockRoundSlots(tx, interview);
-
-    // Sibling interviews of the same round count as one pool, so a candidate
-    // cannot hold a seat in "Coffee Chat - Round 1" and another in "Round 2".
-    const { interviewIds, slots } = await loadRoundSlotsWithCounts(tx, interview);
-
-    const existing = await tx.interviewSlotSignup.findMany({
-      where: { interviewId: { in: interviewIds }, applicationId, status: { in: LIVE_STATUSES } },
-      select: SIGNUP_SELECT,
-    });
-    const confirmedRow = existing.find((row) => row.status === 'CONFIRMED');
-    if (confirmedRow?.slotId === slotId) {
-      throw new SlotTransactionError(409, 'You are already booked into that time slot');
-    }
-    if (confirmedRow) {
-      // Changing an existing booking is a move, not a fresh claim - otherwise we
-      // would cancel first and leave them momentarily seatless.
-      throw new SlotTransactionError(
-        409,
-        'You already have a time for this interview. Change it instead of booking a second one.'
-      );
-    }
-    if (existing.length > 0) {
-      throw new SlotTransactionError(409, 'You already have a pending request for this interview');
-    }
-
-    const preferred = slots.find((s) => s.id === slotId);
-
-    if (hasRoom(preferred, preferred.confirmedCount)) {
-      const signup = await tx.interviewSlotSignup.create({
-        data: {
-          slotId,
-          interviewId: interview.id,
-          applicationId,
-          status: 'CONFIRMED',
-          groupLabel: await nextGroupLabel(tx, preferred),
-        },
-        select: SIGNUP_SELECT,
-      });
-      return { outcome: 'CONFIRMED', confirmed: signup, waitlisted: null, slot, interview };
-    }
-
-    const fallback = chooseFallbackSlot(slots, slotId, now);
-
-    if (!fallback) {
-      const unplaced = await tx.interviewSlotSignup.create({
-        data: {
-          slotId,
-          interviewId: interview.id,
-          applicationId,
-          status: 'NEEDS_PLACEMENT',
-          signedUpAt: now,
-        },
-        select: SIGNUP_SELECT,
-      });
-      return { outcome: 'NEEDS_PLACEMENT', needsPlacement: unplaced, slot, interview };
-    }
-
-    const heldSeat = await tx.interviewSlotSignup.create({
-      // The fallback may live in a sibling interview, so the seat is filed
-      // against that one - the composite foreign key would reject it otherwise.
-      data: {
-        slotId: fallback.id,
-        interviewId: fallback.interviewId,
-        applicationId,
-        status: 'CONFIRMED',
-        groupLabel: await nextGroupLabel(tx, fallback),
-      },
-      select: SIGNUP_SELECT,
-    });
-    const waitlisted = await tx.interviewSlotSignup.create({
-      data: {
-        slotId,
-        interviewId: interview.id,
-        applicationId,
-        status: 'WAITLISTED',
-        waitlistedAt: now,
-        heldSeatId: heldSeat.id,
-      },
-      select: SIGNUP_SELECT,
-    });
-
-    return {
-      outcome: 'WAITLISTED',
-      confirmed: heldSeat,
-      waitlisted,
-      slot,
-      fallbackSlot: fallback,
-      interview,
-    };
-    },
-    // Read Committed, with the row lock above doing the work. Serialisable here
-    // aborts nearly every claim in a burst: at 200 simultaneous claims it failed
-    // 137, and adding the lock on top made it 162, because a queued transaction
-    // whose snapshot went stale aborts regardless. Under Read Committed the
-    // waiters simply re-read after acquiring the lock.
-    { isolationLevel: 'ReadCommitted', maxRetries: 5, timeout: 20000, maxWait: 15000 }
-  );
+  const round = { cycleId: interview.cycleId, interviewType: interview.interviewType };
+  return enqueueClaim(`${round.cycleId}:${round.interviewType}`, { applicationId, slotId, round });
 }
 
 /**
@@ -422,6 +612,7 @@ export async function cancelSignup({ signupId, actorId = null, reason = null, is
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: { include: { interview: { select: { id: true, title: true, interviewType: true } } } } },
@@ -466,7 +657,7 @@ export async function cancelSignup({ signupId, actorId = null, reason = null, is
       promotions: [...promotions, ...alsoDrained],
       interview: signup.slot.interview,
     };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -492,6 +683,9 @@ export async function moveSignup({
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    // The booking's round. A target in another round is refused below, so this
+    // is the only round a move can change.
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: true },
@@ -579,7 +773,7 @@ export async function moveSignup({
     // time from a reshuffle that lands on the same one - the difference between
     // an email a candidate needs and one that worries them for nothing.
     return { moved, vacatedSlotId, releasedSeatId, promotions, overCapacity, target, fromSlot: signup.slot, fromStatus: signup.status };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -597,6 +791,7 @@ export async function promoteFromWaitlist({ signupId, actorId, force = false }) 
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: true },
@@ -641,7 +836,7 @@ export async function promoteFromWaitlist({ signupId, actorId, force = false }) 
     const promotions = releasedSlotId ? await drainWaitlist(tx, releasedSlotId, now) : [];
 
     return { promoted, releasedSlotId, promotions, overCapacity };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -658,6 +853,7 @@ export async function placeCandidate({
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSlot(tx, slotId);
     const slot = await loadSlotForBooking(tx, slotId);
     if (slot.interviewId !== interviewId) {
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
@@ -695,7 +891,7 @@ export async function placeCandidate({
     });
 
     return { placed, overCapacity, slot };
-  });
+  }, ROUND_LOCKED);
 }
 
-export { drainWaitlist, loadSlotsWithCounts, LIVE_STATUSES };
+export { drainWaitlist, isClaimSpecific, loadSlotsWithCounts, LIVE_STATUSES };
