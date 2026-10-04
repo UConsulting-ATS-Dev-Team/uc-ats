@@ -548,7 +548,8 @@ export default function InterviewInterface() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={() => !isDisabled && handleGroupToggle(group.id)}
+                              readOnly
+                              tabIndex={-1}
                               disabled={isDisabled}
                             />
                             <span className="checkmark"></span>
