@@ -276,6 +276,9 @@ async function loadSlotForBooking(tx, slotId) {
     include: { interview: { select: { id: true, cycleId: true, title: true, interviewType: true, status: true, location: true } } },
   });
   if (!slot) throw new SlotTransactionError(404, 'That time slot no longer exists');
+  if (slot.interview.status === 'CANCELLED') {
+    throw new SlotTransactionError(409, 'That interview has been cancelled');
+  }
   return slot;
 }
 
@@ -761,6 +764,7 @@ export async function moveSignup({
     // If they were waitlisted and holding a seat elsewhere, that seat is now
     // surplus - release it, and let its slot's queue have it.
     let releasedSeatId = null;
+    let releasedPromotions = [];
     if (signup.heldSeatId) {
       const released = await tx.interviewSlotSignup.update({
         where: { id: signup.heldSeatId },
@@ -768,10 +772,12 @@ export async function moveSignup({
         select: { id: true, slotId: true },
       });
       releasedSeatId = released.id;
-      await drainWaitlist(tx, released.slotId, now);
+      // Returned with the rest: somebody promoted into the released seat is
+      // owed the same email as somebody promoted into the vacated one.
+      releasedPromotions = await drainWaitlist(tx, released.slotId, now);
     }
 
-    const promotions = await drainWaitlist(tx, vacatedSlotId, now);
+    const promotions = [...(await drainWaitlist(tx, vacatedSlotId, now)), ...releasedPromotions];
 
     // fromSlot travels with the result so callers can tell a real change of
     // time from a reshuffle that lands on the same one - the difference between
@@ -863,14 +869,34 @@ export async function placeCandidate({
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
     }
 
+    // Searched across the whole round, not just this interview. Sibling
+    // interviews share one pool (see loadRoundState), so somebody holding a seat
+    // in the morning block, or in a virtual coffee chat, would otherwise be
+    // given a second seat here.
     const existing = await tx.interviewSlotSignup.findMany({
-      where: { interviewId, applicationId, status: { in: LIVE_STATUSES } },
+      where: {
+        applicationId,
+        status: { in: LIVE_STATUSES },
+        slot: {
+          interview: {
+            cycleId: slot.interview.cycleId,
+            interviewType: slot.interview.interviewType,
+            status: { notIn: ['CANCELLED', 'COMPLETED'] },
+          },
+        },
+      },
       select: SIGNUP_SELECT,
     });
 
-    // Already somewhere in this interview: that is a move, and moving keeps the
-    // audit trail and the waitlist bookkeeping intact.
-    const live = existing.find((row) => row.status === 'CONFIRMED') ?? existing[0];
+    // Already somewhere in this round: that is a move, and moving keeps the
+    // audit trail and the waitlist bookkeeping intact. A waitlist row is the one
+    // to move when there is one: moving it confirms them here and releases the
+    // seat it was holding. Moving the held seat instead would leave the waitlist
+    // entry behind, and its later promotion would pull them back out of here.
+    const live =
+      existing.find((row) => row.status === 'WAITLISTED') ??
+      existing.find((row) => row.status === 'CONFIRMED') ??
+      existing[0];
     if (live) {
       if (live.slotId === slotId && live.status === 'CONFIRMED') {
         throw new SlotTransactionError(409, 'That candidate is already in this time slot');
@@ -895,6 +921,34 @@ export async function placeCandidate({
     });
 
     return { placed, overCapacity, slot };
+  }, ROUND_LOCKED);
+}
+
+/**
+ * Mark an interview CANCELLED while holding its round lock, and return the seats
+ * still live in it.
+ *
+ * Under the lock no placement or move can be half-done, and every one after it
+ * reads CANCELLED in loadSlotForBooking and is refused. So the seats returned
+ * here are all the seats there will ever be, and releasing them leaves nobody
+ * booked into a cancelled interview.
+ *
+ * Repeatable. On an interview that is already CANCELLED it changes nothing and
+ * returns whatever is still live, which is how a cancellation that stopped part
+ * way gets finished. Returns null only for a COMPLETED interview.
+ */
+export async function closeInterviewToBookings({ interviewId, slotId }) {
+  return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSlot(tx, slotId);
+    const current = await tx.interview.findUnique({ where: { id: interviewId }, select: { status: true } });
+    if (!current || current.status === 'COMPLETED') return null;
+    if (current.status !== 'CANCELLED') {
+      await tx.interview.update({ where: { id: interviewId }, data: { status: 'CANCELLED' } });
+    }
+    return tx.interviewSlotSignup.findMany({
+      where: { interviewId, status: { in: LIVE_STATUSES } },
+      select: { id: true },
+    });
   }, ROUND_LOCKED);
 }
 

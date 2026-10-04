@@ -223,7 +223,13 @@ export default function InterviewStaffingSignup() {
                     </Stack>
                   </CardContent>
                   <CardActions sx={{ px: 2, pb: 2 }}>
-                    {mine ? (
+                    {/* Recruitment staffs a virtual coffee chat; the server
+                        refuses a member's claim or drop on one. */}
+                    {interview.isVirtual ? (
+                      <Typography variant="caption" color="text.secondary">
+                        Virtual coffee chat, assigned by recruitment. Ask them to make changes.
+                      </Typography>
+                    ) : mine ? (
                       <Button size="small" color="error" disabled={busy} onClick={() => drop(slot.yourAssignmentId)}>
                         Drop this session
                       </Button>

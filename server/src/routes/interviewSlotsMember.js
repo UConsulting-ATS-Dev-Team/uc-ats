@@ -99,14 +99,23 @@ router.get('/interview-slots', async (req, res) => {
       },
     });
 
+    // A virtual coffee chat is not open to claim, so it is listed only to the
+    // members recruitment put on it.
+    const visible = interviews.filter(
+      (interview) =>
+        !interview.isVirtual ||
+        interview.slots.some((slot) => slot.assignments.some((a) => a.userId === req.user.id))
+    );
+
     res.json({
-      interviews: interviews
+      interviews: visible
         .filter((interview) => interview.slots.length > 0)
         .map((interview) => ({
           id: interview.id,
           title: interview.title,
           interviewType: interview.interviewType,
           location: interview.location,
+          isVirtual: interview.isVirtual,
           slots: interview.slots.map((slot) => ({
             id: slot.id,
             label: slot.label,
@@ -142,11 +151,15 @@ router.post('/interview-slots/:id/claim', async (req, res) => {
     const result = await withSerializableTransaction(prisma, async (tx) => {
       const slot = await tx.interviewSlot.findUnique({
         where: { id },
-        include: { interview: { select: { id: true, cycleId: true, status: true } } },
+        include: { interview: { select: { id: true, cycleId: true, status: true, isVirtual: true } } },
       });
       if (!slot) throw new SlotTransactionError(404, 'That session no longer exists');
       if (slot.interview.status === 'CANCELLED') {
         throw new SlotTransactionError(409, 'That interview has been cancelled');
+      }
+      // Recruitment picks who runs a virtual coffee chat.
+      if (slot.interview.isVirtual) {
+        throw new SlotTransactionError(403, 'Virtual coffee chats are staffed by recruitment');
       }
 
       const existing = await tx.interviewSlotAssignment.findFirst({
@@ -205,9 +218,20 @@ router.delete('/interview-slot-assignments/:id', async (req, res) => {
   try {
     const assignment = await prisma.interviewSlotAssignment.findUnique({
       where: { id: req.params.id },
-      select: { id: true, userId: true, removedAt: true, slotId: true },
+      select: {
+        id: true,
+        userId: true,
+        removedAt: true,
+        slotId: true,
+        slot: { select: { interview: { select: { isVirtual: true } } } },
+      },
     });
     if (!assignment) return res.status(404).json({ error: 'That signup no longer exists' });
+    // Recruitment put them on it, so recruitment takes them off: the applicants
+    // in a virtual chat are waiting on a call, not a table that others share.
+    if (assignment.slot?.interview?.isVirtual && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Ask recruitment to take you off a virtual coffee chat' });
+    }
 
     // A member drops their own; an admin can drop anyone's.
     const isOwner = assignment.userId === req.user.id;

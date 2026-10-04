@@ -243,6 +243,8 @@ The system follows a **recruiting cycle-based workflow**:
   recruiting-interest list: upload the CSV, get back what the ATS has never seen
 - `/api/master-communications/audiences` - Saved audiences (named filter trees);
   `/audience-options` feeds the builder; `/suppressions` is the unsubscribe list
+- `/api/admin/virtual-coffee-chats` - Video-call coffee chats an admin schedules by hand:
+  create, edit, cancel, and add or remove applicants and interviewers
 - `/api/admin/email-health` - Administration → Email Deliverability: the health report and
   `POST /test`, a real send to check end to end
 - `/api/unsubscribe` - Public, token-gated: the footer link's page actions and the
@@ -333,6 +335,39 @@ The system follows a **recruiting cycle-based workflow**:
   from `POST /api/exec-access/unlock`) sees everything. Any new route that returns scores,
   evaluations, comments or application content must go through these helpers.
 - The first executive password is set with `node scripts/set-exec-password.js`.
+
+**Virtual coffee chats:**
+- Interviews → Coffee Chats → Virtual coffee chats. An admin creates a call (day, Pacific
+  start and end, meeting link, notes) and adds any number of applicants and interviewers,
+  one-on-one or a group, at creation or later. Nobody else can put themselves in one.
+- Each chat is a `COFFEE_CHAT` `Interview` with `isVirtual` set and exactly one session
+  whose `candidateCapacity` is null. `Interview.location` holds the meeting link (or
+  `NO_LINK_YET`), so the emails, the `.ics` and My Interviews show it unchanged, and
+  interviewers run and evaluate it like any coffee chat session.
+- Rules live in [server/src/services/virtualCoffeeChats.js](server/src/services/virtualCoffeeChats.js).
+  Applicants must be in the coffee chat round of the admin cycle and not rejected. Seats go
+  through `placeCandidate` / `moveSignup`, so somebody holding an in-person seat is **moved**
+  into the chat, never given a second seat; `placeCandidate` checks the whole round, not
+  just one interview, for exactly this.
+- Candidates cannot book one, since its capacity is null. They cannot switch or cancel
+  out of one either (`409 VIRTUAL_CHAT_LOCKED`), and see no in-person times while they
+  hold one (`reason: SCHEDULED_BY_RECRUITMENT`). Members cannot claim or drop it. The
+  generic interview and session endpoints refuse to add a session, give it seats, change
+  its time, link or status, reschedule it, or delete it (`409`): only the chat's own
+  routes email the people in it.
+- Every change is scoped to the admin cycle, like the list, so a stale tab cannot edit
+  last cycle's chats.
+- Cancelling closes the interview under the round lock first (`closeInterviewToBookings`)
+  and only then releases the seats it reports. `placeCandidate` and `moveSignup` refuse a
+  cancelled interview, so nothing can join one mid-cancel. Each seat is released on its
+  own; if any fail, the chat stays listed as "Cancelled · N still booked" and cancelling
+  again releases what is left.
+- Placing someone sends `CONFIRMATION` (or `MOVED_BY_ADMIN` if they were moved);
+  interviewers get `INTERVIEWER_ASSIGNED`. Changing the time or link emails everyone;
+  removing someone or cancelling emails those affected. A virtual chat's email adds a
+  "Join the call" button. All of it is behind `SCHEDULING_EMAILS` like every slot email.
+- Cancelling marks the interview `CANCELLED` after releasing every seat; evaluations
+  already written are kept.
 
 **Decision processing:**
 - The four `POST /api/admin/process-*-decisions` endpoints share

@@ -72,6 +72,30 @@ const fail = (res, error, fallback) => {
 /// round can be set up before anybody reaches it.
 const SCHEDULABLE_ROUNDS = ['2', '3', '4'];
 
+/// A virtual coffee chat is one call: its session is created with it, and its
+/// time is changed from the Virtual coffee chats panel.
+const VIRTUAL_HAS_ONE_SESSION = 'A virtual coffee chat has exactly one session. Change its time from the chat instead.';
+const VIRTUAL_USE_PANEL =
+  "Change a virtual coffee chat from Interviews > Coffee Chats > Virtual coffee chats, so the people in it are emailed.";
+
+/**
+ * Whether an interview, or the interview a session belongs to, is a virtual
+ * coffee chat. Its time, link and existence go through
+ * services/virtualCoffeeChats.js, which emails everyone in it; the generic
+ * endpoints here would change them silently.
+ */
+async function isVirtualChat({ interviewId, slotId }) {
+  if (interviewId) {
+    const row = await prisma.interview.findUnique({ where: { id: interviewId }, select: { isVirtual: true } });
+    return Boolean(row?.isVirtual);
+  }
+  const row = await prisma.interviewSlot.findUnique({
+    where: { id: slotId },
+    select: { interview: { select: { isVirtual: true } } },
+  });
+  return Boolean(row?.interview?.isVirtual);
+}
+
 const parseTime = (value) => {
   if (value == null) return null;
   const date = new Date(value);
@@ -213,6 +237,7 @@ router.get('/scheduling/overview', async (req, res) => {
         location: true,
         startDate: true,
         status: true,
+        isVirtual: true,
         slots: {
           orderBy: { startTime: 'asc' },
           include: {
@@ -221,7 +246,18 @@ router.get('/scheduling/overview', async (req, res) => {
               orderBy: [{ waitlistedAt: 'asc' }, { signedUpAt: 'asc' }],
               include: {
                 application: {
-                  select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
+                  // currentRound and status decide whether a virtual booking
+                  // still counts toward this round (stats.virtualPlaced).
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    email: true,
+                    major1: true,
+                    graduationYear: true,
+                    currentRound: true,
+                    status: true,
+                  },
                 },
               },
             },
@@ -280,6 +316,7 @@ router.get('/scheduling/overview', async (req, res) => {
             confirmedCount: confirmed.length,
             isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
             isBookable: slot.candidateCapacity != null,
+            isVirtual: interview.isVirtual,
             signups: slot.signups.map((signup) => ({
               id: signup.id,
               status: signup.status,
@@ -326,12 +363,39 @@ router.get('/scheduling/overview', async (req, res) => {
           interviewTypesForRound(round).find((type) => type !== 'ROUND_TWO') ??
           interviewTypesForRound(round)[0] ??
           null,
-        interviews: roundInterviews.map((i) => ({ id: i.id, title: i.title, startDate: i.startDate, status: i.status })),
+        interviews: roundInterviews.map((i) => ({
+          id: i.id,
+          title: i.title,
+          startDate: i.startDate,
+          status: i.status,
+          isVirtual: i.isVirtual,
+        })),
         slots,
         unassigned,
         stats: {
           eligible: eligibleCount.get(round) ?? 0,
-          sessions: slots.length,
+          // Virtual coffee chats are counted apart: they are never open to
+          // signup by design, and counting them here would raise "none are
+          // open to candidates" for a round that only has virtual chats so far.
+          sessions: slots.filter((s) => !s.isVirtual).length,
+          virtualSessions: slots.filter((s) => s.isVirtual).length,
+          // Applicants already holding a virtual chat need no in-person seat,
+          // so the page takes them off before comparing seats with people.
+          // Only people still counted in `eligible`: a booking left behind by
+          // somebody who has since advanced or been rejected would otherwise
+          // hide a real shortage.
+          virtualPlaced: new Set(
+            slots
+              .filter((s) => s.isVirtual)
+              .flatMap((s) => s.signups)
+              .filter(
+                (x) =>
+                  x.status === 'CONFIRMED' &&
+                  x.candidate?.currentRound === round &&
+                  x.candidate?.status !== 'REJECTED'
+              )
+              .map((x) => x.applicationId)
+          ).size,
           bookableSessions: bookable.length,
           openSessions,
           seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
@@ -839,6 +903,13 @@ router.patch('/interviews/:id', async (req, res) => {
       return res.status(400).json({ error: 'The end time must be after the start time' });
     }
 
+    const touchesSchedule = ['startDate', 'endDate', 'location', 'interviewType', 'status'].some(
+      (field) => data[field] !== undefined
+    );
+    if (touchesSchedule && (await isVirtualChat({ interviewId: req.params.id }))) {
+      return res.status(409).json({ error: VIRTUAL_USE_PANEL });
+    }
+
     const interview = await prisma.interview.update({ where: { id: req.params.id }, data });
 
     // Moving the interview does not move its sessions: those carry their own
@@ -858,6 +929,7 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
   try {
     const { id } = req.params;
     const { day, shiftMinutes } = req.body ?? {};
+    if (await isVirtualChat({ interviewId: id })) return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     const slots = await prisma.interviewSlot.findMany({ where: { interviewId: id } });
     if (slots.length === 0) return res.status(409).json({ error: 'This interview has no sessions to move' });
 
@@ -1184,8 +1256,9 @@ router.post('/interviews/:id/slots', async (req, res) => {
     if (!start || !end) return res.status(400).json({ error: 'A valid start and end time are required' });
     if (end <= start) return res.status(400).json({ error: 'The end time must be after the start time' });
 
-    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true, isVirtual: true } });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
 
     const slot = await prisma.interviewSlot.create({
       data: {
@@ -1214,9 +1287,10 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
 
     const interview = await prisma.interview.findUnique({
       where: { id },
-      select: { id: true, interviewType: true, startDate: true, endDate: true },
+      select: { id: true, interviewType: true, startDate: true, endDate: true, isVirtual: true },
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
 
     const rows = [];
 
@@ -1298,6 +1372,16 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.candidateCapacity !== undefined) {
       data.candidateCapacity = body.candidateCapacity == null ? null : Number(body.candidateCapacity);
     }
+    // A virtual chat's time and link are changed from its own panel, which
+    // emails everyone in it and keeps the interview's dates in step. A seat
+    // count would open it to self-signup, which nobody gets.
+    const touchesVirtual =
+      data.startTime || data.endTime || data.location !== undefined || data.candidateCapacity != null;
+    if (touchesVirtual && (await isVirtualChat({ slotId }))) {
+      return res.status(409).json({
+        error: data.candidateCapacity != null ? 'A virtual coffee chat cannot be opened to candidate signup' : VIRTUAL_USE_PANEL,
+      });
+    }
     if (body.interviewerCapacity !== undefined) {
       data.interviewerCapacity = body.interviewerCapacity == null ? null : Number(body.interviewerCapacity);
     }
@@ -1333,6 +1417,8 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
 router.delete('/interviews/slots/:slotId', async (req, res) => {
   try {
     const { slotId } = req.params;
+    // Its only session: deleting it leaves a chat nobody can run. Cancel the chat.
+    if (await isVirtualChat({ slotId })) return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     const live = await prisma.interviewSlotSignup.count({
       where: { slotId, status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] } },
     });

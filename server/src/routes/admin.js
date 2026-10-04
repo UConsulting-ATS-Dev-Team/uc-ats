@@ -2341,6 +2341,11 @@ router.delete('/interviews/:id', async (req, res) => {
     if (!interview) {
       return res.status(404).json({ error: 'Interview not found' });
     }
+    // Deleting a virtual coffee chat would drop everyone's seat without a word.
+    // Cancelling it from its panel releases the seats and emails them.
+    if (interview.isVirtual) {
+      return res.status(409).json({ error: 'Cancel a virtual coffee chat from its panel instead of deleting it.' });
+    }
     // Delete dependent records first to satisfy FK constraints
     const ops = [];
     if (prisma.interviewAssignment?.deleteMany) {

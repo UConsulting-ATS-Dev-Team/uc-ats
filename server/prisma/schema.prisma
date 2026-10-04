@@ -914,6 +914,12 @@ model Interview {
   dresscode             String?
   maxCandidates         Int?
   currentCandidates     Int                             @default(0)
+  /// A video call that recruitment schedules by hand: an admin picks who is in
+  /// it and who runs it, and nobody signs up. Its session has no candidate
+  /// capacity, members cannot claim it, and a candidate placed in it cannot
+  /// move or cancel it themselves. `location` holds the meeting link.
+  /// Rules live in services/virtualCoffeeChats.js.
+  isVirtual             Boolean                         @default(false)
   status                InterviewStatus                 @default(UPCOMING)
   cycleId               String
   createdBy             String

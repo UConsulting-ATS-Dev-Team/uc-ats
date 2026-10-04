@@ -1,5 +1,47 @@
 import { describe, it, expect, vi } from 'vitest';
-import { checkCanBookSlot } from './candidateSchedulingView.js';
+import { checkCanBookSlot, getBookingOptions } from './candidateSchedulingView.js';
+
+describe('getBookingOptions and virtual coffee chats', () => {
+  const interviews = [
+    {
+      id: 'in-person',
+      title: 'Coffee Chat',
+      interviewType: 'COFFEE_CHAT',
+      isVirtual: false,
+      slots: [{ id: 'slot-am', candidateCapacity: 20, startTime: new Date('2030-01-01T17:00:00Z') }],
+    },
+    {
+      id: 'virtual',
+      title: 'Virtual Coffee Chat',
+      interviewType: 'COFFEE_CHAT',
+      isVirtual: true,
+      slots: [{ id: 'slot-v', candidateCapacity: null, startTime: new Date('2030-01-02T02:00:00Z') }],
+    },
+  ];
+  const clientWith = (own) => ({
+    interview: { findMany: vi.fn().mockResolvedValue(interviews) },
+    interviewSlotSignup: {
+      groupBy: vi.fn().mockResolvedValue([]),
+      findMany: vi.fn().mockResolvedValue(own),
+    },
+  });
+  const application = { id: 'a1', status: 'UNDER_REVIEW', currentRound: '2' };
+
+  it('never lists a virtual chat as something to book', async () => {
+    const options = await getBookingOptions(application, 'c1', clientWith([]));
+    expect(options.interviews.map((i) => i.id)).toEqual(['in-person']);
+  });
+
+  it('offers nothing to somebody recruitment already put in one', async () => {
+    const options = await getBookingOptions(
+      application,
+      'c1',
+      clientWith([{ id: 'su-1', slotId: 'slot-v', interviewId: 'virtual', status: 'CONFIRMED' }])
+    );
+    expect(options.interviews).toEqual([]);
+    expect(options.reason).toBe('SCHEDULED_BY_RECRUITMENT');
+  });
+});
 
 // A slot belonging to a first-round interview in the active cycle.
 const firstRoundSlot = {
