@@ -69,6 +69,17 @@ export default function useConversation({ resolve, currentUser }) {
     if (unseen) setUnreadCount((c) => c + unseen);
   }, [currentUserId, shownReactions]);
 
+  const refetchReactions = useCallback(async (conversationId, messageId) => {
+    try {
+      const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
+      if (conversationIdRef.current !== conversationId) return;
+      serverReactionsRef.current.set(messageId, result.reactions || []);
+      showReactions(messageId);
+    } catch (_) {
+      // The next cue, or reopening the chat, catches up.
+    }
+  }, [showReactions]);
+
   // Broadcasts carry no content: each one is a cue to fetch the latest page
   // through the API, which checks access. Overlapping cues share one fetch.
   const refetchLatest = useCallback(async () => {
@@ -133,12 +144,15 @@ export default function useConversation({ resolve, currentUser }) {
     const channelName = conversation.channelName || `conv:${conversation.id}`;
     const channel = supabase.channel(channelName, { config: { broadcast: { self: false } } });
 
-    const onNudge = ({ payload }) => {
+    channel.on('broadcast', { event: 'message:created' }, ({ payload }) => {
       if (!payload || payload.conversationId !== conversationIdRef.current) return;
       refetchLatest();
-    };
-    channel.on('broadcast', { event: 'message:created' }, onNudge);
-    channel.on('broadcast', { event: 'message:reactions' }, onNudge);
+    });
+    // Just the one message: it may be older than the latest page.
+    channel.on('broadcast', { event: 'message:reactions' }, ({ payload }) => {
+      if (!payload?.messageId || payload.conversationId !== conversationIdRef.current) return;
+      refetchReactions(payload.conversationId, payload.messageId);
+    });
 
     channel.subscribe((status) => {
       setConnected(status === 'SUBSCRIBED');
@@ -151,7 +165,7 @@ export default function useConversation({ resolve, currentUser }) {
       try { supabase.removeChannel(channel); } catch (_) {}
       channelRef.current = null;
     };
-  }, [conversation, refetchLatest]);
+  }, [conversation, refetchLatest, refetchReactions]);
 
   const submitMessage = useCallback(async (body, tempId, optimistic) => {
     if (!conversation || !currentUser) return;

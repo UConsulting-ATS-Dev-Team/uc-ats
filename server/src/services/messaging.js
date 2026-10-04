@@ -186,6 +186,31 @@ export async function listMessages(conversationId, { before, limit = MESSAGE_PAG
   return rows.reverse().map(serializeMessage);
 }
 
+/** One message's reactions, for a client told they changed. */
+export async function getMessageReactions(conversationId, messageId) {
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { conversationId: true, deletedAt: true }
+  });
+  // The conversation was authorized; the message id came from the URL.
+  if (!message || message.conversationId !== conversationId || message.deletedAt) {
+    const err = new Error('Message not found');
+    err.status = 404;
+    throw err;
+  }
+  try {
+    const rows = await prisma.messageReaction.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' },
+      select: reactionInclude.reactions.select
+    });
+    return { messageId, reactions: summarizeReactions(rows) };
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    return { messageId, reactions: [] };
+  }
+}
+
 /**
  * Put an emoji on a message, or take it off if the user already put that one on.
  * Returns the message's reactions afterwards and tells the conversation.

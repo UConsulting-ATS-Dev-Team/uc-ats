@@ -6,6 +6,7 @@ import {
   listMessages,
   sendMessage,
   toggleReaction,
+  getMessageReactions,
   summarizeReactions
 } from './messaging.js';
 
@@ -319,6 +320,16 @@ describe('messaging service', () => {
       await expect(toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '<b>' })).rejects.toMatchObject({ status: 400 });
       prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-2', deletedAt: null });
       await expect(toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' })).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("reads one message's reactions, and only from its own conversation", async () => {
+      prisma.message.findUnique.mockResolvedValue({ conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.findMany.mockResolvedValue([row('🎉', 'a', 'A')]);
+      expect(await getMessageReactions('conv-1', 'msg-1')).toEqual({
+        messageId: 'msg-1',
+        reactions: [{ emoji: '🎉', count: 1, users: [{ id: 'a', fullName: 'A' }] }]
+      });
+      await expect(getMessageReactions('conv-2', 'msg-1')).rejects.toMatchObject({ status: 404 });
     });
 
     it('answers 503 before the reactions table exists', async () => {

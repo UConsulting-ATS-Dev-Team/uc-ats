@@ -12,9 +12,33 @@ vi.mock('../utils/api', () => ({
   }
 }));
 
+// Null unless a test hands in a fake realtime client.
+const mockRealtime = { client: null };
 vi.mock('../supabaseClient', () => ({
-  supabase: null
+  get supabase() {
+    return mockRealtime.client;
+  }
 }));
+
+/** A fake Supabase client whose channel lets a test fire broadcasts. */
+function fakeRealtime() {
+  const handlers = {};
+  const channel = {
+    on: (_type, { event }, handler) => {
+      handlers[event] = handler;
+      return channel;
+    },
+    subscribe: (cb) => {
+      cb?.('SUBSCRIBED');
+      return channel;
+    },
+    unsubscribe: () => {}
+  };
+  return {
+    client: { channel: () => channel, removeChannel: () => {} },
+    fire: (event, payload) => handlers[event]?.({ payload })
+  };
+}
 
 describe('useConversation', () => {
   const currentUser = { id: 'user-1', fullName: 'Test User', email: 'test@test.local', role: 'MEMBER' };
@@ -194,6 +218,28 @@ describe('useConversation', () => {
         await second;
       });
       expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
+    });
+
+    it('fetches only the reacted message when told its reactions changed, even an old one', async () => {
+      const realtime = fakeRealtime();
+      mockRealtime.client = realtime.client;
+      resolve.mockResolvedValue(conv);
+      const fresh = [{ emoji: '🎉', count: 1, users: [{ id: 'user-2', fullName: 'Other' }] }];
+      mockGet.mockImplementation((url) =>
+        Promise.resolve(url.endsWith('/reactions') ? { messageId: 'msg-1', reactions: fresh } : [msg])
+      );
+
+      try {
+        const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+        await waitFor(() => expect(result.current.loading).toBe(false));
+
+        await act(async () => { realtime.fire('message:reactions', { conversationId: 'conv-1', messageId: 'msg-1' }); });
+
+        expect(mockGet).toHaveBeenCalledWith('/conversations/conv-1/messages/msg-1/reactions');
+        await waitFor(() => expect(result.current.messages[0].reactions).toEqual(fresh));
+      } finally {
+        mockRealtime.client = null;
+      }
     });
 
     it('puts the reactions back when the server refuses', async () => {

@@ -12,6 +12,7 @@ const mockMarkRead = vi.fn();
 const mockUserCanAccessConversation = vi.fn();
 const mockSyncInterviewParticipants = vi.fn();
 const mockToggleReaction = vi.fn();
+const mockGetMessageReactions = vi.fn();
 const mockOpenThread = vi.fn();
 const mockListChatPeople = vi.fn();
 const mockListThreadsForUser = vi.fn();
@@ -40,7 +41,8 @@ vi.mock('../services/messaging.js', () => ({
   markRead: (...args) => mockMarkRead(...args),
   userCanAccessConversation: (...args) => mockUserCanAccessConversation(...args),
   syncInterviewParticipants: (...args) => mockSyncInterviewParticipants(...args),
-  toggleReaction: (...args) => mockToggleReaction(...args)
+  toggleReaction: (...args) => mockToggleReaction(...args),
+  getMessageReactions: (...args) => mockGetMessageReactions(...args)
 }));
 
 vi.mock('../services/interviewThreads.js', async (importOriginal) => {
@@ -278,6 +280,25 @@ describe('Conversations routes', () => {
 
       expect(res.status).toBe(200);
       expect(mockToggleReaction).toHaveBeenCalledWith({ conversationId: 'conv-1', messageId: 'msg-1', user: memberUser, emoji: '👍' });
+    });
+
+    it("reads one message's reactions in an accessible conversation", async () => {
+      mockUserCanAccessConversation.mockResolvedValue(true);
+      mockGetMessageReactions.mockResolvedValue({ messageId: 'msg-1', reactions: [] });
+
+      const res = await get(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions');
+
+      expect(res.status).toBe(200);
+      expect(mockGetMessageReactions).toHaveBeenCalledWith('conv-1', 'msg-1');
+    });
+
+    it("refuses reading reactions in a conversation the user cannot read", async () => {
+      mockUserCanAccessConversation.mockResolvedValue(false);
+
+      const res = await get(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions');
+
+      expect(res.status).toBe(403);
+      expect(mockGetMessageReactions).not.toHaveBeenCalled();
     });
 
     it('refuses a conversation the user cannot read', async () => {

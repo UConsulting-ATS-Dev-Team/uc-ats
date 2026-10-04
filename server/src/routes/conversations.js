@@ -9,6 +9,7 @@ import {
   listMessages,
   sendMessage,
   toggleReaction,
+  getMessageReactions,
   markRead,
   userCanAccessConversation,
   syncInterviewParticipants
@@ -178,6 +179,22 @@ router.post('/:id/messages', requireAuth, requireAdminOrMember, async (req, res)
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('[POST /api/conversations/:id/messages]', err);
     res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+router.get('/:id/messages/:messageId/reactions', requireAuth, requireAdminOrMember, async (req, res) => {
+  try {
+    const conversation = await prisma.conversation.findUnique({ where: { id: req.params.id } });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    if (!(await userCanAccessConversation(conversation, req.user))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (await isSealedConversation(req, conversation)) return sendRecordLocked(res);
+    res.json(await getMessageReactions(req.params.id, req.params.messageId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    console.error('[GET /api/conversations/:id/messages/:messageId/reactions]', err);
+    res.status(500).json({ error: 'Failed to load reactions' });
   }
 });
 
