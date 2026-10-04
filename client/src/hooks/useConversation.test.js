@@ -171,53 +171,98 @@ describe('useConversation', () => {
   describe('reactions', () => {
     const conv = { id: 'conv-1', title: 'T', participants: [{ userId: 'user-1', lastReadAt: null }] };
     const msg = { id: 'msg-1', body: 'hi', createdAt: '2026-10-04T10:00:00Z', sender: { id: 'user-2' }, reactions: [] };
+    const me = { id: 'user-1', fullName: 'Test User' };
 
-    it('shows the reaction at once and settles on what the server returns', async () => {
+    // GET serves the history, and each reactions read from `reads` in order;
+    // a read is a deferred promise the test settles when it chooses.
+    function serve(reads) {
+      mockGet.mockImplementation((url) => {
+        if (!url.endsWith('/reactions')) return Promise.resolve([msg]);
+        return new Promise((r) => reads.push(r));
+      });
+    }
+
+    it('shows a tap at once and keeps it until the reactions are read back', async () => {
+      const reads = [];
+      serve(reads);
       resolve.mockResolvedValue(conv);
-      mockGet.mockResolvedValue([msg]);
-      const serverReactions = [{ emoji: '👍', count: 2, users: [{ id: 'user-1' }, { id: 'user-3' }] }];
-      let answer;
-      mockPost.mockReturnValue(new Promise((r) => { answer = r; }));
+      mockPost.mockResolvedValue({ messageId: 'msg-1' });
 
       const { result } = renderHook(() => useConversation({ resolve, currentUser }));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
       let pending;
       act(() => { pending = result.current.react('msg-1', '👍'); });
-      expect(result.current.messages[0].reactions).toEqual([
-        { emoji: '👍', count: 1, users: [{ id: 'user-1', fullName: 'Test User' }] }
-      ]);
+      expect(result.current.messages[0].reactions).toEqual([{ emoji: '👍', count: 1, users: [me] }]);
       expect(mockPost).toHaveBeenCalledWith('/conversations/conv-1/messages/msg-1/reactions', { emoji: '👍' });
 
-      await act(async () => { answer({ messageId: 'msg-1', reactions: serverReactions }); await pending; });
-      expect(result.current.messages[0].reactions).toEqual(serverReactions);
+      await waitFor(() => expect(reads).toHaveLength(1));
+      const fromServer = [{ emoji: '👍', count: 2, users: [me, { id: 'user-3' }] }];
+      await act(async () => { reads[0]({ messageId: 'msg-1', reactions: fromServer }); await pending; });
+      expect(result.current.messages[0].reactions).toEqual(fromServer);
     });
 
-    it('keeps a newer tap on top when an older answer arrives late', async () => {
+    it('applies reaction reads one at a time, so an older read cannot land last', async () => {
+      const realtime = fakeRealtime();
+      mockRealtime.client = realtime.client;
+      const reads = [];
+      serve(reads);
       resolve.mockResolvedValue(conv);
-      mockGet.mockResolvedValue([msg]);
-      const answers = [];
-      mockPost.mockImplementation(() => new Promise((r) => answers.push(r)));
+
+      try {
+        const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+        await waitFor(() => expect(result.current.loading).toBe(false));
+
+        // Two cues close together: the second waits for the first read.
+        act(() => {
+          realtime.fire('message:reactions', { conversationId: 'conv-1', messageId: 'msg-1' });
+          realtime.fire('message:reactions', { conversationId: 'conv-1', messageId: 'msg-1' });
+        });
+        expect(reads).toHaveLength(1);
+
+        const older = [{ emoji: '🎉', count: 1, users: [{ id: 'user-2' }] }];
+        const newer = [{ emoji: '🎉', count: 2, users: [{ id: 'user-2' }, { id: 'user-3' }] }];
+        await act(async () => { reads[0]({ reactions: older }); });
+        await waitFor(() => expect(reads).toHaveLength(2));
+        await act(async () => { reads[1]({ reactions: newer }); });
+
+        await waitFor(() => expect(result.current.messages[0].reactions).toEqual(newer));
+      } finally {
+        mockRealtime.client = null;
+      }
+    });
+
+    it('keeps a newer tap shown while an older one is still settling', async () => {
+      const reads = [];
+      serve(reads);
+      resolve.mockResolvedValue(conv);
+      const posts = [];
+      mockPost.mockImplementation(() => new Promise((r) => posts.push(r)));
 
       const { result } = renderHook(() => useConversation({ resolve, currentUser }));
       await waitFor(() => expect(result.current.loading).toBe(false));
 
-      // 👍 on, then ❤️ on, before either answer is back.
-      let first;
-      let second;
-      act(() => { first = result.current.react('msg-1', '👍'); });
-      act(() => { second = result.current.react('msg-1', '❤️'); });
+      act(() => { result.current.react('msg-1', '👍'); });
+      act(() => { result.current.react('msg-1', '❤️'); });
 
-      // The first answer knows only about 👍. ❤️ must survive it.
-      const me = { id: 'user-1', fullName: 'Test User' };
-      await act(async () => { answers[0]({ reactions: [{ emoji: '👍', count: 1, users: [me] }] }); await first; });
+      // The first tap is saved and read back knowing only 👍. ❤️ must survive it.
+      await act(async () => { posts[0]({}); });
+      await waitFor(() => expect(reads).toHaveLength(1));
+      await act(async () => { reads[0]({ reactions: [{ emoji: '👍', count: 1, users: [me] }] }); });
       expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
+    });
 
-      await act(async () => {
-        answers[1]({ reactions: [{ emoji: '👍', count: 1, users: [me] }, { emoji: '❤️', count: 1, users: [me] }] });
-        await second;
-      });
-      expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
+    it('drops a refused tap and says why', async () => {
+      serve([]);
+      resolve.mockResolvedValue(conv);
+      mockPost.mockRejectedValue(new Error('Reactions are not available yet'));
+
+      const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => { await result.current.react('msg-1', '👍'); });
+      expect(result.current.messages[0].reactions).toEqual([]);
+      expect(result.current.error).toBe('Reactions are not available yet');
     });
 
     it('fetches only the reacted message when told its reactions changed, even an old one', async () => {
@@ -240,19 +285,6 @@ describe('useConversation', () => {
       } finally {
         mockRealtime.client = null;
       }
-    });
-
-    it('puts the reactions back when the server refuses', async () => {
-      resolve.mockResolvedValue(conv);
-      mockGet.mockResolvedValue([msg]);
-      mockPost.mockRejectedValue(new Error('Reactions are not available yet'));
-
-      const { result } = renderHook(() => useConversation({ resolve, currentUser }));
-      await waitFor(() => expect(result.current.loading).toBe(false));
-
-      await act(async () => { await result.current.react('msg-1', '👍'); });
-      expect(result.current.messages[0].reactions).toEqual([]);
-      expect(result.current.error).toBe('Reactions are not available yet');
     });
   });
 

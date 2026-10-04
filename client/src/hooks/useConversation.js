@@ -55,7 +55,10 @@ export default function useConversation({ resolve, currentUser }) {
   const applyServerPage = useCallback((page) => {
     let unseen = 0;
     for (const m of page) {
-      serverReactionsRef.current.set(m.id, m.reactions || []);
+      // A page seeds reactions only for messages it brings in. After that they
+      // move only through refetchReactions, one fetch at a time per message, so
+      // a slow page read can never put back reactions that already changed.
+      if (!serverReactionsRef.current.has(m.id)) serverReactionsRef.current.set(m.id, m.reactions || []);
       if (!knownIdsRef.current.has(m.id)) {
         knownIdsRef.current.add(m.id);
         if (m.sender.id !== currentUserId) unseen += 1;
@@ -69,15 +72,35 @@ export default function useConversation({ resolve, currentUser }) {
     if (unseen) setUnreadCount((c) => c + unseen);
   }, [currentUserId, shownReactions]);
 
-  const refetchReactions = useCallback(async (conversationId, messageId) => {
-    try {
-      const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
-      if (conversationIdRef.current !== conversationId) return;
-      serverReactionsRef.current.set(messageId, result.reactions || []);
-      showReactions(messageId);
-    } catch (_) {
-      // The next cue, or reopening the chat, catches up.
+  // One fetch at a time per message. A cue arriving mid-fetch runs one more
+  // afterwards, so the last answer applied is always the newest read. Every
+  // caller gets the same promise, settled once the queue is empty.
+  const reactionFetchesRef = useRef(new Map());
+  const refetchReactions = useCallback((conversationId, messageId) => {
+    const inFlight = reactionFetchesRef.current;
+    const running = inFlight.get(messageId);
+    if (running) {
+      running.again = true;
+      return running.done;
     }
+    const entry = { again: false, done: null };
+    inFlight.set(messageId, entry);
+    entry.done = (async () => {
+      try {
+        do {
+          entry.again = false;
+          const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
+          if (conversationIdRef.current !== conversationId) return;
+          serverReactionsRef.current.set(messageId, result.reactions || []);
+          showReactions(messageId);
+        } while (entry.again);
+      } catch (_) {
+        // The next cue, or reopening the chat, catches up.
+      } finally {
+        inFlight.delete(messageId);
+      }
+    })();
+    return entry.done;
   }, [showReactions]);
 
   // Broadcasts carry no content: each one is a cue to fetch the latest page
@@ -251,18 +274,21 @@ export default function useConversation({ resolve, currentUser }) {
     const pending = pendingReactionsRef.current;
     pending.set(messageId, [...(pending.get(messageId) ?? []), tap]);
     showReactions(messageId);
+    let saved = false;
     try {
-      const result = await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
-      serverReactionsRef.current.set(messageId, result.reactions);
+      await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
+      saved = true;
     } catch (err) {
       setError(err.message || 'Failed to react');
-    } finally {
-      const rest = (pending.get(messageId) ?? []).filter((t) => t !== tap);
-      if (rest.length) pending.set(messageId, rest);
-      else pending.delete(messageId);
-      showReactions(messageId);
     }
-  }, [conversation, currentUser, showReactions]);
+    // The tap stays shown until the reactions are read back through the one
+    // per-message fetch, which also orders it against everyone else's.
+    if (saved) await refetchReactions(conversation.id, messageId);
+    const rest = (pending.get(messageId) ?? []).filter((t) => t !== tap);
+    if (rest.length) pending.set(messageId, rest);
+    else pending.delete(messageId);
+    showReactions(messageId);
+  }, [conversation, currentUser, showReactions, refetchReactions]);
 
   const markRead = useCallback(async () => {
     if (!conversation) return;
