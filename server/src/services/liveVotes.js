@@ -398,40 +398,56 @@ export async function beginSession({ client = prisma, sessionId, user }) {
 export async function castVote({ client = prisma, sessionId, ballotId, value, user }) {
   if (value !== 'YES' && value !== 'NO') throw fail(400, 'Vote YES or NO', 'INVALID_VOTE');
 
-  const { version } = await withSessionLock(client, sessionId, async (tx, session) => {
-    assertStatus(session, 'ACTIVE');
-
-    const participant = await tx.liveVoteParticipant.findUnique({
+  // Everything that cannot change under a close is checked before taking the
+  // lock. Every vote in the room queues on the one session row, so each round
+  // trip held inside it is paid once per voter; a whole room voting at once
+  // used to outwait maxWait and drain the pool.
+  const [participant, ballot] = await Promise.all([
+    client.liveVoteParticipant.findUnique({
       where: { sessionId_userId: { sessionId, userId: user.id } },
       select: { id: true }
-    });
-    if (!participant) throw fail(403, 'Join the live vote first', 'NOT_JOINED');
-
-    const ballot = await tx.liveVoteBallot.findFirst({
+    }),
+    client.liveVoteBallot.findFirst({
       where: { id: ballotId, sessionId },
       include: { sessionCandidate: { include: { application: { select: OWNERSHIP_SELECT } } } }
-    });
-    if (!ballot || ballot.status !== 'OPEN') {
+    })
+  ]);
+  if (!participant) throw fail(403, 'Join the live vote first', 'NOT_JOINED');
+  if (!ballot || ballot.status !== 'OPEN') {
+    throw fail(409, 'Voting on this candidate has closed', 'BALLOT_CLOSED');
+  }
+  if (isOwnedBy(ballot.sessionCandidate.application, user)) {
+    throw fail(403, 'You cannot vote on your own application', 'OWN_RECORD');
+  }
+  const key = voterKey(ballot.id, user.id);
+
+  const { version } = await withSessionLock(client, sessionId, async (tx, session) => {
+    assertStatus(session, 'ACTIVE');
+    // Re-read under the lock: this is what keeps a vote from landing on a
+    // ballot a close has just committed.
+    const current = await tx.liveVoteBallot.findFirst({ where: { id: ballot.id, sessionId }, select: { status: true } });
+    if (current?.status !== 'OPEN') {
       throw fail(409, 'Voting on this candidate has closed', 'BALLOT_CLOSED');
     }
-    if (isOwnedBy(ballot.sessionCandidate.application, user)) {
-      throw fail(403, 'You cannot vote on your own application', 'OWN_RECORD');
-    }
-
-    const key = voterKey(ballot.id, user.id);
     await tx.liveVoteVote.upsert({
       where: { ballotId_voterKey: { ballotId: ballot.id, voterKey: key } },
       create: { ballotId: ballot.id, voterKey: key, value },
       update: { value }
     });
-    // Voting is proof of presence; also clears a leave from a flaky pagehide.
-    await tx.liveVoteParticipant.update({
-      where: { id: participant.id },
-      data: { lastSeenAt: new Date(), leftAt: null }
-    });
   });
 
   nudgeLiveVote(sessionId, { version, kind: 'vote' });
+
+  // Voting is proof of presence; also clears a leave from a flaky pagehide.
+  // Outside the lock: it changes nothing anyone else is shown.
+  try {
+    await client.liveVoteParticipant.update({
+      where: { id: participant.id },
+      data: { lastSeenAt: new Date(), leftAt: null }
+    });
+  } catch (error) {
+    console.error('[live-votes] presence update after vote failed:', error);
+  }
   return { ballotId, myVote: value, version };
 }
 

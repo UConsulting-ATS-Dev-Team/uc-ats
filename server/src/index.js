@@ -164,8 +164,15 @@ app.use('/api/applicant-info', applicantInfoRoutes);
 app.use('/api', candidateRoutes);
 app.use('/api', publicRoutes);
 
-// Health check endpoint to test database connection
+// Health check. Render probes this to decide whether an instance stays in
+// rotation, so by default it answers without touching the database: a pool
+// saturated by a burst (a live vote) used to time this out, Render pulled every
+// instance, and the burst became 502s for everyone. `?deep=1` still checks the
+// database.
 app.get('/api/health', async (req, res) => {
+  if (req.query.deep !== '1') {
+    return res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  }
   try {
     // Test database connection with timeout
     const healthCheckPromise = prisma.$queryRaw`SELECT 1`;
