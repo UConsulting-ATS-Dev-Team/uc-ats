@@ -295,6 +295,12 @@ describe('messaging service', () => {
       const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
 
       expect(prisma.$executeRaw).toHaveBeenCalled();
+      // Read back only once the toggle has committed.
+      expect(prisma.messageReaction.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(
+        prisma.messageReaction.create.mock.invocationCallOrder[0]
+      );
+      expect(prisma.$transaction.mock.results[0].type).toBe('return');
+      expect(result.readAt).toEqual(expect.any(String));
       expect(prisma.messageReaction.create).toHaveBeenCalledWith({ data: { messageId: 'msg-1', userId: 'member-1', emoji: '👍' } });
       expect(result.reactions).toEqual([{ emoji: '👍', count: 1, users: [{ id: 'member-1', fullName: 'Me' }] }]);
       // Content-free: who reacted is fetched through the API, not broadcast.

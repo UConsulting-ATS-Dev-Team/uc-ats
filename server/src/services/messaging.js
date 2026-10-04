@@ -243,23 +243,24 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
     // one after the other and cancel out, instead of both seeing nothing to
     // delete and both inserting.
     const lockKey = `reaction:${messageId}:${user.id}:${emoji}`;
-    let readAt;
-    const reactions = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
       const removed = await tx.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
       if (removed.count === 0) {
         await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
       }
-      readAt = new Date().toISOString();
-      const rows = await tx.messageReaction.findMany({
-        where: { messageId },
-        orderBy: { createdAt: 'asc' },
-        select: reactionInclude.reactions.select
-      });
-      return summarizeReactions(rows);
     });
     nudgeConversation(conversationId, 'message:reactions', { messageId });
-    return { messageId, reactions, readAt };
+    // Read back after the commit, stamped like any other read: a read stamped
+    // inside the transaction would claim to be newer than reads that ran before
+    // the commit, yet see less than they do once it lands.
+    const readAt = new Date().toISOString();
+    const rows = await prisma.messageReaction.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' },
+      select: reactionInclude.reactions.select
+    });
+    return { messageId, reactions: summarizeReactions(rows), readAt };
   } catch (err) {
     if (!isMissingTable(err)) throw err;
     const unavailable = new Error('Reactions are not available yet');
