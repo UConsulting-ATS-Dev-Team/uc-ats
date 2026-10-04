@@ -343,6 +343,26 @@ The system follows a **recruiting cycle-based workflow**:
   ([server/src/services/decisionBatches.js](server/src/services/decisionBatches.js)).
 - Round order lives in [server/src/utils/roundProgression.js](server/src/utils/roundProgression.js).
 
+**Candidate interview sign-up under a burst:**
+- A decision email sends a whole round to `/interview-signup` at once. Every booking in a
+  round takes one row lock (`lockRoundSlots`), so they cannot run side by side anyway.
+  `claimWithFallback` therefore queues claims per round in memory
+  ([keyedBatchQueue.js](server/src/utils/keyedBatchQueue.js)) and books whoever is waiting
+  in one transaction: one lock, one read of the round, one insert. Waiting claims hold no
+  database connection. The lock still separates two server instances.
+- Seats go first come, first served by the time a claim joins the queue. Each claim keeps
+  its own `signedUpAt` / `waitlistedAt`, strictly increasing per process, so a batch never
+  leaves waitlist order to a random id. A batch that fails outright is retried claim by
+  claim, so one bad claim fails only itself.
+- Production's server sits about 25ms from its database. Site Analytics puts an idle
+  `GET /api/my-interview-signups` at ~500ms. At that latency, 90 simultaneous bookings
+  used to fail 68 with 500s from pool and transaction timeouts. Batched, all 90 book.
+  `interviewSignups.claim.test.js` pins capacity, FCFS, group labels and two instances
+  racing, against a real Postgres (`TEST_DATABASE_URL`).
+- Sign-in is what is left. `bcryptjs` at cost 12 burns CPU on the one Node thread, so
+  `routes/auth.js` runs password work two at a time. People get through in arrival order
+  instead of all finishing together at the end.
+
 **iMessage (Master Communications):**
 - Members only. An admin picks people by name and writes plain text; Send opens one group
   conversation in their own Messages app through an `sms://open?addresses=…&body=…` link
@@ -1264,6 +1284,11 @@ Required in `server/.env`:
   import uploads to. Share it with the service account as an **Editor**; read
   access is enough for every other Drive call this server makes, so a folder
   that works elsewhere can still fail here with `ACCESS_DENIED`.
+- `DATABASE_CONNECTION_LIMIT` - (Optional, default 20) Prisma's pool size per server
+  process. Against the Supabase transaction pooler each query holds a connection for
+  several Render-to-Supabase round trips while Postgres itself is idle, so this, not
+  the database, is what caps throughput under a burst. Every process on the database
+  (each Render instance, each laptop) takes this many pooler client connections.
 - `ANALYTICS_DISABLED` - (Optional) `1` stops Site Analytics recording anything on the
   server. The client's equivalent is `VITE_ANALYTICS_DISABLED=1` in `client/.env`.
 - `RUN_CRONS` - (Optional) Scheduled jobs (form sync, scheduled sends, GTKUC reminders)

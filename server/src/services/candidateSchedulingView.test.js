@@ -7,8 +7,9 @@ const firstRoundSlot = {
   interview: { cycleId: 'c1', interviewType: 'ROUND_ONE', status: 'UPCOMING' },
 };
 
+// The lookup is asked of the interview that owns the slot; no slot, no interview.
 const clientReturning = (slot) => ({
-  interviewSlot: { findUnique: vi.fn().mockResolvedValue(slot) },
+  interview: { findFirst: vi.fn().mockResolvedValue(slot?.interview ?? null) },
 });
 
 describe('checkCanBookSlot', () => {
@@ -46,7 +47,7 @@ describe('checkCanBookSlot', () => {
       client
     );
     expect(denied).toMatchObject({ status: 403 });
-    expect(client.interviewSlot.findUnique).not.toHaveBeenCalled();
+    expect(client.interview.findFirst).not.toHaveBeenCalled();
   });
 
   it('refuses a slot from another cycle without confirming it exists', async () => {
