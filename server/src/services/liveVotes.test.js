@@ -334,7 +334,7 @@ describe('joining and the lobby', () => {
     expect(state.me).toMatchObject({ joined: true, isHost: false });
   });
 
-  it('bumps the version when someone arrives, not when a present participant re-joins', async () => {
+  it('does not bump the version for presence', async () => {
     const { session } = await launch();
     const first = await joinSession({ client: db, sessionId: session.id, user: member });
     clearStateCache();
@@ -377,6 +377,8 @@ describe('voting', () => {
     expect(db.tables.liveVoteVote.every((row) => !('userId' in row))).toBe(true);
     expect(db.tables.liveVoteVote.map((row) => row.voterKey)).toContain(voterKey(ballotId, member.id));
 
+    // A vote does not move the version, so the tally is read past the cache.
+    clearStateCache();
     const open = await getState({ client: db, sessionId, user: member });
     expect(open.current.ballot).toMatchObject({ votedCount: 2, eligibleCount: 3, myVote: 'NO' });
     expect(open.current.ballot).not.toHaveProperty('yesCount');
@@ -527,13 +529,13 @@ describe('running the session', () => {
     expect(db.tables.liveVoteBallot).toHaveLength(0);
   });
 
-  it('bumps the version exactly once per change', async () => {
+  it('bumps the version once per host change and never for a vote', async () => {
     const { sessionId, state } = await activeSession();
     const before = db.tables.liveVoteSession[0].version;
     await vote(sessionId, state.current.ballot.id, member, 'YES');
-    expect(db.tables.liveVoteSession[0].version).toBe(before + 1);
+    expect(db.tables.liveVoteSession[0].version).toBe(before);
     await closeBallot({ client: db, sessionId, ballotId: state.current.ballot.id, user: admin });
-    expect(db.tables.liveVoteSession[0].version).toBe(before + 2);
+    expect(db.tables.liveVoteSession[0].version).toBe(before + 1);
   });
 });
 

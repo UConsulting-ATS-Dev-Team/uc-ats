@@ -28,6 +28,9 @@ export default function useLiveVoteSession(sessionId, { onError } = {}) {
   const [connected, setConnected] = useState(false);
   const [hidden, setHidden] = useState(isHidden);
   const [pendingVote, setPendingVote] = useState(null);
+  // The last vote this tab saw accepted. A refetch can be answered from a copy
+  // cached a moment before the vote landed, so this keeps it on screen.
+  const [lastCast, setLastCast] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
 
   const versionRef = useRef(null);
@@ -123,7 +126,12 @@ export default function useLiveVoteSession(sessionId, { onError } = {}) {
 
     channel.on('broadcast', { event: 'state:changed' }, ({ payload }) => {
       if (payload?.sessionId !== sessionId) return;
-      if (versionRef.current != null && payload.version <= versionRef.current) return;
+      // Votes and presence leave the version where it is (the server answers
+      // them from a cache that lives about a second), so they are refetched at
+      // an equal version too; anything else only when the version moved.
+      const sameVersionRefetch = payload.kind === 'vote' || payload.kind === 'presence';
+      if (versionRef.current != null &&
+        (payload.version < versionRef.current || (payload.version === versionRef.current && !sameVersionRefetch))) return;
       // Forty screens refetching on the same millisecond is a thundering herd;
       // a vote tally can wait a beat, a host action should not.
       const delay = payload.kind === 'vote' ? Math.random() * 250 : 0;
@@ -165,7 +173,8 @@ export default function useLiveVoteSession(sessionId, { onError } = {}) {
     setPendingVote({ ballotId: ballot.id, value });
     try {
       await liveVoteApi.vote(sessionId, ballot.id, value);
-      await refreshRef.current?.();
+      setLastCast({ ballotId: ballot.id, value });
+      refreshRef.current?.();
     } catch (error) {
       report(error?.code === 'BALLOT_CLOSED'
         ? { message: 'Voting closed before your vote was counted.' }
@@ -191,7 +200,9 @@ export default function useLiveVoteSession(sessionId, { onError } = {}) {
   // A vote on its way shows as cast; it is replaced by the server's answer.
   const myVote = pendingVote && pendingVote.ballotId === currentBallot?.id
     ? pendingVote.value
-    : currentBallot?.myVote ?? null;
+    : lastCast && lastCast.ballotId === currentBallot?.id
+      ? lastCast.value
+      : currentBallot?.myVote ?? null;
 
   return {
     state,

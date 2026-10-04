@@ -123,8 +123,8 @@ export async function saveRubric({ client = prisma, phase, criteria, user }) {
  * `{ result, version }`. The version bump is the first statement on purpose: it
  * is what takes the lock, and it rolls back with everything else if `fn` throws.
  */
-export const withSessionLock = (client, sessionId, fn) =>
-  withVersionLock(client, 'liveVoteSession', sessionId, fn, { notFoundMessage: 'Live vote not found' });
+export const withSessionLock = (client, sessionId, fn, { bump = true } = {}) =>
+  withVersionLock(client, 'liveVoteSession', sessionId, fn, { notFoundMessage: 'Live vote not found', bump });
 
 const assertStatus = (session, ...statuses) => {
   if (statuses.includes(session.status)) return;
@@ -328,7 +328,7 @@ export async function getActiveSession({ client = prisma, user }) {
 
 export async function joinSession({ client = prisma, sessionId, user }) {
   const [session, participant] = await Promise.all([
-    client.liveVoteSession.findUnique({ where: { id: sessionId }, select: { status: true } }),
+    client.liveVoteSession.findUnique({ where: { id: sessionId }, select: { status: true, version: true } }),
     client.liveVoteParticipant.findUnique({ where: { sessionId_userId: { sessionId, userId: user.id } } })
   ]);
   if (!session) throw fail(404, 'Live vote not found', 'NOT_FOUND');
@@ -345,15 +345,15 @@ export async function joinSession({ client = prisma, sessionId, user }) {
       data: { lastSeenAt: new Date(now) }
     });
   } else {
-    const { version } = await withSessionLock(client, sessionId, async (tx, locked) => {
-      assertStatus(locked, 'LOBBY', 'ACTIVE');
-      await tx.liveVoteParticipant.upsert({
-        where: { sessionId_userId: { sessionId, userId: user.id } },
-        create: { sessionId, userId: user.id },
-        update: { lastSeenAt: new Date(now), leftAt: null }
-      });
+    // Presence takes no session lock and no version bump: it is worked out at
+    // read time, and arrivals and departures are frequent enough that locking
+    // for them queued host actions and emptied the state cache.
+    await client.liveVoteParticipant.upsert({
+      where: { sessionId_userId: { sessionId, userId: user.id } },
+      create: { sessionId, userId: user.id },
+      update: { lastSeenAt: new Date(now), leftAt: null }
     });
-    nudgeLiveVote(sessionId, { version, kind: 'presence' });
+    nudgeLiveVote(sessionId, { version: session.version, kind: 'presence' });
   }
 
   return getState({ client, sessionId, user });
@@ -366,13 +366,12 @@ export async function leaveSession({ client = prisma, sessionId, user }) {
   });
   if (!participant || participant.leftAt) return;
 
-  const { version } = await withSessionLock(client, sessionId, (tx) =>
-    tx.liveVoteParticipant.updateMany({
-      where: { sessionId, userId: user.id, leftAt: null },
-      data: { leftAt: new Date() }
-    })
-  );
-  nudgeLiveVote(sessionId, { version, kind: 'presence' });
+  await client.liveVoteParticipant.updateMany({
+    where: { sessionId, userId: user.id, leftAt: null },
+    data: { leftAt: new Date() }
+  });
+  const session = await client.liveVoteSession.findUnique({ where: { id: sessionId }, select: { version: true } });
+  if (session) nudgeLiveVote(sessionId, { version: session.version, kind: 'presence' });
 }
 
 export async function beginSession({ client = prisma, sessionId, user }) {
@@ -434,7 +433,12 @@ export async function castVote({ client = prisma, sessionId, ballotId, value, us
       create: { ballotId: ballot.id, voterKey: key, value },
       update: { value }
     });
-  });
+  }, { bump: false });
+  // No version bump: a whole room voting used to bump it once per vote, so every
+  // viewer's refetch missed the state cache and rebuilt the room from the
+  // database, and the host's next action queued behind all of it. Votes are
+  // still serialized with close by the row lock; the tally reaches viewers
+  // through the nudge and the cache's one-second TTL.
 
   nudgeLiveVote(sessionId, { version, kind: 'vote' });
 
@@ -648,17 +652,27 @@ export async function getState({ client = prisma, sessionId, user, now = Date.no
   });
   if (!head) throw fail(404, 'Live vote not found', 'NOT_FOUND');
 
+  const load = async () => {
+    const fresh = await loadRaw(client, sessionId);
+    if (!fresh) throw fail(404, 'Live vote not found', 'NOT_FOUND');
+    stateCache.set(sessionId, { version: fresh.session.version, raw: fresh, at: now });
+    return fresh;
+  };
+  const findMine = (data) => data.participants.find((participant) => participant.userId === user.id);
+
   let raw;
   const cached = stateCache.get(sessionId);
   if (cached && cached.version === head.version && now - cached.at <= STATE_CACHE_TTL_MS) {
     raw = cached.raw;
+    // Joining no longer bumps the version, so a copy cached a moment before
+    // this viewer arrived would refuse them; read it fresh instead.
+    const cachedMine = findMine(raw);
+    if (raw.session.status !== 'ENDED' && (!cachedMine || cachedMine.leftAt)) raw = await load();
   } else {
-    raw = await loadRaw(client, sessionId);
-    if (!raw) throw fail(404, 'Live vote not found', 'NOT_FOUND');
-    stateCache.set(sessionId, { version: raw.session.version, raw, at: now });
+    raw = await load();
   }
 
-  const mine = raw.participants.find((participant) => participant.userId === user.id);
+  const mine = findMine(raw);
   if (raw.session.status !== 'ENDED' && (!mine || mine.leftAt)) {
     throw fail(403, 'Join the live vote first', 'NOT_JOINED');
   }

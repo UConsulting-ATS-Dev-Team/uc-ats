@@ -14,14 +14,18 @@ const notFound = (message) => Object.assign(new Error(message), { status: 404, c
 /**
  * Runs `fn(tx, row)` holding the row lock on `delegate` (a Prisma model name
  * such as 'liveVoteSession') and returns `{ result, version }`.
+ *
+ * `bump: false` takes the same lock without moving the version, for a change
+ * that must be serialized with the others but that clients need not refetch
+ * for at once (a vote: the tally is re-read within the state cache's TTL).
  */
-export async function withVersionLock(client, delegate, id, fn, { notFoundMessage = 'Not found' } = {}) {
+export async function withVersionLock(client, delegate, id, fn, { notFoundMessage = 'Not found', bump = true } = {}) {
   return client.$transaction(async (tx) => {
     let row;
     try {
       row = await tx[delegate].update({
         where: { id },
-        data: { version: { increment: 1 } }
+        data: { version: { increment: bump ? 1 : 0 } }
       });
     } catch (error) {
       if (error?.code === 'P2025') throw notFound(notFoundMessage);
