@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 // Saving an interview evaluation from the interview pages: an autosave a moment after
 // the last edit, plus Save and Save All. One instance per page, keyed by application.
+// `scope` is the interview, so the same candidate in two interviews never shares a queue.
 //
 // Saves of one candidate's evaluation go out one at a time. They used to be sent the
 // moment they were asked for, so a slow autosave could land after the save that
@@ -14,15 +15,22 @@ import { useCallback, useEffect, useRef } from 'react';
 // which may never come (the interviewer moves on to the next candidate). It is retried
 // only if nothing newer was asked for since it started: an edit brings its own
 // autosave, and a Save already sent the notes after it. Nothing is retried once the
-// page is gone, or a retry could land after the notes saved on the page reopened. `onAutoSaveError` is told about
-// every failure and `onSaved` about every save that lands, so the page can show
-// "Auto-save failed" and take it down once a retry, a later autosave or Save gets through.
+// page is gone. `onAutoSaveError` is told about every failure and `onSaved` about
+// every save that lands, so the page can show "Auto-save failed" and take it down once
+// a retry, a later autosave or Save gets through.
 //
 // Leaving the page sends whatever autosave was still waiting rather than dropping it.
+// The queues live outside the page for that reason: if the interviewer reopens the
+// interview at once, the new page's saves wait behind the old page's last one, so the
+// old notes cannot land after the new ones.
 
 export const AUTOSAVE_RETRY_DELAYS_MS = [2000, 5000, 15000];
 
+// The last save queued for each scope and application, across every page instance.
+const queueTails = new Map();
+
 export default function useEvaluationSaves({
+  scope,
   send,
   delayMs = 2000,
   retryDelaysMs = AUTOSAVE_RETRY_DELAYS_MS,
@@ -31,13 +39,12 @@ export default function useEvaluationSaves({
 }) {
   // Read at call time: the page hands in fresh closures every render.
   const latest = useRef({});
-  latest.current = { send, delayMs, retryDelaysMs, onAutoSaveError, onSaved };
+  latest.current = { scope, send, delayMs, retryDelaysMs, onAutoSaveError, onSaved };
 
   const timers = useRef({});
   // Bumped by every edit and every Save, so a failed autosave can tell it is stale.
   const requests = useRef({});
   const unmounted = useRef(false);
-  const tails = useRef({});
   const waiting = useRef({});
 
   const cancelAutoSave = useCallback((id) => {
@@ -49,8 +56,11 @@ export default function useEvaluationSaves({
 
   // Runs `task` once every save already queued for `id` has finished, failed or not.
   const enqueue = useCallback((id, task) => {
-    const run = (tails.current[id] || Promise.resolve()).catch(() => {}).then(task);
-    tails.current[id] = run;
+    const key = `${latest.current.scope ?? ''}\u0000${id}`;
+    const run = (queueTails.get(key) || Promise.resolve()).catch(() => {}).then(task);
+    queueTails.set(key, run);
+    const forget = () => { if (queueTails.get(key) === run) queueTails.delete(key); };
+    run.then(forget, forget);
     return run;
   }, []);
 
