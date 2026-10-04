@@ -115,10 +115,18 @@ function OutcomeGroup({ batchId, group, userEmail, onChanged, onNotice }) {
   const reviewable = messages.filter((message) => message.status === 'PENDING' || message.status === 'EXCLUDED');
   const everythingSent = messages.length > 0 && reviewable.length === 0 && countBy(messages, 'FAILED') === 0;
   const unreachable = ready.filter((message) => !addressOk(message));
-  const inFlight = messages.filter((message) => IN_FLIGHT.has(message.status)).length;
+  const inFlightMessages = messages.filter((message) => IN_FLIGHT.has(message.status));
+  const inFlight = inFlightMessages.length;
   const unconfirmed = countBy(messages, 'UNCONFIRMED');
-  // Progress over what has been approved: finished one way or another, or still going.
-  const finished = countBy(messages, 'SENT') + countBy(messages, 'FAILED') + unconfirmed;
+  // Progress of the send under way only. Its messages were approved together
+  // and keep that time in nextAttemptAt (a retry only moves it later), so an
+  // earlier send's messages, approved before, are left out.
+  const sendStartedAt = Math.min(...inFlightMessages.map((message) => Date.parse(message.nextAttemptAt) || Infinity));
+  const finished = messages.filter(
+    (message) =>
+      ['SENT', 'FAILED', 'UNCONFIRMED'].includes(message.status) &&
+      Date.parse(message.nextAttemptAt) >= sendStartedAt
+  ).length;
 
   const run = async (work, successText) => {
     try {

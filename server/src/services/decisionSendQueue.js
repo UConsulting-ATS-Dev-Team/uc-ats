@@ -29,6 +29,10 @@ import { decisionLetterContext, mintInviteLink } from './decisionBatches.js';
  *   - still SENDING: cut off while SES was being asked. It may have gone out,
  *     and a second decision letter is worse than a late one, so it becomes
  *     UNCONFIRMED and an admin chooses.
+ *
+ * The same reasoning applies while the process is alive: a send SES refused
+ * (it answered with an error) is retried, and one that got no answer at all
+ * (a timeout, a dropped connection) becomes UNCONFIRMED rather than retried.
  */
 
 const SEND_CONCURRENCY = 5;
@@ -48,7 +52,9 @@ export const UNCONFIRMED_NOTE =
 const ACCEPTED_LOG_STATUSES = new Set(['SENT', 'DELIVERED', 'DELAYED', 'CLICKED', 'BOUNCED', 'COMPLAINED']);
 
 const attemptKeyFor = (message) => `decision-message:${message.id}:${message.attempts}`;
-const logKeyFor = (message) => `${attemptKeyFor(message)}|${message.email}`;
+// sendEmail trims the address when it keys its log row, so the claim does too.
+const addressOf = (message) => String(message.email ?? '').trim();
+export const logKeyFor = (message) => `${attemptKeyFor(message)}|${addressOf(message)}`;
 const nameOf = (message) => [message.firstName, message.lastName].filter(Boolean).join(' ') || null;
 
 /** A failed attempt is retried later, until MAX_ATTEMPTS, then left FAILED for an admin. */
@@ -124,7 +130,7 @@ async function sendOne(messageId, contextFor, client) {
         category: 'DECISION_BATCH',
         trigger: 'MANUAL',
         status: 'SENDING',
-        recipient: message.email,
+        recipient: addressOf(message),
         recipientName: nameOf(message),
         subject: rendered.subject,
         triggeredById: message.sentById,
@@ -140,7 +146,7 @@ async function sendOne(messageId, contextFor, client) {
 
   let result = { success: false, error: 'Not attempted' };
   for (let attempt = 1; attempt <= TRANSPORT_TRIES; attempt++) {
-    result = await sendEmail(message.email, rendered.subject, rendered.html, [], {
+    result = await sendEmail(addressOf(message), rendered.subject, rendered.html, [], {
       // Same key as the claim above, so the send overwrites it.
       attemptKey: attemptKeyFor(message),
       category: 'DECISION_BATCH',
@@ -149,19 +155,25 @@ async function sendOne(messageId, contextFor, client) {
       triggeredById: message.sentById,
       cycleId: rendered.batch.cycleId,
     });
-    if (result.success) break;
+    // Only a refusal is safe to try again. Without an answer SES may have
+    // taken it, and a second try could be a second letter.
+    if (result.success || !result.rejected) break;
     if (attempt < TRANSPORT_TRIES) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
   }
 
-  // If either write below fails the message stays SENDING, and recovery reads
-  // the outcome back from the log row sendEmail just wrote.
+  let data;
+  if (result.success) {
+    data = { status: 'SENT', sentAt: new Date(), providerMessageId: result.messageId ?? null, error: null };
+  } else if (result.rejected) {
+    data = failureUpdate(message, result.error || 'Send failed');
+  } else {
+    data = { status: 'UNCONFIRMED', error: `${UNCONFIRMED_NOTE} (${result.error || 'no answer from SES'})` };
+  }
+
+  // If this write fails the message stays SENDING, and recovery reads the
+  // outcome back from the log row sendEmail just wrote.
   try {
-    await client.decisionMessage.update({
-      where: { id: messageId },
-      data: result.success
-        ? { status: 'SENT', sentAt: new Date(), providerMessageId: result.messageId ?? null, error: null }
-        : failureUpdate(message, result.error || 'Send failed'),
-    });
+    await client.decisionMessage.update({ where: { id: messageId }, data });
   } catch (error) {
     console.error(`[decision send queue] could not record the outcome for ${messageId}:`, error);
   }
@@ -199,7 +211,18 @@ export async function processDecisionQueue(client = prisma) {
     const results = [];
     await Promise.all(
       Array.from({ length: Math.min(SEND_CONCURRENCY, queue.length) }, async () => {
-        while (queue.length > 0) results.push(await sendOne(queue.shift(), contextFor, client));
+        while (queue.length > 0) {
+          const messageId = queue.shift();
+          // A database error claiming or reading one message must not end the
+          // run for the rest. A message left SENDING without its log claim is
+          // queued again by recovery.
+          results.push(
+            await sendOne(messageId, contextFor, client).catch((error) => {
+              console.error(`[decision send queue] ${messageId} failed before sending:`, error);
+              return { messageId, success: false, error: error.message };
+            })
+          );
+        }
       })
     );
     totals.sent += results.filter((r) => r.success).length;

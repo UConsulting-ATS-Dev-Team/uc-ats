@@ -406,7 +406,9 @@ The system follows a **recruiting cycle-based workflow**:
   settled from that row: no row is queued again (SES was never asked), `SENT`/`DELIVERED`/
   `BOUNCED` is marked sent, `FAILED` is retried (3 attempts, a minute apart, then `FAILED`),
   and a row still `SENDING` becomes `UNCONFIRMED`. Unconfirmed means it may have gone out;
-  nothing resends it until an admin picks Mark sent or Send again on the batch page.
+  nothing resends it until an admin picks Mark sent or Send again on the batch page. The
+  same split applies live: `sendEmail` returns `rejected: true` only when SES answered with
+  an error, which is retried; a send that got no answer becomes `UNCONFIRMED`.
 - An address that is not an address (a lone `d` was queued once) blocks the send until it
   is fixed on the batch page or left out. Fixing it changes only that email, not the application.
 

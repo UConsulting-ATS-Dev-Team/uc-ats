@@ -80,11 +80,21 @@ describe('every send is recorded', () => {
 
     const result = await sendEmail('ryan@example.com', 'Subject', '<p>Body</p>');
 
-    expect(result).toEqual({ success: false, error: '550 mailbox unavailable' });
+    expect(result).toEqual({ success: false, error: '550 mailbox unavailable', rejected: false });
     expect(rowOf()).toMatchObject({
       status: 'FAILED',
       error: '550 mailbox unavailable',
     });
+  });
+
+  // A refusal is safe to retry; a send that got no answer may have gone out.
+  // decisionSendQueue.js retries only the first.
+  it('says whether SES answered the failed send', async () => {
+    sendMail.mockRejectedValueOnce(Object.assign(new Error('Throttling'), { $metadata: { httpStatusCode: 400 } }));
+    expect(await sendEmail('ryan@example.com', 'Subject', '<p>Body</p>')).toMatchObject({ rejected: true });
+
+    sendMail.mockRejectedValueOnce(new Error('socket hang up'));
+    expect(await sendEmail('ryan@example.com', 'Subject', '<p>Body</p>')).toMatchObject({ rejected: false });
   });
 
   it('writes one row per address when a send goes to several', async () => {
@@ -124,6 +134,7 @@ describe('every send is recorded', () => {
     await expect(sendEmail('ryan@example.com', 'Subject', '<p>Body</p>')).resolves.toEqual({
       success: false,
       error: '550 mailbox unavailable',
+      rejected: false,
     });
   });
 

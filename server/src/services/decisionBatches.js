@@ -115,7 +115,8 @@ const emptyCounts = () => ({ PENDING: 0, EXCLUDED: 0, QUEUED: 0, SENDING: 0, SEN
 async function deliveryByMessage(messages, client) {
   const keys = messages
     .filter((message) => message.attempts > 0)
-    .map((message) => `decision-message:${message.id}:${message.attempts}|${message.email}`);
+    // Trimmed as sendEmail trims it when it keys the row.
+    .map((message) => `decision-message:${message.id}:${message.attempts}|${String(message.email).trim()}`);
   if (keys.length === 0) return new Map();
   const rows = await client.communicationLog.findMany({
     where: { attemptKey: { in: keys } },

@@ -74,9 +74,16 @@ describe('a decision batch', () => {
     expect(await screen.findByText('Bounced')).toBeInTheDocument();
   });
 
-  it('shows progress and a way to stop while sending', async () => {
+  it('shows progress of the send under way, and a way to stop it', async () => {
+    const earlier = '2026-10-04T02:18:00Z';
+    const now = '2026-10-04T02:31:00Z';
     vi.spyOn(apiClient, 'get').mockResolvedValue(
-      batchWith([person({ id: 'm1', status: 'SENT' }), person({ id: 'm2', status: 'QUEUED' })])
+      batchWith([
+        // From an earlier send: not part of this one's progress.
+        person({ id: 'm0', status: 'SENT', nextAttemptAt: earlier }),
+        person({ id: 'm1', status: 'SENT', nextAttemptAt: now }),
+        person({ id: 'm2', status: 'QUEUED', nextAttemptAt: now })
+      ])
     );
     render(<DecisionBatchPanel initialBatchId="batch-1" />);
 

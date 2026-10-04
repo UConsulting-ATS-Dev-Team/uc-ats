@@ -87,7 +87,7 @@ describe('sendAdminMessageEmail', () => {
 
     const result = await sendAdminMessageEmail(input);
 
-    expect(result).toEqual({ success: false, error: 'SES down' });
+    expect(result).toEqual({ success: false, error: 'SES down', rejected: false });
     expect(logged()).toMatchObject({
       recipient: 'uconsultingla@gmail.com',
       status: 'FAILED',

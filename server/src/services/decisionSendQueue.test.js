@@ -150,9 +150,9 @@ describe('sending what was approved', () => {
     expect(rows.get('m1').nextAttemptAt.getTime()).toBeGreaterThan(NOW.getTime());
   });
 
-  it('retries a failed send on a later run, then leaves it failed for an admin', async () => {
+  it('retries a send SES refused on a later run, then leaves it failed for an admin', async () => {
     const { client, rows } = fakeClient([message({ id: 'm1' })]);
-    sendEmail.mockResolvedValue({ success: false, error: 'Throttling' });
+    sendEmail.mockResolvedValue({ success: false, error: 'Throttling', rejected: true });
 
     for (let run = 1; run <= MAX_ATTEMPTS; run++) {
       await processDecisionQueue(client);
@@ -166,13 +166,45 @@ describe('sending what was approved', () => {
 
   it('waits out the backoff instead of retrying straight away', async () => {
     const { client } = fakeClient([message({ id: 'm1' })]);
-    sendEmail.mockResolvedValue({ success: false, error: 'Throttling' });
+    sendEmail.mockResolvedValue({ success: false, error: 'Throttling', rejected: true });
 
     await processDecisionQueue(client);
     await processDecisionQueue(client);
 
     // Three quick transport tries in the first run, none in the second.
     expect(sendEmail).toHaveBeenCalledTimes(3);
+  });
+
+  it('never tries again when SES did not answer, since it may have taken the email', async () => {
+    const { client, rows } = fakeClient([message({ id: 'm1' })]);
+    sendEmail.mockResolvedValue({ success: false, error: 'socket hang up', rejected: false });
+
+    await processDecisionQueue(client);
+    await processDecisionQueue(client);
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(rows.get('m1').status).toBe('UNCONFIRMED');
+    expect(rows.get('m1').error).toContain('socket hang up');
+  });
+
+  it('keys the claim on the trimmed address, as sendEmail keys its row', async () => {
+    const { client } = fakeClient([message({ id: 'm1', email: ' sam@ucla.edu ' })]);
+    await processDecisionQueue(client);
+    expect(client.communicationLog.create.mock.calls[0][0].data.attemptKey).toBe('decision-message:m1:1|sam@ucla.edu');
+    expect(sendEmail.mock.calls[0][0]).toBe('sam@ucla.edu');
+  });
+
+  it('keeps sending the rest when one message hits a database error', async () => {
+    const { client } = fakeClient([message({ id: 'm1' }), message({ id: 'm2', email: 'ava@ucla.edu' })]);
+    const read = client.decisionMessage.findUnique.getMockImplementation();
+    client.decisionMessage.findUnique.mockImplementation(({ where }) =>
+      where.id === 'm1' ? Promise.reject(new Error('pool timeout')) : read({ where })
+    );
+
+    const totals = await processDecisionQueue(client);
+
+    expect(totals).toMatchObject({ sent: 1, failed: 1 });
+    expect(sendEmail.mock.calls.map((call) => call[0])).toEqual(['ava@ucla.edu']);
   });
 
   it('skips a message another server claimed first', async () => {
