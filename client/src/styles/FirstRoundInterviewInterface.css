@@ -66,6 +66,18 @@
   display: flex;
   gap: 1rem;
   flex-shrink: 0;
+  align-items: center;
+}
+
+/* Shown while a candidate's autosave is failing; it clears once a save lands. */
+.save-status.error {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 500;
+  background-color: var(--status-error-bg);
+  color: var(--status-error-text);
+  border: 1px solid var(--status-error-border);
 }
 
 .btn-primary {

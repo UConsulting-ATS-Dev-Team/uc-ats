@@ -1,8 +1,7 @@
 import express from 'express';
 import {
-  firstRoundEvaluationWrite,
-  interviewEvaluationWrite,
-  readFirstRoundEvaluation
+  readFirstRoundEvaluation,
+  saveInterviewEvaluation
 } from '../services/interviewEvaluations.js';
 import multer from 'multer';
 import path from 'node:path';
@@ -1670,7 +1669,6 @@ router.post('/evaluations', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Interview ID and application ID are required' });
     }
     
-    // Check if this is a first round interview
     const interview = await prisma.interview.findUnique({
       where: { id: interviewId }
     });
@@ -1679,75 +1677,8 @@ router.post('/evaluations', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Handle first round interviews with dedicated table
-    if (interview.interviewType === 'ROUND_ONE') {
-      // Check if first round evaluation already exists
-      const existingFirstRoundEvaluation = await prisma.firstRoundInterviewEvaluation.findFirst({
-        where: {
-          interviewId,
-          applicationId,
-          evaluatorId
-        }
-      });
-      
-      // Only what this save sends: see services/interviewEvaluations.js.
-      const firstRoundData = {
-        ...firstRoundEvaluationWrite(req.body),
-        updatedAt: new Date()
-      };
-      
-      let evaluation;
-      if (existingFirstRoundEvaluation) {
-        // Update existing first round evaluation
-        evaluation = await prisma.firstRoundInterviewEvaluation.update({
-          where: { id: existingFirstRoundEvaluation.id },
-          data: firstRoundData
-        });
-      } else {
-        // Create new first round evaluation
-        evaluation = await prisma.firstRoundInterviewEvaluation.create({
-          data: { interviewId, applicationId, evaluatorId, ...firstRoundData }
-        });
-      }
-      
-      res.json(evaluation);
-    } else {
-      // Handle regular interviews with standard evaluation table
-      const existingEvaluation = await prisma.interviewEvaluation.findFirst({
-        where: {
-          interviewId,
-          applicationId,
-          evaluatorId
-        }
-      });
-      
-      // Only what this save sends: see services/interviewEvaluations.js.
-      const evaluationData = {
-        ...interviewEvaluationWrite(req.body),
-        updatedAt: new Date()
-      };
-      
-      let evaluation;
-      if (existingEvaluation) {
-        // Update existing evaluation
-        evaluation = await prisma.interviewEvaluation.update({
-          where: { id: existingEvaluation.id },
-          data: evaluationData
-        });
-      } else {
-        // Create new evaluation
-        evaluation = await prisma.interviewEvaluation.create({
-          data: {
-            interviewId,
-            applicationId,
-            evaluatorId,
-            ...evaluationData
-          }
-        });
-      }
-      
-      res.json(evaluation);
-    }
+    // First round evaluations live in their own table; the service picks it.
+    res.json(await saveInterviewEvaluation(prisma, { interview, applicationId, evaluatorId, body: req.body }));
   } catch (error) {
     console.error('[POST /api/member/evaluations]', error);
     res.status(500).json({ error: 'Failed to save evaluation' });

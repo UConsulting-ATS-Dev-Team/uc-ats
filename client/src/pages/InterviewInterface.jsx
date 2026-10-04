@@ -9,6 +9,7 @@ import {
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import { headshotSrc } from '../utils/headshotUrl';
 import apiClient from '../utils/api';
+import useEvaluationSaves from '../hooks/useEvaluationSaves';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
@@ -33,7 +34,6 @@ export default function InterviewInterface() {
   const [evaluations, setEvaluations] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [autoSaveTimeouts, setAutoSaveTimeouts] = useState({});
   const [saveStatus, setSaveStatus] = useState({});
   const [groupSelectionOpen, setGroupSelectionOpen] = useState(false);
   const [groupSearchTerm, setGroupSearchTerm] = useState('');
@@ -183,56 +183,34 @@ export default function InterviewInterface() {
     scheduleAutoSave(applicationId);
   };
 
-  const scheduleAutoSave = (applicationId) => {
-    // Clear existing timeout for this application
-    if (autoSaveTimeouts[applicationId]) {
-      clearTimeout(autoSaveTimeouts[applicationId]);
-    }
-
-    // Set new timeout for auto-save (2 seconds after last change)
-    const timeoutId = setTimeout(() => {
-      autoSaveEvaluation(applicationId);
-    }, 2000);
-
-    setAutoSaveTimeouts(prev => ({
-      ...prev,
-      [applicationId]: timeoutId
-    }));
+  const postEvaluation = (applicationId) => {
+    // Rubric scores are no longer used, so they are not sent.
+    const { rubricScores, ...evaluationData } = getEvaluation(applicationId, evaluationsRef.current);
+    return apiClient.post(`/admin/interviews/${interviewId}/evaluations`, {
+      applicationId,
+      ...evaluationData
+    });
   };
 
-  const autoSaveEvaluation = async (applicationId) => {
-    try {
-      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
-      const { rubricScores, ...evaluationData } = evaluation;
-      
-      await apiClient.post(`/admin/interviews/${interviewId}/evaluations`, {
-        applicationId,
-        ...evaluationData
-      });
-      
-      // Auto-save completed successfully - no visual feedback needed
-    } catch (error) {
+  // One save per candidate at a time, retried if an autosave fails: see the hook.
+  const { scheduleAutoSave, saveNow } = useEvaluationSaves({
+    send: postEvaluation,
+    onAutoSaveError: (applicationId, error) => {
       console.error('Auto-save failed:', error);
       setSaveStatus(prev => ({
         ...prev,
         [applicationId]: { type: 'error', message: 'Auto-save failed', timestamp: Date.now() }
       }));
-    }
-  };
-
+    },
+    onSaved: (applicationId) => {
+      setSaveStatus(({ [applicationId]: _, ...rest }) => rest);
+    },
+  });
 
   const saveEvaluation = async (applicationId) => {
     try {
       setSaving(true);
-      const evaluation = getEvaluation(applicationId);
-      // Remove rubricScores from the evaluation data since we're not using them anymore
-      const { rubricScores, ...evaluationData } = evaluation;
-      
-      await apiClient.post(`/admin/interviews/${interviewId}/evaluations`, {
-        applicationId,
-        ...evaluationData
-      });
-      
+      await saveNow(applicationId);
       alert('Evaluation saved successfully');
     } catch (error) {
       console.error('Failed to save evaluation:', error);
@@ -245,17 +223,7 @@ export default function InterviewInterface() {
   const saveAllEvaluations = async () => {
     try {
       setSaving(true);
-      const promises = applications.map(app => {
-        const evaluation = getEvaluation(app.id);
-        // Remove rubricScores from the evaluation data since we're not using them anymore
-        const { rubricScores, ...evaluationData } = evaluation;
-        return apiClient.post(`/admin/interviews/${interviewId}/evaluations`, {
-          applicationId: app.id,
-          ...evaluationData
-        });
-      });
-      
-      await Promise.all(promises);
+      await Promise.all(applications.map(app => saveNow(app.id)));
       setAllEvaluationsSaved(true);
       setShowNextActionModal(true);
     } catch (error) {

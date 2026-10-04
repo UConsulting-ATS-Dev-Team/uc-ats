@@ -369,6 +369,23 @@ The system follows a **recruiting cycle-based workflow**:
 - Cancelling marks the interview `CANCELLED` after releasing every seat; evaluations
   already written are kept.
 
+**Saving interview evaluations:**
+- One evaluation per (interview, application, evaluator), unique on both tables
+  (`interview_evaluations`, `first_round_interview_evaluations`). Both save routes
+  (`POST /api/member/evaluations`, `POST /api/admin/interviews/:id/evaluations`) call
+  `saveInterviewEvaluation` in
+  [server/src/services/interviewEvaluations.js](server/src/services/interviewEvaluations.js),
+  a single upsert on that key. It used to read and then create, so two first saves
+  arriving together failed the second with a 500.
+- The four interview pages save through `useEvaluationSaves`
+  ([client/src/hooks/useEvaluationSaves.js](client/src/hooks/useEvaluationSaves.js)). It
+  keeps one save per candidate in flight, and each save reads the evaluation when it goes
+  out, so a slow save can never land after a newer one and put old notes back. A failed autosave
+  retries (2s, 5s, 15s) and the page shows "Auto-save failed" until a save lands. A new
+  write from these pages goes through `saveNow` or `runInQueue`, never a direct POST.
+- `interviewEvaluations.concurrency.test.js` runs 40 interviewers saving at once against a
+  real Postgres (`TEST_DATABASE_URL`).
+
 **Decision processing:**
 - The four `POST /api/admin/process-*-decisions` endpoints share
   [server/src/services/decisionProcessing.js](server/src/services/decisionProcessing.js).
