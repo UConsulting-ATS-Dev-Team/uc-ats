@@ -272,13 +272,18 @@ export default function useConversation({ resolve, currentUser }) {
       // shown until a read of our own lands.
       if (result.reactions) acceptReactions(messageId, result.reactions, result.readAt);
       else if (!(await refetchReactions(conversation.id, messageId))) {
-        // Nothing could be read, but the toggle is saved: fold it into what is
-        // held, under the held stamp, so the next real read still replaces it.
+        // Nothing could be read, but the server said which way the toggle went:
+        // make what is held agree, under the held stamp, so the next real read
+        // still replaces it. Set, not toggled: another read may already have it.
         const held = serverReactionsRef.current.get(messageId);
-        serverReactionsRef.current.set(messageId, {
-          reactions: toggleLocally(held?.reactions ?? [], emoji, currentUser),
-          readAt: held?.readAt ?? null
-        });
+        const heldReactions = held?.reactions ?? [];
+        const isOn = heldReactions.some((r) => r.emoji === emoji && r.users.some((u) => u.id === currentUser.id));
+        if (typeof result.reacted === 'boolean' && isOn !== result.reacted) {
+          serverReactionsRef.current.set(messageId, {
+            reactions: toggleLocally(heldReactions, emoji, currentUser),
+            readAt: held?.readAt ?? null
+          });
+        }
       }
     } catch (err) {
       setError(err.message || 'Failed to react');

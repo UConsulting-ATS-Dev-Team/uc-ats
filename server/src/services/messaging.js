@@ -243,12 +243,14 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
     // one after the other and cancel out, instead of both seeing nothing to
     // delete and both inserting.
     const lockKey = `reaction:${messageId}:${user.id}:${emoji}`;
-    await prisma.$transaction(async (tx) => {
+    // Whether the user's emoji is on the message now, so a client that cannot
+    // read the reactions back still knows which way the toggle went.
+    const reacted = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
       const removed = await tx.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
-      if (removed.count === 0) {
-        await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
-      }
+      if (removed.count > 0) return false;
+      await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
+      return true;
     });
     nudgeConversation(conversationId, 'message:reactions', { messageId });
     // Read back after the commit, stamped like any other read: a read stamped
@@ -264,10 +266,10 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
         orderBy: { createdAt: 'asc' },
         select: reactionInclude.reactions.select
       });
-      return { messageId, reactions: summarizeReactions(rows), readAt };
+      return { messageId, reacted, reactions: summarizeReactions(rows), readAt };
     } catch (err) {
       console.error('[toggleReaction] saved, but reading reactions back failed:', err);
-      return { messageId, reactions: null, readAt: null };
+      return { messageId, reacted, reactions: null, readAt: null };
     }
   } catch (err) {
     if (!isMissingTable(err)) throw err;
