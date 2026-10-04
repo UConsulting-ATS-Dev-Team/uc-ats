@@ -5,6 +5,7 @@ import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
 import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
 import { lockTalentAccount } from './talentAccountLock.js';
+import { findUclaTwin, isMergeRetired } from './uclaTwinAccounts.js';
 
 /**
  * Sign in with Google.
@@ -306,22 +307,6 @@ const adoptApplicant = async (user, profile) => {
 };
 
 /**
- * The account under the other UCLA spelling of this address, or null. x@g.ucla.edu
- * and x@ucla.edu are one mailbox, so someone who registered with one and signs in
- * with Google as the other is the same person. Before this they were given a
- * second, empty talent-portal account instead.
- */
-const findUclaTwin = async (email) => {
-  const twins = emailVariants(email).slice(1);
-  if (twins.length === 0) return null;
-  const matches = await prisma.user.findMany({
-    where: { OR: twins.map((twin) => ({ email: { equals: twin, mode: 'insensitive' } })) },
-    take: 2
-  });
-  return matches.length === 1 ? matches[0] : null;
-};
-
-/**
  * A Google sign-in that lands on an empty talent-portal account while the same
  * person has a real account under the other UCLA spelling moves Google onto the
  * real one. The talent account is kept, without Google. Null when there is
@@ -377,17 +362,22 @@ export const resolveGoogleUser = async (profile) => {
   }
 
   const byEmail = await findByEmail(profile.email);
-  if (byEmail) {
-    // Checked before the write, so a deactivated account is not quietly linked.
-    assertActive(byEmail);
+  if (byEmail && byEmail.isActive !== false) {
     return { user: await adoptApplicant(await linkExisting(byEmail, profile), profile), isNewAccount: false };
   }
 
+  // No account under this spelling, or only one a UCLA twin merge retired
+  // (scripts/merge-ucla-twin-accounts.js): the account under the other spelling
+  // is the same person. An account an admin deactivated is not a merge
+  // retirement and keeps refusing below, rather than handing out the twin.
   const twin = await findUclaTwin(profile.email);
-  if (twin && !twin.googleId) {
+  if (twin && !twin.googleId && (byEmail ? isMergeRetired(byEmail) && twin.isActive !== false : true)) {
     assertActive(twin);
     return { user: await adoptApplicant(await linkExisting(twin, profile), profile), isNewAccount: false };
   }
+
+  // Checked before any write, so a deactivated account is not quietly linked.
+  if (byEmail) assertActive(byEmail);
 
   try {
     return { user: await createFromGoogle(profile), isNewAccount: true };

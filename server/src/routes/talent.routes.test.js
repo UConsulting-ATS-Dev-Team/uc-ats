@@ -183,6 +183,21 @@ describe('access gating', () => {
 });
 
 describe('an account that stopped being a talent account', () => {
+  it('stores nothing when a UCLA twin merge retired the account mid-upload', async () => {
+    // A session admitted from the user cache, reaching the lock after the merge
+    // deactivated the account. It is still a talent account, just not a live one.
+    prisma.__tx.$queryRaw.mockResolvedValue([{ isExternalTalent: true, studentId: null, isActive: false }]);
+
+    const res = await uploadRequest({
+      user: verifiedTalent,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Economics', graduationYear: '2027', shareConsent: 'true' }
+    });
+
+    expect(res.status).toBe(409);
+    expect(prisma.__tx.externalResume.create).not.toHaveBeenCalled();
+  });
+
   it('stores nothing when Google sign-in turned it into an applicant mid-upload', async () => {
     // The upload passed the gate as a talent account, but by the time it holds
     // the row lock Google sign-in has handed the account to its applicant.

@@ -9,6 +9,6 @@
  */
 export const lockTalentAccount = async (tx, userId) => {
   const [row] = await tx.$queryRaw`
-    SELECT "isExternalTalent", "studentId" FROM users WHERE id = ${userId} FOR UPDATE`;
+    SELECT "isExternalTalent", "studentId", "isActive" FROM users WHERE id = ${userId} FOR UPDATE`;
   return row || null;
 };
