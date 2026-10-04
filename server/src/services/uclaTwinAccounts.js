@@ -81,6 +81,12 @@ export function decideMerge(users, resumes = []) {
 
   const moveResumeIds = resumes.filter((r) => r.userId === retire.id).map((r) => r.id);
 
+  // A pair an earlier run already merged: the talent account is deactivated and
+  // holds nothing. Reported as done so a re-run after a partial run is a no-op.
+  if (retire.isActive === false && !retire.googleId && moveResumeIds.length === 0) {
+    return { ok: false, reason: 'already merged' };
+  }
+
   // Both accounts may each have a current resume. One person has one current
   // resume, so the newest stays current and the rest become history.
   const current = resumes.filter((r) => r.isCurrent).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -158,11 +164,13 @@ export async function mergeUclaTwinPair(keepId, retireId, client = prisma) {
     if (!decision.ok) return decision;
     if (decision.keep.id !== keepId) return { ok: false, reason: 'the account to keep changed since the plan' };
 
-    if (decision.moveResumeIds.length) {
-      await tx.externalResume.updateMany({ where: { id: { in: decision.moveResumeIds } }, data: { userId: keepId } });
-    }
+    // Demote before moving: external_resumes_userId_current_key allows one
+    // current resume per user, so moving first would briefly give the keeper two.
     if (decision.demoteResumeIds.length) {
       await tx.externalResume.updateMany({ where: { id: { in: decision.demoteResumeIds } }, data: { isCurrent: false } });
+    }
+    if (decision.moveResumeIds.length) {
+      await tx.externalResume.updateMany({ where: { id: { in: decision.moveResumeIds } }, data: { userId: keepId } });
     }
 
     // googleId is unique, so it leaves the talent account before it arrives.

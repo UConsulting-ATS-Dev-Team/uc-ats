@@ -48,7 +48,13 @@ try {
 
     let result = d;
     if (apply) {
-      result = await mergeUclaTwinPair(d.keep.id, d.retire.id, prisma);
+      // Each pair is its own transaction, so one failure rolls back only that
+      // pair and the rest still run.
+      try {
+        result = await mergeUclaTwinPair(d.keep.id, d.retire.id, prisma);
+      } catch (error) {
+        result = { ok: false, reason: `failed: ${error.code ?? ''} ${error.message.split('\n').filter(Boolean).pop()}`.trim() };
+      }
       if (!result.ok) console.log(`    SKIPPED at write time: ${result.reason}`);
     }
     record.push({

@@ -65,6 +65,7 @@ describe('decideMerge', () => {
     ['different Google accounts', [applicant({ googleId: 'g-2' }), talent()], 'each account is linked to a different Google account'],
     ['different UIDs', [applicant(), talent({ studentId: '999' })], 'the accounts carry different UIDs'],
     ['three accounts', [applicant(), talent(), talent({ id: 'x' })], 'expected 2 accounts, found 3'],
+    ['a pair an earlier run merged', [applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null })], 'already merged'],
   ])('refuses %s', (_name, users, reason) => {
     expect(decideMerge(users)).toEqual({ ok: false, reason });
   });
@@ -126,6 +127,21 @@ describe('mergeUclaTwinPair', () => {
     expect(retireCall.where.id).toBe('retire');
     expect(retireCall.data).toMatchObject({ isActive: false, googleId: null, googleLinkedAt: null });
     expect(keepCall).toMatchObject({ where: { id: 'keep' }, data: { googleId: 'g-1' } });
+  });
+
+  it('demotes the older current resume before moving, so the keeper never holds two current', async () => {
+    prisma.user.findMany.mockResolvedValue([applicant(), talent()]);
+    prisma.externalResume.findMany.mockResolvedValue([
+      resume('old', 'keep', '2026-09-01'),
+      resume('new', 'retire', '2026-10-01'),
+    ]);
+
+    await mergeUclaTwinPair('keep', 'retire');
+
+    expect(prisma.externalResume.updateMany.mock.calls.map(([args]) => args)).toEqual([
+      { where: { id: { in: ['old'] } }, data: { isCurrent: false } },
+      { where: { id: { in: ['new'] } }, data: { userId: 'keep' } },
+    ]);
   });
 
   it('writes nothing when the pair no longer qualifies under lock', async () => {
