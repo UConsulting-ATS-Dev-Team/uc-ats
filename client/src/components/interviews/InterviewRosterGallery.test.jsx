@@ -257,4 +257,71 @@ describe('InterviewRosterGallery', () => {
     render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} />);
     expect(within(screen.getByTestId('slot-empty')).getByText('Nobody yet')).toBeInTheDocument();
   });
+
+  describe('adding people who have not booked', () => {
+    // Far-future sessions: the dialog hides ones that have ended, and the
+    // shared fixture's date will not stay in the future.
+    const stragglers = () => {
+      const roster = coffeeChatRoster({
+        unassigned: [candidate('a8', 'Late', 'Comer'), candidate('a9', 'Forgotten', 'Person')],
+      });
+      roster.slots = roster.slots.map((s) => ({ ...s, startTime: '2099-10-06T16:00:00Z', endTime: '2099-10-06T18:00:00Z' }));
+      return roster;
+    };
+
+    it('does not offer a session that has already ended', async () => {
+      const roster = stragglers();
+      roster.slots[0] = { ...roster.slots[0], startTime: '2020-01-01T16:00:00Z', endTime: '2020-01-01T18:00:00Z' };
+      render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} onPlace={vi.fn()} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add to a session' }));
+      await userEvent.click(within(screen.getByRole('dialog')).getByRole('combobox'));
+      expect(screen.queryByRole('option', { name: /Morning Block/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /Afternoon Block/ })).toBeInTheDocument();
+    });
+
+    it('lets the admin choose the session instead of picking one for them', async () => {
+      // The old chip placed silently into the first session with room. Morning
+      // is full here, so that was Afternoon; the admin wants Morning.
+      const onPlace = vi.fn();
+      render(<InterviewRosterGallery roster={stragglers()} onMove={vi.fn()} onRemove={vi.fn()} onPlace={onPlace} />);
+
+      await userEvent.click(screen.getByText('Forgotten Person'));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByRole('checkbox', { name: 'Forgotten Person' })).toBeChecked();
+      expect(within(dialog).getByRole('checkbox', { name: 'Late Comer' })).not.toBeChecked();
+      expect(within(dialog).getByRole('combobox')).toHaveTextContent('Afternoon Block');
+
+      await userEvent.click(within(dialog).getByRole('combobox'));
+      await userEvent.click(screen.getByRole('option', { name: /Morning Block/ }));
+      expect(screen.getByText(/puts it 1 over capacity/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Add 1 anyway' }));
+
+      expect(onPlace).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'a9' })],
+        expect.objectContaining({ id: 'morning' }),
+        { force: true }
+      );
+    });
+
+    it('adds several at once without forcing when there is room', async () => {
+      const onPlace = vi.fn();
+      render(<InterviewRosterGallery roster={stragglers()} onMove={vi.fn()} onRemove={vi.fn()} onPlace={onPlace} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add to a session' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Select all' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Add 2' }));
+
+      expect(onPlace).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'a8' }), expect.objectContaining({ id: 'a9' })],
+        expect.objectContaining({ id: 'afternoon' }),
+        { force: false }
+      );
+    });
+
+    it('offers nothing to click when the page cannot place anyone', () => {
+      render(<InterviewRosterGallery roster={stragglers()} onMove={vi.fn()} onRemove={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: 'Add to a session' })).not.toBeInTheDocument();
+    });
+  });
 });

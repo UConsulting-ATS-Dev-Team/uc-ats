@@ -164,4 +164,30 @@ describe('RoundSignupStatus', () => {
     );
     expect(screen.getByText('Nobody is in this round yet')).toBeInTheDocument();
   });
+
+  it('adds the selected people to the session chosen, and clears the selection', async () => {
+    const onPlace = vi.fn();
+    const r = round();
+    r.slots = r.slots.map((s) => ({ ...s, startTime: '2099-10-06T16:00:00Z', endTime: '2099-10-06T18:00:00Z' }));
+    render(
+      <RoundSignupStatus round={r} reminderDefaults={defaults} busy={false} onRemind={vi.fn()} onPlace={onPlace} />
+    );
+
+    await userEvent.click(within(screen.getByTestId('signup-row-app-d')).getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: 'Add selected to a session (1)' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('checkbox', { name: 'Dee Diaz' })).toBeChecked();
+    expect(within(dialog).getByRole('checkbox', { name: 'Eli Evans' })).not.toBeChecked();
+
+    await userEvent.click(within(dialog).getByRole('combobox'));
+    await userEvent.click(screen.getByRole('option', { name: /Afternoon/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add 1' }));
+
+    expect(onPlace).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 'app-d' })],
+      expect.objectContaining({ id: 's2' }),
+      { force: false }
+    );
+    expect(await screen.findByRole('button', { name: 'Add to a session' })).toBeInTheDocument();
+  });
 });
