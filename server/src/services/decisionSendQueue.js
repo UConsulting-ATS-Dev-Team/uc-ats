@@ -196,11 +196,13 @@ export async function processDecisionQueue(client = prisma) {
   const contextFor = contextLoader(client);
   const totals = { recovered, sent: 0, failed: 0, skipped: 0 };
 
-  // Page by page until nothing is due. Every message leaves QUEUED or moves its
-  // nextAttemptAt into the future when tried, so this ends.
+  // Page by page until nothing is due. A message is tried at most once per run,
+  // so one whose claim keeps failing waits for the next tick instead of being
+  // fetched again forever.
+  const tried = [];
   for (;;) {
     const due = await client.decisionMessage.findMany({
-      where: { status: 'QUEUED', nextAttemptAt: { lte: new Date() } },
+      where: { status: 'QUEUED', nextAttemptAt: { lte: new Date() }, ...(tried.length ? { id: { notIn: tried } } : {}) },
       orderBy: { nextAttemptAt: 'asc' },
       select: { id: true },
       take: PAGE_SIZE,
@@ -208,6 +210,7 @@ export async function processDecisionQueue(client = prisma) {
     if (due.length === 0) break;
 
     const queue = due.map((row) => row.id);
+    tried.push(...queue);
     const results = [];
     await Promise.all(
       Array.from({ length: Math.min(SEND_CONCURRENCY, queue.length) }, async () => {
@@ -228,7 +231,6 @@ export async function processDecisionQueue(client = prisma) {
     totals.sent += results.filter((r) => r.success).length;
     totals.failed += results.filter((r) => r.success === false).length;
     totals.skipped += results.filter((r) => r.skipped).length;
-    if (results.every((r) => r.skipped)) break; // another server has these
   }
   return totals;
 }

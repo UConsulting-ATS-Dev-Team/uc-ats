@@ -54,6 +54,7 @@ function fakeClient(messages, logRows = []) {
   const matches = (row, where) => {
     const ids = where.id?.in ?? (typeof where.id === 'string' ? [where.id] : null);
     if (ids && !ids.includes(row.id)) return false;
+    if (where.id?.notIn?.includes(row.id)) return false;
     if (where.status && row.status !== where.status) return false;
     if (where.attempts !== undefined && row.attempts !== where.attempts) return false;
     if (where.updatedAt?.lt && !(row.updatedAt < where.updatedAt.lt)) return false;
@@ -192,6 +193,19 @@ describe('sending what was approved', () => {
     await processDecisionQueue(client);
     expect(client.communicationLog.create.mock.calls[0][0].data.attemptKey).toBe('decision-message:m1:1|sam@ucla.edu');
     expect(sendEmail.mock.calls[0][0]).toBe('sam@ucla.edu');
+  });
+
+  it('finishes the run when a claim keeps failing, leaving that message for the next tick', async () => {
+    const { client, rows } = fakeClient([message({ id: 'm1' }), message({ id: 'm2', email: 'ava@ucla.edu' })]);
+    const claim = client.decisionMessage.updateMany.getMockImplementation();
+    client.decisionMessage.updateMany.mockImplementation((args) =>
+      args.where.id === 'm1' ? Promise.reject(new Error('pool timeout')) : claim(args)
+    );
+
+    const totals = await processDecisionQueue(client); // would never return if m1 were fetched again
+
+    expect(totals).toMatchObject({ sent: 1, failed: 1 });
+    expect(rows.get('m1').status).toBe('QUEUED');
   });
 
   it('keeps sending the rest when one message hits a database error', async () => {
