@@ -18,3 +18,25 @@ export function groupsForMember(config, userId) {
     mine.some((memberGroup) => assignments[memberGroup.id]?.includes(group.id))
   );
 }
+
+// Props for one row of a group picker. The row is the control: it takes the
+// click and the keyboard, and the input inside it is only drawn. When the input
+// handled clicks as well, a click on the box toggled the group twice.
+export function groupRowProps({ selected, disabled, onToggle, kind = 'checkbox' }) {
+  const toggle = () => {
+    if (!disabled) onToggle();
+  };
+  return {
+    role: kind,
+    'aria-checked': selected,
+    'aria-disabled': disabled,
+    tabIndex: disabled ? -1 : 0,
+    onClick: toggle,
+    onKeyDown: (event) => {
+      if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault();
+        toggle();
+      }
+    }
+  };
+}

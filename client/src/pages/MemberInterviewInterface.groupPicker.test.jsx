@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import MemberInterviewInterface from './MemberInterviewInterface';
@@ -39,6 +39,7 @@ beforeEach(() => {
   });
 });
 
+// The row is the control; the input inside it is only drawn.
 const openPicker = async () => {
   render(
     <MemoryRouter initialEntries={['/member/interview-interface?interviewId=int-1&groupIds=g-4a']}>
@@ -46,16 +47,25 @@ const openPicker = async () => {
     </MemoryRouter>
   );
   await userEvent.click(await screen.findByRole('button', { name: 'Select Groups' }));
-  return screen.getByText('5A').closest('.group-selection-item');
+  return screen.getByRole('checkbox', { name: /5A/ });
 };
 
 describe('MemberInterviewInterface group picker', () => {
-  it('selects a group with one click on its checkbox', async () => {
+  it('selects a group with one click on the box drawn beside it', async () => {
     const row = await openPicker();
-    await userEvent.click(within(row).getByRole('checkbox'));
+    await userEvent.click(row.querySelector('.checkmark'));
 
     expect(screen.getByText('1/3 groups selected')).toBeInTheDocument();
-    expect(within(row).getByRole('checkbox')).toBeChecked();
+    expect(row).toHaveAttribute('aria-checked', 'true');
+  });
+
+  // jsdom ignores the CSS that keeps clicks off the input, so this click lands
+  // on it, as every click on the box did before: it must still count once.
+  it('counts a click that reaches the hidden input once', async () => {
+    const row = await openPicker();
+    await userEvent.click(row.querySelector('input'));
+
+    expect(screen.getByText('1/3 groups selected')).toBeInTheDocument();
   });
 
   it('selects a group with one click on its name, and a second click clears it', async () => {
@@ -65,6 +75,16 @@ describe('MemberInterviewInterface group picker', () => {
 
     await userEvent.click(screen.getByText('5A'));
     expect(screen.getByText('0/3 groups selected')).toBeInTheDocument();
-    expect(within(row).getByRole('checkbox')).not.toBeChecked();
+    expect(row).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('selects a group from the keyboard', async () => {
+    const row = await openPicker();
+    row.focus();
+    await userEvent.keyboard(' ');
+    expect(screen.getByText('1/3 groups selected')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByText('0/3 groups selected')).toBeInTheDocument();
   });
 });

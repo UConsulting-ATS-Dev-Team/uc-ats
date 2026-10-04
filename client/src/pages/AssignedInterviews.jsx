@@ -22,7 +22,7 @@ import AuthenticatedImage from '../components/AuthenticatedImage';
 import { headshotSrc } from '../utils/headshotUrl';
 import CandidateQuestionSetup from '../components/interview/CandidateQuestionSetup';
 import { DECISION_OPTIONS, guidePhaseForInterviewType } from '../utils/decisionOptions';
-import { groupsForMember } from '../utils/interviewGroups';
+import { groupRowProps, groupsForMember } from '../utils/interviewGroups';
 import { DecisionGuideButton, DecisionGuidePanel, useDecisionGuide } from '../components/deliberations/DecisionGuide';
 import { useTutorialGate } from '../components/TutorialGate';
 import { tutorialCategoryForInterviewType } from '../utils/tutorialCategories';
@@ -776,7 +776,12 @@ export default function AssignedInterviews() {
                               <div 
                                 key={group.id} 
                                 className={`group-selection-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}`}
-                                onClick={() => !isDisabled && handleGroupToggle(group.id)}
+                                {...groupRowProps({
+                                  selected: isSelected,
+                                  disabled: isDisabled,
+                                  onToggle: () => handleGroupToggle(group.id),
+                                  kind: isFinalRound ? 'radio' : 'checkbox'
+                                })}
                               >
                                 <div className="group-checkbox">
                                   <input
@@ -784,6 +789,7 @@ export default function AssignedInterviews() {
                                     checked={isSelected}
                                     readOnly
                                     tabIndex={-1}
+                                    aria-hidden="true"
                                     disabled={isDisabled}
                                   />
                                   <span className="checkmark"></span>
