@@ -396,6 +396,21 @@ The system follows a **recruiting cycle-based workflow**:
   `DecisionMessage`s that an admin reviews and sends in Master Communications → Decisions
   ([server/src/services/decisionBatches.js](server/src/services/decisionBatches.js)).
 - Round order lives in [server/src/utils/roundProgression.js](server/src/utils/roundProgression.js).
+- **Approving a send only queues it** (`PENDING → QUEUED`); the request answers at once.
+  [decisionSendQueue.js](server/src/services/decisionSendQueue.js) sends, started by the
+  approval and by a cron every minute, so a send outlives the tab, the Vercel proxy and a
+  restart. On 2026-10-03 a restart under load killed an in-request send mid-batch and the
+  leftovers had to be reconstructed from the database by hand.
+- Each send writes its `communication_logs` row as a `SENDING` claim **before** calling SES,
+  keyed `decision-message:<id>:<attempt>|<email>`. A message left `SENDING` for 10 minutes is
+  settled from that row: no row is queued again (SES was never asked), `SENT`/`DELIVERED`/
+  `BOUNCED` is marked sent, `FAILED` is retried (3 attempts, a minute apart, then `FAILED`),
+  and a row still `SENDING` becomes `UNCONFIRMED`. Unconfirmed means it may have gone out;
+  nothing resends it until an admin picks Mark sent or Send again on the batch page. The
+  same split applies live: `sendEmail` returns `rejected: true` only when SES answered with
+  an error, which is retried; a send that got no answer becomes `UNCONFIRMED`.
+- An address that is not an address (a lone `d` was queued once) blocks the send until it
+  is fixed on the batch page or left out. Fixing it changes only that email, not the application.
 
 **Candidate interview sign-up under a burst:**
 - A decision email sends a whole round to `/interview-signup` at once. Every booking in a

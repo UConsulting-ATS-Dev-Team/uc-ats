@@ -9,19 +9,22 @@ import { roundNumberForInterviewType } from '../utils/interviewRounds.js';
 // Decision emails, held for human review.
 //
 // Processing decisions on Staging queues one DecisionMessage per applicant
-// (services/decisionProcessing.js). Nothing here runs on a timer: an admin reads
-// each outcome's wording and recipient list in Master Communications, sends
-// themselves a test, and approves the send - one outcome at a time, so "you're
-// in" and "not this time" are never a single click apart.
+// (services/decisionProcessing.js). An admin reads each outcome's wording and
+// recipient list in Master Communications, sends themselves a test, and
+// approves the send - one outcome at a time, so "you're in" and "not this time"
+// are never a single click apart. Approving moves the messages to QUEUED; the
+// sending itself is decisionSendQueue.js.
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const SEND_CONCURRENCY = 5;
-const SEND_ATTEMPTS = 3;
-// A message still SENDING after this long was interrupted, e.g. by a restart.
-const STUCK_SENDING_MS = 15 * 60 * 1000;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const unique = (values) => [...new Set(values.filter(Boolean))];
+
+// Deliberately loose: it catches what cannot be an address at all (a lone "d"
+// was queued on 2026-10-03), not every address SES would refuse. The client's
+// copy is in DecisionBatchPanel.jsx.
+const ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const isDeliverableAddress = (email) => ADDRESS_PATTERN.test(String(email ?? '').trim());
 
 const MESSAGE_SELECT = {
   id: true,
@@ -36,7 +39,8 @@ const MESSAGE_SELECT = {
   attempts: true,
   sentAt: true,
   error: true,
-  toRound: true
+  toRound: true,
+  nextAttemptAt: true
 };
 
 // Stands in for a recipient when an outcome has none left to render against.
@@ -95,7 +99,31 @@ async function renderContext(batch, client, extra = {}) {
   };
 }
 
-const emptyCounts = () => ({ PENDING: 0, EXCLUDED: 0, SENDING: 0, SENT: 0, FAILED: 0 });
+/** What the send worker needs to render one outcome of a batch. */
+export async function decisionLetterContext(batchId, outcome, client = prisma) {
+  const batch = await loadBatch(batchId, client);
+  return { batch, template: templateFor(batch, outcome), context: await renderContext(batch, client) };
+}
+
+const emptyCounts = () => ({ PENDING: 0, EXCLUDED: 0, QUEUED: 0, SENDING: 0, SENT: 0, FAILED: 0, UNCONFIRMED: 0 });
+
+/**
+ * What SES reported for each message's latest attempt, from the
+ * communications log: DELIVERED, BOUNCED and so on. Plain SENT until SES
+ * delivery reports are configured (see sesEvents.js).
+ */
+async function deliveryByMessage(messages, client) {
+  const keys = messages
+    .filter((message) => message.attempts > 0)
+    // Trimmed as sendEmail trims it when it keys the row.
+    .map((message) => `decision-message:${message.id}:${message.attempts}|${String(message.email).trim()}`);
+  if (keys.length === 0) return new Map();
+  const rows = await client.communicationLog.findMany({
+    where: { attemptKey: { in: keys } },
+    select: { attemptKey: true, status: true, error: true }
+  });
+  return new Map(rows.map((row) => [row.attemptKey.split(':')[1], { status: row.status, error: row.error }]));
+}
 
 export async function listDecisionBatches({ cycleId } = {}, client = prisma) {
   const batches = await client.decisionBatch.findMany({
@@ -152,6 +180,11 @@ export async function getDecisionBatch(batchId, client = prisma) {
     client.recruitingCycle.findUnique({ where: { id: batch.cycleId }, select: { id: true, name: true } }),
     client.user.findUnique({ where: { id: batch.processedById }, select: { id: true, fullName: true } })
   ]);
+  const delivery = await deliveryByMessage(messages, client);
+  for (const message of messages) {
+    message.delivery = delivery.get(message.id) ?? null;
+    message.addressOk = isDeliverableAddress(message.email);
+  }
 
   return {
     id: batch.id,
@@ -255,7 +288,7 @@ export async function sendDecisionTest({ batchId, outcome, user }, client = pris
 
 // Minted at send time, not when the batch was made, so a batch that waited a
 // week for review still delivers a working link. Reuses the password-reset flow.
-async function mintInviteLink(userId, client) {
+export async function mintInviteLink(userId, client = prisma) {
   const resetToken = crypto.randomBytes(32).toString('hex');
   await client.user.update({
     where: { id: userId },
@@ -264,70 +297,20 @@ async function mintInviteLink(userId, client) {
   return `${config.clientUrl}/reset-password?token=${resetToken}`;
 }
 
-async function sendOne(messageId, { template, outcome, context, sentBy, cycleId }, client) {
-  // Claim the message first. Only one sender can move it out of PENDING, so a
-  // double click, or two admins sending at once, cannot email anyone twice.
-  const { count } = await client.decisionMessage.updateMany({
-    where: { id: messageId, status: 'PENDING' },
-    data: { status: 'SENDING', attempts: { increment: 1 } }
-  });
-  if (count === 0) return { messageId, skipped: true };
-
-  const message = await client.decisionMessage.findUnique({ where: { id: messageId } });
-
-  try {
-    const setPasswordLink = message.needsInvite && message.userId ? await mintInviteLink(message.userId, client) : null;
-    const { subject, html } = await renderDecisionLetter(template, message, { ...context, setPasswordLink }, outcome);
-
-    let result = { success: false, error: 'Not attempted' };
-    for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
-      result = await sendEmail(message.email, subject, html, [], {
-        // Includes the claim count, which the updateMany above incremented.
-        // Constant across the transport retries just below, so those collapse
-        // into one row; different for a later requeue, so an approved resend
-        // is a new row rather than an overwrite of the first send's record.
-        attemptKey: `decision-message:${messageId}:${message.attempts}`,
-        category: 'DECISION_BATCH',
-        trigger: 'MANUAL',
-        recipientName: [message.firstName, message.lastName].filter(Boolean).join(' ') || null,
-        triggeredById: sentBy,
-        cycleId,
-      });
-      if (result.success) break;
-      if (attempt < SEND_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-    }
-
-    if (result.success) {
-      await client.decisionMessage.update({
-        where: { id: messageId },
-        data: { status: 'SENT', sentAt: new Date(), sentById: sentBy, providerMessageId: result.messageId ?? null, error: null }
-      });
-      return { messageId, success: true };
-    }
-
-    await client.decisionMessage.update({
-      where: { id: messageId },
-      data: { status: 'FAILED', error: result.error || 'Send failed' }
-    });
-    return { messageId, success: false, error: result.error };
-  } catch (error) {
-    await client.decisionMessage.update({ where: { id: messageId }, data: { status: 'FAILED', error: error.message } });
-    return { messageId, success: false, error: error.message };
-  }
-}
-
 /**
- * Send every PENDING message for one outcome of a batch. `expectedCount` is the
- * number the admin approved; if the list has changed since they looked, nothing
- * is sent and they are asked to look again.
+ * Approve one outcome of a batch: every PENDING message moves to QUEUED and the
+ * send worker takes it from there. `expectedCount` is the number the admin
+ * approved; if the list has changed since they looked, nothing is queued and
+ * they are asked to look again. So is a list holding an address that cannot
+ * receive mail, which has to be fixed or left out first.
  */
-export async function sendDecisionEmails({ batchId, outcome, expectedCount, sentBy }, client = prisma) {
+export async function queueDecisionEmails({ batchId, outcome, expectedCount, sentBy }, client = prisma) {
   const batch = await loadBatch(batchId, client);
   const template = templateFor(batch, outcome);
 
   const pending = await client.decisionMessage.findMany({
     where: { batchId, outcome, status: 'PENDING' },
-    select: { id: true }
+    select: { id: true, email: true, firstName: true, lastName: true }
   });
 
   if (expectedCount !== undefined && expectedCount !== null && pending.length !== Number(expectedCount)) {
@@ -336,29 +319,32 @@ export async function sendDecisionEmails({ batchId, outcome, expectedCount, sent
       `The recipient list changed since you reviewed it: ${pending.length} ready to send, not ${expectedCount}. Review it again before sending.`
     );
   }
-  if (pending.length === 0) return { sent: 0, failed: 0, skipped: 0, total: 0 };
+  const unreachable = pending.filter((message) => !isDeliverableAddress(message.email));
+  if (unreachable.length > 0) {
+    const one = unreachable.length === 1;
+    const names = unreachable
+      .slice(0, 3)
+      .map((message) => `${[message.firstName, message.lastName].filter(Boolean).join(' ')} ("${message.email}")`);
+    throw httpError(
+      409,
+      `${unreachable.length} ${one ? 'address' : 'addresses'} cannot receive email: ${names.join(', ')}` +
+        `${unreachable.length > 3 ? ' and more' : ''}. Fix ${one ? 'it' : 'them'} or leave ${one ? 'it' : 'them'} out, then send.`
+    );
+  }
+  if (pending.length === 0) return { queued: 0 };
 
-  const shared = { template, outcome, context: await renderContext(batch, client), sentBy, cycleId: batch.cycleId };
-  const queue = pending.map((message) => message.id);
-  const results = [];
-  await Promise.all(
-    Array.from({ length: Math.min(SEND_CONCURRENCY, queue.length) }, async () => {
-      while (queue.length > 0) {
-        results.push(await sendOne(queue.shift(), shared, client));
-      }
-    })
-  );
+  const { count } = await client.decisionMessage.updateMany({
+    // Only what was reviewed: a message un-excluded since the list was read waits.
+    where: { batchId, outcome, status: 'PENDING', id: { in: pending.map((message) => message.id) } },
+    data: { status: 'QUEUED', sentById: sentBy, nextAttemptAt: new Date(), error: null }
+  });
 
-  const sent = results.filter((result) => result.success).length;
-  const failed = results.filter((result) => result.success === false).length;
-  const skipped = results.filter((result) => result.skipped).length;
-
-  if (sent > 0) {
+  if (count > 0) {
     try {
       await client.messageLog.create({
         data: {
           channel: 'email',
-          recipientCount: sent,
+          recipientCount: count,
           subject: template.subject,
           body: template.body,
           sentBy,
@@ -370,25 +356,74 @@ export async function sendDecisionEmails({ batchId, outcome, expectedCount, sent
     }
   }
 
-  return { sent, failed, skipped, total: results.length };
+  return { queued: count };
+}
+
+/** Stop what is still queued for one outcome. Anything already sent stays sent. */
+export async function cancelQueuedDecisionEmails({ batchId, outcome }, client = prisma) {
+  const batch = await loadBatch(batchId, client);
+  templateFor(batch, outcome);
+  const { count } = await client.decisionMessage.updateMany({
+    where: { batchId, outcome, status: 'QUEUED' },
+    data: { status: 'PENDING', nextAttemptAt: null }
+  });
+  return { stopped: count };
 }
 
 /**
- * Put failed messages back in the queue. Sending them again is a separate,
- * explicit approval. A message stuck in SENDING - the server stopped mid-send -
- * is marked failed first, with a note that it may already have been delivered.
+ * Put failed messages back to Ready. Sending them again is a separate,
+ * explicit approval. Unconfirmed ones are not included: they may have been
+ * delivered, so each is settled on its own with resolveUnconfirmedDecisionEmails.
  */
 export async function requeueFailedDecisionEmails({ batchId, outcome }, client = prisma) {
   const batch = await loadBatch(batchId, client);
   templateFor(batch, outcome);
 
-  await client.decisionMessage.updateMany({
-    where: { batchId, outcome, status: 'SENDING', updatedAt: { lt: new Date(Date.now() - STUCK_SENDING_MS) } },
-    data: { status: 'FAILED', error: 'Interrupted while sending - it may or may not have been delivered.' }
-  });
   const { count } = await client.decisionMessage.updateMany({
     where: { batchId, outcome, status: 'FAILED' },
-    data: { status: 'PENDING', error: null }
+    data: { status: 'PENDING', error: null, nextAttemptAt: null }
   });
   return { requeued: count };
+}
+
+/**
+ * An admin's answer for messages whose send was cut off: MARK_SENT when they
+ * know it arrived, SEND_AGAIN to put it back to Ready for an ordinary approved
+ * send.
+ */
+export async function resolveUnconfirmedDecisionEmails({ batchId, messageIds, resolution, resolvedBy }, client = prisma) {
+  if (!Array.isArray(messageIds) || messageIds.length === 0) throw httpError(400, 'messageIds is required');
+  const where = { batchId, id: { in: messageIds }, status: 'UNCONFIRMED' };
+
+  if (resolution === 'MARK_SENT') {
+    const { count } = await client.decisionMessage.updateMany({
+      where,
+      data: { status: 'SENT', error: null, sentById: resolvedBy }
+    });
+    return { updated: count };
+  }
+  if (resolution === 'SEND_AGAIN') {
+    const { count } = await client.decisionMessage.updateMany({
+      where,
+      data: { status: 'PENDING', error: null, nextAttemptAt: null }
+    });
+    return { updated: count };
+  }
+  throw httpError(400, 'resolution must be MARK_SENT or SEND_AGAIN');
+}
+
+/**
+ * Correct the address one unsent message goes to. Only this email changes;
+ * the application keeps the address it was submitted with.
+ */
+export async function updateDecisionMessageEmail({ batchId, messageId, email }, client = prisma) {
+  const address = String(email ?? '').trim();
+  if (!isDeliverableAddress(address)) throw httpError(400, `"${address}" is not an email address.`);
+
+  const { count } = await client.decisionMessage.updateMany({
+    where: { id: messageId, batchId, status: { in: ['PENDING', 'EXCLUDED', 'FAILED'] } },
+    data: { email: address }
+  });
+  if (count === 0) throw httpError(409, 'Only an email that has not been sent can be readdressed.');
+  return { email: address };
 }

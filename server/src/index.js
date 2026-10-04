@@ -31,6 +31,7 @@ import decisionGuideRoutes from './routes/decisionGuides.js';
 import documentRubricRoutes from './routes/documentRubrics.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
+import { drainDecisionQueue } from './services/decisionSendQueue.js';
 import { sendDueHostReminders } from './services/meetingHostReminders.js';
 import { sendDueAttendanceReminders } from './services/meetingAttendanceReminders.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
@@ -235,6 +236,12 @@ if (config.runCrons) {
     if (count > 0) {
       console.log(`Processed ${count} scheduled master communication(s)`);
     }
+  });
+
+  // Send approved decision emails, and finish any a restart interrupted. A run
+  // still going from the last tick (or from an approval) is not doubled.
+  cron.schedule('* * * * *', () => {
+    drainDecisionQueue();
   });
 
   // Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is

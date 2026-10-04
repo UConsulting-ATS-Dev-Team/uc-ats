@@ -181,7 +181,10 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
     console.error('Error sending email:', error);
     // A failed send is the row an admin most wants to find, so it is logged too.
     await record('FAILED', { error: error.message });
-    return { success: false, error: error.message };
+    // `rejected`: SES answered, and the answer was no, so trying again cannot
+    // deliver a second copy. Without an answer (a timeout, a dropped
+    // connection) SES may have taken the message anyway.
+    return { success: false, error: error.message, rejected: Boolean(error?.$metadata?.httpStatusCode) };
   }
 };
 
