@@ -66,7 +66,8 @@ describe('decideMerge', () => {
     ['different UIDs', [applicant(), talent({ studentId: '999' })], 'the accounts carry different UIDs'],
     ['three accounts', [applicant(), talent(), talent({ id: 'x' })], 'expected 2 accounts, found 3'],
     ['accounts whose addresses no longer match', [applicant({ email: 'someone@ucla.edu' }), talent()], 'the accounts no longer share a UCLA inbox'],
-    ['a pair an earlier run merged', [applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null })], 'already merged'],
+    ['a pair an earlier run merged', [applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null, deactivatedBy: 'ucla-twin-merge' })], 'already merged'],
+    ['a talent account an admin deactivated', [applicant(), talent({ isActive: false, googleId: null, deactivatedBy: 'admin-1' })], 'the talent account was deactivated by an admin'],
   ])('refuses %s', (_name, users, reason) => {
     expect(decideMerge(users)).toEqual({ ok: false, reason });
   });
@@ -82,7 +83,7 @@ describe('findAccountForSignIn', () => {
   });
 
   it('falls through to the active twin when the typed address was retired by a merge', async () => {
-    prisma.user.findFirst.mockResolvedValue(talent({ isActive: false }));
+    prisma.user.findFirst.mockResolvedValue(talent({ isActive: false, deactivatedBy: 'ucla-twin-merge' }));
     prisma.user.findMany.mockResolvedValue([applicant()]);
     expect((await findAccountForSignIn('james@g.ucla.edu')).id).toBe('keep');
     expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([
@@ -96,8 +97,14 @@ describe('findAccountForSignIn', () => {
     expect((await findAccountForSignIn('james@g.ucla.edu')).id).toBe('keep');
   });
 
-  it('still returns a deactivated account when no active twin exists, so it says so', async () => {
-    prisma.user.findFirst.mockResolvedValue(talent({ isActive: false }));
+  it('keeps an account an admin deactivated, without looking for its twin', async () => {
+    prisma.user.findFirst.mockResolvedValue(talent({ isActive: false, deactivatedBy: 'admin-1' }));
+    expect((await findAccountForSignIn('james@g.ucla.edu')).id).toBe('retire');
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still returns a retired account when no active twin exists, so it says so', async () => {
+    prisma.user.findFirst.mockResolvedValue(talent({ isActive: false, deactivatedBy: 'ucla-twin-merge' }));
     prisma.user.findMany.mockResolvedValue([applicant({ isActive: false })]);
     expect((await findAccountForSignIn('james@g.ucla.edu')).id).toBe('retire');
   });
@@ -106,6 +113,13 @@ describe('findAccountForSignIn', () => {
     prisma.user.findFirst.mockResolvedValue(null);
     expect(await findAccountForSignIn('james@gmail.com')).toBeNull();
     expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('decideMerge on a pair merged before retirements were marked', () => {
+  it('only adds the marker', () => {
+    const d = decideMerge([applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null, deactivatedBy: null })]);
+    expect(d).toMatchObject({ ok: true, markOnly: true, moveResumeIds: [], moveGoogle: false });
   });
 });
 
@@ -126,7 +140,7 @@ describe('mergeUclaTwinPair', () => {
     expect(prisma.externalResume.updateMany).toHaveBeenCalledWith({ where: { id: { in: ['r1'] } }, data: { userId: 'keep' } });
     const [retireCall, keepCall] = prisma.user.update.mock.calls.map(([args]) => args);
     expect(retireCall.where.id).toBe('retire');
-    expect(retireCall.data).toMatchObject({ isActive: false, googleId: null, googleLinkedAt: null });
+    expect(retireCall.data).toMatchObject({ isActive: false, deactivatedBy: 'ucla-twin-merge', googleId: null, googleLinkedAt: null });
     expect(keepCall).toMatchObject({ where: { id: 'keep' }, data: { googleId: 'g-1' } });
   });
 

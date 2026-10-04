@@ -5,7 +5,7 @@ import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
 import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
 import { lockTalentAccount } from './talentAccountLock.js';
-import { findUclaTwin } from './uclaTwinAccounts.js';
+import { findUclaTwin, isMergeRetired } from './uclaTwinAccounts.js';
 
 /**
  * Sign in with Google.
@@ -368,10 +368,10 @@ export const resolveGoogleUser = async (profile) => {
 
   // No account under this spelling, or only one a UCLA twin merge retired
   // (scripts/merge-ucla-twin-accounts.js): the account under the other spelling
-  // is the same person. A deactivated twin is only reported when there is no
-  // retired row of our own to report instead.
+  // is the same person. An account an admin deactivated is not a merge
+  // retirement and keeps refusing below, rather than handing out the twin.
   const twin = await findUclaTwin(profile.email);
-  if (twin && !twin.googleId && (twin.isActive !== false || !byEmail)) {
+  if (twin && !twin.googleId && (byEmail ? isMergeRetired(byEmail) && twin.isActive !== false : true)) {
     assertActive(twin);
     return { user: await adoptApplicant(await linkExisting(twin, profile), profile), isNewAccount: false };
   }

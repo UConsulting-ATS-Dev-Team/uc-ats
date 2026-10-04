@@ -18,6 +18,17 @@ import { lockTalentAccount } from './talentAccountLock.js';
 const insensitive = (email) => ({ email: { equals: email, mode: 'insensitive' } });
 
 /**
+ * User.deactivatedBy on an account a merge retired. Normally an admin's id; this
+ * marker is what tells a merge retirement from an admin's deactivation, which
+ * must keep the person out. Reactivating clears deactivatedBy, and the marker
+ * with it.
+ */
+export const MERGE_RETIRED_BY = 'ucla-twin-merge';
+
+/** Whether this account was retired by a merge, as opposed to deactivated by an admin. */
+export const isMergeRetired = (user) => user?.isActive === false && user.deactivatedBy === MERGE_RETIRED_BY;
+
+/**
  * The account under the other UCLA spelling of this address, or null. Null too
  * when more than one row matches, so a collision is never resolved by sort order.
  */
@@ -32,14 +43,16 @@ export const findUclaTwin = async (email, client = prisma) => {
  * The account a password sign-in or reset for this address belongs to.
  *
  * The address as typed wins while it names an active account. When it names
- * nothing, or only a deactivated account (the talent half of a merged pair), the
- * active account under the other UCLA spelling answers instead - the same inbox,
- * so the same proof of identity. Otherwise the typed address's own row, so a
- * deactivated account still says it is deactivated.
+ * nothing, or only the account a merge retired (the talent half of a merged
+ * pair), the active account under the other UCLA spelling answers instead - the
+ * same inbox, so the same proof of identity. Otherwise the typed address's own
+ * row, so an account an admin deactivated still says it is deactivated.
  */
 export const findAccountForSignIn = async (email, client = prisma) => {
   const typed = await client.user.findFirst({ where: insensitive(email) });
   if (typed && typed.isActive !== false) return typed;
+  // An admin's deactivation stands: only a merge retirement falls through.
+  if (typed && !isMergeRetired(typed)) return typed;
 
   const twin = await findUclaTwin(email, client);
   if (twin && twin.isActive !== false) return twin;
@@ -89,7 +102,11 @@ export function decideMerge(users, resumes = []) {
   // A pair an earlier run already merged: the talent account is deactivated and
   // holds nothing. Reported as done so a re-run after a partial run is a no-op.
   if (retire.isActive === false && !retire.googleId && moveResumeIds.length === 0) {
-    return { ok: false, reason: 'already merged' };
+    if (isMergeRetired(retire)) return { ok: false, reason: 'already merged' };
+    // An admin's deactivation records their id; a merge made before retirements
+    // were marked left deactivatedBy empty, and only that one gets the marker.
+    if (retire.deactivatedBy) return { ok: false, reason: 'the talent account was deactivated by an admin' };
+    return { ok: true, keep, retire, moveResumeIds: [], demoteResumeIds: [], moveGoogle: false, fillVerified: null, markOnly: true };
   }
 
   // Both accounts may each have a current resume. One person has one current
@@ -118,7 +135,7 @@ export async function planUclaTwinMerges(client = prisma) {
     where: { email: { endsWith: 'ucla.edu', mode: 'insensitive' } },
     select: {
       id: true, email: true, fullName: true, role: true, isActive: true, isExternalTalent: true,
-      studentId: true, googleId: true, googleLinkedAt: true, emailVerifiedAt: true,
+      studentId: true, googleId: true, googleLinkedAt: true, emailVerifiedAt: true, deactivatedBy: true,
     },
   });
 
@@ -183,7 +200,8 @@ export async function mergeUclaTwinPair(keepId, retireId, client = prisma) {
       where: { id: retireId },
       data: {
         isActive: false,
-        deactivatedAt: new Date(),
+        deactivatedBy: MERGE_RETIRED_BY,
+        ...(decision.markOnly ? {} : { deactivatedAt: new Date() }),
         ...(decision.moveGoogle ? { googleId: null, googleLinkedAt: null } : {}),
       },
     });

@@ -54,6 +54,7 @@ try {
       planned.moveResumeIds.length && `${planned.moveResumeIds.length} resume(s)`,
       planned.moveGoogle && 'Google link',
       planned.fillVerified && 'verified address',
+      planned.markOnly && 'already merged, marking it retired',
     ].filter(Boolean).join(', ') || 'nothing to move';
     console.log(`  keep ${label(planned.keep)}  <-  retire ${label(planned.retire)}   [${what}]`);
 
