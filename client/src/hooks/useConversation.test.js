@@ -255,6 +255,17 @@ describe('useConversation', () => {
       expect(result.current.error).toBeNull();
     });
 
+    it('keeps a saved tap when neither the server nor the client can read it back', async () => {
+      mockGet.mockImplementation((url) =>
+        url.endsWith('/reactions') ? Promise.reject(new Error('offline')) : Promise.resolve([msg])
+      );
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reactions: null, readAt: null });
+      const result = await mount();
+
+      await act(async () => { await result.current.react('msg-1', '👍'); });
+      expect(result.current.messages[0].reactions).toEqual([{ emoji: '👍', count: 1, users: [me] }]);
+    });
+
     it('drops a refused tap and says why', async () => {
       mockGet.mockResolvedValue([msg]);
       mockPost.mockRejectedValue(new Error('Reactions are not available yet'));

@@ -86,8 +86,10 @@ export default function useConversation({ resolve, currentUser }) {
       const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
       if (conversationIdRef.current !== conversationId) return;
       if (acceptReactions(messageId, result.reactions, result.readAt)) showReactions(messageId);
+      return true;
     } catch (_) {
       // The next cue, or reopening the chat, catches up.
+      return false;
     }
   }, [acceptReactions, showReactions]);
 
@@ -269,7 +271,15 @@ export default function useConversation({ resolve, currentUser }) {
       // Saved, but the server could not read the reactions back: keep the tap
       // shown until a read of our own lands.
       if (result.reactions) acceptReactions(messageId, result.reactions, result.readAt);
-      else await refetchReactions(conversation.id, messageId);
+      else if (!(await refetchReactions(conversation.id, messageId))) {
+        // Nothing could be read, but the toggle is saved: fold it into what is
+        // held, under the held stamp, so the next real read still replaces it.
+        const held = serverReactionsRef.current.get(messageId);
+        serverReactionsRef.current.set(messageId, {
+          reactions: toggleLocally(held?.reactions ?? [], emoji, currentUser),
+          readAt: held?.readAt ?? null
+        });
+      }
     } catch (err) {
       setError(err.message || 'Failed to react');
     } finally {
