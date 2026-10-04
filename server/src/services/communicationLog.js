@@ -13,6 +13,7 @@ export const COMMUNICATION_CATEGORIES = [
   'INTERVIEW_SLOT',       // slot invitations, reminders, changes
   'REVIEWER_REMINDER',
   'ACCOUNTABILITY_REMINDER', // members under their points target, sent by an admin
+  'SIGNUP_REMINDER',      // "pick a time" to people in a round with no booking, sent by an admin
   'MASTER_COMMUNICATION', // composed by hand in Master Communications
   'DECISION_BATCH',       // queued by Process All Decisions, sent by an admin
   'TEST',                 // "send this to me first"

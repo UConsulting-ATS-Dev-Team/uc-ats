@@ -778,6 +778,23 @@ The system follows a **recruiting cycle-based workflow**:
   hand their number to the host. A sealed candidate's onboarding and applications are
   never read.
 
+**Interview signup reminders:**
+- An admin emails the people in a round who have not booked a session. Rules live in
+  [server/src/services/signupReminders.js](server/src/services/signupReminders.js); the route
+  is `POST /api/admin/scheduling/rounds/:round/signup-reminders` (rounds 2-4).
+- Not booked means `currentRound` is the round, not `REJECTED`, and no `CONFIRMED`,
+  `WAITLISTED` or `NEEDS_PLACEMENT` signup on a session of a non-cancelled interview of that
+  round in the cycle. `findUnbookedApplications` is the one definition; the overview's
+  `unassigned` reads it too. It is recomputed at send time, so anyone who booked since the
+  page loaded is `skipped`.
+- Refuses with `409 NO_OPEN_SESSIONS` when no session of the round is bookable right now:
+  the email's only job is the link to `/interview-signup`.
+- There is no reminders table. Each send is a `SIGNUP_REMINDER` row in `communication_logs`
+  with `attemptKey` `signup-reminder:<round>:<applicationId>:<sendId>`, and "last reminded"
+  is read back from that key, per round. A `FAILED` row does not count.
+- Not gated on `SCHEDULING_EMAILS`: that switch holds back the automatic slot mail, and this
+  is an admin sending copy they wrote, like accountability reminders.
+
 **Accountability points:**
 - Every member needs a target number of points per cycle (3 by default), earned from nine
   types of participation. **Each type counts once**, so the member's view reads as a
