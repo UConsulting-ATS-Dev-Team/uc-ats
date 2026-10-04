@@ -10,6 +10,7 @@ vi.mock('./emailTheme.js', async (importOriginal) => {
 });
 
 const { sendEmail } = await import('./emailNotifications.js');
+const { resolveEmailTheme } = await import('./emailTheme.js');
 const {
   DEFAULT_SIGNUP_REMINDER_MESSAGE,
   SIGNUP_REMINDER_MERGE_FIELDS,
@@ -176,6 +177,13 @@ function claimClient({ booked = [], rows = [] } = {}) {
   const log = [...rows];
   const client = {
     log,
+    communicationLog: {
+      updateMany: vi.fn(async ({ where, data }) => {
+        const hits = log.filter((row) => row.attemptKey === where.attemptKey && row.status === where.status);
+        for (const row of hits) Object.assign(row, data);
+        return { count: hits.length };
+      }),
+    },
     $transaction: vi.fn(async (fn) => {
       const mine = [];
       const tx = {
@@ -349,6 +357,57 @@ describe('sendSignupReminders', () => {
     expect(sendEmail).toHaveBeenCalledTimes(1);
     expect([...first.sent, ...second.sent]).toEqual(['app-1']);
     expect([...first.skipped, ...second.skipped]).toEqual(['app-1']);
+  });
+
+  it('claims nothing when the email cannot be rendered, so a retry sends', async () => {
+    resolveEmailTheme.mockRejectedValueOnce(new Error('theme store exploded'));
+    sendEmail.mockResolvedValue({ success: true });
+    const client = claimClient();
+
+    const first = await sendSignupReminders([pat], opts, client);
+
+    expect(first).toEqual({ sent: [], skipped: [], failed: [{ id: 'app-1', email: 'pat@example.com', error: 'theme store exploded' }] });
+    expect(client.log).toHaveLength(0);
+    expect(sendEmail).not.toHaveBeenCalled();
+
+    const retry = await sendSignupReminders([pat], opts, client);
+    expect(retry.sent).toEqual(['app-1']);
+  });
+
+  it('marks the claim FAILED when the send throws after claiming, so a retry sends', async () => {
+    sendEmail.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValue({ success: true });
+    const client = claimClient();
+
+    const first = await sendSignupReminders([pat], opts, client);
+
+    expect(first.failed).toEqual([{ id: 'app-1', email: 'pat@example.com', error: 'connection reset' }]);
+    expect(client.log).toHaveLength(1);
+    expect(client.log[0]).toMatchObject({ status: 'FAILED', error: 'connection reset' });
+
+    const retry = await sendSignupReminders([pat], opts, client);
+    expect(retry.sent).toEqual(['app-1']);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it('still reports the failure when releasing the claim fails too', async () => {
+    sendEmail.mockRejectedValueOnce(new Error('connection reset'));
+    const client = claimClient();
+    client.communicationLog.updateMany.mockRejectedValueOnce(new Error('db down'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await sendSignupReminders([pat], opts, client);
+
+    expect(result.failed).toEqual([{ id: 'app-1', email: 'pat@example.com', error: 'connection reset' }]);
+    quiet.mockRestore();
+  });
+
+  it('counts a claim left SENDING as reminded: it may have gone out', async () => {
+    const client = claimClient({
+      rows: [{ attemptKey: 'signup-reminder:2:app-1:died|pat@example.com', status: 'SENDING', sentAt: new Date() }],
+    });
+    const result = await sendSignupReminders([pat], opts, client);
+    expect(result.skipped).toEqual(['app-1']);
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 
   it('sends once when a retry follows a finished send', async () => {

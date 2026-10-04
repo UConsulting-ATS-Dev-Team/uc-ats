@@ -796,12 +796,15 @@ The system follows a **recruiting cycle-based workflow**:
 - There is no reminders table. Each send is a `SIGNUP_REMINDER` row in `communication_logs`
   with `attemptKey` `signup-reminder:<round>:<applicationId>:<sendId>`, and "last reminded"
   is read back from that key, per round (on `unassigned` and on booked `signups` alike).
-  `FAILED`, `BOUNCED` and `COMPLAINED` rows do not count; a leftover `SENDING` row does,
-  since it most likely went out.
+  `FAILED`, `BOUNCED` and `COMPLAINED` rows do not count. A leftover `SENDING` row (the
+  process died between claim and send) does, on purpose: nobody can tell whether it went
+  out, and a double send is worse than a missed one.
 - Each person's send is claimed first, the `applicationReceipts.js` pattern: under
   `pg_try_advisory_xact_lock` on (round, application) it re-checks they are unbooked,
   refuses if they were reminded for that round within `REMINDER_COOLDOWN_MS` (1 hour), and
-  writes a `SENDING` row that `sendEmail` overwrites. A retry after the proxy cut the
+  writes a `SENDING` row that `sendEmail` overwrites. The email is rendered before the
+  claim, and a throw after it marks the claim `FAILED`, so neither blocks the next attempt
+  for an hour. A retry after the proxy cut the
   response off, or two admins at once, skips instead of sending twice. Five sends run at
   once (`utils/concurrency.js`) to keep the response short in the first place.
 - Not gated on `SCHEDULING_EMAILS`: that switch holds back the automatic slot mail, and this

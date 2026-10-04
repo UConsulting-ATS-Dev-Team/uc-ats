@@ -56,10 +56,14 @@ const ATTEMPT_PREFIX = 'signup-reminder';
 /// that a deliberate second nudge later in the day still goes.
 export const REMINDER_COOLDOWN_MS = 60 * 60 * 1000;
 
-// Statuses that mean the reminder never reached the person. A SENDING row
-// left behind by an interrupted send is NOT here: it was claimed right before
-// sendEmail, so it most likely went out, and counting it is the side that
-// avoids a double send.
+// Statuses that mean the reminder never reached the person.
+//
+// SENDING is deliberately NOT here. A SENDING row that stays SENDING means the
+// process died between the claim and sendEmail recording how the send ended
+// (every failure we can see is turned into FAILED; see sendSignupReminders).
+// From the row alone there is no telling whether SES got the message, and a
+// double send is worse than a missed one, so it counts as reminded: the person
+// is skipped for the cooldown and the page shows it as their last reminder.
 const NOT_DELIVERED = ['FAILED', 'BOUNCED', 'COMPLAINED'];
 
 const attemptPrefixFor = (round, applicationId) => `${ATTEMPT_PREFIX}:${round}:${applicationId}:`;
@@ -230,6 +234,27 @@ export async function renderSignupReminder(
  * sendEmail then overwrites the row through the same attemptKey with how the
  * send ended.
  */
+// sendEmail scopes the key to the address with `|recipient`, trimmed; the
+// claim has to match it exactly for the send to overwrite it.
+const claimKeyFor = (attemptKey, application) => `${attemptKey}|${String(application.email).trim()}`;
+
+/**
+ * Turn a claim that will never be overwritten into FAILED, so the person is
+ * not skipped for an hour over a send that never happened. Only a row still
+ * SENDING is touched: if sendEmail did record an outcome, that stands.
+ * Best-effort; a failure here is logged, never thrown.
+ */
+async function releaseClaim(claimKey, error, client) {
+  try {
+    await client.communicationLog.updateMany({
+      where: { attemptKey: claimKey, status: 'SENDING' },
+      data: { status: 'FAILED', error: String(error?.message ?? error).slice(0, 2000) },
+    });
+  } catch (e) {
+    console.error('[signupReminders] could not release a reminder claim:', e);
+  }
+}
+
 async function claimReminder({ application, cycleId, round, attemptKey, triggeredById, now }, client) {
   return client.$transaction(
     async (tx) => {
@@ -254,8 +279,6 @@ async function claimReminder({ application, cycleId, round, attemptKey, triggere
       });
       if (recent) return 'RECENT';
 
-      // sendEmail scopes the key to the address with `|recipient`, trimmed;
-      // the claim has to match it exactly for the send to overwrite it.
       const recipient = String(application.email).trim();
       await tx.communicationLog.create({
         data: {
@@ -267,7 +290,7 @@ async function claimReminder({ application, cycleId, round, attemptKey, triggere
           recipientName: reminderValues(application, {}).fullName || null,
           triggeredById: triggeredById ?? null,
           cycleId,
-          attemptKey: `${attemptKey}|${recipient}`,
+          attemptKey: claimKeyFor(attemptKey, application),
         },
       });
       return 'CLAIMED';
@@ -302,12 +325,18 @@ export async function sendSignupReminders(
   const outcomes = await mapWithConcurrency(
     applications,
     async (application) => {
+      const attemptKey = `${attemptPrefixFor(round, application.id)}${sendId}`;
+      let claimed = false;
       try {
-        const attemptKey = `${attemptPrefixFor(round, application.id)}${sendId}`;
+        // Rendered before claiming, so an email that cannot be drawn never
+        // leaves a claim behind to block the next attempt.
+        const rendered = await renderSignupReminder(application, { subject, message, roundLabel, deadline, signupUrl });
         const claim = await claimReminder({ application, cycleId, round, attemptKey, triggeredById, now }, client);
         if (claim !== 'CLAIMED') return { skipped: true };
+        claimed = true;
 
-        const rendered = await renderSignupReminder(application, { subject, message, roundLabel, deadline, signupUrl });
+        // sendEmail never rejects in practice and records its own outcome over
+        // the claim. If it does throw, it may not have, which the catch covers.
         const result = await sendEmail(application.email, rendered.subject, rendered.html, [], {
           category: SIGNUP_REMINDER_CATEGORY,
           trigger: 'MANUAL',
@@ -318,6 +347,7 @@ export async function sendSignupReminders(
         });
         return result?.success ? { sent: true } : { error: result?.error ?? 'Send failed' };
       } catch (error) {
+        if (claimed) await releaseClaim(claimKeyFor(attemptKey, application), error, client);
         return { error: error?.message ?? String(error) };
       }
     },
