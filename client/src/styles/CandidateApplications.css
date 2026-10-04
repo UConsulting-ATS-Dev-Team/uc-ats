@@ -36,6 +36,14 @@
   line-height: 1.5;
 }
 
+.applications-sync-note a {
+  color: var(--link-default);
+}
+
+.applications-sync-note a:hover {
+  color: var(--link-hover);
+}
+
 .applications-content {
   margin-top: 2rem;
 }
@@ -347,7 +355,7 @@
 
 .document-link:hover {
   background-color: var(--primary-color);
-  color: var(--text-white);}
+  color: var(--text-on-primary);}
 
 .document-link:disabled {
   opacity: 0.5;

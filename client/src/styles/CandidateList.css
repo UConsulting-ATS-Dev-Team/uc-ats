@@ -132,7 +132,7 @@
 .apply-filters-btn.has-changes {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: var(--text-white);}
+  color: var(--text-on-primary);}
 
 .apply-filters-btn.has-changes:hover {
   background-color: var(--primary-blue-dark);

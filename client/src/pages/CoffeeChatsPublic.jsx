@@ -544,7 +544,7 @@ export default function CoffeeChatsPublic() {
                 mb: 3,
               }}
             >
-              <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
+              <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'text.primary', fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
                 {picking ? 'Pick a new time' : 'Available Meeting Slots'}
               </Typography>
               {picking && (
@@ -567,7 +567,7 @@ export default function CoffeeChatsPublic() {
               </Box>
             ) : gallerySlots.length === 0 ? (
               <Box sx={{ textAlign: 'center', p: 4 }}>
-                <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
+                <ScheduleIcon sx={{ fontSize: 60, color: 'text.muted', mb: 2 }} />
                 <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
                   {slots.length === 0 ? 'No Meeting Slots Available' : 'No Available Meeting Slots'}
                 </Typography>
@@ -618,7 +618,7 @@ export default function CoffeeChatsPublic() {
                         <Typography variant="h6" sx={{ 
                           fontWeight: 600, 
                           mb: 2, 
-                          color: 'primary.dark',
+                          color: 'text.primary',
                           fontSize: { xs: '1.1rem', md: '1.25rem' }
                         }}>
                           {picking ? 'Move My Meeting Here' : 'Sign Up for This Meeting'}
@@ -711,7 +711,7 @@ export default function CoffeeChatsPublic() {
         {!selectedSlot && !showBooked && (
           <Grid size={12}>
             <Paper sx={{ p: { xs: 2, md: 3 }, textAlign: 'center' }}>
-              <PeopleIcon sx={{ fontSize: { xs: 48, md: 60 }, color: 'grey.400', mb: 2 }} />
+              <PeopleIcon sx={{ fontSize: { xs: 48, md: 60 }, color: 'text.muted', mb: 2 }} />
               <Typography variant="h6" color="text.secondary" sx={{ 
                 mb: 1,
                 fontSize: { xs: '1.1rem', md: '1.25rem' }

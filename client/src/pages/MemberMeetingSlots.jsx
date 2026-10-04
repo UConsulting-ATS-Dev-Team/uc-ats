@@ -540,7 +540,7 @@ export default function MemberMeetingSlots() {
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
           <Box>
-            <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+            <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
               Get to Know UC
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
@@ -620,7 +620,7 @@ export default function MemberMeetingSlots() {
 
       {/* Create New Slot Form */}
       <Paper sx={{ p: 3, mb: 4 }}>
-        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark' }}>
+        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'text.primary' }}>
           Create New Meeting Slot
         </Typography>
         
@@ -727,7 +727,7 @@ export default function MemberMeetingSlots() {
       {/* Edit Meeting Slot Form */}
       {editingSlot && (
         <Paper sx={{ p: 3, mb: 4, border: '2px solid', borderColor: 'primary.main' }}>
-          <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'primary.dark' }}>
+          <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 3, color: 'text.primary' }}>
             Edit Meeting Slot
           </Typography>
 
@@ -880,7 +880,7 @@ export default function MemberMeetingSlots() {
       {/* Meeting Slots List */}
       <Paper sx={{ p: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark' }}>
+          <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'text.primary' }}>
             Your Meeting Slots
           </Typography>
           <Chip
@@ -896,7 +896,7 @@ export default function MemberMeetingSlots() {
           </Box>
         ) : slots.length === 0 ? (
           <Box sx={{ textAlign: 'center', p: 4 }}>
-            <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
+            <ScheduleIcon sx={{ fontSize: 60, color: 'text.muted', mb: 2 }} />
             <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
               No Meeting Slots Yet
             </Typography>

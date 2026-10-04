@@ -210,14 +210,14 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                         fontWeight: 500,
                         borderRadius: '40px',
                         border: '1px solid',
-                        color: 'white',
+                        color: 'success.contrastText',
                         borderColor: 'success.main',
                         height: '32px',
                         minWidth: '110px',
                         px: 1,
                         '& .MuiChip-icon': {
                             marginLeft: '8px',
-                            color: 'white'
+                            color: 'success.contrastText'
                         },
                         '& .MuiChip-label': {
                             paddingLeft: '8px',
@@ -241,11 +241,11 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                         borderColor: 'error.main',
                         height: '32px',
                         minWidth: '110px',
-                        color: 'white',
+                        color: 'error.contrastText',
                         px: 1,
                         '& .MuiChip-icon': {
                             marginLeft: '8px',
-                            color: 'white'
+                            color: 'error.contrastText'
                         },
                         '& .MuiChip-label': {
                             paddingLeft: '8px',
@@ -271,7 +271,7 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                     fontWeight: 500,
                     borderRadius: '40px',
                     border: '1px solid',
-                    color: 'white',
+                    color: 'success.contrastText',
                     borderColor: 'success.main',
                     height: '32px',
                     minWidth: '90px',
@@ -284,7 +284,7 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                     },
                     '& .MuiChip-icon': {
                         marginLeft: '8px',
-                        color: 'white'
+                        color: 'success.contrastText'
                     },
                     '& .MuiChip-label': {
                         paddingLeft: '8px',
@@ -309,7 +309,7 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                     borderColor: 'error.main',
                     height: '32px',
                     minWidth: '90px',
-                    color: 'white',
+                    color: 'error.contrastText',
                     px: 1,
                     cursor: 'pointer',
                     transition: 'all 0.2s ease',
@@ -319,7 +319,7 @@ const ApprovalIndicator = ({ approved, onApprovalChange, isDisabled = false, isW
                     },
                     '& .MuiChip-icon': {
                         marginLeft: '8px',
-                        color: 'white'
+                        color: 'error.contrastText'
                     },
                     '& .MuiChip-label': {
                         paddingLeft: '8px',
@@ -1139,17 +1139,17 @@ export default function CandidateManagement() {
                     {selectedCandidate && (
                         <Stack spacing={4}>
                             <Box sx={{
-                                background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+                                background: 'linear-gradient(135deg, var(--bg-gray-light) 0%, var(--bg-gray-medium) 100%)',
                                 borderRadius: '16px',
                                 p: 3,
                                 mt: 4,
-                                border: '1px solid #e0e7ff'
+                                border: '1px solid var(--border-light)'
                             }}>
                                 <Typography variant="h6" sx={{
                                     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
                                     mb: 2,
                                     fontWeight: 600,
-                                    color: '#374151',
+                                    color: 'text.primary',
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: 1
@@ -1159,17 +1159,17 @@ export default function CandidateManagement() {
                                 <Stack spacing={1.5}>
                                     <Typography variant="body1" sx={{
                                         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-                                        color: '#6b7280',
+                                        color: 'var(--text-tertiary)',
                                         fontSize: '0.95rem'
                                     }}>
-                                        <Box component="span" sx={{ fontWeight: 600, color: '#374151' }}>Name:</Box> {selectedCandidate.name}
+                                        <Box component="span" sx={{ fontWeight: 600, color: 'text.primary' }}>Name:</Box> {selectedCandidate.name}
                                     </Typography>
                                     <Typography variant="body1" sx={{
                                         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-                                        color: '#6b7280',
+                                        color: 'var(--text-tertiary)',
                                         fontSize: '0.95rem'
                                     }}>
-                                        <Box component="span" sx={{ fontWeight: 600, color: '#374151' }}>Email:</Box> {selectedCandidate.email}
+                                        <Box component="span" sx={{ fontWeight: 600, color: 'text.primary' }}>Email:</Box> {selectedCandidate.email}
                                     </Typography>
                                 </Stack>
                             </Box>
@@ -1179,7 +1179,7 @@ export default function CandidateManagement() {
                                     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
                                     mb: 2,
                                     fontWeight: 600,
-                                    color: '#374151',
+                                    color: 'text.primary',
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: 1
@@ -1191,7 +1191,7 @@ export default function CandidateManagement() {
                                     <InputLabel sx={{
                                         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
                                         fontWeight: 500,
-                                        color: '#6b7280'
+                                        color: 'text.secondary'
                                     }}>
                                         Candidate Status
                                     </InputLabel>
@@ -1207,11 +1207,11 @@ export default function CandidateManagement() {
                                             borderRadius: '16px',
                                             '& .MuiOutlinedInput-notchedOutline': {
                                                 borderWidth: '2px',
-                                                borderColor: '#d1d5db'
+                                                borderColor: 'var(--border-medium)'
                                             },
                                             '&:hover .MuiOutlinedInput-notchedOutline': {
                                                 borderWidth: '2px',
-                                                borderColor: '#9ca3af'
+                                                borderColor: 'var(--text-muted)'
                                             },
                                             '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
                                                 borderWidth: '2px',
@@ -1309,8 +1309,8 @@ export default function CandidateManagement() {
                     px: 3,
                     py: 3,
                     gap: 1.5,
-                    background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-                    borderTop: '1px solid #e2e8f0'
+                    background: 'linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-gray-medium) 100%)',
+                    borderTop: '1px solid var(--border-light)'
                 }}>
                     <Button
                         onClick={() => setEditDialogOpen(false)}
@@ -1321,13 +1321,13 @@ export default function CandidateManagement() {
                             py: 1.5,
                             textTransform: 'none',
                             fontWeight: 600,
-                            color: '#6b7280',
-                            border: '2px solid #d1d5db',
-                            background: 'white',
+                            color: 'var(--text-tertiary)',
+                            border: '2px solid var(--border-medium)',
+                            background: 'var(--bg-white)',
                             transition: 'all 0.3s ease',
                             '&:hover': {
-                                borderColor: '#9ca3af',
-                                background: '#f9fafb',
+                                borderColor: 'var(--text-muted)',
+                                background: 'var(--bg-gray-light)',
                                 transform: 'translateY(-1px)'
                             }
                         }}
@@ -1344,6 +1344,7 @@ export default function CandidateManagement() {
                             py: 1.5,
                             textTransform: 'none',
                             fontWeight: 600,
+                            color: '#fff',
                             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                             boxShadow: '0 8px 25px rgba(102, 126, 234, 0.4)',
                             border: 'none',

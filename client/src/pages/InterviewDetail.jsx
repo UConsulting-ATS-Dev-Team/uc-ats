@@ -448,7 +448,7 @@ export default function InterviewDetail() {
                 <Grid container spacing={2}>
                   {round.map((session, sessionIndex) => (
                     <Grid item xs={12} md={6} key={sessionIndex}>
-                      <Paper sx={{ p: 2, border: '1px solid #e0e0e0' }}>
+                      <Paper sx={{ p: 2, border: 1, borderColor: 'divider' }}>
                         <Typography variant="subtitle1" gutterBottom>
                           Interviewer Group {sessionIndex + 1}
                         </Typography>

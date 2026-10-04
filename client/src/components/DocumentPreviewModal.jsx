@@ -77,7 +77,7 @@ export default function DocumentPreviewModal({ src, kind, title, text, onClose }
               </div>
             )}
             {kind !== 'text' && error && (
-              <div style={{ padding: 16, color: 'red' }}>Error: {error}</div>
+              <div style={{ padding: 16, color: 'var(--status-error-text)' }}>Error: {error}</div>
             )}
             {kind !== 'text' && !error && !previewUrl && (
               <div style={{ padding: 16 }}>Loading preview…</div>

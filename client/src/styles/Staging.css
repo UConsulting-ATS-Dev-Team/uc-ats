@@ -299,7 +299,7 @@
 
 .candidate-details {
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .candidate-tags {
@@ -507,17 +507,13 @@
 .staging-btn--primary {
   background: var(--primary-dark);
   border-color: var(--primary-dark);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .staging-btn--primary:hover:not(:disabled) {
   background: var(--primary-dark-hover);
   border-color: var(--primary-dark-hover);
 }
-
-/* Dark mode lightens --primary-dark to a sky blue, which white text cannot
-   sit on; dark text, as on the sign-in button. */
-[data-theme="dark"] .staging-btn--primary { color: var(--bg-white); }
 
 .staging-btn--live {
   background: var(--status-error-bg);
@@ -657,8 +653,8 @@
 .staging-demo-table td.num { white-space: nowrap; }
 
 .staging-page .num { text-align: right; font-variant-numeric: tabular-nums; }
-.staging-muted { color: var(--text-muted); font-size: 0.75rem; }
-.staging-zero { color: var(--text-muted); }
+.staging-muted { color: var(--text-secondary); font-size: 0.75rem; }
+.staging-zero { color: var(--text-secondary); }
 .staging-yes { color: var(--status-success-text); font-weight: 600; }
 .staging-no { color: var(--status-error-text); font-weight: 600; }
 .staging-maybe { color: var(--status-warning-text); font-weight: 600; }
@@ -768,6 +764,9 @@
 }
 
 .staging-row:hover td { background: var(--bg-gray-lighter); }
+/* --bg-gray-lighter is too light in dark mode for the rank and the muted
+   counts (about 4:1); the elevated surface keeps them above 5.7:1. */
+[data-theme="dark"] .staging-row:hover td { background: var(--bg-gray-light); }
 
 .staging-rank {
   font-size: 1rem;

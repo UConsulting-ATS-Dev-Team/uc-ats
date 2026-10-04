@@ -1,7 +1,7 @@
 import { Alert, AlertTitle, Box, Chip, Stack } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 
-import { fmtNum, fmtPct, fmtWhen } from './formatters';
+import { distinctFromPrimary, fmtNum, fmtPct, fmtWhen } from './formatters';
 import { SectionTitle, SortableTable, StatTile, TrendChart } from './parts';
 
 const CATEGORY_LABELS = {
@@ -83,7 +83,7 @@ export default function EmailTab({ data }) {
         series={[
           { key: 'sent', label: 'Sent', color: theme.palette.primary.main },
           { key: 'delivered', label: 'Delivered', color: theme.palette.success.main },
-          { key: 'clicked', label: 'Clicked', color: theme.palette.info.main },
+          { key: 'clicked', label: 'Clicked', color: distinctFromPrimary(theme) },
           { key: 'problems', label: 'Bounced, spam or failed', color: theme.palette.error.main },
         ]}
       />

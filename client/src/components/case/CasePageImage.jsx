@@ -49,8 +49,8 @@ const CasePageImage = ({ src, alt, style, className, onLoaded }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: '#f8fafc',
-          color: '#64748b',
+          background: 'var(--bg-secondary)',
+          color: 'var(--text-secondary)',
           fontSize: '0.85rem',
         }}
       >
@@ -68,10 +68,10 @@ const CasePageImage = ({ src, alt, style, className, onLoaded }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: '#f8fafc',
-          color: '#64748b',
+          background: 'var(--bg-secondary)',
+          color: 'var(--text-secondary)',
           fontSize: '0.85rem',
-          border: '1px dashed #e5e7eb',
+          border: '1px dashed var(--border-light)',
         }}
       >
         Page unavailable

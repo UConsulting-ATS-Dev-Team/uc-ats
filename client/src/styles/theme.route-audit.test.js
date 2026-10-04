@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const ROUTE_CSS_FILES = [
   'ApplicationDetail.css',
@@ -38,7 +40,14 @@ function findRawColors(source, exclude = []) {
 }
 
 describe('route CSS uses semantic tokens', () => {
-  const cssModules = import.meta.glob('../styles/*.css', { eager: true, query: '?raw', import: 'default' });
+  // Read from disk: vitest answers a `?raw` CSS import with an empty string,
+  // which let every file here pass no matter what it contained.
+  const stylesDir = resolve(process.cwd(), 'src/styles');
+  const cssModules = Object.fromEntries(
+    readdirSync(stylesDir)
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => [`/${name}`, readFileSync(resolve(stylesDir, name), 'utf8')])
+  );
 
   for (const file of ROUTE_CSS_FILES) {
     it(`${file} contains no hardcoded color values`, () => {

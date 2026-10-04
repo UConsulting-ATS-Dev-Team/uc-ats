@@ -42,10 +42,10 @@ export default function CycleScopeBanner() {
         gap: '0.5rem',
         padding: '0.625rem 0.875rem',
         marginBottom: '1rem',
-        border: '1px solid #f0b429',
+        border: '1px solid var(--status-warning-border)',
         borderRadius: '0.375rem',
-        background: '#fff8e6',
-        color: '#5c4400',
+        background: 'var(--status-warning-bg)',
+        color: 'var(--status-warning-text)',
         fontSize: '0.875rem'
       }}
     >
@@ -54,7 +54,7 @@ export default function CycleScopeBanner() {
         <strong>{scope.candidateCycle?.name}</strong>. Events, interviews and review teams you
         create here will not be visible to them.
       </span>
-      <Link to="/cycles" style={{ color: '#5c4400', fontWeight: 600 }}>
+      <Link to="/cycles" style={{ color: 'var(--status-warning-text)', fontWeight: 600 }}>
         Manage cycles
       </Link>
     </div>

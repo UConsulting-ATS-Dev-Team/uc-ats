@@ -34,7 +34,7 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
   border: none;
   border-radius: var(--border-radius);
   font-size: 0.875rem;
@@ -151,7 +151,7 @@
 .apply-filters-btn.has-changes {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .apply-filters-btn.has-changes:hover:not(:disabled) {
@@ -703,7 +703,7 @@
   padding: 0.75rem 1.5rem;
   border: none;
   background: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
   border-radius: var(--border-radius-sm);
   font-size: 0.875rem;
   font-weight: 500;

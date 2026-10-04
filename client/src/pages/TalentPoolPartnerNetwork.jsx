@@ -192,7 +192,7 @@ const TalentPoolPartnerNetwork = () => {
             spacing={2}
             mb={1}
           >
-            <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+            <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
               Talent Pool Partner Network
             </Typography>
             <Stack direction="row" spacing={2} alignItems="center">

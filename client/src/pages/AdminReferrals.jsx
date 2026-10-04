@@ -150,7 +150,7 @@ const AdminReferrals = () => {
   return (
     <Box sx={{ maxWidth: 1100, mx: 'auto' }}>
       <Box sx={{ mb: 3 }}>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
           Referrals
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>

@@ -30,7 +30,7 @@ const isValidImageUrl = (profileImage) => {
 };
 
 const DEFAULT_BG = 'var(--primary-blue)';
-const DEFAULT_COLOR = 'var(--text-white)';
+const DEFAULT_COLOR = 'var(--text-on-primary)';
 
 const MemberAvatar = ({ member, size = 32, className = '', style = {} }) => {
   const [hasError, setHasError] = useState(false);

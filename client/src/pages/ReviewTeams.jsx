@@ -95,7 +95,7 @@ function DraggableApplication({ application, teamId, onRemove, onClick, isDraggi
         transition: 'all 0.2s ease-in-out',
         '&:hover': {
           borderColor: 'primary.main',
-          backgroundColor: 'rgba(4, 39, 66, 0.04)',
+          backgroundColor: 'action.hover',
           transform: editMode ? 'translateY(-1px)' : 'none',
           boxShadow: editMode ? '0 4px 8px rgba(0, 0, 0, 0.1)' : 'none'
         },
@@ -158,7 +158,7 @@ function DraggableApplication({ application, teamId, onRemove, onClick, isDraggi
               sx={{
                 color: 'primary.main',
                 '&:hover': {
-                  backgroundColor: 'primary.light',
+                  backgroundColor: 'action.selected',
                   color: 'text.primary'
                 }
               }}
@@ -175,7 +175,7 @@ function DraggableApplication({ application, teamId, onRemove, onClick, isDraggi
                 color: 'error.main',
                 '&:hover': {
                   backgroundColor: 'error.light',
-                  color: 'error.contrastText'
+                  color: 'error.dark'
                 }
               }}
             >
@@ -649,7 +649,7 @@ export default function ReviewTeams() {
               color: 'primary.main',
               '&:hover': {
                 borderColor: 'primary.dark',
-                backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                backgroundColor: 'action.hover'
               }
             }}
           >
@@ -665,7 +665,7 @@ export default function ReviewTeams() {
               backgroundColor: editMode ? 'warning.main' : 'transparent',
               '&:hover': {
                 borderColor: editMode ? 'warning.dark' : 'primary.dark',
-                backgroundColor: editMode ? 'warning.dark' : 'rgba(4, 39, 66, 0.04)'
+                backgroundColor: editMode ? 'warning.dark' : 'action.hover'
               }
             }}
           >
@@ -695,7 +695,7 @@ export default function ReviewTeams() {
               color: 'primary.main',
               '&:hover': {
                 borderColor: 'primary.dark',
-                backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                backgroundColor: 'action.hover'
               }
             }}
           >
@@ -705,13 +705,13 @@ export default function ReviewTeams() {
       </Stack>
 
       {error && (
-        <Paper sx={{ p: 2, mb: 3, backgroundColor: 'error.light', color: 'error.contrastText' }}>
+        <Paper sx={{ p: 2, mb: 3, backgroundColor: 'error.light', color: 'error.dark' }}>
           {error}
         </Paper>
       )}
 
       {success && (
-        <Paper sx={{ p: 2, mb: 3, backgroundColor: 'success.light', color: 'success.contrastText' }}>
+        <Paper sx={{ p: 2, mb: 3, backgroundColor: 'success.light', color: 'success.dark' }}>
           {success}
         </Paper>
       )}
@@ -750,7 +750,7 @@ export default function ReviewTeams() {
                 sx={{
                   color: 'primary.main',
                   '&:hover': {
-                    backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                    backgroundColor: 'action.hover'
                   }
                 }}
               >
@@ -773,7 +773,7 @@ export default function ReviewTeams() {
                   color: 'text.secondary',
                   '&:hover': {
                     color: 'primary.main',
-                    backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                    backgroundColor: 'action.hover'
                   }
                 }}
                 title="Rename team"
@@ -1031,7 +1031,7 @@ export default function ReviewTeams() {
                         avatar={
                           <AuthenticatedAvatar member={member} size={24} />
                         }
-                        sx={{ backgroundColor: 'rgba(4, 39, 66, 0.08)' }}
+                        sx={{ backgroundColor: 'action.selected' }}
                       />
                     ))}
                   </Stack>
@@ -1049,7 +1049,7 @@ export default function ReviewTeams() {
                       cursor: 'pointer',
                       '&:hover': {
                         borderColor: 'primary.main',
-                        backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                        backgroundColor: 'action.hover'
                       }
                     }}
                     title="Add team member"
@@ -1073,7 +1073,7 @@ export default function ReviewTeams() {
                   transition: 'all 0.2s ease-in-out',
                   '&:hover': {
                     borderColor: editMode ? 'primary.dark' : 'primary.main',
-                    backgroundColor: editMode ? 'rgba(4, 39, 66, 0.04)' : 'rgba(4, 39, 66, 0.02)'
+                    backgroundColor: editMode ? 'action.hover' : 'rgba(4, 39, 66, 0.02)'
                   }
                 }}
               >
@@ -1092,7 +1092,7 @@ export default function ReviewTeams() {
                       fontSize: '0.75rem',
                       '&:hover': {
                         borderColor: 'primary.dark',
-                        backgroundColor: 'rgba(4, 39, 66, 0.04)'
+                        backgroundColor: 'action.hover'
                       }
                     }}
                   >
@@ -1306,7 +1306,7 @@ export default function ReviewTeams() {
                       transition: 'all 0.2s ease-in-out',
                       '&:hover': {
                         borderColor: 'primary.main',
-                        backgroundColor: 'rgba(4, 39, 66, 0.04)',
+                        backgroundColor: 'action.hover',
                         transform: 'translateY(-1px)',
                         boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)'
                       }
@@ -1366,7 +1366,7 @@ export default function ReviewTeams() {
                     transition: 'all 0.2s ease-in-out',
                     '&:hover': {
                       borderColor: 'primary.main',
-                      backgroundColor: 'rgba(4, 39, 66, 0.04)',
+                      backgroundColor: 'action.hover',
                       transform: 'translateY(-1px)',
                       boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)'
                     }
@@ -1396,8 +1396,8 @@ export default function ReviewTeams() {
                       sx={{
                         color: 'primary.main',
                         '&:hover': {
-                          backgroundColor: 'primary.light',
-                          color: 'primary.contrastText'
+                          backgroundColor: 'action.selected',
+                          color: 'text.primary'
                         }
                       }}
                     >

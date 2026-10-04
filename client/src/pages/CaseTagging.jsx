@@ -149,7 +149,7 @@ export default function CaseTagging() {
                     border:
                       page.pageType === 'INTERVIEWER_ONLY'
                         ? '2px solid #f59e0b'
-                        : '1px solid #e5e7eb',
+                        : '1px solid var(--border-light)',
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',

@@ -83,7 +83,7 @@ function ComparisonStrip({ type, entry, teamName }) {
             <Box
               sx={{
                 position: 'absolute', left: at(team.pct), top: 8, width: 12, height: 12, ml: '-6px',
-                borderRadius: '50%', bgcolor: 'grey.400', border: 2, borderColor: 'background.paper'
+                borderRadius: '50%', bgcolor: 'grey.500', border: 2, borderColor: 'background.paper'
               }}
             />
           </Tooltip>
@@ -212,7 +212,7 @@ export default function OverviewStep({ team, onOpenCandidate }) {
             <Typography variant="h6" component="h2">Against the other teams</Typography>
             <Stack direction="row" spacing={2} sx={{ mt: 0.5, mb: 1 }} alignItems="center" flexWrap="wrap" useFlexGap>
               <Legend swatch={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'primary.main' }} label={teamName} />
-              <Legend swatch={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'grey.400' }} label="Other teams" />
+              <Legend swatch={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'grey.500' }} label="Other teams" />
               <Legend swatch={{ width: 2, height: 14, bgcolor: 'text.secondary' }} label="Rest of cycle" />
             </Stack>
             {DOC_TYPES.map((type) => (

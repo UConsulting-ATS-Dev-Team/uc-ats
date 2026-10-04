@@ -808,14 +808,14 @@ export default function EventManagement() {
           height: '8px',
         },
         '&::-webkit-scrollbar-track': {
-          backgroundColor: '#f1f1f1',
+          backgroundColor: 'grey.100',
           borderRadius: '4px',
         },
         '&::-webkit-scrollbar-thumb': {
-          backgroundColor: '#c1c1c1',
+          backgroundColor: 'text.muted',
           borderRadius: '4px',
           '&:hover': {
-            backgroundColor: '#a8a8a8',
+            backgroundColor: 'text.secondary',
           },
         },
       }}>

@@ -258,7 +258,7 @@ const ResumeGradingModal = ({ open, onClose, application }) => {
                     style={{
                       width: '100%',
                       height: '100%',
-                      border: '1px solid #ddd',
+                      border: '1px solid var(--border-medium)',
                       borderRadius: '4px'
                     }}
                     title="Resume Preview"

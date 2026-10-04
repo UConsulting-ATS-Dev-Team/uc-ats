@@ -57,7 +57,7 @@ const AuthenticatedImage = ({ src, alt, style, onError, fallback, ...props }) =>
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: '#f5f5f5',
+          backgroundColor: 'var(--bg-gray-lighter)',
         }}
         {...props}
       />
@@ -72,9 +72,9 @@ const AuthenticatedImage = ({ src, alt, style, onError, fallback, ...props }) =>
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: '#f5f5f5',
-          color: '#666',
-          border: '2px dashed #ccc',
+          backgroundColor: 'var(--bg-gray-lighter)',
+          color: 'var(--text-tertiary)',
+          border: '2px dashed var(--border-medium)',
         }}
         {...props}
       >

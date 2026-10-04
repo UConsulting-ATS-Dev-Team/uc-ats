@@ -496,7 +496,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
   if (error) {
     return (
       <div className="application-detail">
-        <div style={{ color: 'red', marginBottom: '1rem' }}>Error: {error}</div>
+        <div style={{ color: 'var(--status-error-text)', marginBottom: '1rem' }}>Error: {error}</div>
         {!embedded && (
           <Link to="/application-list" className="back-link">
             <ArrowLeftIcon className="back-icon" />
@@ -597,16 +597,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                           {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').filter(e => e.attendanceStatus === 'Attended').length} attended of {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').length} relevant
                         </div>
                         {eventData.totalPoints > 3 && (
-                          <div className="average-grade-count" style={{ color: '#9ca3af', fontSize: '0.7rem' }}>
+                          <div className="average-grade-count" style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem' }}>
                             ({eventData.totalPoints} raw, capped)
                           </div>
                         )}
                       </div>
                       
-                      <div className="average-grade" style={{ backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}>
+                      <div className="average-grade" style={{ backgroundColor: 'var(--status-info-bg)', borderColor: 'var(--status-info-border)' }}>
                         <span className="average-grade-label">Overall</span>
                         <div>
-                          <span className="average-grade-value" style={{ color: '#0369a1' }}>{calculatedAverages.total.toFixed(1)}</span>
+                          <span className="average-grade-value" style={{ color: 'var(--status-info-text)' }}>{calculatedAverages.total.toFixed(1)}</span>
                           <span className="average-grade-total">/ {formatScore(stagingMax(rubricData))}</span>
                         </div>
                         {calculatedAverages.count > 0 && (
@@ -615,7 +615,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                           </div>
                         )}
                         {calculatedAverages.eventPointsContribution > 0 && (
-                          <div className="average-grade-count" style={{ color: '#059669', fontWeight: '600' }}>
+                          <div className="average-grade-count" style={{ color: 'var(--status-success-text)', fontWeight: '600' }}>
                             +{Math.floor(calculatedAverages.eventPointsContribution)} events
                           </div>
                         )}
@@ -677,15 +677,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           {/* Past Applications Section - only show if there are past applications */}
           {!readOnly && application.pastApplications && application.pastApplications.length > 0 && (
             <div className="info-section" style={{
-              backgroundColor: '#eff6ff',
-              border: '1px solid #bfdbfe',
+              backgroundColor: 'var(--status-info-bg)',
+              border: '1px solid var(--status-info-border)',
               borderRadius: '8px',
               padding: '1rem'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '0.75rem' }}>
                 <span style={{
-                  backgroundColor: '#1e40af',
-                  color: 'white',
+                  backgroundColor: 'var(--status-info-text)',
+                  color: 'var(--status-info-bg)',
                   padding: '2px 8px',
                   borderRadius: '9999px',
                   fontSize: '0.75rem',
@@ -695,7 +695,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 </span>
                 <h2 className="section-title" style={{ margin: 0 }}>Past Applications</h2>
               </div>
-              <p style={{ color: '#1e40af', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+              <p style={{ color: 'var(--status-info-text)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
                 This applicant has applied {application.pastApplications.length} time{application.pastApplications.length > 1 ? 's' : ''} before.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -711,26 +711,26 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '12px',
-                      backgroundColor: 'white',
-                      border: '1px solid #93c5fd',
+                      backgroundColor: 'var(--bg-white)',
+                      border: '1px solid var(--status-info-border)',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       transition: 'all 0.2s'
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = '#f0f9ff';
+                      e.currentTarget.style.backgroundColor = 'var(--status-info-bg)';
                       e.currentTarget.style.transform = 'translateX(4px)';
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'white';
+                      e.currentTarget.style.backgroundColor = 'var(--bg-white)';
                       e.currentTarget.style.transform = 'translateX(0)';
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: '600', color: '#1e40af' }}>
+                      <div style={{ fontWeight: '600', color: 'var(--status-info-text)' }}>
                         {pastApp.cycle?.name || 'Unknown Cycle'}
                       </div>
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>
                         Submitted: {new Date(pastApp.submittedAt).toLocaleDateString()}
                       </div>
                     </div>
@@ -741,19 +741,19 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         fontSize: '0.75rem',
                         fontWeight: '500',
                         backgroundColor:
-                          pastApp.status === 'ACCEPTED' ? '#dcfce7' :
-                          pastApp.status === 'REJECTED' ? '#fee2e2' :
-                          pastApp.status === 'WAITLISTED' ? '#fef3c7' :
-                          '#e0e7ff',
+                          pastApp.status === 'ACCEPTED' ? 'var(--status-success-bg)' :
+                          pastApp.status === 'REJECTED' ? 'var(--status-error-bg)' :
+                          pastApp.status === 'WAITLISTED' ? 'var(--status-warning-bg)' :
+                          'var(--status-info-bg)',
                         color:
-                          pastApp.status === 'ACCEPTED' ? '#166534' :
-                          pastApp.status === 'REJECTED' ? '#991b1b' :
-                          pastApp.status === 'WAITLISTED' ? '#92400e' :
-                          '#3730a3'
+                          pastApp.status === 'ACCEPTED' ? 'var(--status-success-text)' :
+                          pastApp.status === 'REJECTED' ? 'var(--status-error-text)' :
+                          pastApp.status === 'WAITLISTED' ? 'var(--status-warning-text)' :
+                          'var(--status-info-text)'
                       }}>
                         {pastApp.status.replace('_', ' ')}
                       </span>
-                      <span style={{ color: '#3b82f6', fontSize: '1.25rem' }}>→</span>
+                      <span style={{ color: 'var(--link-default)', fontSize: '1.25rem' }}>→</span>
                     </div>
                   </div>
                 ))}
@@ -976,13 +976,13 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           <div className="info-section">
             <h2 className="section-title">Event Attendance</h2>
             <div style={{
-              backgroundColor: '#f0f9ff',
-              border: '1px solid #bae6fd',
+              backgroundColor: 'var(--status-info-bg)',
+              border: '1px solid var(--status-info-border)',
               borderRadius: '6px',
               padding: '12px',
               marginBottom: '16px',
               fontSize: '0.875rem',
-              color: '#0369a1'
+              color: 'var(--status-info-text)'
             }}>
               <strong>Note:</strong> Students can earn a maximum of 3 points total from events and GTKUC (Get To Know UC) meetings combined. Points beyond 3 are tracked but do not contribute to the overall score.
             </div>
@@ -998,15 +998,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     justifyContent: 'space-between',
                     alignItems: 'center'
                   }}>
-                    <span style={{ fontWeight: '600', color: '#0369a1' }}>
+                    <span style={{ fontWeight: '600', color: 'var(--status-info-text)' }}>
                       Total Event Points: {Math.min(eventData.totalPoints, participationMax)} / {participationMax}
                       {eventData.totalPoints > 3 && (
-                        <span style={{ fontWeight: '400', color: '#6b7280', marginLeft: '8px' }}>
+                        <span style={{ fontWeight: '400', color: 'var(--text-tertiary)', marginLeft: '8px' }}>
                           ({eventData.totalPoints} earned, capped at 3)
                         </span>
                       )}
                     </span>
-                    <span style={{ fontSize: '0.875rem', color: '#0369a1' }}>
+                    <span style={{ fontSize: '0.875rem', color: 'var(--status-info-text)' }}>
                       {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').filter(e => e.attendanceStatus === 'Attended').length} attended of {eventData.events.filter(e => e.rsvpStatus === 'RSVPed' || e.attendanceStatus === 'Attended').length} relevant events
                     </span>
                   </div>
@@ -1028,7 +1028,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                               <span style={{ 
                                 fontSize: '0.875rem', 
                                 fontWeight: '500', 
-                                color: '#0369a1',
+                                color: 'var(--status-info-text)',
                                 marginLeft: '8px'
                               }}>
                                 with {event.memberName}
@@ -1082,10 +1082,10 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
 
           {/* Comments Chatbox */}
           <div className="info-section" style={{ 
-            border: '1px solid #e5e7eb', 
+            border: '1px solid var(--border-light)', 
             borderRadius: '12px', 
             overflow: 'hidden',
-            backgroundColor: '#fafafa'
+            backgroundColor: 'var(--bg-gray-light)'
           }}>
             {/* Chatbox Header */}
             <div 
@@ -1094,19 +1094,19 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 alignItems: 'center', 
                 justifyContent: 'space-between',
                 padding: '16px 20px',
-                backgroundColor: '#f8fafc',
-                borderBottom: '1px solid #e5e7eb',
+                backgroundColor: 'var(--bg-secondary)',
+                borderBottom: '1px solid var(--border-light)',
                 cursor: 'pointer'
               }}
               onClick={() => setIsCommentsMinimized(!isCommentsMinimized)}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ChatBubbleLeftRightIcon style={{ width: '20px', height: '20px', color: '#6b7280' }} />
+                <ChatBubbleLeftRightIcon style={{ width: '20px', height: '20px', color: 'var(--text-tertiary)' }} />
                 <h2 style={{ 
                   margin: 0, 
                   fontSize: '1.125rem', 
                   fontWeight: '600', 
-                  color: '#374151' 
+                  color: 'var(--text-primary)' 
                 }}>
                   Comments ({comments.length})
                 </h2>
@@ -1115,8 +1115,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 {comments.length > 0 && (
                   <span style={{ 
                     fontSize: '0.75rem', 
-                    color: '#6b7280',
-                    backgroundColor: '#e5e7eb',
+                    color: 'var(--text-tertiary)',
+                    backgroundColor: 'var(--bg-gray-medium)',
                     padding: '2px 8px',
                     borderRadius: '12px'
                   }}>
@@ -1124,9 +1124,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   </span>
                 )}
                 {isCommentsMinimized ? (
-                  <ChevronDownIcon style={{ width: '20px', height: '20px', color: '#6b7280' }} />
+                  <ChevronDownIcon style={{ width: '20px', height: '20px', color: 'var(--text-tertiary)' }} />
                 ) : (
-                  <ChevronUpIcon style={{ width: '20px', height: '20px', color: '#6b7280' }} />
+                  <ChevronUpIcon style={{ width: '20px', height: '20px', color: 'var(--text-tertiary)' }} />
                 )}
               </div>
             </div>
@@ -1139,12 +1139,12 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   flex: 1, 
                   overflowY: 'auto', 
                   padding: '16px 20px',
-                  backgroundColor: '#ffffff'
+                  backgroundColor: 'var(--bg-white)'
                 }}>
                   {comments.length === 0 ? (
                     <div style={{ 
                       textAlign: 'center', 
-                      color: '#6b7280', 
+                      color: 'var(--text-tertiary)', 
                       padding: '40px 20px',
                       fontStyle: 'italic'
                     }}>
@@ -1160,9 +1160,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                             flexDirection: 'column',
                             alignItems: 'flex-start',
                             padding: '12px 16px',
-                            backgroundColor: '#f8fafc',
+                            backgroundColor: 'var(--bg-gray-light)',
                             borderRadius: '12px',
-                            border: '1px solid #e5e7eb',
+                            border: '1px solid var(--border-light)',
                             maxWidth: '80%',
                             alignSelf: 'flex-start'
                           }}
@@ -1177,18 +1177,18 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                               width: '8px', 
                               height: '8px', 
                               borderRadius: '50%', 
-                              backgroundColor: '#10b981' 
+                              backgroundColor: 'var(--status-success-border)' 
                             }} />
                             <span style={{ 
                               fontSize: '0.875rem', 
                               fontWeight: '600',
-                              color: '#374151' 
+                              color: 'var(--text-primary)' 
                             }}>
                               {c.user?.fullName || c.user?.email || 'Unknown'}
                             </span>
                             <span style={{ 
                               fontSize: '0.75rem', 
-                              color: '#6b7280' 
+                              color: 'var(--text-tertiary)' 
                             }}>
                               {new Date(c.createdAt).toLocaleString()}
                             </span>
@@ -1196,7 +1196,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                           <div style={{ 
                             whiteSpace: 'pre-wrap', 
                             fontSize: '0.875rem',
-                            color: '#374151',
+                            color: 'var(--text-primary)',
                             lineHeight: '1.5'
                           }}>
                             {c.content}
@@ -1212,17 +1212,17 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 {!readOnly && (
                 <div style={{ 
                   padding: '16px 20px', 
-                  borderTop: '1px solid #e5e7eb',
-                  backgroundColor: '#f8fafc'
+                  borderTop: '1px solid var(--border-light)',
+                  backgroundColor: 'var(--bg-secondary)'
                 }}>
                   {commentError && (
                     <div style={{ 
-                      color: '#dc2626', 
+                      color: 'var(--status-error-text)', 
                       fontSize: '0.875rem',
                       marginBottom: '8px',
                       padding: '8px 12px',
-                      backgroundColor: '#fef2f2',
-                      border: '1px solid #fecaca',
+                      backgroundColor: 'var(--status-error-bg)',
+                      border: '1px solid var(--status-error-border)',
                       borderRadius: '6px'
                     }}>
                       {commentError}
@@ -1238,7 +1238,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         minHeight: '40px',
                         maxHeight: '120px',
                         padding: '10px 12px',
-                        border: '1px solid #d1d5db',
+                        border: '1px solid var(--border-medium)',
                         borderRadius: '8px',
                         fontSize: '0.875rem',
                         resize: 'vertical',
@@ -1282,8 +1282,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                       disabled={isSubmittingComment || !newComment.trim()}
                       style={{ 
                         padding: '10px 16px',
-                        backgroundColor: isSubmittingComment || !newComment.trim() ? '#9ca3af' : '#3b82f6',
-                        color: 'white',
+                        backgroundColor: isSubmittingComment || !newComment.trim() ? 'var(--text-muted)' : 'var(--link-default)',
+                        color: 'var(--text-on-primary)',
                         border: 'none',
                         borderRadius: '8px',
                         fontSize: '0.875rem',
@@ -1298,7 +1298,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   </div>
                   <div style={{ 
                     fontSize: '0.75rem', 
-                    color: '#6b7280', 
+                    color: 'var(--text-tertiary)', 
                     marginTop: '6px',
                     textAlign: 'center'
                   }}>
@@ -1317,12 +1317,12 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         <h2 className="section-title">Referral</h2>
         <div style={{ 
           padding: '1rem', 
-          backgroundColor: '#f0fdf4', 
+          backgroundColor: 'var(--bg-gray-light)', 
           borderRadius: '8px', 
-          border: '1px solid #bbf7d0' 
+          border: '1px solid var(--status-success-border)' 
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: '600', color: '#374151' }}>
+            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)' }}>
               Referral Information
             </h3>
             {!manualReferral && !readOnly && (
@@ -1330,8 +1330,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 onClick={() => setIsReferralModalOpen(true)}
                 style={{
                   padding: '8px 16px',
-                  backgroundColor: '#3b82f6',
-                  color: 'white',
+                  backgroundColor: 'var(--link-default)',
+                  color: 'var(--text-on-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '0.875rem',
@@ -1352,18 +1352,18 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                 >
                   <div>
-                    <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                    <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                       {item.referrerName}
                     </div>
-                    <div style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>
                       {item.relationship}
                     </div>
                     {item.reason && (
-                      <div style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '4px', whiteSpace: 'pre-wrap' }}>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-primary)', marginBottom: '4px', whiteSpace: 'pre-wrap' }}>
                         {item.reason}
                       </div>
                     )}
-                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       {item.source === 'PRE_APPLICATION'
                         ? `Submitted ${new Date(item.createdAt).toLocaleDateString()} before this application`
                         : `Added ${new Date(item.createdAt).toLocaleDateString()}`}
@@ -1389,7 +1389,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               ))}
             </div>
           ) : (
-            <div style={{ color: '#6b7280', fontSize: '0.875rem', fontStyle: 'italic' }}>
+            <div style={{ color: 'var(--text-tertiary)', fontSize: '0.875rem', fontStyle: 'italic' }}>
               No referral added yet.
             </div>
           )}
@@ -1402,7 +1402,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         
         {/* Resume Scores */}
         <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '1rem' }}>
+          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem' }}>
             Resume Scores ({resumeScores.length})
           </h3>
           {resumeScores.length === 0 ? (
@@ -1415,16 +1415,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   className="resume-score-item"
                   style={{
                     padding: '12px',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-light)',
                     borderRadius: '8px',
                     marginBottom: '8px',
                     cursor: 'pointer',
-                    backgroundColor: '#f9fafb',
+                    backgroundColor: 'var(--bg-gray-light)',
                     transition: 'background-color 0.2s',
                     position: 'relative'
                   }}
-                  onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                  onMouseLeave={(e) => e.target.style.backgroundColor = '#f9fafb'}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--bg-gray-lighter)'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--bg-gray-light)'}
                   onClick={() => {
                     setSelectedScore({...score, documentType: 'Resume'});
                     setScoreModalOpen(true);
@@ -1448,15 +1448,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         alignItems: 'center',
                         justifyContent: 'center',
                         borderRadius: '4px',
-                        color: '#6b7280'
+                        color: 'var(--text-tertiary)'
                       }}
                       onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = '#e5e7eb';
-                        e.target.style.color = '#374151';
+                        e.target.style.backgroundColor = 'var(--bg-gray-medium)';
+                        e.target.style.color = 'var(--text-primary)';
                       }}
                       onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'transparent';
-                        e.target.style.color = '#6b7280';
+                        e.target.style.color = 'var(--text-tertiary)';
                       }}
                       title="Edit score (Admin)"
                     >
@@ -1465,30 +1465,30 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <div style={{ fontWeight: '600', color: '#374151' }}>
+                      <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                         {score.evaluator?.fullName || score.evaluator?.email || 'Unknown Evaluator'}
                       </div>
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '2px' }}>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                         {new Date(score.createdAt).toLocaleDateString()} at {new Date(score.createdAt).toLocaleTimeString()}
                       </div>
                       {score.notes && (
-                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', fontStyle: 'italic' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', fontStyle: 'italic' }}>
                           {score.notes}
                         </div>
                       )}
                       {score.adminNotes && (
-                        <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '4px', fontWeight: '600' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--link-default)', marginTop: '4px', fontWeight: '600' }}>
                           Admin Notes: {score.adminNotes}
                         </div>
                       )}
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
+                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--status-success-text)' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
                           ? `${score.adminScore}/${maxFor('resume')} (Admin Override)`
                           : `${score.overallScore}/${maxFor('resume')}`}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
                         Overall Score
                       </div>
                     </div>
@@ -1501,7 +1501,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
 
         {/* Cover Letter Scores */}
         <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '1rem' }}>
+          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem' }}>
             Cover Letter Scores ({coverLetterScores.length})
           </h3>
           {coverLetterScores.length === 0 ? (
@@ -1514,16 +1514,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   className="resume-score-item"
                   style={{
                     padding: '12px',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-light)',
                     borderRadius: '8px',
                     marginBottom: '8px',
                     cursor: 'pointer',
-                    backgroundColor: '#f9fafb',
+                    backgroundColor: 'var(--bg-gray-light)',
                     transition: 'background-color 0.2s',
                     position: 'relative'
                   }}
-                  onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                  onMouseLeave={(e) => e.target.style.backgroundColor = '#f9fafb'}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--bg-gray-lighter)'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--bg-gray-light)'}
                   onClick={() => {
                     setSelectedScore({...score, documentType: 'Cover Letter'});
                     setScoreModalOpen(true);
@@ -1547,15 +1547,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         alignItems: 'center',
                         justifyContent: 'center',
                         borderRadius: '4px',
-                        color: '#6b7280'
+                        color: 'var(--text-tertiary)'
                       }}
                       onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = '#e5e7eb';
-                        e.target.style.color = '#374151';
+                        e.target.style.backgroundColor = 'var(--bg-gray-medium)';
+                        e.target.style.color = 'var(--text-primary)';
                       }}
                       onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'transparent';
-                        e.target.style.color = '#6b7280';
+                        e.target.style.color = 'var(--text-tertiary)';
                       }}
                       title="Edit score (Admin)"
                     >
@@ -1564,30 +1564,30 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <div style={{ fontWeight: '600', color: '#374151' }}>
+                      <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                         {score.evaluator?.fullName || score.evaluator?.email || 'Unknown Evaluator'}
                       </div>
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '2px' }}>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                         {new Date(score.createdAt).toLocaleDateString()} at {new Date(score.createdAt).toLocaleTimeString()}
                       </div>
                       {(score.notes || score.notesOne) && (
-                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', fontStyle: 'italic' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', fontStyle: 'italic' }}>
                           {score.notes || score.notesOne}
                         </div>
                       )}
                       {score.adminNotes && (
-                        <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '4px', fontWeight: '600' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--link-default)', marginTop: '4px', fontWeight: '600' }}>
                           Admin Notes: {score.adminNotes}
                         </div>
                       )}
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
+                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--status-success-text)' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
                           ? `${score.adminScore}/${maxFor('coverLetter')} (Admin Override)`
                           : `${score.overallScore}/${maxFor('coverLetter')}`}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
                         Overall Score
                       </div>
                     </div>
@@ -1600,7 +1600,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
 
         {/* Video Scores */}
         <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '1rem' }}>
+          <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem' }}>
             Video Scores ({videoScores.length})
           </h3>
           {videoScores.length === 0 ? (
@@ -1613,16 +1613,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   className="resume-score-item"
                   style={{
                     padding: '12px',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-light)',
                     borderRadius: '8px',
                     marginBottom: '8px',
                     cursor: 'pointer',
-                    backgroundColor: '#f9fafb',
+                    backgroundColor: 'var(--bg-gray-light)',
                     transition: 'background-color 0.2s',
                     position: 'relative'
                   }}
-                  onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                  onMouseLeave={(e) => e.target.style.backgroundColor = '#f9fafb'}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--bg-gray-lighter)'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--bg-gray-light)'}
                   onClick={() => {
                     setSelectedScore({...score, documentType: 'Video'});
                     setScoreModalOpen(true);
@@ -1646,15 +1646,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         alignItems: 'center',
                         justifyContent: 'center',
                         borderRadius: '4px',
-                        color: '#6b7280'
+                        color: 'var(--text-tertiary)'
                       }}
                       onMouseEnter={(e) => {
-                        e.target.style.backgroundColor = '#e5e7eb';
-                        e.target.style.color = '#374151';
+                        e.target.style.backgroundColor = 'var(--bg-gray-medium)';
+                        e.target.style.color = 'var(--text-primary)';
                       }}
                       onMouseLeave={(e) => {
                         e.target.style.backgroundColor = 'transparent';
-                        e.target.style.color = '#6b7280';
+                        e.target.style.color = 'var(--text-tertiary)';
                       }}
                       title="Edit score (Admin)"
                     >
@@ -1663,30 +1663,30 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <div style={{ fontWeight: '600', color: '#374151' }}>
+                      <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
                         {score.evaluator?.fullName || score.evaluator?.email || 'Unknown Evaluator'}
                       </div>
-                      <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '2px' }}>
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                         {new Date(score.createdAt).toLocaleDateString()} at {new Date(score.createdAt).toLocaleTimeString()}
                       </div>
                       {(score.notes || score.notesOne) && (
-                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', fontStyle: 'italic' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', fontStyle: 'italic' }}>
                           {score.notes || score.notesOne}
                         </div>
                       )}
                       {score.adminNotes && (
-                        <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '4px', fontWeight: '600' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--link-default)', marginTop: '4px', fontWeight: '600' }}>
                           Admin Notes: {score.adminNotes}
                         </div>
                       )}
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: '#059669' }}>
+                      <div style={{ fontSize: '1.125rem', fontWeight: '600', color: 'var(--status-success-text)' }}>
                         {score.adminScore !== null && score.adminScore !== undefined 
                           ? `${score.adminScore}/${maxFor('video')} (Admin Override)`
                           : `${score.overallScore}/${maxFor('video')}`}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
                         Overall Score
                       </div>
                     </div>
@@ -1708,8 +1708,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 onClick={() => setIsEditingTestFor(true)}
                 style={{
                   padding: '6px 12px',
-                  backgroundColor: '#2563eb',
-                  color: 'white',
+                  backgroundColor: 'var(--link-default)',
+                  color: 'var(--text-on-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   cursor: 'pointer',
@@ -1729,9 +1729,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           {isEditingTestFor ? (
             <div style={{ 
               padding: '16px', 
-              backgroundColor: '#f9fafb', 
+              backgroundColor: 'var(--bg-gray-light)', 
               borderRadius: '8px',
-              border: '1px solid #e5e7eb'
+              border: '1px solid var(--border-light)'
             }}>
               <textarea
                 value={testForNote}
@@ -1741,7 +1741,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 style={{
                   width: '100%',
                   padding: '12px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   fontSize: '0.875rem',
                   fontFamily: 'inherit',
@@ -1758,9 +1758,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   disabled={savingTestFor}
                   style={{
                     padding: '8px 16px',
-                    backgroundColor: '#fff',
-                    color: '#374151',
-                    border: '1px solid #d1d5db',
+                    backgroundColor: 'var(--bg-white)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '6px',
                     cursor: savingTestFor ? 'not-allowed' : 'pointer',
                     fontSize: '0.875rem',
@@ -1774,8 +1774,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   disabled={savingTestFor}
                   style={{
                     padding: '8px 16px',
-                    backgroundColor: savingTestFor ? '#9ca3af' : '#2563eb',
-                    color: 'white',
+                    backgroundColor: savingTestFor ? 'var(--text-muted)' : 'var(--link-default)',
+                    color: 'var(--text-on-primary)',
                     border: 'none',
                     borderRadius: '6px',
                     cursor: savingTestFor ? 'not-allowed' : 'pointer',
@@ -1790,15 +1790,15 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           ) : (
             <div style={{ 
               padding: '16px', 
-              backgroundColor: testForNote ? '#eff6ff' : '#f9fafb', 
+              backgroundColor: testForNote ? 'var(--status-info-bg)' : 'var(--bg-gray-light)', 
               borderRadius: '8px',
-              border: `1px solid ${testForNote ? '#bfdbfe' : '#e5e7eb'}`,
+              border: `1px solid ${testForNote ? 'var(--status-info-border)' : 'var(--border-light)'}`,
               minHeight: '60px'
             }}>
               {testForNote ? (
                 <p style={{ 
                   margin: 0, 
-                  color: '#1e40af',
+                  color: 'var(--status-info-text)',
                   fontSize: '0.875rem',
                   lineHeight: '1.5',
                   whiteSpace: 'pre-wrap'
@@ -1808,7 +1808,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               ) : (
                 <p style={{ 
                   margin: 0, 
-                  color: '#6b7280',
+                  color: 'var(--text-tertiary)',
                   fontSize: '0.875rem',
                   fontStyle: 'italic'
                 }}>
@@ -1833,22 +1833,22 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 className="interview-evaluation-item"
                 style={{
                   padding: '16px',
-                  border: '1px solid #e5e7eb',
+                  border: '1px solid var(--border-light)',
                   borderRadius: '8px',
                   marginBottom: '12px',
-                  backgroundColor: '#f9fafb'
+                  backgroundColor: 'var(--bg-gray-light)'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '600', color: '#374151', fontSize: '1.1rem' }}>
+                    <div style={{ fontWeight: '600', color: 'var(--text-primary)', fontSize: '1.1rem' }}>
                       {evaluation.interview.title}
                     </div>
-                    <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '2px' }}>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                       {evaluation.interview.interviewType.replace(/_/g, ' ')} • 
                       Evaluated by {evaluation.evaluator.fullName}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '2px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
                       {new Date(evaluation.createdAt).toLocaleDateString()}
                     </div>
                   </div>
@@ -1860,24 +1860,24 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                         fontSize: '0.75rem',
                         fontWeight: '600',
                         backgroundColor: 
-                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? '#dcfce7' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? '#dcfce7' :
-                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? '#fef3c7' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? '#fee2e2' :
-                          '#fee2e2',
+                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? 'var(--status-success-bg)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? 'var(--status-success-bg)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? 'var(--status-warning-bg)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? 'var(--status-error-bg)' :
+                          'var(--status-error-bg)',
                         color: 
-                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? '#166534' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? '#166534' :
-                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? '#92400e' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? '#991b1b' :
-                          '#991b1b',
+                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? 'var(--status-success-text)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? 'var(--status-success-text)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? 'var(--status-warning-text)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? 'var(--status-error-text)' :
+                          'var(--status-error-text)',
                         border: '1px solid',
                         borderColor: 
-                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? '#bbf7d0' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? '#bbf7d0' :
-                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? '#fde68a' :
-                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? '#fecaca' :
-                          '#fecaca'
+                          (evaluation.decision || evaluation.finalDecision) === 'YES' ? 'var(--status-success-border)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_YES' ? 'var(--status-success-border)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'UNSURE' ? 'var(--status-warning-border)' :
+                          (evaluation.decision || evaluation.finalDecision) === 'MAYBE_NO' ? 'var(--status-error-border)' :
+                          'var(--status-error-border)'
                       }}
                     >
                       {(evaluation.decision || evaluation.finalDecision).replace(/_/g, ' ')}
@@ -1890,20 +1890,20 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   <div style={{ 
                     marginBottom: '12px',
                     padding: '12px',
-                    backgroundColor: '#eff6ff', 
-                    borderLeft: '4px solid #2563eb',
+                    backgroundColor: 'var(--status-info-bg)', 
+                    borderLeft: '4px solid var(--status-info-border)',
                     borderRadius: '4px'
                   }}>
                     <div style={{ 
                       fontWeight: '600', 
-                      color: '#1e40af', 
+                      color: 'var(--status-info-text)', 
                       marginBottom: '4px', 
                       fontSize: '0.875rem'
                     }}>
                       Test For (Admin Note):
                     </div>
                     <div style={{ 
-                      color: '#1e40af',
+                      color: 'var(--status-info-text)',
                       fontSize: '0.875rem',
                       lineHeight: '1.5',
                       whiteSpace: 'pre-wrap'
@@ -1916,20 +1916,20 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 {/* First Round Interview Scores */}
                 {evaluation.interview.interviewType === 'ROUND_ONE' && (evaluation.behavioralTotal !== undefined || evaluation.marketSizingTotal !== undefined) && (
                   <div style={{ marginBottom: '12px' }}>
-                    <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                    <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                       First Round Scores:
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                       {/* Behavioral Section */}
                       <div style={{
-                        backgroundColor: '#f3f4f6',
+                        backgroundColor: 'var(--bg-gray-lighter)',
                         padding: '12px',
                         borderRadius: '4px'
                       }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Behavioral
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem', color: '#6b7280' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                             <span>Leadership:</span>
                             <span style={{ fontWeight: '500' }}>{evaluation.behavioralLeadership ?? 'N/A'}/5</span>
@@ -1942,22 +1942,22 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                             <span>Interest:</span>
                             <span style={{ fontWeight: '500' }}>{evaluation.behavioralInterest ?? 'N/A'}/5</span>
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #d1d5db', paddingTop: '4px', marginTop: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-medium)', paddingTop: '4px', marginTop: '4px' }}>
                             <span style={{ fontWeight: '600' }}>Total:</span>
-                            <span style={{ fontWeight: '600', color: '#374151' }}>{evaluation.behavioralTotal ?? 'N/A'}/15</span>
+                            <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{evaluation.behavioralTotal ?? 'N/A'}/15</span>
                           </div>
                         </div>
                       </div>
                       {/* Market Sizing Section */}
                       <div style={{
-                        backgroundColor: '#f3f4f6',
+                        backgroundColor: 'var(--bg-gray-lighter)',
                         padding: '12px',
                         borderRadius: '4px'
                       }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Market Sizing
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem', color: '#6b7280' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                             <span>Teamwork:</span>
                             <span style={{ fontWeight: '500' }}>{evaluation.marketSizingTeamwork ?? 'N/A'}/5</span>
@@ -1970,9 +1970,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                             <span>Creativity:</span>
                             <span style={{ fontWeight: '500' }}>{evaluation.marketSizingCreativity ?? 'N/A'}/5</span>
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #d1d5db', paddingTop: '4px', marginTop: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-medium)', paddingTop: '4px', marginTop: '4px' }}>
                             <span style={{ fontWeight: '600' }}>Total:</span>
-                            <span style={{ fontWeight: '600', color: '#374151' }}>{evaluation.marketSizingTotal ?? 'N/A'}/15</span>
+                            <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{evaluation.marketSizingTotal ?? 'N/A'}/15</span>
                           </div>
                         </div>
                       </div>
@@ -1985,7 +1985,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   <>
                     {evaluation.behavioralNotes && typeof evaluation.behavioralNotes === 'object' && Object.keys(evaluation.behavioralNotes).length > 0 && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Behavioral Notes:
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1993,14 +1993,14 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                             const questionText = evaluation.behavioralQuestionMap?.[questionId] || `Question ${index + 1}`;
                             return (
                               <div key={questionId} style={{
-                                backgroundColor: '#f3f4f6',
+                                backgroundColor: 'var(--bg-gray-lighter)',
                                 padding: '12px',
                                 borderRadius: '4px',
-                                borderLeft: '3px solid #6366f1'
+                                borderLeft: '3px solid var(--status-info-border)'
                               }}>
                                 <div style={{
                                   fontWeight: '500',
-                                  color: '#4f46e5',
+                                  color: 'var(--status-info-text)',
                                   fontSize: '0.8rem',
                                   marginBottom: '6px'
                                 }}>
@@ -2009,7 +2009,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                                 <div style={{
                                   whiteSpace: 'pre-wrap',
                                   fontSize: '0.875rem',
-                                  color: '#374151',
+                                  color: 'var(--text-primary)',
                                   lineHeight: '1.5'
                                 }}>
                                   {notes || 'No notes'}
@@ -2022,16 +2022,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     )}
                     {evaluation.behavioralNotes && typeof evaluation.behavioralNotes === 'string' && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                           Behavioral Notes:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '8px',
                           borderRadius: '4px',
                           whiteSpace: 'pre-wrap',
                           fontSize: '0.875rem',
-                          color: '#374151'
+                          color: 'var(--text-primary)'
                         }}>
                           {evaluation.behavioralNotes}
                         </div>
@@ -2039,16 +2039,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     )}
                     {evaluation.marketSizingNotes && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                           Market Sizing Notes:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '8px',
                           borderRadius: '4px',
                           whiteSpace: 'pre-wrap',
                           fontSize: '0.875rem',
-                          color: '#374151'
+                          color: 'var(--text-primary)'
                         }}>
                           {typeof evaluation.marketSizingNotes === 'object' ? JSON.stringify(evaluation.marketSizingNotes, null, 2) : evaluation.marketSizingNotes}
                         </div>
@@ -2056,16 +2056,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     )}
                     {evaluation.additionalNotes && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                           Additional Notes:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '8px',
                           borderRadius: '4px',
                           whiteSpace: 'pre-wrap',
                           fontSize: '0.875rem',
-                          color: '#374151'
+                          color: 'var(--text-primary)'
                         }}>
                           {typeof evaluation.additionalNotes === 'object' ? JSON.stringify(evaluation.additionalNotes, null, 2) : evaluation.additionalNotes}
                         </div>
@@ -2080,20 +2080,20 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     {/* Behavioral Notes for Final Round */}
                     {evaluation.behavioralNotes && typeof evaluation.behavioralNotes === 'object' && Object.keys(evaluation.behavioralNotes).length > 0 && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Behavioral Notes:
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                           {Object.entries(evaluation.behavioralNotes).map(([questionId, notes], index) => (
                             <div key={questionId} style={{
-                              backgroundColor: '#f3f4f6',
+                              backgroundColor: 'var(--bg-gray-lighter)',
                               padding: '12px',
                               borderRadius: '4px',
-                              borderLeft: '3px solid #6366f1'
+                              borderLeft: '3px solid var(--status-info-border)'
                             }}>
                               <div style={{
                                 fontWeight: '500',
-                                color: '#4f46e5',
+                                color: 'var(--status-info-text)',
                                 fontSize: '0.8rem',
                                 marginBottom: '6px'
                               }}>
@@ -2102,7 +2102,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                               <div style={{
                                 whiteSpace: 'pre-wrap',
                                 fontSize: '0.875rem',
-                                color: '#374151',
+                                color: 'var(--text-primary)',
                                 lineHeight: '1.5'
                               }}>
                                 {notes || 'No notes'}
@@ -2114,16 +2114,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     )}
                     {evaluation.behavioralNotes && typeof evaluation.behavioralNotes === 'string' && evaluation.behavioralNotes.trim() && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                           Behavioral Notes:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '8px',
                           borderRadius: '4px',
                           whiteSpace: 'pre-wrap',
                           fontSize: '0.875rem',
-                          color: '#374151'
+                          color: 'var(--text-primary)'
                         }}>
                           {evaluation.behavioralNotes}
                         </div>
@@ -2133,20 +2133,20 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     {/* Casing Notes for Final Round */}
                     {evaluation.casingNotes && typeof evaluation.casingNotes === 'object' && Object.keys(evaluation.casingNotes).length > 0 && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Casing Notes:
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                           {Object.entries(evaluation.casingNotes).map(([sectionId, notes], index) => (
                             <div key={sectionId} style={{
-                              backgroundColor: '#f3f4f6',
+                              backgroundColor: 'var(--bg-gray-lighter)',
                               padding: '12px',
                               borderRadius: '4px',
-                              borderLeft: '3px solid #10b981'
+                              borderLeft: '3px solid var(--status-success-border)'
                             }}>
                               <div style={{
                                 fontWeight: '500',
-                                color: '#059669',
+                                color: 'var(--status-success-text)',
                                 fontSize: '0.8rem',
                                 marginBottom: '6px'
                               }}>
@@ -2155,7 +2155,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                               <div style={{
                                 whiteSpace: 'pre-wrap',
                                 fontSize: '0.875rem',
-                                color: '#374151',
+                                color: 'var(--text-primary)',
                                 lineHeight: '1.5'
                               }}>
                                 {notes || 'No notes'}
@@ -2167,16 +2167,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     )}
                     {evaluation.casingNotes && typeof evaluation.casingNotes === 'string' && evaluation.casingNotes.trim() && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                           Casing Notes:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '8px',
                           borderRadius: '4px',
                           whiteSpace: 'pre-wrap',
                           fontSize: '0.875rem',
-                          color: '#374151'
+                          color: 'var(--text-primary)'
                         }}>
                           {evaluation.casingNotes}
                         </div>
@@ -2186,19 +2186,19 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                     {/* Candidate Details for Final Round */}
                     {evaluation.candidateDetails && typeof evaluation.candidateDetails === 'object' && Object.keys(evaluation.candidateDetails).length > 0 && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px', fontSize: '0.875rem' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.875rem' }}>
                           Candidate Details:
                         </div>
                         <div style={{
-                          backgroundColor: '#f3f4f6',
+                          backgroundColor: 'var(--bg-gray-lighter)',
                           padding: '12px',
                           borderRadius: '4px',
-                          borderLeft: '3px solid #f59e0b'
+                          borderLeft: '3px solid var(--status-warning-border)'
                         }}>
                           <div style={{
                             whiteSpace: 'pre-wrap',
                             fontSize: '0.875rem',
-                            color: '#374151',
+                            color: 'var(--text-primary)',
                             lineHeight: '1.5'
                           }}>
                             {JSON.stringify(evaluation.candidateDetails, null, 2)}
@@ -2215,16 +2215,16 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                  evaluation.interview.interviewType !== 'ROUND_TWO' && 
                  evaluation.notes && (
                   <div style={{ marginBottom: '12px' }}>
-                    <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px', fontSize: '0.875rem' }}>
+                    <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px', fontSize: '0.875rem' }}>
                       Notes:
                     </div>
                     <div style={{
-                      backgroundColor: '#f3f4f6',
+                      backgroundColor: 'var(--bg-gray-lighter)',
                       padding: '8px',
                       borderRadius: '4px',
                       whiteSpace: 'pre-wrap',
                       fontSize: '0.875rem',
-                      color: '#374151'
+                      color: 'var(--text-primary)'
                     }}>
                       {evaluation.notes}
                     </div>
@@ -2255,7 +2255,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         >
           <div 
             style={{
-              backgroundColor: '#fff',
+              backgroundColor: 'var(--bg-white)',
               borderRadius: '12px',
               padding: '24px',
               maxWidth: '500px',
@@ -2276,7 +2276,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   border: 'none',
                   fontSize: '1.5rem',
                   cursor: 'pointer',
-                  color: '#6b7280'
+                  color: 'var(--text-tertiary)'
                 }}
               >
                 ×
@@ -2284,30 +2284,30 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             </div>
             
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Evaluator
               </div>
-              <div style={{ color: '#6b7280' }}>
+              <div style={{ color: 'var(--text-tertiary)' }}>
                 {selectedScore.evaluator?.fullName || selectedScore.evaluator?.email || 'Unknown'}
               </div>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Date & Time
               </div>
-              <div style={{ color: '#6b7280' }}>
+              <div style={{ color: 'var(--text-tertiary)' }}>
                 {new Date(selectedScore.createdAt).toLocaleString()}
               </div>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px' }}>
                 Category Scores
               </div>
               <div style={{ display: 'grid', gap: '8px' }}>
                 {rubricCategoriesFor(DOCUMENT_LABEL_TO_TYPE[selectedScore.documentType]).map((category) => (
-                  <div key={category.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
+                  <div key={category.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px', backgroundColor: 'var(--bg-gray-light)', borderRadius: '4px' }}>
                     <span>{category.title}</span>
                     <span style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>{selectedScore[category.id] ?? 'N/A'}{category.max !== null ? `/${category.max}` : ''}</span>
                   </div>
@@ -2316,25 +2316,25 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px' }}>
                 Overall Score
               </div>
-              <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#059669' }}>
+              <div style={{ fontSize: '1.25rem', fontWeight: '600', color: 'var(--status-success-text)' }}>
                 {selectedScore.overallScore}/{maxFor(DOCUMENT_LABEL_TO_TYPE[selectedScore.documentType])}
               </div>
             </div>
 
             {selectedScore.notes && (
               <div style={{ marginBottom: '16px' }}>
-                <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '8px' }}>
                   Notes
                 </div>
                 <div style={{ 
                   padding: '12px', 
-                  backgroundColor: '#f9fafb', 
+                  backgroundColor: 'var(--bg-gray-light)', 
                   borderRadius: '4px',
                   whiteSpace: 'pre-wrap',
-                  color: '#374151'
+                  color: 'var(--text-primary)'
                 }}>
                   {selectedScore.notes}
                 </div>
@@ -2384,7 +2384,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
           zIndex: 1000
         }}>
           <div style={{
-            backgroundColor: 'white',
+            backgroundColor: 'var(--bg-white)',
             padding: '24px',
             borderRadius: '12px',
             width: '90%',
@@ -2403,7 +2403,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   border: 'none',
                   fontSize: '1.5rem',
                   cursor: 'pointer',
-                  color: '#6b7280'
+                  color: 'var(--text-tertiary)'
                 }}
               >
                 ×
@@ -2411,7 +2411,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#374151' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: 'var(--text-primary)' }}>
                 Referrer Name *
               </label>
               <input
@@ -2422,7 +2422,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   fontSize: '0.875rem'
                 }}
@@ -2430,7 +2430,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: '#374151' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: 'var(--text-primary)' }}>
                 Relationship *
               </label>
               <input
@@ -2441,7 +2441,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   fontSize: '0.875rem'
                 }}
@@ -2454,8 +2454,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 onClick={() => setIsReferralModalOpen(false)}
                 style={{
                   padding: '10px 16px',
-                  backgroundColor: '#f3f4f6',
-                  color: '#374151',
+                  backgroundColor: 'var(--bg-gray-lighter)',
+                  color: 'var(--text-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '0.875rem',
@@ -2470,8 +2470,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 disabled={isSubmittingReferral || !referralForm.referrerName.trim() || !referralForm.relationship.trim()}
                 style={{
                   padding: '10px 16px',
-                  backgroundColor: isSubmittingReferral || !referralForm.referrerName.trim() || !referralForm.relationship.trim() ? '#9ca3af' : '#3b82f6',
-                  color: 'white',
+                  backgroundColor: isSubmittingReferral || !referralForm.referrerName.trim() || !referralForm.relationship.trim() ? 'var(--text-muted)' : 'var(--link-default)',
+                  color: 'var(--text-on-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '0.875rem',
@@ -2502,7 +2502,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         >
           <div 
             style={{
-              backgroundColor: '#fff',
+              backgroundColor: 'var(--bg-white)',
               borderRadius: '12px',
               padding: '24px',
               maxWidth: '600px',
@@ -2523,7 +2523,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   border: 'none',
                   fontSize: '1.5rem',
                   cursor: 'pointer',
-                  color: '#6b7280'
+                  color: 'var(--text-tertiary)'
                 }}
               >
                 ×
@@ -2533,8 +2533,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             {saveError && (
               <div style={{ 
                 padding: '12px', 
-                backgroundColor: '#fee2e2', 
-                color: '#991b1b', 
+                backgroundColor: 'var(--status-error-bg)', 
+                color: 'var(--status-error-text)', 
                 borderRadius: '8px', 
                 marginBottom: '16px' 
               }}>
@@ -2543,26 +2543,26 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             )}
 
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Evaluator
               </div>
-              <div style={{ color: '#6b7280' }}>
+              <div style={{ color: 'var(--text-tertiary)' }}>
                 {editingScore.evaluator?.fullName || 'Unknown'}
               </div>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Date
               </div>
-              <div style={{ color: '#6b7280' }}>
+              <div style={{ color: 'var(--text-tertiary)' }}>
                 {editingScore.createdAt ? new Date(editingScore.createdAt).toLocaleDateString() : 'N/A'}
               </div>
             </div>
 
             {rubricCategoriesFor(editingScoreType).map((category) => (
               <div key={category.id} style={{ marginBottom: '12px' }}>
-                <label htmlFor={`edit-${category.id}`} style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                <label htmlFor={`edit-${category.id}`} style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                   {category.title}{category.max !== null ? ` (${category.min}–${category.max})` : ''}
                 </label>
                 <input
@@ -2576,7 +2576,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   style={{
                     width: '100%',
                     padding: '8px',
-                    border: '1px solid #d1d5db',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '6px',
                     fontSize: '1rem'
                   }}
@@ -2584,7 +2584,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               </div>
             ))}
             <div style={{ marginBottom: '12px' }}>
-              <label htmlFor="edit-overallScore" style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <label htmlFor="edit-overallScore" style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Overall Score (0–{maxFor(editingScoreType)})
               </label>
               <input
@@ -2598,18 +2598,18 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 style={{
                     width: '100%',
                     padding: '8px',
-                    border: '1px solid #d1d5db',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '6px',
                     fontSize: '1rem'
                   }}
               />
-              <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                 Recalculated from the category scores when you change one. Type a different value to set it by hand.
               </div>
             </div>
 
             <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                 Notes
               </label>
               <textarea
@@ -2619,7 +2619,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 style={{
                   width: '100%',
                   padding: '8px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   fontSize: '1rem',
                   fontFamily: 'inherit',
@@ -2628,12 +2628,12 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
               />
             </div>
 
-            <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
-              <div style={{ fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+            <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-light)' }}>
+              <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '12px' }}>
                 Admin Override (Optional)
               </div>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                   Admin Score Override
                 </label>
                 <input
@@ -2646,17 +2646,17 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   style={{
                     width: '100%',
                     padding: '8px',
-                    border: '1px solid #d1d5db',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '6px',
                     fontSize: '1rem'
                   }}
                 />
-                <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                   Override the overall score with an admin score
                 </div>
               </div>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
                   Admin Notes
                 </label>
                 <textarea
@@ -2667,7 +2667,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   style={{
                     width: '100%',
                     padding: '8px',
-                    border: '1px solid #d1d5db',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '6px',
                     fontSize: '1rem',
                     fontFamily: 'inherit',
@@ -2683,11 +2683,11 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 disabled={savingScore}
                 style={{
                   padding: '8px 16px',
-                  border: '1px solid #d1d5db',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
-                  background: '#fff',
+                  background: 'var(--bg-white)',
                   cursor: savingScore ? 'not-allowed' : 'pointer',
-                  color: '#374151',
+                  color: 'var(--text-primary)',
                   fontSize: '0.875rem',
                   fontWeight: '500'
                 }}
@@ -2701,9 +2701,9 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   padding: '8px 16px',
                   border: 'none',
                   borderRadius: '6px',
-                  background: savingScore ? '#9ca3af' : '#2563eb',
+                  background: savingScore ? 'var(--text-muted)' : 'var(--link-default)',
                   cursor: savingScore ? 'not-allowed' : 'pointer',
-                  color: '#fff',
+                  color: 'var(--text-on-primary)',
                   fontSize: '0.875rem',
                   fontWeight: '500'
                 }}
@@ -2731,7 +2731,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
         >
           <div
             style={{
-              backgroundColor: '#fff',
+              backgroundColor: 'var(--bg-white)',
               borderRadius: '12px',
               padding: '24px',
               maxWidth: '1400px',
@@ -2746,7 +2746,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: '600' }}>
                   Past Application Details
                 </h3>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.875rem', color: '#6b7280' }}>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>
                   {selectedPastApplication.cycle?.name || 'Unknown Cycle'}
                 </p>
               </div>
@@ -2757,7 +2757,7 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                   border: 'none',
                   fontSize: '1.5rem',
                   cursor: 'pointer',
-                  color: '#6b7280'
+                  color: 'var(--text-tertiary)'
                 }}
               >
                 ×
@@ -2775,13 +2775,13 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
             />
 
             {/* Action Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e5e7eb' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border-light)' }}>
               <button
                 onClick={() => setPastApplicationModalOpen(false)}
                 style={{
                   padding: '10px 20px',
-                  backgroundColor: '#f3f4f6',
-                  color: '#374151',
+                  backgroundColor: 'var(--bg-gray-lighter)',
+                  color: 'var(--text-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   cursor: 'pointer',
@@ -2797,8 +2797,8 @@ export default function ApplicationDetail({ applicationId: propApplicationId, em
                 }}
                 style={{
                   padding: '10px 20px',
-                  backgroundColor: '#2563eb',
-                  color: 'white',
+                  backgroundColor: 'var(--link-default)',
+                  color: 'var(--text-on-primary)',
                   border: 'none',
                   borderRadius: '6px',
                   cursor: 'pointer',

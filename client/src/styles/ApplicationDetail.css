@@ -250,7 +250,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);  font-size: 0.875rem;
+  color: var(--text-secondary);  font-size: 0.875rem;
 }
 
 /* Document Gallery */
@@ -485,7 +485,7 @@
 
 /* Style for when N/A is active */
 .na-button[data-active="true"] {
-  background-color: var(--status-error-border);  color: var(--text-white);  border-color: var(--status-error-border);}
+  background-color: var(--status-error-border);  color: var(--text-on-primary);  border-color: var(--status-error-border);}
 
 /* Style for disabled sliders */
 .grade-slider:disabled {
@@ -685,7 +685,7 @@
 
 .grading-button.save-button {
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .grading-button.save-button:hover {
@@ -726,7 +726,7 @@
 
 .event-item .event-name {
   font-weight: 600;
-  color: var(--text-secondary);  margin-bottom: 4px;
+  color: var(--text-tertiary);  margin-bottom: 4px;
 }
 
 .event-item .event-details {

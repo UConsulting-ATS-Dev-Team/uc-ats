@@ -31,6 +31,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import AccessControl from '../components/AccessControl';
+import { themeTokens } from '../styles/theme';
 
 function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisAngle = 0, limit }) {
   const theme = useTheme();
@@ -44,19 +45,32 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
     ? [...data.slice(0, limit - 1), { name: 'Other', value: otherValue }]
     : data;
 
-  const chartColors = [
-    theme.palette.primary.main,
-    theme.palette.secondary.main,
-    theme.palette.success.main,
-    theme.palette.info.main,
-    theme.palette.warning.main,
-    theme.palette.error.main,
-    theme.palette.primary.light,
-    theme.palette.secondary.light,
-  ];
+  const { chart } = themeTokens[theme.palette.mode];
+  // In dark mode primary.main and info.main are the same blue, so the dark
+  // palette comes from the chart tokens. The two pale *.light entries were
+  // invisible on white, so those slots use chart tokens in light mode too.
+  const chartColors = theme.palette.mode === 'dark'
+    ? chart
+    : [
+        theme.palette.primary.main,
+        theme.palette.secondary.main,
+        theme.palette.success.main,
+        theme.palette.info.main,
+        theme.palette.warning.main,
+        theme.palette.error.main,
+        chart[5],
+        chart[7],
+      ];
 
   const getColor = (item, index) =>
-    item.name === 'Other' ? theme.palette.grey[500] : chartColors[index % chartColors.length];
+    item.name === 'Other' ? theme.palette.text.secondary : chartColors[index % chartColors.length];
+
+  // Recharts draws its tooltip on white by default, where the page's own light
+  // text disappears in dark mode.
+  const tooltipStyles = {
+    labelStyle: { color: theme.palette.text.primary },
+    itemStyle: { color: theme.palette.text.primary },
+  };
 
   const chartBody = displayData.length > 0 ? (
     <>
@@ -77,7 +91,14 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
               <YAxis allowDecimals={false} tick={{ fill: theme.palette.text.secondary }} />
               <Tooltip
                 formatter={(value) => [`${value} application${value !== 1 ? 's' : ''}`, 'Count']}
-                contentStyle={{ borderRadius: theme.shape.borderRadius, border: 'none', boxShadow: theme.shadows[4] }}
+                contentStyle={{
+                  borderRadius: theme.shape.borderRadius,
+                  border: 'none',
+                  boxShadow: theme.shadows[4],
+                  backgroundColor: theme.palette.background.elevated,
+                }}
+                cursor={{ fill: theme.palette.action.hover }}
+                {...tooltipStyles}
               />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                 <LabelList dataKey="value" position="top" fill={theme.palette.text.primary} fontSize={12} />
@@ -105,7 +126,14 @@ function DemographicChartCard({ title, icon: Icon, data, type, emptyText, xAxisA
                   <Cell key={`cell-${index}`} fill={getColor(entry, index)} />
                 ))}
               </Pie>
-              <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
+              <Tooltip
+                formatter={(value, name) => [`${value}`, `${name}`]}
+                contentStyle={{
+                  backgroundColor: theme.palette.background.elevated,
+                  borderColor: theme.palette.divider,
+                }}
+                {...tooltipStyles}
+              />
               <Legend verticalAlign="bottom" height={36} />
             </PieChart>
           )}
@@ -379,7 +407,7 @@ export default function Dashboard() {
           {/* Header */}
           <Box sx={{ mb: 4 }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
-              <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+              <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
                 Admin Dashboard
               </Typography>
               <Button

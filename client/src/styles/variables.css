@@ -60,6 +60,27 @@
   --status-info-text: #4F46E5;
   --status-info-border: #6366f1;
 
+  --status-purple-bg: #f3e8ff;
+  --status-purple-text: #6b21a8;
+  --status-purple-border: #a855f7;
+
+  --accent-rose-bg: #fdf2f8;
+  --accent-rose-border: #f9a8d4;
+  --accent-rose-text: #9d174d;
+
+  --accent-purple: #7c3aed;
+
+  /* Text on a --primary-blue / --primary-dark fill. Those fills are dark in
+     light mode and light in dark mode, so the text on them has to flip too. */
+  --text-on-primary: #ffffff;
+
+  /* Aliases older stylesheets use */
+  --border-color: var(--border-light);
+  --error-text: var(--status-error-text);
+  --primary-hover: var(--primary-blue-hover);
+  --surface-light: var(--bg-gray-light);
+  --surface-hover: var(--bg-gray-lighter);
+
   --primary-color: var(--primary-blue);
   --error-color: var(--status-error-text);
 
@@ -134,18 +155,18 @@
   --nav-bg: #0b1220;
   --nav-text: #f8fafc;
   --nav-text-secondary: #94a3b8;
-  --nav-border: #1e293b;
+  --nav-border: #2a3a52;
 
   /* Text */
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --text-tertiary: #cbd5e1;
-  --text-muted: #64748b;
+  --text-muted: #8291a7;
   --text-white: #f8fafc;
 
   /* Border */
-  --border-light: #1e293b;
-  --border-medium: #334155;
+  --border-light: #2a3a52;
+  --border-medium: #475569;
   --border-focus: #38bdf8;
 
   /* Status (dark, higher contrast) */
@@ -174,6 +195,8 @@
   --accent-rose-text: #fce7f3;
 
   --accent-purple: #a78bfa;
+
+  --text-on-primary: #0b1220;
 
   --bg-gray-medium: #334155;
 
