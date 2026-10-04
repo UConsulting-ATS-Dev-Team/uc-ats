@@ -2,6 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import apiClient from '../utils/api';
 import { supabase } from '../supabaseClient';
 
+/** A message's reactions with this user's `emoji` added or taken off. */
+export function toggleLocally(reactions, emoji, user) {
+  const existing = reactions.find((r) => r.emoji === emoji);
+  if (existing?.users.some((u) => u.id === user.id)) {
+    const users = existing.users.filter((u) => u.id !== user.id);
+    return users.length
+      ? reactions.map((r) => (r.emoji === emoji ? { ...r, count: users.length, users } : r))
+      : reactions.filter((r) => r.emoji !== emoji);
+  }
+  const me = { id: user.id, fullName: user.fullName };
+  return existing
+    ? reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1, users: [...r.users, me] } : r))
+    : [...reactions, { emoji, count: 1, users: [me] }];
+}
+
 export default function useConversation({ resolve, currentUser }) {
   const currentUserId = currentUser?.id;
   const [conversation, setConversation] = useState(null);
@@ -68,6 +83,11 @@ export default function useConversation({ resolve, currentUser }) {
       if (payload.sender.id !== currentUserId) {
         setUnreadCount((c) => c + 1);
       }
+    });
+
+    channel.on('broadcast', { event: 'message:reactions' }, ({ payload }) => {
+      if (!payload || payload.conversationId !== conversationIdRef.current) return;
+      setMessages((prev) => prev.map((m) => (m.id === payload.messageId ? { ...m, reactions: payload.reactions } : m)));
     });
 
     channel.subscribe((status) => {
@@ -157,6 +177,25 @@ export default function useConversation({ resolve, currentUser }) {
     await submitMessage(message.body, tempId, optimistic);
   }, [conversation, currentUser, messages, submitMessage]);
 
+  // Toggles the emoji at once and settles on what the server answers; a failed
+  // toggle goes back to the reactions the message had.
+  const react = useCallback(async (messageId, emoji) => {
+    if (!conversation || !currentUser) return;
+    let before;
+    setMessages((prev) => prev.map((m) => {
+      if (m.id !== messageId) return m;
+      before = m.reactions || [];
+      return { ...m, reactions: toggleLocally(before, emoji, currentUser) };
+    }));
+    try {
+      const result = await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: result.reactions } : m)));
+    } catch (err) {
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: before } : m)));
+      setError(err.message || 'Failed to react');
+    }
+  }, [conversation, currentUser]);
+
   const markRead = useCallback(async () => {
     if (!conversation) return;
     try {
@@ -175,6 +214,7 @@ export default function useConversation({ resolve, currentUser }) {
     connected,
     send,
     retry,
+    react,
     markRead
-  }), [conversation, messages, loading, sending, error, unreadCount, connected, send, retry, markRead]);
+  }), [conversation, messages, loading, sending, error, unreadCount, connected, send, retry, react, markRead]);
 }

@@ -75,6 +75,7 @@ model User {
   videoScores                VideoScore[]
   conversationParticipants   ConversationParticipant[]       @relation("ConversationParticipantUser")
   sentMessages               Message[]                       @relation("MessageSender")
+  messageReactions           MessageReaction[]               @relation("MessageReactionUser")
   createdCases               Case[]                          @relation("CaseCreator")
   caseAssignments            CaseAssignment[]                @relation("CaseAssigner")
   gtkucProfile               MemberGtkucProfile?
@@ -1407,9 +1408,27 @@ model Message {
   deletedAt      DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation("MessageSender", fields: [senderId], references: [id])
+  reactions      MessageReaction[]
 
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+/// An emoji someone put on a chat message, iMessage / Slack style. One row per
+/// person per emoji per message, so tapping the same one again takes it off.
+/// The emoji is one of a fixed palette (REACTION_EMOJI in services/messaging.js).
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation("MessageReactionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@map("message_reactions")
 }
 
 model InterviewQuestion {

@@ -1,6 +1,7 @@
 import prisma from '../prismaClient.js';
 import { broadcastToConversation, channelNameFor } from './realtime.js';
 import { interviewStaffIds, interviewsStaffedBy } from './interviewRoster.js';
+import { interviewIdOfThread, userCanAccessThread } from './interviewThreads.js';
 
 // An interview conversation's members are whoever staffs the interview now
 // (interviewRoster.js): session assignments where it has sessions. Reading only the
@@ -17,6 +18,33 @@ const senderSelect = {
   role: true
 };
 
+/// The reactions on offer. A fixed palette rather than any emoji: what arrives in
+/// a request body is checked against it, and it keeps the picker one row.
+export const REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '👎', '🎉', '👀'];
+
+const reactionInclude = {
+  reactions: {
+    orderBy: { createdAt: 'asc' },
+    select: { emoji: true, user: { select: { id: true, fullName: true } } }
+  }
+};
+
+/** Reaction rows folded to one entry per emoji, in the order each was first used. */
+export function summarizeReactions(rows = []) {
+  const byEmoji = new Map();
+  for (const row of rows) {
+    const entry = byEmoji.get(row.emoji) ?? { emoji: row.emoji, count: 0, users: [] };
+    entry.count += 1;
+    entry.users.push({ id: row.user.id, fullName: row.user.fullName });
+    byEmoji.set(row.emoji, entry);
+  }
+  return [...byEmoji.values()];
+}
+
+// message_reactions arrives in its own migration. Until it is applied, chats
+// load and send as before and simply show no reactions.
+const isMissingTable = (err) => err?.code === 'P2021' || err?.code === 'P2022';
+
 function serializeMessage(msg) {
   return {
     id: msg.id,
@@ -25,7 +53,8 @@ function serializeMessage(msg) {
     createdAt: msg.createdAt,
     editedAt: msg.editedAt,
     deletedAt: msg.deletedAt,
-    sender: msg.sender
+    sender: msg.sender,
+    reactions: summarizeReactions(msg.reactions)
   };
 }
 
@@ -112,6 +141,9 @@ async function ensureParticipantRow(conversationId, userId) {
 
 export async function userCanAccessConversation(conversation, user) {
   if (!conversation || !user) return false;
+  // A coffee chat thread is private to the people in it, admins included
+  // (interviewThreads.js), so it is checked before the admin shortcut.
+  if (interviewIdOfThread(conversation)) return userCanAccessThread(conversation, user);
   if (user.role === 'ADMIN') return true;
 
   // Interview conversations are authorized by who staffs the interview now, not stale
@@ -129,13 +161,63 @@ export async function userCanAccessConversation(conversation, user) {
 export async function listMessages(conversationId, { before, limit = MESSAGE_PAGE_SIZE } = {}) {
   const where = { conversationId };
   if (before) where.createdAt = { lt: new Date(before) };
-  const rows = await prisma.message.findMany({
+  const query = {
     where,
     orderBy: { createdAt: 'desc' },
-    take: Math.min(Math.max(parseInt(limit, 10) || MESSAGE_PAGE_SIZE, 1), 200),
-    include: { sender: { select: senderSelect } }
-  });
+    take: Math.min(Math.max(parseInt(limit, 10) || MESSAGE_PAGE_SIZE, 1), 200)
+  };
+  let rows;
+  try {
+    rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect }, ...reactionInclude } });
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect } } });
+  }
   return rows.reverse().map(serializeMessage);
+}
+
+/**
+ * Put an emoji on a message, or take it off if the user already put that one on.
+ * Returns the message's reactions afterwards and tells the conversation.
+ */
+export async function toggleReaction({ conversationId, messageId, user, emoji }) {
+  if (!REACTION_EMOJI.includes(emoji)) {
+    const err = new Error('Unknown reaction');
+    err.status = 400;
+    throw err;
+  }
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { id: true, conversationId: true, deletedAt: true }
+  });
+  // The conversation was authorized; the message id came from the URL.
+  if (!message || message.conversationId !== conversationId || message.deletedAt) {
+    const err = new Error('Message not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const key = { messageId_userId_emoji: { messageId, userId: user.id, emoji } };
+  try {
+    const removed = await prisma.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
+    if (removed.count === 0) {
+      await prisma.messageReaction.upsert({ where: key, create: { messageId, userId: user.id, emoji }, update: {} });
+    }
+    const rows = await prisma.messageReaction.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' },
+      select: reactionInclude.reactions.select
+    });
+    const reactions = summarizeReactions(rows);
+    broadcastToConversation(conversationId, 'message:reactions', { conversationId, messageId, reactions }).catch(() => {});
+    return { messageId, reactions };
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    const unavailable = new Error('Reactions are not available yet');
+    unavailable.status = 503;
+    unavailable.code = 'REACTIONS_UNAVAILABLE';
+    throw unavailable;
+  }
 }
 
 export async function sendMessage({ conversationId, sender, body }) {
@@ -242,8 +324,14 @@ async function interviewIdsWithChatsFor(user) {
 export async function listConversationsForUser(user) {
   const assignedInterviewIds = user.role === 'ADMIN' ? [] : await interviewIdsWithChatsFor(user);
 
+  // Admins see every conversation except coffee chat threads they are not in.
   const where = user.role === 'ADMIN'
-    ? {}
+    ? {
+        OR: [
+          { contextType: { not: 'DIRECT_MESSAGE' } },
+          { participants: { some: { userId: user.id } } }
+        ]
+      }
     : {
         OR: [
           {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import useConversation from './useConversation';
+import useConversation, { toggleLocally } from './useConversation';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
@@ -142,5 +142,58 @@ describe('useConversation', () => {
 
     await waitFor(() => expect(result.current.messages[0].id).toBe('msg-1'));
     expect(result.current.messages[0]._failed).toBeFalsy();
+  });
+
+  describe('reactions', () => {
+    const conv = { id: 'conv-1', title: 'T', participants: [{ userId: 'user-1', lastReadAt: null }] };
+    const msg = { id: 'msg-1', body: 'hi', createdAt: '2026-10-04T10:00:00Z', sender: { id: 'user-2' }, reactions: [] };
+
+    it('shows the reaction at once and settles on what the server returns', async () => {
+      resolve.mockResolvedValue(conv);
+      mockGet.mockResolvedValue([msg]);
+      const serverReactions = [{ emoji: '👍', count: 2, users: [{ id: 'user-1' }, { id: 'user-3' }] }];
+      let answer;
+      mockPost.mockReturnValue(new Promise((r) => { answer = r; }));
+
+      const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let pending;
+      act(() => { pending = result.current.react('msg-1', '👍'); });
+      expect(result.current.messages[0].reactions).toEqual([
+        { emoji: '👍', count: 1, users: [{ id: 'user-1', fullName: 'Test User' }] }
+      ]);
+      expect(mockPost).toHaveBeenCalledWith('/conversations/conv-1/messages/msg-1/reactions', { emoji: '👍' });
+
+      await act(async () => { answer({ messageId: 'msg-1', reactions: serverReactions }); await pending; });
+      expect(result.current.messages[0].reactions).toEqual(serverReactions);
+    });
+
+    it('puts the reactions back when the server refuses', async () => {
+      resolve.mockResolvedValue(conv);
+      mockGet.mockResolvedValue([msg]);
+      mockPost.mockRejectedValue(new Error('Reactions are not available yet'));
+
+      const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => { await result.current.react('msg-1', '👍'); });
+      expect(result.current.messages[0].reactions).toEqual([]);
+      expect(result.current.error).toBe('Reactions are not available yet');
+    });
+  });
+
+  describe('toggleLocally', () => {
+    const me = { id: 'me', fullName: 'Me' };
+    const other = { id: 'o', fullName: 'O' };
+
+    it('adds a new emoji, joins an existing one, and takes mine off again', () => {
+      const added = toggleLocally([], '🎉', me);
+      expect(added).toEqual([{ emoji: '🎉', count: 1, users: [me] }]);
+      const joined = toggleLocally([{ emoji: '🎉', count: 1, users: [other] }], '🎉', me);
+      expect(joined).toEqual([{ emoji: '🎉', count: 2, users: [other, me] }]);
+      expect(toggleLocally(joined, '🎉', me)).toEqual([{ emoji: '🎉', count: 1, users: [other] }]);
+      expect(toggleLocally(added, '🎉', me)).toEqual([]);
+    });
   });
 });

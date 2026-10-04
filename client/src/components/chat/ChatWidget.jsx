@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChatBubbleLeftRightIcon, XMarkIcon, PaperAirplaneIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
+import { ChatBubbleLeftRightIcon, XMarkIcon, PaperAirplaneIcon, ArrowPathIcon, FaceSmileIcon } from '@heroicons/react/24/solid';
 import useConversation from '../../hooks/useConversation';
 import { useAuth } from '../../context/AuthContext';
 import MemberAvatar from '../MemberAvatar';
@@ -21,7 +21,76 @@ function formatDayLabel(date) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
 }
 
-function MessageList({ messages, currentUserId, onRetry }) {
+/// Must match REACTION_EMOJI in server/src/services/messaging.js.
+export const REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '👎', '🎉', '👀'];
+
+function reactorNames(reaction, currentUserId) {
+  return reaction.users.map((u) => (u.id === currentUserId ? 'You' : u.fullName || 'Someone')).join(', ');
+}
+
+function Reactions({ msg, currentUserId, onReact }) {
+  const [picking, setPicking] = useState(false);
+  const reactions = msg.reactions || [];
+  if (msg._pending || msg._failed || !onReact) return null;
+
+  const choose = (emoji) => {
+    setPicking(false);
+    onReact(msg.id, emoji);
+  };
+
+  return (
+    <div className="chat-reactions">
+      {reactions.map((reaction) => {
+        const mine = reaction.users.some((u) => u.id === currentUserId);
+        return (
+          <button
+            type="button"
+            key={reaction.emoji}
+            className={`chat-reaction${mine ? ' chat-reaction--mine' : ''}`}
+            title={reactorNames(reaction, currentUserId)}
+            aria-label={`${reaction.emoji} ${reaction.count}${mine ? ', including you' : ''}`}
+            aria-pressed={mine}
+            data-no-track
+            onClick={() => choose(reaction.emoji)}
+          >
+            <span>{reaction.emoji}</span>
+            <span className="chat-reaction__count">{reaction.count}</span>
+          </button>
+        );
+      })}
+      <div className="chat-reaction-add-wrap">
+        <button
+          type="button"
+          className="chat-reaction-add"
+          aria-label="Add reaction"
+          aria-expanded={picking}
+          data-track="chat-add-reaction"
+          onClick={() => setPicking((open) => !open)}
+        >
+          <FaceSmileIcon style={{ width: 14, height: 14 }} />
+        </button>
+        {picking && (
+          <div className="chat-reaction-picker" role="menu" onMouseLeave={() => setPicking(false)}>
+            {REACTION_EMOJI.map((emoji) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={emoji}
+                aria-label={`React ${emoji}`}
+                data-track="chat-pick-reaction"
+                onClick={() => choose(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MessageList({ messages, currentUserId, onRetry, onReact }) {
   const items = useMemo(() => {
     const result = [];
     let lastDay = null;
@@ -64,6 +133,7 @@ function MessageList({ messages, currentUserId, onRetry }) {
             <div className="chat-message-row__bubble-col">
               {showSender && <div className="chat-message-row__sender">{msg.sender.fullName}</div>}
               <div className="chat-message-bubble">{msg.body}</div>
+              <Reactions msg={msg} currentUserId={currentUserId} onReact={onReact} />
               <div className="chat-message-row__meta">
                 {msg._failed ? (
                   <>
@@ -91,24 +161,20 @@ function MessageList({ messages, currentUserId, onRetry }) {
   );
 }
 
-export default function ChatWidget({ resolve, title, subtitle }) {
-  const { user } = useAuth();
-  const [open, setOpen] = useState(false);
+/**
+ * The inside of a chat: status, messages and composer, for one conversation.
+ * The interview room widget and each coffee chat thread window draw this.
+ */
+export function ConversationBody({ chat, user, emptyText = 'No messages yet. Say hi to your fellow interviewers.' }) {
   const [draft, setDraft] = useState('');
   const messagesRef = useRef(null);
   const textareaRef = useRef(null);
-
-  const { conversation, messages, loading, sending, error, unreadCount, connected, send, retry, markRead } =
-    useConversation({ resolve, currentUser: user });
+  const { conversation, messages, loading, sending, error, connected, send, retry, react } = chat;
 
   useLayoutEffect(() => {
     if (!messagesRef.current) return;
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-  }, [messages, open]);
-
-  useEffect(() => {
-    if (open && conversation) markRead();
-  }, [open, conversation, markRead, messages.length]);
+  }, [messages.length]);
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
@@ -126,10 +192,72 @@ export default function ChatWidget({ resolve, title, subtitle }) {
     }
   };
 
-  if (!user) return null;
-
   const isUnauthorized = !loading && error && /Forbidden|Unauthorized/i.test(error);
   const canSend = draft.trim() && conversation && !sending;
+
+  return (
+    <>
+      {!connected && (
+        <div className="chat-widget-panel__status chat-widget-panel__status--disconnected">
+          Realtime disconnected — messages will refresh on reconnect
+        </div>
+      )}
+
+      <div className="chat-widget-panel__messages" ref={messagesRef}>
+        {loading && <div className="chat-widget-panel__loading">Loading…</div>}
+        {!loading && isUnauthorized && (
+          <div className="chat-widget-panel__error chat-widget-panel__error--unauthorized">
+            You do not have access to this conversation.
+          </div>
+        )}
+        {!loading && !isUnauthorized && error && !conversation && <div className="chat-widget-panel__error">{error}</div>}
+        {!loading && conversation && messages.length === 0 && (
+          <div className="chat-widget-panel__empty">{emptyText}</div>
+        )}
+        {!loading && conversation && messages.length > 0 && (
+          <MessageList messages={messages} currentUserId={user.id} onRetry={retry} onReact={react} />
+        )}
+      </div>
+
+      {!loading && conversation && error && !isUnauthorized && (
+        <div className="chat-widget-panel__status chat-widget-panel__status--error" role="alert">{error}</div>
+      )}
+
+      <form className="chat-widget-panel__composer" onSubmit={handleSubmit}>
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          placeholder="Write a reply..."
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={!conversation || sending}
+        />
+        <button
+          type="submit"
+          className="chat-widget-panel__send"
+          disabled={!canSend}
+          aria-label="Send"
+        >
+          <PaperAirplaneIcon style={{ width: 16, height: 16 }} />
+        </button>
+      </form>
+    </>
+  );
+}
+
+export default function ChatWidget({ resolve, title, subtitle }) {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+
+  const chat = useConversation({ resolve, currentUser: user });
+  const { conversation, messages, unreadCount, markRead } = chat;
+
+  useEffect(() => {
+    if (open && conversation) markRead();
+  }, [open, conversation, markRead, messages.length]);
+
+  if (!user) return null;
 
   return (
     <>
@@ -163,50 +291,7 @@ export default function ChatWidget({ resolve, title, subtitle }) {
               <XMarkIcon style={{ width: 20, height: 20 }} />
             </button>
           </div>
-
-          {!connected && (
-            <div className="chat-widget-panel__status chat-widget-panel__status--disconnected">
-              Realtime disconnected — messages will refresh on reconnect
-            </div>
-          )}
-
-          <div className="chat-widget-panel__messages" ref={messagesRef}>
-            {loading && <div className="chat-widget-panel__loading">Loading…</div>}
-            {!loading && isUnauthorized && (
-              <div className="chat-widget-panel__error chat-widget-panel__error--unauthorized">
-                You do not have access to this conversation.
-              </div>
-            )}
-            {!loading && !isUnauthorized && error && <div className="chat-widget-panel__error">{error}</div>}
-            {!loading && !error && messages.length === 0 && (
-              <div className="chat-widget-panel__empty">
-                No messages yet. Say hi to your fellow interviewers.
-              </div>
-            )}
-            {!loading && !error && messages.length > 0 && (
-              <MessageList messages={messages} currentUserId={user.id} onRetry={retry} />
-            )}
-          </div>
-
-          <form className="chat-widget-panel__composer" onSubmit={handleSubmit}>
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              placeholder="Write a reply..."
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={!conversation || sending}
-            />
-            <button
-              type="submit"
-              className="chat-widget-panel__send"
-              disabled={!canSend}
-              aria-label="Send"
-            >
-              <PaperAirplaneIcon style={{ width: 16, height: 16 }} />
-            </button>
-          </form>
+          <ConversationBody chat={chat} user={user} />
         </div>
       )}
     </>
