@@ -153,9 +153,13 @@ function fakeDb({ users, applications, candidates = [], cycle = { id: 'cycle-1',
     liveVoteSessionCandidate: {
       findFirst: vi.fn(async ({ where }) => withApplication(find('liveVoteSessionCandidate', where))),
       findUnique: vi.fn(async ({ where }) => withApplication(find('liveVoteSessionCandidate', where))),
-      count: vi.fn(async ({ where }) => filter('liveVoteSessionCandidate', where).length)
+      count: vi.fn(async ({ where }) => filter('liveVoteSessionCandidate', where).length),
+      findMany: vi.fn(async ({ where }) => filter('liveVoteSessionCandidate', where)
+        .sort((a, b) => a.position - b.position)
+        .map(withApplication))
     },
     liveVoteBallot: {
+      findMany: vi.fn(async ({ where }) => filter('liveVoteBallot', where).map((row) => ({ ...row }))),
       findFirst: vi.fn(async ({ where, include, orderBy }) => {
         let rows = filter('liveVoteBallot', where);
         if (orderBy?.roundNumber === 'desc') rows = rows.sort((a, b) => b.roundNumber - a.roundNumber);

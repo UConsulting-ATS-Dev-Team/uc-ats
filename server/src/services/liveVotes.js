@@ -614,35 +614,42 @@ const stateCache = new Map();
 
 export const clearStateCache = () => stateCache.clear();
 
+// Read as parallel queries rather than one nested include: Prisma resolves an
+// include one relation after another, and every round trip to the database
+// crosses the country (server in Oregon, database in Ohio).
 async function loadRaw(client, sessionId) {
-  const session = await client.liveVoteSession.findUnique({
-    where: { id: sessionId },
-    include: {
-      createdBy: { select: { id: true, fullName: true } },
-      candidates: { orderBy: { position: 'asc' }, include: { application: { select: CARD_SELECT } } },
-      participants: {
-        select: {
-          userId: true,
-          lastSeenAt: true,
-          leftAt: true,
-          user: { select: { id: true, fullName: true, email: true, studentId: true } }
-        }
-      },
-      ballots: true
-    }
-  });
+  const [session, candidates, participants, ballots] = await Promise.all([
+    client.liveVoteSession.findUnique({
+      where: { id: sessionId },
+      include: { createdBy: { select: { id: true, fullName: true } } }
+    }),
+    client.liveVoteSessionCandidate.findMany({
+      where: { sessionId },
+      orderBy: { position: 'asc' },
+      include: { application: { select: CARD_SELECT } }
+    }),
+    client.liveVoteParticipant.findMany({
+      where: { sessionId },
+      select: {
+        userId: true,
+        lastSeenAt: true,
+        leftAt: true,
+        user: { select: { id: true, fullName: true, email: true, studentId: true } }
+      }
+    }),
+    client.liveVoteBallot.findMany({ where: { sessionId } })
+  ]);
   if (!session) return null;
 
-  const open = session.ballots.find((ballot) => ballot.status === 'OPEN');
+  const open = ballots.find((ballot) => ballot.status === 'OPEN');
   const [openVotes, sealed] = await Promise.all([
     open
       ? client.liveVoteVote.findMany({ where: { ballotId: open.id }, select: { voterKey: true, value: true } })
       : [],
-    sealedApplicationIds(session.candidates.map((entry) => entry.applicationId), client)
+    sealedApplicationIds(candidates.map((entry) => entry.applicationId), client)
   ]);
 
-  const { candidates, participants, ballots, ...rest } = session;
-  return { session: rest, candidates, participants, ballots, openVotes, sealedApplicationIds: sealed };
+  return { session, candidates, participants, ballots, openVotes, sealedApplicationIds: sealed };
 }
 
 export async function getState({ client = prisma, sessionId, user, now = Date.now() }) {
