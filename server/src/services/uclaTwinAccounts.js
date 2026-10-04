@@ -101,11 +101,15 @@ export function decideMerge(users, resumes = []) {
 
   // A pair an earlier run already merged: the talent account is deactivated and
   // holds nothing. Reported as done so a re-run after a partial run is a no-op.
+  // An admin's deactivation records their id, and a merge must never replace it
+  // with the marker, whatever the account still holds: that would hand the
+  // retired address a way into the active account the admin did not grant.
+  if (retire.isActive === false && retire.deactivatedBy && !isMergeRetired(retire)) {
+    return { ok: false, reason: 'the talent account was deactivated by an admin' };
+  }
   if (retire.isActive === false && !retire.googleId && moveResumeIds.length === 0) {
     if (isMergeRetired(retire)) return { ok: false, reason: 'already merged' };
-    // An admin's deactivation records their id; a merge made before retirements
-    // were marked left deactivatedBy empty, and only that one gets the marker.
-    if (retire.deactivatedBy) return { ok: false, reason: 'the talent account was deactivated by an admin' };
+    // A merge made before retirements were marked left deactivatedBy empty.
     return { ok: true, keep, retire, moveResumeIds: [], demoteResumeIds: [], moveGoogle: false, fillVerified: null, markOnly: true };
   }
 

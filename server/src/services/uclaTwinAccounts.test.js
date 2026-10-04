@@ -67,6 +67,7 @@ describe('decideMerge', () => {
     ['three accounts', [applicant(), talent(), talent({ id: 'x' })], 'expected 2 accounts, found 3'],
     ['accounts whose addresses no longer match', [applicant({ email: 'someone@ucla.edu' }), talent()], 'the accounts no longer share a UCLA inbox'],
     ['a pair an earlier run merged', [applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null, deactivatedBy: 'ucla-twin-merge' })], 'already merged'],
+    ['an admin-deactivated talent account that still holds Google', [applicant(), talent({ isActive: false, deactivatedBy: 'admin-1' })], 'the talent account was deactivated by an admin'],
     ['a talent account an admin deactivated', [applicant(), talent({ isActive: false, googleId: null, deactivatedBy: 'admin-1' })], 'the talent account was deactivated by an admin'],
   ])('refuses %s', (_name, users, reason) => {
     expect(decideMerge(users)).toEqual({ ok: false, reason });
