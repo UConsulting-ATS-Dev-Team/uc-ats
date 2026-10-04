@@ -706,12 +706,18 @@
 /* Table. It scrolls in its own box, one screen tall, because the layout's
    .main-content sets overflow without being the thing that scrolls, and a
    sticky header only sticks to its nearest overflow container. Changing the
-   layout would touch every page. */
+   layout would touch every page.
+
+   Scrolling must chain out of the box. Once the page is scrolled down, the
+   box fills the screen, so every scroll up starts inside it; when it reaches
+   its top the page has to take over, or the filters above it are unreachable
+   (`overscroll-behavior: contain` did exactly that in Safari). dvh keeps the
+   box inside Safari's visible area while its toolbars are showing. */
 .staging-table-wrapper {
   width: 100%;
   max-height: calc(100vh - var(--staging-nav-offset) - 1rem);
+  max-height: calc(100dvh - var(--staging-nav-offset) - 1rem);
   overflow: auto;
-  overscroll-behavior: contain;
 }
 
 .staging-page .staging-table {
