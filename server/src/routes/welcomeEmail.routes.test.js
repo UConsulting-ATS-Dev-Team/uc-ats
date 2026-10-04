@@ -31,7 +31,7 @@ vi.mock('../prismaClient.js', () => ({
       update: vi.fn(),
       updateMany: vi.fn()
     },
-    candidate: { create: vi.fn() }
+    candidate: { create: vi.fn(), findMany: vi.fn().mockResolvedValue([]) }
   }
 }));
 
