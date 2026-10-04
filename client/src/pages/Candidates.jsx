@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { 
   MagnifyingGlassIcon,
   FunnelIcon,
@@ -17,6 +17,9 @@ import { GRADUATION_YEARS } from '../utils/graduationYears';
 import { coverLetterLabel } from '../utils/coverLetter';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import '../styles/ApplicationList.css';
+
+// Attendance requests in flight at once from this page.
+const ATTENDANCE_CONCURRENCY = 4;
 
 export default function Candidates() {
   const { user } = useAuth();
@@ -38,6 +41,10 @@ export default function Candidates() {
   const [textPreview, setTextPreview] = useState(null); // { title, text } of an open short answer
   const [scoreCache, setScoreCache] = useState({}); // key: candidateId -> { resume, cover, video }
   const [attendanceByAppId, setAttendanceByAppId] = useState({}); // key: applicationId -> array of attended keys
+  // Every application id ever asked for, answered or not. An id is fetched once per
+  // visit: a failure is not retried, so a slow server is not asked again and again.
+  const requestedAttendanceRef = useRef(new Set());
+  const unmountedRef = useRef(false);
   const [events, setEvents] = useState([]);
 
   useEffect(() => {
@@ -98,43 +105,48 @@ export default function Candidates() {
     return list;
   }, [applications, searchTerm, filters, sort]);
 
-  // Fetch attendance for visible applications
   useEffect(() => {
-    const fetchAttendanceFor = async (appIds) => {
-      const results = await Promise.allSettled(appIds.map(id => apiClient.get(`/applications/${id}/events`)));
-      const next = {};
-      results.forEach((res, idx) => {
-        const appId = appIds[idx];
-        if (res.status === 'fulfilled' && res.value && Array.isArray(res.value.events)) {
-          const attended = res.value.events
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
+
+  // Fetch attendance for visible applications, a few at a time. This used to send
+  // 25 at once and re-send any id without an answer on every keystroke and every
+  // answer, which with a few admins on the page ran the database out of connections.
+  useEffect(() => {
+    const mapName = (name) => {
+      const n = name.toLowerCase();
+      if (n.includes('info') && n.includes('session')) return 'Info Session';
+      if (n.includes('case')) return 'Case Workshop';
+      if (n.includes('gtkuc') || n.includes('get to know')) return 'GTKUC';
+      return null;
+    };
+
+    const queue = normalized
+      .map(a => a.id)
+      .filter(id => !requestedAttendanceRef.current.has(id));
+    if (queue.length === 0) return;
+    queue.forEach(id => requestedAttendanceRef.current.add(id));
+
+    const worker = async () => {
+      while (queue.length > 0 && !unmountedRef.current) {
+        const appId = queue.shift();
+        try {
+          const res = await apiClient.get(`/applications/${appId}/events`);
+          if (unmountedRef.current || !Array.isArray(res?.events)) continue;
+          const attended = res.events
             .filter(ev => ev.attendanceStatus === 'Attended')
             .map(ev => ev.eventName || '')
             .filter(Boolean);
-          const mapName = (name) => {
-            const n = name.toLowerCase();
-            if (n.includes('info') && n.includes('session')) return 'Info Session';
-            if (n.includes('case')) return 'Case Workshop';
-            if (n.includes('gtkuc') || n.includes('get to know')) return 'GTKUC';
-            return null;
-          };
           const keys = Array.from(new Set(attended.map(mapName).filter(Boolean)));
-          next[appId] = keys;
+          setAttendanceByAppId(prev => ({ ...prev, [appId]: keys }));
+        } catch {
+          // Left blank rather than retried.
         }
-      });
-      if (Object.keys(next).length > 0) {
-        setAttendanceByAppId(prev => ({ ...prev, ...next }));
       }
     };
-
-    const idsToLoad = normalized
-      .map(a => a.id)
-      .filter(id => !attendanceByAppId[id]);
-    if (idsToLoad.length > 0) {
-      // Limit concurrent fetches if list is large
-      const batch = idsToLoad.slice(0, 25);
-      fetchAttendanceFor(batch);
-    }
-  }, [normalized, attendanceByAppId]);
+    for (let i = 0; i < Math.min(ATTENDANCE_CONCURRENCY, queue.length); i++) worker();
+  }, [normalized]);
 
   const onFilterChange = (name, value) => {
     setFilters(prev => ({ ...prev, [name]: value }));
