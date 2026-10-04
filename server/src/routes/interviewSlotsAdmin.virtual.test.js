@@ -6,12 +6,15 @@ import express from 'express';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
-    interview: { findUnique: vi.fn(), update: vi.fn() },
+    interview: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     interviewSlot: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     interviewSlotSignup: { count: vi.fn() },
+    application: { groupBy: vi.fn(), findMany: vi.fn() },
+    interviewSlotNotification: { groupBy: vi.fn() },
     $transaction: vi.fn((arg) => Promise.all(arg)),
   },
 }));
+vi.mock('../services/activeCycle.js', () => ({ resolveAdminCycle: vi.fn(async () => ({ id: 'c1', name: 'Fall' })) }));
 
 const prisma = (await import('../prismaClient.js')).default;
 const routes = (await import('./interviewSlotsAdmin.js')).default;
@@ -97,5 +100,49 @@ describe('generic endpoints and a virtual coffee chat', () => {
     prisma.interviewSlot.update.mockResolvedValue({ id: 'slot-am' });
     const res = await call('/interviews/slots/slot-am', 'PATCH', { endTime: '2030-01-01T21:00:00Z' });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('scheduling overview with virtual chats', () => {
+  it('counts only people still in the round as placed virtually', async () => {
+    const signup = (id, application) => ({ id, status: 'CONFIRMED', applicationId: application.id, slotId: 'slot-v', application });
+    prisma.interview.findMany.mockResolvedValue([
+      {
+        id: 'chat-1',
+        title: 'Virtual Coffee Chat',
+        interviewType: 'COFFEE_CHAT',
+        isVirtual: true,
+        location: 'https://zoom.us/j/1',
+        startDate: new Date('2030-01-01T02:00:00Z'),
+        status: 'UPCOMING',
+        slots: [
+          {
+            id: 'slot-v',
+            label: null,
+            startTime: new Date('2030-01-01T02:00:00Z'),
+            endTime: new Date('2030-01-01T02:30:00Z'),
+            candidateCapacity: null,
+            assignments: [],
+            signups: [
+              signup('su-1', { id: 'a1', currentRound: '2', status: 'UNDER_REVIEW' }),
+              // Advanced to first round since; no longer counted in eligible.
+              signup('su-2', { id: 'a2', currentRound: '3', status: 'UNDER_REVIEW' }),
+              // Rejected since.
+              signup('su-3', { id: 'a3', currentRound: '2', status: 'REJECTED' }),
+            ],
+          },
+        ],
+      },
+    ]);
+    prisma.application.groupBy.mockResolvedValue([{ currentRound: '2', _count: { _all: 5 } }]);
+    prisma.application.findMany.mockResolvedValue([]);
+    prisma.interviewSlotNotification.groupBy.mockResolvedValue([]);
+
+    const res = await call('/scheduling/overview', 'GET');
+    const coffee = (await res.json()).rounds.find((r) => r.round === '2');
+
+    expect(coffee.stats.virtualPlaced).toBe(1);
+    expect(coffee.stats.virtualSessions).toBe(1);
+    expect(coffee.stats.sessions).toBe(0);
   });
 });

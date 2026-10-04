@@ -235,7 +235,18 @@ router.get('/scheduling/overview', async (req, res) => {
               orderBy: [{ waitlistedAt: 'asc' }, { signedUpAt: 'asc' }],
               include: {
                 application: {
-                  select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
+                  // currentRound and status decide whether a virtual booking
+                  // still counts toward this round (stats.virtualPlaced).
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    email: true,
+                    major1: true,
+                    graduationYear: true,
+                    currentRound: true,
+                    status: true,
+                  },
                 },
               },
             },
@@ -353,9 +364,21 @@ router.get('/scheduling/overview', async (req, res) => {
           virtualSessions: slots.filter((s) => s.isVirtual).length,
           // Applicants already holding a virtual chat need no in-person seat,
           // so the page takes them off before comparing seats with people.
-          virtualPlaced: slots
-            .filter((s) => s.isVirtual)
-            .reduce((n, s) => n + s.signups.filter((x) => x.status === 'CONFIRMED').length, 0),
+          // Only people still counted in `eligible`: a booking left behind by
+          // somebody who has since advanced or been rejected would otherwise
+          // hide a real shortage.
+          virtualPlaced: new Set(
+            slots
+              .filter((s) => s.isVirtual)
+              .flatMap((s) => s.signups)
+              .filter(
+                (x) =>
+                  x.status === 'CONFIRMED' &&
+                  x.candidate?.currentRound === round &&
+                  x.candidate?.status !== 'REJECTED'
+              )
+              .map((x) => x.applicationId)
+          ).size,
           bookableSessions: bookable.length,
           seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
           confirmed: allSignups.filter((s) => s.status === 'CONFIRMED').length,

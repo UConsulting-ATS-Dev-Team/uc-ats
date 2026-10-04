@@ -927,16 +927,20 @@ export async function placeCandidate({
  * Under the lock no placement or move can be half-done, and every one after it
  * reads CANCELLED in loadSlotForBooking and is refused. So the seats returned
  * here are all the seats there will ever be, and releasing them leaves nobody
- * booked into a cancelled interview. Returns null when it was already closed.
+ * booked into a cancelled interview.
+ *
+ * Repeatable. On an interview that is already CANCELLED it changes nothing and
+ * returns whatever is still live, which is how a cancellation that stopped part
+ * way gets finished. Returns null only for a COMPLETED interview.
  */
 export async function closeInterviewToBookings({ interviewId, slotId }) {
   return withSerializableTransaction(prisma, async (tx) => {
     await lockRoundOfSlot(tx, slotId);
-    const closed = await tx.interview.updateMany({
-      where: { id: interviewId, status: { notIn: ['CANCELLED', 'COMPLETED'] } },
-      data: { status: 'CANCELLED' },
-    });
-    if (closed.count === 0) return null;
+    const current = await tx.interview.findUnique({ where: { id: interviewId }, select: { status: true } });
+    if (!current || current.status === 'COMPLETED') return null;
+    if (current.status !== 'CANCELLED') {
+      await tx.interview.update({ where: { id: interviewId }, data: { status: 'CANCELLED' } });
+    }
     return tx.interviewSlotSignup.findMany({
       where: { interviewId, status: { in: LIVE_STATUSES } },
       select: { id: true },

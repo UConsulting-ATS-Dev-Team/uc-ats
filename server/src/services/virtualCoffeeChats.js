@@ -116,14 +116,15 @@ export function parseChatDetails(body = {}, { partial = false } = {}) {
  * comes from. A tab left open across a cycle change must not be able to edit,
  * staff or cancel last cycle's chats and email the people in them.
  */
-async function loadChat(chatId, cycleId, { allowClosed = false } = {}) {
+async function loadChat(chatId, cycleId, { allowCancelled = false } = {}) {
   if (!cycleId) throw new SlotTransactionError(409, 'There is no active cycle');
   const interview = await prisma.interview.findFirst({
     where: { id: chatId, isVirtual: true, cycleId },
     include: { slots: { orderBy: { startTime: 'asc' } } },
   });
   if (!interview) throw new SlotTransactionError(404, 'That virtual coffee chat no longer exists');
-  if (!allowClosed && ['CANCELLED', 'COMPLETED'].includes(interview.status)) {
+  const closed = interview.status === 'COMPLETED' || (interview.status === 'CANCELLED' && !allowCancelled);
+  if (closed) {
     throw new SlotTransactionError(409, 'That virtual coffee chat has been cancelled or completed');
   }
   const slot = interview.slots[0];
@@ -191,7 +192,16 @@ export async function getVirtualCoffeeChat(chatId) {
 /** Every live virtual chat in a cycle, soonest first. */
 export async function listVirtualCoffeeChats(cycleId) {
   const interviews = await prisma.interview.findMany({
-    where: { cycleId, isVirtual: true, status: { notIn: ['CANCELLED'] } },
+    // A cancelled chat that still holds a seat stays listed: something went
+    // wrong part way through, and cancelling it again is the fix.
+    where: {
+      cycleId,
+      isVirtual: true,
+      OR: [
+        { status: { not: 'CANCELLED' } },
+        { slots: { some: { signups: { some: { status: { in: LIVE_STATUSES } } } } } },
+      ],
+    },
     orderBy: { startDate: 'asc' },
     include: CHAT_INCLUDE,
   });
@@ -443,7 +453,10 @@ export async function addApplicants(chatId, applicationIds, actorId, { cycleId }
         outcomes.push({ applicationId, outcome: 'SKIPPED', reason: error.message });
         continue;
       }
-      throw error;
+      // Kept to this applicant. Throwing would report everyone as not added,
+      // including the people already seated above, and skip their emails.
+      console.error('[virtualCoffeeChats] could not place an applicant', error);
+      outcomes.push({ applicationId, outcome: 'SKIPPED', reason: 'Could not be added; try again' });
     }
   }
 
@@ -556,15 +569,25 @@ export async function removeInterviewer(chatId, assignmentId, actorId, { cycleId
  * that is not happening.
  */
 export async function cancelVirtualCoffeeChat(chatId, actorId, { cycleId } = {}) {
-  const { interview, slot } = await loadChat(chatId, cycleId);
+  // An already-cancelled chat is let through: cancelling again finishes one
+  // that stopped part way.
+  const { interview, slot } = await loadChat(chatId, cycleId, { allowCancelled: true });
 
   const seats = await closeInterviewToBookings({ interviewId: interview.id, slotId: slot.id });
-  if (!seats) throw new SlotTransactionError(409, 'That virtual coffee chat has been cancelled or completed');
+  if (!seats) throw new SlotTransactionError(409, 'That virtual coffee chat has already happened');
 
+  // One seat failing must not stop the rest being released, and the ones that
+  // were released are emailed either way.
   const cancelled = [];
+  let failed = 0;
   for (const seat of seats) {
-    await cancelSignup({ signupId: seat.id, actorId, isAdmin: true, reason: 'Virtual coffee chat cancelled' });
-    cancelled.push({ signupId: seat.id, type: 'CANCELLATION' });
+    try {
+      await cancelSignup({ signupId: seat.id, actorId, isAdmin: true, reason: 'Virtual coffee chat cancelled' });
+      cancelled.push({ signupId: seat.id, type: 'CANCELLATION' });
+    } catch (error) {
+      failed += 1;
+      console.error('[virtualCoffeeChats] could not release a seat while cancelling', error);
+    }
   }
 
   // Read after the status change, which waited on any interviewer add holding
@@ -583,6 +606,12 @@ export async function cancelVirtualCoffeeChat(chatId, actorId, { cycleId } = {})
     staffed.map((row) => ({ slotId: slot.id, userId: row.userId })),
     'INTERVIEWER_REMOVED'
   );
+  if (failed > 0) {
+    throw new SlotTransactionError(
+      500,
+      `${failed} applicant${failed === 1 ? ' is' : 's are'} still booked into this cancelled chat. Cancel it again to finish.`
+    );
+  }
   return { cancelled: true, applicants: cancelled.length, interviewers: staffed.length };
 }
 

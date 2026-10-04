@@ -55,6 +55,7 @@ const {
   cancelVirtualCoffeeChat,
   createVirtualCoffeeChat,
   parseChatDetails,
+  listVirtualCoffeeChats,
   removeInterviewer,
   updateVirtualCoffeeChat,
 } = await import('./virtualCoffeeChats.js');
@@ -297,10 +298,83 @@ describe('cancelVirtualCoffeeChat', () => {
     expect(result).toEqual({ cancelled: true, applicants: 2, interviewers: 1 });
   });
 
-  it('refuses a chat that another request already cancelled', async () => {
+  it('refuses a chat that has already happened', async () => {
     signups.closeInterviewToBookings.mockResolvedValue(null);
     await expect(cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE)).rejects.toMatchObject({ status: 409 });
     expect(signups.cancelSignup).not.toHaveBeenCalled();
+  });
+
+  it('keeps releasing past a seat that fails, emails the rest, and says to cancel again', async () => {
+    signups.closeInterviewToBookings.mockResolvedValue([{ id: 'su-1' }, { id: 'su-bad' }, { id: 'su-3' }]);
+    signups.cancelSignup.mockImplementation(async ({ signupId }) => {
+      if (signupId === 'su-bad') throw new Error('deadlock');
+    });
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([
+      { id: 'su-1', slotId: 'slot-v', application: { email: 'one@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
+      { id: 'su-3', slotId: 'slot-v', application: { email: 'three@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
+    ]);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE)).rejects.toMatchObject({
+      status: 500,
+      message: expect.stringMatching(/1 applicant is still booked.*Cancel it again/),
+    });
+    expect(signups.cancelSignup).toHaveBeenCalledTimes(3);
+    expect(comms.queueNotificationsBulk.mock.calls[0][0].map((e) => e.recipient)).toEqual([
+      'one@ucla.edu',
+      'three@ucla.edu',
+    ]);
+    spy.mockRestore();
+  });
+
+  it('can be run again on a chat a failed cancellation left behind', async () => {
+    prisma.interview.findFirst.mockResolvedValue(chatInterview({ status: 'CANCELLED' }));
+    signups.closeInterviewToBookings.mockResolvedValue([{ id: 'su-bad' }]);
+    signups.cancelSignup.mockReset();
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+
+    const result = await cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE);
+
+    expect(signups.cancelSignup).toHaveBeenCalledWith(expect.objectContaining({ signupId: 'su-bad' }));
+    expect(result.applicants).toBe(1);
+  });
+
+  it('still lists a cancelled chat while someone is booked into it', async () => {
+    prisma.interview.findMany.mockResolvedValue([]);
+    await listVirtualCoffeeChats('c1');
+    expect(prisma.interview.findMany.mock.calls[0][0].where.OR).toEqual([
+      { status: { not: 'CANCELLED' } },
+      { slots: { some: { signups: { some: { status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] } } } } } },
+    ]);
+  });
+});
+
+describe('addApplicants when one placement fails unexpectedly', () => {
+  it('reports only that applicant, and still emails the ones placed', async () => {
+    prisma.application.findMany.mockResolvedValue([
+      { id: 'a1', cycleId: 'c1', currentRound: '2', status: 'UNDER_REVIEW' },
+      { id: 'a2', cycleId: 'c1', currentRound: '2', status: 'UNDER_REVIEW' },
+    ]);
+    signups.placeCandidate.mockImplementation(async ({ applicationId }) => {
+      if (applicationId === 'a2') throw new Error('connection reset');
+      return { placed: { id: 'su-a1' } };
+    });
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([
+      { id: 'su-a1', slotId: 'slot-v', application: { email: 'a1@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
+    ]);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const outcomes = await addApplicants('chat-1', ['a1', 'a2'], 'admin-1', SCOPE);
+
+    expect(outcomes).toEqual([
+      { applicationId: 'a1', outcome: 'PLACED', signupId: 'su-a1' },
+      { applicationId: 'a2', outcome: 'SKIPPED', reason: 'Could not be added; try again' },
+    ]);
+    expect(comms.queueNotificationsBulk.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ recipient: 'a1@ucla.edu', type: 'CONFIRMATION' }),
+    ]);
+    spy.mockRestore();
   });
 });
 

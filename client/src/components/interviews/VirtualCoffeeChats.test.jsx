@@ -79,4 +79,20 @@ describe('VirtualCoffeeChats', () => {
     );
     expect(await screen.findByText('1 moved from Morning Block')).toBeInTheDocument();
   });
+
+  it('offers only "Finish cancelling" on a chat a failed cancellation left people in', async () => {
+    apiClient.get = vi.fn((endpoint) => {
+      if (endpoint === '/admin/virtual-coffee-chats') {
+        return Promise.resolve({ chats: [{ ...chat, status: 'CANCELLED' }], applicants });
+      }
+      return Promise.resolve([]);
+    });
+    renderPanel();
+    const row = await screen.findByTestId('virtual-chat');
+
+    expect(within(row).getByText('Cancelled · 1 still booked')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /Finish cancelling/ })).toBeEnabled();
+    expect(within(row).queryByRole('button', { name: /^Run$/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /^Edit$/ })).not.toBeInTheDocument();
+  });
 });

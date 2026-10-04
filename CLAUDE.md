@@ -359,7 +359,9 @@ The system follows a **recruiting cycle-based workflow**:
   last cycle's chats.
 - Cancelling closes the interview under the round lock first (`closeInterviewToBookings`)
   and only then releases the seats it reports. `placeCandidate` and `moveSignup` refuse a
-  cancelled interview, so nothing can join one mid-cancel.
+  cancelled interview, so nothing can join one mid-cancel. Each seat is released on its
+  own; if any fail, the chat stays listed as "Cancelled · N still booked" and cancelling
+  again releases what is left.
 - Placing someone sends `CONFIRMATION` (or `MOVED_BY_ADMIN` if they were moved);
   interviewers get `INTERVIEWER_ASSIGNED`. Changing the time or link emails everyone;
   removing someone or cancelling emails those affected. A virtual chat's email adds a

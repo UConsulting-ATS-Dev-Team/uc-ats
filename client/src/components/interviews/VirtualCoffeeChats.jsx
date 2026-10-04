@@ -307,6 +307,9 @@ function AddPeopleDialog({ target, applicants, staff, busy, onClose, onAdd }) {
 }
 
 function ChatRow({ chat, busy, onEdit, onAddPeople, onRemoveApplicant, onRemoveInterviewer, onRun, onCancel }) {
+  // Only listed when a cancellation stopped part way and left people booked.
+  // The one thing to do with it is finish cancelling.
+  const stranded = chat.status === 'CANCELLED';
   return (
     <Paper variant="outlined" sx={{ p: 2 }} data-testid="virtual-chat">
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1}>
@@ -316,7 +319,14 @@ function ChatRow({ chat, busy, onEdit, onAddPeople, onRemoveApplicant, onRemoveI
             <Typography variant="subtitle1" fontWeight={600}>
               {chat.title}
             </Typography>
-            {chat.applicants.length === 1 && <Chip size="small" variant="outlined" label="1:1" />}
+            {!stranded && chat.applicants.length === 1 && <Chip size="small" variant="outlined" label="1:1" />}
+            {stranded && (
+              <Chip
+                size="small"
+                color="error"
+                label={`Cancelled · ${chat.applicants.length} still booked`}
+              />
+            )}
           </Stack>
           <Typography variant="body2" color="text.secondary">
             {formatDay(chat.startTime)} · {formatTimeRange(chat.startTime, chat.endTime)}
@@ -337,19 +347,28 @@ function ChatRow({ chat, busy, onEdit, onAddPeople, onRemoveApplicant, onRemoveI
           )}
         </Box>
         <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignSelf: { md: 'flex-start' } }}>
-          <Button size="small" startIcon={<PlayIcon />} disabled={busy || chat.applicants.length === 0} onClick={() => onRun(chat)}>
-            Run
-          </Button>
-          <Button size="small" startIcon={<EditIcon />} disabled={busy} onClick={() => onEdit(chat)}>
-            Edit
-          </Button>
+          {!stranded && (
+            <>
+              <Button
+                size="small"
+                startIcon={<PlayIcon />}
+                disabled={busy || chat.applicants.length === 0}
+                onClick={() => onRun(chat)}
+              >
+                Run
+              </Button>
+              <Button size="small" startIcon={<EditIcon />} disabled={busy} onClick={() => onEdit(chat)}>
+                Edit
+              </Button>
+            </>
+          )}
           <Button size="small" color="error" startIcon={<CancelIcon />} disabled={busy} onClick={() => onCancel(chat)}>
-            Cancel chat
+            {stranded ? 'Finish cancelling' : 'Cancel chat'}
           </Button>
         </Stack>
       </Stack>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ mt: 1.5 }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ mt: 1.5, ...(stranded && { opacity: 0.6, pointerEvents: 'none' }) }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
             Interviewers

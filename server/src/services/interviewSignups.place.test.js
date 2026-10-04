@@ -123,3 +123,30 @@ describe('moveSignup', () => {
     expect(result.promotions.map((p) => p.signupId)).toEqual(['su-ben']);
   });
 });
+
+describe('closeInterviewToBookings', () => {
+  const load = async () => (await import('./interviewSignups.js')).closeInterviewToBookings;
+
+  it('cancels an open interview and returns its live seats', async () => {
+    tx.interview = { findUnique: vi.fn().mockResolvedValue({ status: 'UPCOMING' }), update: vi.fn() };
+    tx.interviewSlotSignup.findMany.mockResolvedValue([{ id: 'su-1' }]);
+
+    expect(await (await load())({ interviewId: 'chat-1', slotId: 'slot-v' })).toEqual([{ id: 'su-1' }]);
+    expect(tx.interview.update).toHaveBeenCalledWith({ where: { id: 'chat-1' }, data: { status: 'CANCELLED' } });
+  });
+
+  it('on an already-cancelled interview returns what is still booked, so a stalled cancel can finish', async () => {
+    tx.interview = { findUnique: vi.fn().mockResolvedValue({ status: 'CANCELLED' }), update: vi.fn() };
+    tx.interviewSlotSignup.findMany.mockResolvedValue([{ id: 'su-left' }]);
+
+    expect(await (await load())({ interviewId: 'chat-1', slotId: 'slot-v' })).toEqual([{ id: 'su-left' }]);
+    expect(tx.interview.update).not.toHaveBeenCalled();
+  });
+
+  it('leaves a completed interview alone', async () => {
+    tx.interview = { findUnique: vi.fn().mockResolvedValue({ status: 'COMPLETED' }), update: vi.fn() };
+
+    expect(await (await load())({ interviewId: 'chat-1', slotId: 'slot-v' })).toBeNull();
+    expect(tx.interview.update).not.toHaveBeenCalled();
+  });
+});
