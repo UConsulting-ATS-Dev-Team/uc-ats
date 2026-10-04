@@ -12,7 +12,8 @@ import { formatTimeRange } from './scheduleFormat';
 export async function placeCandidates({ applications, slot, interviewId, force = false }) {
   const placed = [];
   const failed = [];
-  // Seated, but the confirmation email could not be queued, so nobody told them.
+  // Seated, but no confirmation is on its way: it failed, scheduling emails are
+  // switched off, or there is no address. Nobody has told them.
   const unnotified = [];
   for (const application of applications) {
     try {
@@ -22,7 +23,7 @@ export async function placeCandidates({ applications, slot, interviewId, force =
         force,
       });
       placed.push(application);
-      if (result?.emailQueued === false) unnotified.push(application);
+      if (result?.confirmation && result.confirmation !== 'QUEUED') unnotified.push(application);
     } catch (error) {
       failed.push({ application, message: error?.message || 'Failed' });
     }
@@ -38,7 +39,7 @@ export function describePlacement({ placed, failed, unnotified = [] }, slot) {
   const bad = [
     failed.length ? `Could not add ${failed.map((f) => `${name(f.application)} (${f.message})`).join(', ')}.` : '',
     unnotified.length
-      ? `Added, but no confirmation email went out to ${unnotified.map(name).join(', ')}. Tell them their time directly.`
+      ? `Added, but no confirmation email is going to ${unnotified.map(name).join(', ')}. Tell them their time directly.`
       : '',
   ]
     .filter(Boolean)

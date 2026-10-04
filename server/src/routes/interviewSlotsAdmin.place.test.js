@@ -8,6 +8,7 @@ import express from 'express';
 import prisma from '../prismaClient.js';
 import { placeCandidate } from '../services/interviewSignups.js';
 import { queueNotifications, flushNotifications } from '../services/interviewSlotComms.js';
+import config from '../config.js';
 import interviewSlotsAdminRoutes from './interviewSlotsAdmin.js';
 
 vi.mock('../prismaClient.js', () => ({
@@ -57,8 +58,14 @@ afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
+const emailsWere = config.schedulingEmailsEnabled;
+afterAll(() => {
+  config.schedulingEmailsEnabled = emailsWere;
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  config.schedulingEmailsEnabled = true;
   placeCandidate.mockResolvedValue({
     placed: { id: 'su-1', slotId: 'slot-1', applicationId: 'app-1' },
     overCapacity: false,
@@ -85,12 +92,21 @@ describe('POST /interviews/:id/slot-signups', () => {
       },
     ]);
     expect(flushNotifications).toHaveBeenCalledWith(['n-1'], expect.any(Function));
-    expect(await res.json()).toMatchObject({ placed: true, emailQueued: true });
+    expect(await res.json()).toMatchObject({ placed: true, confirmation: 'QUEUED' });
+  });
+
+  it('says SUPPRESSED when scheduling emails are switched off', async () => {
+    // The row is still written, so it can be sent from the roster later, but
+    // nothing reaches the candidate now and the page has to say so.
+    config.schedulingEmailsEnabled = false;
+    const res = await place({ slotId: 'slot-1', applicationId: 'app-1' });
+    expect(queueNotifications).toHaveBeenCalled();
+    expect(await res.json()).toMatchObject({ placed: true, confirmation: 'SUPPRESSED' });
   });
 
   it('still reports the placement when the email cannot be queued, and says so', async () => {
     // The seat is committed. A 500 here would send the admin to retry, which
-    // then 409s against the seat that was just made; emailQueued: false is
+    // then 409s against the seat that was just made; confirmation: FAILED is
     // what lets the page name who was never told.
     queueNotifications.mockRejectedValueOnce(new Error('db down'));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -98,7 +114,7 @@ describe('POST /interviews/:id/slot-signups', () => {
     const res = await place({ slotId: 'slot-1', applicationId: 'app-1' });
 
     expect(res.status).toBe(201);
-    expect(await res.json()).toMatchObject({ placed: true, signupId: 'su-1', emailQueued: false });
+    expect(await res.json()).toMatchObject({ placed: true, signupId: 'su-1', confirmation: 'FAILED' });
     spy.mockRestore();
   });
 
@@ -107,6 +123,6 @@ describe('POST /interviews/:id/slot-signups', () => {
     const res = await place({ slotId: 'slot-1', applicationId: 'app-1' });
     expect(res.status).toBe(201);
     expect(queueNotifications).not.toHaveBeenCalled();
-    expect(await res.json()).toMatchObject({ emailQueued: false });
+    expect(await res.json()).toMatchObject({ confirmation: 'NO_ADDRESS' });
   });
 });

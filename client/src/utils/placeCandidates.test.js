@@ -12,8 +12,10 @@ describe('placeCandidates', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('keeps going past a failure and names who was seated without an email', async () => {
+    // SUPPRESSED is the case that looks fine from the server's side: the row
+    // was written, but SCHEDULING_EMAILS is off, so nothing reaches them.
     apiClient.post
-      .mockResolvedValueOnce({ placed: true, emailQueued: false })
+      .mockResolvedValueOnce({ placed: true, confirmation: 'SUPPRESSED' })
       .mockRejectedValueOnce(new Error('That candidate has already booked a session in this round'));
 
     const result = await placeCandidates({ applications: [dee, eli], slot });
@@ -27,12 +29,12 @@ describe('placeCandidates', () => {
       ok: 'Added 1 to Morning Block.',
       bad:
         'Could not add Eli Evans (That candidate has already booked a session in this round). ' +
-        'Added, but no confirmation email went out to Dee Diaz. Tell them their time directly.',
+        'Added, but no confirmation email is going to Dee Diaz. Tell them their time directly.',
     });
   });
 
   it('reports nothing wrong when every email was queued', async () => {
-    apiClient.post.mockResolvedValue({ placed: true, emailQueued: true });
+    apiClient.post.mockResolvedValue({ placed: true, confirmation: 'QUEUED' });
     const result = await placeCandidates({ applications: [dee, eli], slot });
     expect(describePlacement(result, slot)).toEqual({ ok: 'Added 2 to Morning Block.', bad: '' });
   });
