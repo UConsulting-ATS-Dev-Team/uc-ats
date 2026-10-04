@@ -252,7 +252,7 @@ describe('rules', () => {
 
   it('reads an empty session list as any coffee chat session', async () => {
     const client = fakeClient({ applications: [app({ id: 'a-app', email: 'a@ucla.edu' })], slotSignups: [{ applicationId: 'a-app' }] });
-    expect(emails(await resolveAudience(all(rule('coffeeChatSession')), { client }))).toEqual(['a@ucla.edu']);
+    expect(emails(await resolveAudience(all(rule('coffeeChatSession', { statuses: ['CONFIRMED'] })), { client }))).toEqual(['a@ucla.edu']);
     expect(client.interviewSlotSignup.findMany.mock.calls[0][0].where).not.toHaveProperty('slotId');
   });
 });

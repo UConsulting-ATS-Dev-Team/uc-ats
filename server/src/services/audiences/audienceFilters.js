@@ -155,13 +155,12 @@ export const RULE_TYPES = {
   talentPoolOptIn: { label: 'Opted into the Talent Partner Network', params: () => ({}) },
   coffeeChatSession: {
     label: 'Signed up for a coffee chat session',
-    params: (p, l) => {
-      const statuses = stringList(p.statuses, l, 'status', { allowed: SESSION_SIGNUP_STATUSES });
-      return {
-        slotIds: stringList(p.slotIds, l, 'session'),
-        statuses: statuses.length ? statuses : ['CONFIRMED'],
-      };
-    },
+    // No default for statuses: the editor starts on CONFIRMED, and an admin who
+    // clears it must not be left sending to a choice the page no longer shows.
+    params: (p, l) => ({
+      slotIds: stringList(p.slotIds, l, 'session'),
+      statuses: stringList(p.statuses, l, 'booking', { required: true, allowed: SESSION_SIGNUP_STATUSES }),
+    }),
   },
   referred: {
     label: 'Was referred',

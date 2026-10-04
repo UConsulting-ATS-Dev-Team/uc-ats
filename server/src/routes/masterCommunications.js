@@ -484,8 +484,9 @@ router.get('/audience-options', requireAuth, requireAdmin, audienceRoute(
       }),
       prisma.interviewSlot.findMany({
         where: { interview: { interviewType: 'COFFEE_CHAT' } },
+        // Not capped: a cycle has a handful of sessions, and a saved audience
+        // naming an old one must still show its label rather than an id.
         orderBy: { startTime: 'desc' },
-        take: 200,
         select: {
           id: true, label: true, startTime: true, endTime: true,
           interview: { select: { title: true, cycleId: true } },

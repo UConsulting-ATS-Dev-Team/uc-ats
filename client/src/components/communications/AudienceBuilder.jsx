@@ -24,6 +24,7 @@ import {
   Bookmark as BookmarkIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
+import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
 import {
   RULES,
   RULE_GROUPS,
@@ -68,14 +69,12 @@ function CsvField({ label, value, onChange }) {
   );
 }
 
-// "Morning Block, Oct 14" - a session's own label when it has one, else its
-// time range, as the interview pages show it.
+// "Morning Block · Monday, October 13", or the time range when the session has
+// no label. In Pacific, like the interview pages, so the picker never shows a
+// different time from the one the session runs at.
 function sessionName(s) {
-  const start = new Date(s.startTime);
-  const day = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  if (s.label) return `${s.label}, ${day}`;
-  const time = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  return `${day} ${time(start)}–${time(new Date(s.endTime))}`;
+  const day = formatDay(s.startTime);
+  return s.label ? `${s.label} · ${day}` : `${day}, ${formatTimeRange(s.startTime, s.endTime)}`;
 }
 
 function FieldEditor({ field, params, onParam, options }) {
