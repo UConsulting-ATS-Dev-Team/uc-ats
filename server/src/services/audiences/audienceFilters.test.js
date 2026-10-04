@@ -56,6 +56,19 @@ describe('normalizeAudienceTree', () => {
       .toThrow(/"perhaps" is not a valid decision/);
   });
 
+  it('requires a coffee chat session rule to say which bookings count', () => {
+    const out = normalizeAudienceTree(tree(group('AND', [
+      rule('coffeeChatSession', { slotIds: ['s1', 's1'], statuses: ['CONFIRMED'] }),
+      rule('coffeeChatSession', { statuses: ['WAITLISTED'] }),
+    ])));
+    expect(out.root.children[0].params).toEqual({ slotIds: ['s1'], statuses: ['CONFIRMED'] });
+    expect(out.root.children[1].params).toEqual({ slotIds: [], statuses: ['WAITLISTED'] });
+    expect(() => normalizeAudienceTree(tree(rule('coffeeChatSession', { statuses: [] }))))
+      .toThrow(/choose at least one booking/);
+    expect(() => normalizeAudienceTree(tree(rule('coffeeChatSession', { statuses: ['CANCELLED'] }))))
+      .toThrow(/"CANCELLED" is not a valid booking/);
+  });
+
   it('refuses a version it does not understand', () => {
     expect(() => normalizeAudienceTree({ version: 3, root: rule('mailingList') })).toThrow(/version/);
   });

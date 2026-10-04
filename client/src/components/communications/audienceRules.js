@@ -28,7 +28,7 @@ const DECISION_OPTIONS = [
 
 /**
  * `fields` drive the generic editor in AudienceBuilder. Kinds:
- *   cycles | events | campaigns             - multi-selects over loaded options
+ *   cycles | events | campaigns | sessions  - multi-selects over loaded options
  *   multi (options) | select (options)      - fixed choices
  *   triBool                                 - any / yes / no
  *   date | int | csv                        - typed inputs; csv is a comma list
@@ -108,6 +108,18 @@ export const RULES = {
       { key: 'cycleIds', kind: 'cycles', label: 'In cycles (any if empty)' },
     ],
     defaults: { round: '1', decisions: ['no'] },
+  },
+  coffeeChatSession: {
+    group: 'Application history',
+    label: 'Signed up for a coffee chat session',
+    fields: [
+      { key: 'slotIds', kind: 'sessions', label: 'Session (any if empty)' },
+      { key: 'statuses', kind: 'multi', label: 'Booking', options: [
+        { value: 'CONFIRMED', label: 'Confirmed seat' },
+        { value: 'WAITLISTED', label: 'On the waitlist' },
+      ] },
+    ],
+    defaults: { statuses: ['CONFIRMED'] },
   },
   talentPoolOptIn: { group: 'Application history', label: 'Opted into the Talent Partner Network', fields: [] },
   referred: {

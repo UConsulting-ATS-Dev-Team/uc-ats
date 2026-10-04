@@ -33,6 +33,9 @@ export const DECISION_ROUNDS = ['1', '2', '3', '4'];
 export const DECISION_VALUES = ['yes', 'no', 'maybe', 'undecided'];
 export const APPLIED_SCOPES = ['any', 'cycles', 'previous'];
 export const CAMPAIGN_OUTCOMES = ['any', 'delivered', 'failed'];
+// InterviewSlotSignupStatus values that mean someone is in a session or waiting
+// for a seat in it. Cancelled, released and needs-placement rows are not.
+export const SESSION_SIGNUP_STATUSES = ['CONFIRMED', 'WAITLISTED'];
 
 function badRequest(message) {
   const err = new Error(message);
@@ -150,6 +153,15 @@ export const RULE_TYPES = {
     }),
   },
   talentPoolOptIn: { label: 'Opted into the Talent Partner Network', params: () => ({}) },
+  coffeeChatSession: {
+    label: 'Signed up for a coffee chat session',
+    // No default for statuses: the editor starts on CONFIRMED, and an admin who
+    // clears it must not be left sending to a choice the page no longer shows.
+    params: (p, l) => ({
+      slotIds: stringList(p.slotIds, l, 'session'),
+      statuses: stringList(p.statuses, l, 'booking', { required: true, allowed: SESSION_SIGNUP_STATUSES }),
+    }),
+  },
   referred: {
     label: 'Was referred',
     params: (p, l) => ({ cycleIds: stringList(p.cycleIds, l, 'cycle') }),

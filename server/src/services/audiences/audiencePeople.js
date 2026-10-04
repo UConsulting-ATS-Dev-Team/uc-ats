@@ -225,6 +225,13 @@ export async function loadAudienceContext(client = prisma) {
     p.applications.push(a);
     p.sources.add('applicant');
   }
+  // Only open applications: a sealed one is identity only, and a coffee chat
+  // booking says how far its owner got.
+  const openApplicationKeys = new Map();
+  for (const a of applications) {
+    const key = a.locked ? null : keyOf(a.email);
+    if (key) openApplicationKeys.set(a.id, key);
+  }
   const candidateKeys = new Map();
   for (const c of candidates) {
     const p = person(c.email);
@@ -278,6 +285,7 @@ export async function loadAudienceContext(client = prisma) {
     keyOf,
     userKeys,
     candidateKeys,
+    openApplicationKeys,
     sealedCandidateIds: sealedIds,
     cycles,
     activeCycleIds: new Set(cycles.filter((c) => c.isActive).map((c) => c.id)),
@@ -415,6 +423,22 @@ const MATCHERS = {
     wherePeople(ctx, (p) =>
       p.applications.some((a) => a.talentPoolOptIn === true) ||
       p.resumes.some((r) => r.shareConsent && !r.consentRevokedAt)),
+
+  // Bookings on a coffee chat interview's sessions (InterviewSlot). Signups
+  // belong to applications, so a person matches through any of theirs.
+  coffeeChatSession: async (ctx, { slotIds, statuses }) => {
+    const signups = await ctx.client.interviewSlotSignup.findMany({
+      where: {
+        status: { in: statuses },
+        slot: { interview: { interviewType: 'COFFEE_CHAT' } },
+        ...(slotIds.length ? { slotId: { in: slotIds } } : {}),
+      },
+      select: { applicationId: true },
+    });
+    const out = new Set();
+    for (const s of signups) addKey(out, ctx.openApplicationKeys.get(s.applicationId));
+    return out;
+  },
 
   referred: async (ctx, { cycleIds }) => {
     const referrals = await ctx.client.referral.findMany({
