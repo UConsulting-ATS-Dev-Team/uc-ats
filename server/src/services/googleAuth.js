@@ -5,6 +5,7 @@ import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
 import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
 import { lockTalentAccount } from './talentAccountLock.js';
+import { findUclaTwin } from './uclaTwinAccounts.js';
 
 /**
  * Sign in with Google.
@@ -303,22 +304,6 @@ const adoptApplicant = async (user, profile) => {
     if (error?.code === 'P2002') return user;
     throw error;
   }
-};
-
-/**
- * The account under the other UCLA spelling of this address, or null. x@g.ucla.edu
- * and x@ucla.edu are one mailbox, so someone who registered with one and signs in
- * with Google as the other is the same person. Before this they were given a
- * second, empty talent-portal account instead.
- */
-const findUclaTwin = async (email) => {
-  const twins = emailVariants(email).slice(1);
-  if (twins.length === 0) return null;
-  const matches = await prisma.user.findMany({
-    where: { OR: twins.map((twin) => ({ email: { equals: twin, mode: 'insensitive' } })) },
-    take: 2
-  });
-  return matches.length === 1 ? matches[0] : null;
 };
 
 /**
