@@ -55,7 +55,7 @@ function nudgeConversation(conversationId, event, { messageId }) {
   broadcastToConversation(conversationId, event, { conversationId, messageId }).catch(() => {});
 }
 
-function serializeMessage(msg) {
+function serializeMessage(msg, reactionsReadAt = null) {
   return {
     id: msg.id,
     conversationId: msg.conversationId,
@@ -64,7 +64,10 @@ function serializeMessage(msg) {
     editedAt: msg.editedAt,
     deletedAt: msg.deletedAt,
     sender: msg.sender,
-    reactions: summarizeReactions(msg.reactions)
+    reactions: summarizeReactions(msg.reactions),
+    // When the reactions were read. A client keeps the newest read it has seen
+    // of a message's reactions, whichever request it came from.
+    reactionsReadAt
   };
 }
 
@@ -177,13 +180,15 @@ export async function listMessages(conversationId, { before, limit = MESSAGE_PAG
     take: Math.min(Math.max(parseInt(limit, 10) || MESSAGE_PAGE_SIZE, 1), 200)
   };
   let rows;
+  // Taken before the read starts, so the read sees at least this moment.
+  const readAt = new Date().toISOString();
   try {
     rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect }, ...reactionInclude } });
   } catch (err) {
     if (!isMissingTable(err)) throw err;
     rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect } } });
   }
-  return rows.reverse().map(serializeMessage);
+  return rows.reverse().map((row) => serializeMessage(row, readAt));
 }
 
 /** One message's reactions, for a client told they changed. */
@@ -198,16 +203,17 @@ export async function getMessageReactions(conversationId, messageId) {
     err.status = 404;
     throw err;
   }
+  const readAt = new Date().toISOString();
   try {
     const rows = await prisma.messageReaction.findMany({
       where: { messageId },
       orderBy: { createdAt: 'asc' },
       select: reactionInclude.reactions.select
     });
-    return { messageId, reactions: summarizeReactions(rows) };
+    return { messageId, reactions: summarizeReactions(rows), readAt };
   } catch (err) {
     if (!isMissingTable(err)) throw err;
-    return { messageId, reactions: [] };
+    return { messageId, reactions: [], readAt };
   }
 }
 
@@ -237,12 +243,14 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
     // one after the other and cancel out, instead of both seeing nothing to
     // delete and both inserting.
     const lockKey = `reaction:${messageId}:${user.id}:${emoji}`;
+    let readAt;
     const reactions = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
       const removed = await tx.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
       if (removed.count === 0) {
         await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
       }
+      readAt = new Date().toISOString();
       const rows = await tx.messageReaction.findMany({
         where: { messageId },
         orderBy: { createdAt: 'asc' },
@@ -251,7 +259,7 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
       return summarizeReactions(rows);
     });
     nudgeConversation(conversationId, 'message:reactions', { messageId });
-    return { messageId, reactions };
+    return { messageId, reactions, readAt };
   } catch (err) {
     if (!isMissingTable(err)) throw err;
     const unavailable = new Error('Reactions are not available yet');

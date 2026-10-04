@@ -39,11 +39,23 @@ export default function useConversation({ resolve, currentUser }) {
   const refetchingRef = useRef(false);
   const refetchAgainRef = useRef(false);
 
+  /**
+   * Record a read of a message's reactions if it is at least as new as the one
+   * held. Reads arrive from pages, cues and taps in any order; the server stamps
+   * each with when it was taken, so the newest wins whichever finishes last.
+   */
+  const acceptReactions = useCallback((messageId, reactions, readAt) => {
+    const held = serverReactionsRef.current.get(messageId);
+    if (held?.readAt && readAt && readAt < held.readAt) return false;
+    serverReactionsRef.current.set(messageId, { reactions: reactions || [], readAt: readAt || held?.readAt || null });
+    return true;
+  }, []);
+
   const shownReactions = useCallback((messageId) => {
     const pending = pendingReactionsRef.current.get(messageId) ?? [];
     return pending.reduce(
       (reactions, tap) => toggleLocally(reactions, tap.emoji, currentUser),
-      serverReactionsRef.current.get(messageId) ?? []
+      serverReactionsRef.current.get(messageId)?.reactions ?? []
     );
   }, [currentUser]);
 
@@ -55,10 +67,7 @@ export default function useConversation({ resolve, currentUser }) {
   const applyServerPage = useCallback((page) => {
     let unseen = 0;
     for (const m of page) {
-      // A page seeds reactions only for messages it brings in. After that they
-      // move only through refetchReactions, one fetch at a time per message, so
-      // a slow page read can never put back reactions that already changed.
-      if (!serverReactionsRef.current.has(m.id)) serverReactionsRef.current.set(m.id, m.reactions || []);
+      acceptReactions(m.id, m.reactions, m.reactionsReadAt);
       if (!knownIdsRef.current.has(m.id)) {
         knownIdsRef.current.add(m.id);
         if (m.sender.id !== currentUserId) unseen += 1;
@@ -70,38 +79,17 @@ export default function useConversation({ resolve, currentUser }) {
       return [...byId.values()].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     });
     if (unseen) setUnreadCount((c) => c + unseen);
-  }, [currentUserId, shownReactions]);
+  }, [currentUserId, shownReactions, acceptReactions]);
 
-  // One fetch at a time per message. A cue arriving mid-fetch runs one more
-  // afterwards, so the last answer applied is always the newest read. Every
-  // caller gets the same promise, settled once the queue is empty.
-  const reactionFetchesRef = useRef(new Map());
-  const refetchReactions = useCallback((conversationId, messageId) => {
-    const inFlight = reactionFetchesRef.current;
-    const running = inFlight.get(messageId);
-    if (running) {
-      running.again = true;
-      return running.done;
+  const refetchReactions = useCallback(async (conversationId, messageId) => {
+    try {
+      const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
+      if (conversationIdRef.current !== conversationId) return;
+      if (acceptReactions(messageId, result.reactions, result.readAt)) showReactions(messageId);
+    } catch (_) {
+      // The next cue, or reopening the chat, catches up.
     }
-    const entry = { again: false, done: null };
-    inFlight.set(messageId, entry);
-    entry.done = (async () => {
-      try {
-        do {
-          entry.again = false;
-          const result = await apiClient.get(`/conversations/${conversationId}/messages/${messageId}/reactions`);
-          if (conversationIdRef.current !== conversationId) return;
-          serverReactionsRef.current.set(messageId, result.reactions || []);
-          showReactions(messageId);
-        } while (entry.again);
-      } catch (_) {
-        // The next cue, or reopening the chat, catches up.
-      } finally {
-        inFlight.delete(messageId);
-      }
-    })();
-    return entry.done;
-  }, [showReactions]);
+  }, [acceptReactions, showReactions]);
 
   // Broadcasts carry no content: each one is a cue to fetch the latest page
   // through the API, which checks access. Overlapping cues share one fetch.
@@ -142,7 +130,9 @@ export default function useConversation({ resolve, currentUser }) {
         const history = await apiClient.get(`/conversations/${conv.id}/messages`);
         if (cancelled) return;
         knownIdsRef.current = new Set(history.map((m) => m.id));
-        serverReactionsRef.current = new Map(history.map((m) => [m.id, m.reactions || []]));
+        serverReactionsRef.current = new Map(
+          history.map((m) => [m.id, { reactions: m.reactions || [], readAt: m.reactionsReadAt || null }])
+        );
         pendingReactionsRef.current = new Map();
         setMessages(history);
 
@@ -195,7 +185,7 @@ export default function useConversation({ resolve, currentUser }) {
     try {
       const created = await apiClient.post(`/conversations/${conversation.id}/messages`, { body: body.trim() });
       knownIdsRef.current.add(created.id);
-      serverReactionsRef.current.set(created.id, created.reactions || []);
+      acceptReactions(created.id, created.reactions, created.reactionsReadAt);
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.id !== tempId);
         if (filtered.some((m) => m.id === created.id)) return filtered;
@@ -210,7 +200,7 @@ export default function useConversation({ resolve, currentUser }) {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [conversation, currentUser]);
+  }, [conversation, currentUser, acceptReactions]);
 
   const send = useCallback(async (body) => {
     if (!conversation || !currentUser) return;
@@ -266,29 +256,26 @@ export default function useConversation({ resolve, currentUser }) {
     await submitMessage(message.body, tempId, optimistic);
   }, [conversation, currentUser, messages, submitMessage]);
 
-  // Shows the tap at once. Whatever the server says next, this tap stays on top
-  // of it until its own answer arrives; a refused tap simply drops out.
+  // Shows the tap at once, replayed on top of whatever the server reports,
+  // until the tap's own answer is recorded. A refused tap simply drops out.
   const react = useCallback(async (messageId, emoji) => {
     if (!conversation || !currentUser) return;
     const tap = { emoji };
     const pending = pendingReactionsRef.current;
     pending.set(messageId, [...(pending.get(messageId) ?? []), tap]);
     showReactions(messageId);
-    let saved = false;
     try {
-      await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
-      saved = true;
+      const result = await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
+      acceptReactions(messageId, result.reactions, result.readAt);
     } catch (err) {
       setError(err.message || 'Failed to react');
+    } finally {
+      const rest = (pending.get(messageId) ?? []).filter((t) => t !== tap);
+      if (rest.length) pending.set(messageId, rest);
+      else pending.delete(messageId);
+      showReactions(messageId);
     }
-    // The tap stays shown until the reactions are read back through the one
-    // per-message fetch, which also orders it against everyone else's.
-    if (saved) await refetchReactions(conversation.id, messageId);
-    const rest = (pending.get(messageId) ?? []).filter((t) => t !== tap);
-    if (rest.length) pending.set(messageId, rest);
-    else pending.delete(messageId);
-    showReactions(messageId);
-  }, [conversation, currentUser, showReactions, refetchReactions]);
+  }, [conversation, currentUser, acceptReactions, showReactions]);
 
   const markRead = useCallback(async () => {
     if (!conversation) return;

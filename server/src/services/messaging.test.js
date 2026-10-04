@@ -327,7 +327,8 @@ describe('messaging service', () => {
       prisma.messageReaction.findMany.mockResolvedValue([row('🎉', 'a', 'A')]);
       expect(await getMessageReactions('conv-1', 'msg-1')).toEqual({
         messageId: 'msg-1',
-        reactions: [{ emoji: '🎉', count: 1, users: [{ id: 'a', fullName: 'A' }] }]
+        reactions: [{ emoji: '🎉', count: 1, users: [{ id: 'a', fullName: 'A' }] }],
+        readAt: expect.any(String)
       });
       await expect(getMessageReactions('conv-2', 'msg-1')).rejects.toMatchObject({ status: 404 });
     });
