@@ -241,7 +241,7 @@ describe('useConversation', () => {
       mockGet.mockImplementation((url) =>
         url.endsWith('/reactions') ? new Promise((r) => { read = r; }) : Promise.resolve([msg])
       );
-      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactions: null, readAt: null });
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactedAt: at(2), reactions: null, readAt: null });
       const result = await mount();
 
       let pending;
@@ -259,11 +259,26 @@ describe('useConversation', () => {
       mockGet.mockImplementation((url) =>
         url.endsWith('/reactions') ? Promise.reject(new Error('offline')) : Promise.resolve([msg])
       );
-      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactions: null, readAt: null });
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactedAt: at(2), reactions: null, readAt: null });
       const result = await mount();
 
       await act(async () => { await result.current.react('msg-1', '👍'); });
       expect(result.current.messages[0].reactions).toEqual([{ emoji: '👍', count: 1, users: [me] }]);
+    });
+
+    it('does not restore a toggle that a newer read has already seen undone', async () => {
+      // A read stamped after this toggle committed shows the reaction off (a
+      // second tap turned it back off). The first tap's fallback must not win.
+      mockGet.mockImplementation((url) =>
+        url.endsWith('/reactions')
+          ? Promise.reject(new Error('offline'))
+          : Promise.resolve([{ ...msg, reactions: [], reactionsReadAt: at(7) }])
+      );
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactedAt: at(5), reactions: null, readAt: null });
+      const result = await mount();
+
+      await act(async () => { await result.current.react('msg-1', '👍'); });
+      expect(result.current.messages[0].reactions).toEqual([]);
     });
 
     it('does not flip a saved tap that another read already brought in', async () => {
@@ -274,7 +289,7 @@ describe('useConversation', () => {
           ? Promise.reject(new Error('offline'))
           : Promise.resolve([{ ...msg, reactions: mine }])
       );
-      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactions: null, readAt: null });
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reacted: true, reactedAt: at(2), reactions: null, readAt: null });
       const result = await mount();
 
       await act(async () => { await result.current.react('msg-1', '👍'); });

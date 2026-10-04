@@ -349,7 +349,7 @@ describe('messaging service', () => {
 
       const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
 
-      expect(result).toEqual({ messageId: 'msg-1', reacted: true, reactions: null, readAt: null });
+      expect(result).toEqual({ messageId: 'msg-1', reacted: true, reactedAt: expect.any(String), reactions: null, readAt: null });
       expect(mockBroadcastToConversation).toHaveBeenCalled();
       spy.mockRestore();
     });

@@ -252,6 +252,9 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
       await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
       return true;
     });
+    // When `reacted` became true: after the commit, so a read stamped later
+    // has seen it and a read stamped earlier may not have.
+    const reactedAt = new Date().toISOString();
     nudgeConversation(conversationId, 'message:reactions', { messageId });
     // Read back after the commit, stamped like any other read: a read stamped
     // inside the transaction would claim to be newer than reads that ran before
@@ -266,10 +269,10 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
         orderBy: { createdAt: 'asc' },
         select: reactionInclude.reactions.select
       });
-      return { messageId, reacted, reactions: summarizeReactions(rows), readAt };
+      return { messageId, reacted, reactedAt, reactions: summarizeReactions(rows), readAt };
     } catch (err) {
       console.error('[toggleReaction] saved, but reading reactions back failed:', err);
-      return { messageId, reacted, reactions: null, readAt: null };
+      return { messageId, reacted, reactedAt, reactions: null, readAt: null };
     }
   } catch (err) {
     if (!isMissingTable(err)) throw err;
