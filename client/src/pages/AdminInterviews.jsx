@@ -40,6 +40,7 @@ import OtherInterviews from '../components/interviews/OtherInterviews';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
+import RoundSignupStatus from '../components/interviews/RoundSignupStatus';
 
 /**
  * Interviews - one page, two audiences.
@@ -271,6 +272,33 @@ export default function AdminInterviews() {
       if (result.promoted > 0) setToast(`Moved. ${result.promoted} promoted off the waitlist.`);
       return result;
     }).catch(() => {});
+
+  // Not through run(): a refused send (no session open, a bad merge field) is
+  // shown in the dialog, which stays open, and a banner behind it would say it
+  // twice. Who is still unbooked is decided by the server at send time, so
+  // anyone who booked while the dialog was open comes back as skipped.
+  const remindUnbooked = async (applicationIds, subject, message) => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await apiClient.post(`/admin/scheduling/rounds/${active.round}/signup-reminders`, {
+        ...(applicationIds ? { applicationIds } : {}),
+        subject,
+        message,
+      });
+      const parts = [`Reminder sent to ${result.sent}.`];
+      if (result.skipped > 0) parts.push(`${result.skipped} skipped — booked since, reminded in the last hour, or no longer in this round.`);
+      setToast(parts.join(' '));
+      await load();
+      // After the reload, which clears the page error.
+      if (result.failed?.length) {
+        setError(`Failed to send to ${result.failed.map((f) => f.email).join(', ')}`);
+      }
+      return result;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleRemove = (signup) => {
     const name = `${signup.candidate?.firstName ?? ''} ${signup.candidate?.lastName ?? ''}`.trim();
@@ -529,6 +557,17 @@ export default function AdminInterviews() {
                     <Tabs value={view} onChange={(e, next) => setView(next)} sx={{ mb: 2 }}>
                       <Tab value="sessions" label="Sessions" />
                       <Tab value="interviewers" label="Interviewers" />
+                      <Tab
+                        value="signups"
+                        label={
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <span>Signups</span>
+                            {active.stats.unassigned > 0 && (
+                              <Chip size="small" color="warning" label={active.stats.unassigned} />
+                            )}
+                          </Stack>
+                        }
+                      />
                     </Tabs>
 
                     {view === 'sessions' && (
@@ -545,6 +584,17 @@ export default function AdminInterviews() {
                         onPromote={promote}
                         onSetGroupSize={setGroupSize}
                         onRegroup={regroup}
+                      />
+                    )}
+                    {/* Keyed by round so the filter and selection start over
+                        on another round rather than carrying ids across. */}
+                    {view === 'signups' && (
+                      <RoundSignupStatus
+                        key={active.round}
+                        round={active}
+                        reminderDefaults={data?.reminderDefaults}
+                        busy={busy}
+                        onRemind={remindUnbooked}
                       />
                     )}
                     {view === 'interviewers' && (

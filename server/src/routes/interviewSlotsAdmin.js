@@ -28,7 +28,7 @@ import {
 } from '../services/interviewerAvailability.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
-import { sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
+import { isSelfBookableNow, sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
 import {
   slotNotificationSubject,
   slotSubjectFormatter,
@@ -40,6 +40,17 @@ import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
 import config from '../config.js';
 import { formatEmailDateTime, formatEmailTime, utcToLocalInput } from '../utils/timezoneUtils.js';
+import { mergeFieldsUsed } from '../services/emailCopyRender.js';
+import {
+  DEFAULT_SIGNUP_REMINDER_MESSAGE,
+  DEFAULT_SIGNUP_REMINDER_SUBJECT,
+  SIGNUP_REMINDER_MERGE_FIELDS,
+  findUnbookedApplications,
+  lastRemindedByRound,
+  openSignupSessions,
+  sendSignupReminders,
+  signupDeadline,
+} from '../services/signupReminders.js';
 
 const router = express.Router();
 
@@ -243,6 +254,11 @@ router.get('/scheduling/overview', async (req, res) => {
       _count: { _all: true },
     });
     const eligibleCount = new Map(applicationsByRound.map((row) => [row.currentRound, row._count._all]));
+    // Read once for every round, not once per round.
+    const remindedByRound = await lastRemindedByRound({ cycleId: cycle.id });
+    const remindedAt = (round, applicationId) =>
+      remindedByRound.get(round)?.get(applicationId)?.toISOString() ?? null;
+    const now = new Date();
 
     const rounds = [];
     for (const [round, roundInterviews] of [...byRound.entries()].sort()) {
@@ -274,23 +290,24 @@ router.get('/scheduling/overview', async (req, res) => {
               heldSeatId: signup.heldSeatId,
               movedById: signup.movedById,
               candidate: signup.application,
+              // So a booked row still shows whether they had to be chased.
+              lastRemindedAt: remindedAt(round, signup.applicationId),
             })),
             interviewers: slot.assignments.map((a) => ({ id: a.id, user: a.user })),
           };
         })
       );
 
-      const placed = new Set(slots.flatMap((s) => s.signups.map((x) => x.applicationId)));
-      const unassigned = await prisma.application.findMany({
-        where: {
-          cycleId: cycle.id,
-          currentRound: round,
-          status: { notIn: ['REJECTED'] },
-          id: { notIn: [...placed] },
-        },
-        select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
-        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      });
+      const unassigned = (await findUnbookedApplications({ cycleId: cycle.id, round })).map((application) => ({
+        ...application,
+        lastRemindedAt: remindedAt(round, application.id),
+      }));
+      // The rule a reminder is refused on (NO_OPEN_SESSIONS), so the page can
+      // say so before anyone presses send.
+      const openSessions = roundInterviews.reduce(
+        (n, interview) => n + interview.slots.filter((slot) => isSelfBookableNow(slot, interview, now)).length,
+        0
+      );
 
       const allSignups = slots.flatMap((s) => s.signups);
       const bookable = slots.filter((s) => s.isBookable);
@@ -316,6 +333,7 @@ router.get('/scheduling/overview', async (req, res) => {
           eligible: eligibleCount.get(round) ?? 0,
           sessions: slots.length,
           bookableSessions: bookable.length,
+          openSessions,
           seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
           confirmed: allSignups.filter((s) => s.status === 'CONFIRMED').length,
           waitlisted: allSignups.filter((s) => s.status === 'WAITLISTED').length,
@@ -337,9 +355,94 @@ router.get('/scheduling/overview', async (req, res) => {
       rounds,
       notifications: Object.fromEntries(notifications.map((row) => [row.status, row._count._all])),
       emailsEnabled: config.schedulingEmailsEnabled,
+      reminderDefaults: {
+        subject: DEFAULT_SIGNUP_REMINDER_SUBJECT,
+        message: DEFAULT_SIGNUP_REMINDER_MESSAGE,
+        mergeFields: SIGNUP_REMINDER_MERGE_FIELDS,
+      },
     });
   } catch (error) {
     fail(res, error, 'Failed to load the scheduling overview');
+  }
+});
+
+// POST /api/admin/scheduling/rounds/:round/signup-reminders
+//   { applicationIds?, subject?, message? }
+//
+// Email the people in a round who have not booked a session. Who is unbooked is
+// recomputed here rather than trusted from the page, so anyone who booked since
+// it loaded is skipped. `applicationIds` narrows the send; omitted, everyone
+// unbooked gets one.
+//
+// Not gated on SCHEDULING_EMAILS: that switch holds back the automatic slot
+// mail, and this is an admin pressing send on copy they wrote.
+const MAX_REMINDER_IDS = 500;
+
+router.post('/scheduling/rounds/:round/signup-reminders', async (req, res) => {
+  try {
+    const { round } = req.params;
+    if (!SCHEDULABLE_ROUNDS.includes(round)) return res.status(400).json({ error: 'Not a scheduling round' });
+
+    const { applicationIds, subject, message } = req.body || {};
+    if (
+      applicationIds !== undefined &&
+      (!Array.isArray(applicationIds) ||
+        applicationIds.length > MAX_REMINDER_IDS ||
+        applicationIds.some((id) => typeof id !== 'string'))
+    ) {
+      return res.status(400).json({ error: `applicationIds must be an array of at most ${MAX_REMINDER_IDS} ids` });
+    }
+    for (const [name, text] of [['subject', subject], ['message', message]]) {
+      if (text === undefined) continue;
+      if (typeof text !== 'string' || !text.trim()) {
+        return res.status(400).json({ error: `${name} cannot be empty` });
+      }
+      const unknown = mergeFieldsUsed(text).filter((field) => !SIGNUP_REMINDER_MERGE_FIELDS.includes(field));
+      if (unknown.length) {
+        return res.status(400).json({ error: `Unknown merge field in ${name}: {{${unknown.join('}}, {{')}}}` });
+      }
+    }
+
+    const cycle = await resolveAdminCycle(prisma);
+    if (!cycle) return res.status(404).json({ error: 'There is no active cycle' });
+
+    // A reminder links to the signup page. With nothing open there, it would
+    // tell people to book and give them nowhere to do it.
+    const sessions = await openSignupSessions({ cycleId: cycle.id, round });
+    if (sessions.length === 0) {
+      return res.status(409).json({
+        error: 'No sessions in this round are open for signup, so a reminder would send people to an empty page.',
+        code: 'NO_OPEN_SESSIONS',
+      });
+    }
+
+    const unbooked = await findUnbookedApplications({ cycleId: cycle.id, round });
+    const wanted = applicationIds ? new Set(applicationIds) : null;
+    const asked = wanted ? unbooked.filter((a) => wanted.has(a.id)) : unbooked;
+    const recipients = asked.filter((a) => a.email);
+
+    const result = await sendSignupReminders(recipients, {
+      subject,
+      message,
+      roundLabel: getRound(round)?.label ?? `Round ${round}`,
+      deadline: signupDeadline(sessions),
+      signupUrl: `${config.clientUrl}/interview-signup`,
+      cycleId: cycle.id,
+      round,
+      triggeredById: req.user?.id ?? null,
+    });
+
+    res.json({
+      sent: result.sent.length,
+      failed: result.failed,
+      // Asked for, but booked, rejected or moved on (or without an address)
+      // by the time it came to sending - either before the send started, or
+      // in the moment before their own email went - or reminded within the
+      // cooldown, by this press or someone else's.
+      skipped: (wanted ? wanted.size : unbooked.length) - recipients.length + result.skipped.length,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to send signup reminders');
   }
 });
 

@@ -778,6 +778,38 @@ The system follows a **recruiting cycle-based workflow**:
   hand their number to the host. A sealed candidate's onboarding and applications are
   never read.
 
+**Interview signup reminders:**
+- An admin emails the people in a round who have not booked a session. Rules live in
+  [server/src/services/signupReminders.js](server/src/services/signupReminders.js); the route
+  is `POST /api/admin/scheduling/rounds/:round/signup-reminders` (rounds 2-4).
+- Not booked means `currentRound` is the round, not `REJECTED`, and no `CONFIRMED`,
+  `WAITLISTED` or `NEEDS_PLACEMENT` signup on a session of a non-cancelled interview of that
+  round in the cycle. `findUnbookedApplications` is the one definition; the overview's
+  `unassigned` reads it too. It is recomputed at send time and again for each person just
+  before their email, so anyone who booked in between is `skipped`.
+- Refuses with `409 NO_OPEN_SESSIONS` when no session of the round is bookable right now:
+  the email's only job is the link to `/interview-signup`. "Bookable" is
+  `isSelfBookableNow` in [interviewSignupPolicy.js](server/src/services/interviewSignupPolicy.js)
+  (interview not cancelled or completed, inside the signup window, outside the 12-hour
+  cutoff) - the same rule booking refuses on and the candidate page marks slots open by.
+  The overview's `stats.openSessions` counts by it too.
+- There is no reminders table. Each send is a `SIGNUP_REMINDER` row in `communication_logs`
+  with `attemptKey` `signup-reminder:<round>:<applicationId>:<sendId>`, and "last reminded"
+  is read back from that key, per round (on `unassigned` and on booked `signups` alike).
+  `FAILED`, `BOUNCED` and `COMPLAINED` rows do not count. A leftover `SENDING` row (the
+  process died between claim and send) does, on purpose: nobody can tell whether it went
+  out, and a double send is worse than a missed one.
+- Each person's send is claimed first, the `applicationReceipts.js` pattern: under
+  `pg_try_advisory_xact_lock` on (round, application) it re-checks they are unbooked,
+  refuses if they were reminded for that round within `REMINDER_COOLDOWN_MS` (1 hour), and
+  writes a `SENDING` row that `sendEmail` overwrites. The email is rendered before the
+  claim, and a throw after it marks the claim `FAILED`, so neither blocks the next attempt
+  for an hour. A retry after the proxy cut the
+  response off, or two admins at once, skips instead of sending twice. Five sends run at
+  once (`utils/concurrency.js`) to keep the response short in the first place.
+- Not gated on `SCHEDULING_EMAILS`: that switch holds back the automatic slot mail, and this
+  is an admin sending copy they wrote, like accountability reminders.
+
 **Accountability points:**
 - Every member needs a target number of points per cycle (3 by default), earned from nine
   types of participation. **Each type counts once**, so the member's view reads as a

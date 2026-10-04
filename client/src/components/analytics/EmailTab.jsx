@@ -14,6 +14,7 @@ const CATEGORY_LABELS = {
   INTERVIEW_SLOT: 'Interview scheduling',
   REVIEWER_REMINDER: 'Reviewer reminders',
   ACCOUNTABILITY_REMINDER: 'Accountability reminders',
+  SIGNUP_REMINDER: 'Signup reminders',
   MASTER_COMMUNICATION: 'Master Communications',
   DECISION_BATCH: 'Decision batches',
   TEST: 'Test sends',

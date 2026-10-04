@@ -96,7 +96,7 @@ describe('AdminInterviews round setup', () => {
     expect(screen.queryByText('0 waitlisted')).not.toBeInTheDocument();
     expect(screen.queryByText('0 not scheduled')).not.toBeInTheDocument();
     // Setup lives in the panel now; there is no separate tab for it.
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Coffee Chats', 'Sessions', 'Interviewers']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Coffee Chats', 'Sessions', 'Interviewers', 'Signups']);
   });
 
   it('says how many seats short a round is', async () => {

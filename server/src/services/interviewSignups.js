@@ -32,6 +32,7 @@ import {
   isCandidateBookable,
   nextInLine,
   nextLabelFrom,
+  selfBookingRefusal,
 } from './interviewSignupPolicy.js';
 
 /// Statuses that occupy something. Everything else is history.
@@ -389,11 +390,14 @@ function decideClaim(claim, state, now, rows) {
     throw new SlotTransactionError(409, 'That interview is no longer taking signups.');
   }
   const { interview } = slot;
-  if (!isCandidateBookable(slot, now)) {
-    throw new SlotTransactionError(409, 'Signup is not open for that time slot');
-  }
-  if (!canModify(slot.startTime)) {
-    throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
+  switch (selfBookingRefusal(slot, interview, now)) {
+    case 'INTERVIEW_CLOSED':
+      throw new SlotTransactionError(409, 'That interview is no longer taking signups.');
+    case 'NOT_OPEN':
+      throw new SlotTransactionError(409, 'Signup is not open for that time slot');
+    case 'CUTOFF':
+      throw new SlotTransactionError(409, `Signup closes ${MODIFY_CUTOFF_HOURS} hours before a slot starts`);
+    default:
   }
 
   // Sibling interviews of the same round count as one pool, so a candidate
