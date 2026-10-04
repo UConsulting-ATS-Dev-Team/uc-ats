@@ -151,3 +151,50 @@ describe('Candidates admin applications view', () => {
     expect(headerCells.length).toBe(6);
   });
 });
+
+describe('Candidates attendance requests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('asks for each application once, a few at a time, even while searching and after a failure', async () => {
+    const user = userEvent.setup();
+    const applications = Array.from({ length: 10 }, (_, i) => ({
+      ...testApplication,
+      id: `app-${i}`,
+      candidateId: `cand-${i}`,
+      name: `Candidate ${i}`,
+      email: `c${i}@example.com`,
+    }));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    useAuth.mockReturnValue({ user: memberUser });
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/member/all-applications') return Promise.resolve(applications);
+      if (url.endsWith('/events') && url.startsWith('/applications/')) {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise((resolve, reject) => setTimeout(() => {
+          inFlight -= 1;
+          if (url.includes('app-3/')) reject(new Error('pool timeout'));
+          else resolve({ events: [] });
+        }, 5));
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<Candidates />);
+    await screen.findByText('Candidate 0');
+    await user.type(screen.getByPlaceholderText('Search applications...'), 'Cand');
+
+    const eventCalls = () => apiClient.get.mock.calls
+      .map(([url]) => url)
+      .filter((url) => url.startsWith('/applications/') && url.endsWith('/events'));
+    await waitFor(() => expect(eventCalls()).toHaveLength(10));
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(eventCalls()).toHaveLength(10);
+    expect(new Set(eventCalls()).size).toBe(10);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+});
