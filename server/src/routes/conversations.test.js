@@ -11,6 +11,12 @@ const mockSendMessage = vi.fn();
 const mockMarkRead = vi.fn();
 const mockUserCanAccessConversation = vi.fn();
 const mockSyncInterviewParticipants = vi.fn();
+const mockToggleReaction = vi.fn();
+const mockGetMessageReactions = vi.fn();
+const mockOpenThread = vi.fn();
+const mockListChatPeople = vi.fn();
+const mockListThreadsForUser = vi.fn();
+const mockNudgeInterviewThreads = vi.fn();
 
 vi.mock('../prismaClient.js', () => ({
   default: {
@@ -21,7 +27,7 @@ vi.mock('../prismaClient.js', () => ({
     interviewSlotAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     interviewAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     conversation: { findUnique: vi.fn() },
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     $transaction: vi.fn((ops) => Promise.all(ops))
   }
 }));
@@ -34,8 +40,21 @@ vi.mock('../services/messaging.js', () => ({
   sendMessage: (...args) => mockSendMessage(...args),
   markRead: (...args) => mockMarkRead(...args),
   userCanAccessConversation: (...args) => mockUserCanAccessConversation(...args),
-  syncInterviewParticipants: (...args) => mockSyncInterviewParticipants(...args)
+  syncInterviewParticipants: (...args) => mockSyncInterviewParticipants(...args),
+  toggleReaction: (...args) => mockToggleReaction(...args),
+  getMessageReactions: (...args) => mockGetMessageReactions(...args)
 }));
+
+vi.mock('../services/interviewThreads.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    openThread: (...args) => mockOpenThread(...args),
+    listChatPeople: (...args) => mockListChatPeople(...args),
+    listThreadsForUser: (...args) => mockListThreadsForUser(...args),
+    nudgeInterviewThreads: (...args) => mockNudgeInterviewThreads(...args)
+  };
+});
 
 import prisma from '../prismaClient.js';
 
@@ -182,6 +201,113 @@ describe('Conversations routes', () => {
 
       expect(res.status).toBe(403);
       expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('coffee chat threads', () => {
+    const coffeeChat = { id: 'cc-1', description: null, interviewType: 'COFFEE_CHAT' };
+
+    it('refuses the one room for everyone on a coffee chat', async () => {
+      prisma.interview.findUnique.mockResolvedValue(coffeeChat);
+
+      const res = await get(tokenFor(adminUser), '/api/conversations/interviews/cc-1');
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('THREADS_ONLY');
+      expect(mockGetOrCreateInterviewConversation).not.toHaveBeenCalled();
+    });
+
+    it('lists the people and threads for a member staffing the coffee chat', async () => {
+      prisma.interview.findUnique.mockResolvedValue(coffeeChat);
+      prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: memberUser.id }]);
+      mockListChatPeople.mockResolvedValue([{ id: 'm2' }]);
+      mockListThreadsForUser.mockResolvedValue([{ id: 'conv-t' }]);
+
+      const res = await get(tokenFor(memberUser), '/api/conversations/interviews/cc-1/threads');
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ people: [{ id: 'm2' }], threads: [{ id: 'conv-t' }] });
+    });
+
+    it('keeps a member not on the coffee chat out of its threads', async () => {
+      prisma.interview.findUnique.mockResolvedValue(coffeeChat);
+      prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'someone-else' }]);
+
+      const res = await post(tokenFor(memberUser), '/api/conversations/interviews/cc-1/threads', { userIds: ['m2'] });
+
+      expect(res.status).toBe(403);
+      expect(mockOpenThread).not.toHaveBeenCalled();
+    });
+
+    it('opens a thread with the people picked', async () => {
+      prisma.interview.findUnique.mockResolvedValue(coffeeChat);
+      prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: memberUser.id }]);
+      mockOpenThread.mockResolvedValue('conv-t');
+      mockGetConversationForUser.mockResolvedValue({ id: 'conv-t' });
+
+      const res = await post(tokenFor(memberUser), '/api/conversations/interviews/cc-1/threads', { userIds: ['m2', 'm3'] });
+
+      expect(res.status).toBe(201);
+      expect(mockOpenThread).toHaveBeenCalledWith('cc-1', memberUser, ['m2', 'm3']);
+    });
+
+    it('has no threads on any other round', async () => {
+      prisma.interview.findUnique.mockResolvedValue({ id: 'r1', description: null, interviewType: 'ROUND_ONE' });
+
+      const res = await get(tokenFor(adminUser), '/api/conversations/interviews/r1/threads');
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('ROOM_ONLY');
+    });
+
+    it("nudges thread lists when a thread's message is sent", async () => {
+      prisma.conversation.findUnique.mockResolvedValue({ id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:cc-1:abc' });
+      mockUserCanAccessConversation.mockResolvedValue(true);
+      mockSendMessage.mockResolvedValue({ id: 'msg-1' });
+
+      await post(tokenFor(memberUser), '/api/conversations/conv-t/messages', { body: 'hi' });
+
+      expect(mockNudgeInterviewThreads).toHaveBeenCalledWith('cc-1');
+    });
+  });
+
+  describe('POST /api/conversations/:id/messages/:messageId/reactions', () => {
+    it('toggles a reaction in an accessible conversation', async () => {
+      mockUserCanAccessConversation.mockResolvedValue(true);
+      mockToggleReaction.mockResolvedValue({ messageId: 'msg-1', reactions: [{ emoji: '👍', count: 1 }] });
+
+      const res = await post(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions', { emoji: '👍' });
+
+      expect(res.status).toBe(200);
+      expect(mockToggleReaction).toHaveBeenCalledWith({ conversationId: 'conv-1', messageId: 'msg-1', user: memberUser, emoji: '👍' });
+    });
+
+    it("reads one message's reactions in an accessible conversation", async () => {
+      mockUserCanAccessConversation.mockResolvedValue(true);
+      mockGetMessageReactions.mockResolvedValue({ messageId: 'msg-1', reactions: [] });
+
+      const res = await get(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions');
+
+      expect(res.status).toBe(200);
+      expect(mockGetMessageReactions).toHaveBeenCalledWith('conv-1', 'msg-1');
+    });
+
+    it("refuses reading reactions in a conversation the user cannot read", async () => {
+      mockUserCanAccessConversation.mockResolvedValue(false);
+
+      const res = await get(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions');
+
+      expect(res.status).toBe(403);
+      expect(mockGetMessageReactions).not.toHaveBeenCalled();
+    });
+
+    it('refuses a conversation the user cannot read', async () => {
+      mockUserCanAccessConversation.mockResolvedValue(false);
+
+      const res = await post(tokenFor(memberUser), '/api/conversations/conv-1/messages/msg-1/reactions', { emoji: '👍' });
+
+      expect(res.status).toBe(403);
+      expect(mockToggleReaction).not.toHaveBeenCalled();
     });
   });
 });

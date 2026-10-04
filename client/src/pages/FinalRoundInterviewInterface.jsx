@@ -981,7 +981,7 @@ export default function FinalRoundInterviewInterface() {
             nothing pops over the exhibit. */}
         {!candidatePreviewActive && (
           <>
-            <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+            <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} interviewType={interview?.interviewType} />
             <InterviewQuestionPanel
               interviewId={interviewId}
               round={interview?.interviewType}

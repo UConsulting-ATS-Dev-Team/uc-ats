@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   userCanAccessConversation,
   listConversationsForUser,
-  syncInterviewParticipants
+  syncInterviewParticipants,
+  listMessages,
+  sendMessage,
+  toggleReaction,
+  getMessageReactions,
+  summarizeReactions
 } from './messaging.js';
 
 const mockBroadcastToConversation = vi.fn();
@@ -41,12 +46,26 @@ vi.mock('../prismaClient.js', () => ({
     },
     message: {
       create: vi.fn(),
-      count: vi.fn()
-    }
+      count: vi.fn(),
+      findMany: vi.fn(),
+      findUnique: vi.fn()
+    },
+    messageReaction: {
+      deleteMany: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn()
+    },
+    $executeRaw: vi.fn(),
+    // The toggle runs in a transaction; the mock hands the same client back as tx.
+    $transaction: vi.fn()
   }
 }));
 
 import prisma from '../prismaClient.js';
+
+beforeEach(() => {
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
+});
 
 describe('messaging service', () => {
   beforeEach(() => {
@@ -207,15 +226,195 @@ describe('messaging service', () => {
       });
     });
 
-    it('returns all conversations for ADMIN', async () => {
+    it('returns every conversation for ADMIN except coffee chat threads they are not in', async () => {
       prisma.conversation.findMany.mockResolvedValue([]);
       prisma.message.count.mockResolvedValue(0);
 
       await listConversationsForUser(admin);
 
       expect(prisma.conversation.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: {} })
+        expect.objectContaining({
+          where: {
+            OR: [
+              { contextType: { not: 'DIRECT_MESSAGE' } },
+              { participants: { some: { userId: admin.id } } }
+            ]
+          }
+        })
       );
+    });
+  });
+
+  describe('coffee chat threads', () => {
+    const admin = { id: 'admin-1', role: 'ADMIN' };
+    const member = { id: 'member-1', role: 'MEMBER' };
+    const thread = { id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:int-1:abc' };
+
+    it('keeps an admin out of a thread they are not in', async () => {
+      staff({ onSession: ['member-1'] });
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+      expect(await userCanAccessConversation(thread, admin)).toBe(false);
+    });
+
+    it('lets an admin in a thread read it', async () => {
+      staff({ onSession: ['member-1'] });
+      prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      expect(await userCanAccessConversation(thread, admin)).toBe(true);
+    });
+
+    it('lets a member in the thread read it while they staff the coffee chat', async () => {
+      staff({ onSession: ['member-1'] });
+      prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      expect(await userCanAccessConversation(thread, member)).toBe(true);
+    });
+
+    it('drops a member taken off the coffee chat, even though they are in the thread', async () => {
+      staff({ onSession: [], removed: ['member-1'] });
+      prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      expect(await userCanAccessConversation(thread, member)).toBe(false);
+    });
+  });
+
+  describe('reactions', () => {
+    const user = { id: 'member-1', role: 'MEMBER' };
+    const row = (emoji, id, fullName) => ({ emoji, user: { id, fullName } });
+
+    it('folds rows to one entry per emoji with who reacted', () => {
+      expect(summarizeReactions([row('👍', 'a', 'A'), row('❤️', 'b', 'B'), row('👍', 'c', 'C')])).toEqual([
+        { emoji: '👍', count: 2, users: [{ id: 'a', fullName: 'A' }, { id: 'c', fullName: 'C' }] },
+        { emoji: '❤️', count: 1, users: [{ id: 'b', fullName: 'B' }] }
+      ]);
+    });
+
+    it('adds a reaction the user has not put on yet', async () => {
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.messageReaction.findMany.mockResolvedValue([row('👍', 'member-1', 'Me')]);
+      mockBroadcastToConversation.mockResolvedValue();
+
+      const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
+
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      // Read back only once the toggle has committed.
+      expect(prisma.messageReaction.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(
+        prisma.messageReaction.create.mock.invocationCallOrder[0]
+      );
+      expect(prisma.$transaction.mock.results[0].type).toBe('return');
+      expect(result.readAt).toEqual(expect.any(String));
+      expect(prisma.messageReaction.create).toHaveBeenCalledWith({ data: { messageId: 'msg-1', userId: 'member-1', emoji: '👍' } });
+      expect(result.reactions).toEqual([{ emoji: '👍', count: 1, users: [{ id: 'member-1', fullName: 'Me' }] }]);
+      // Content-free: who reacted is fetched through the API, not broadcast.
+      expect(mockBroadcastToConversation).toHaveBeenCalledWith('conv-1', 'message:reactions', {
+        conversationId: 'conv-1',
+        messageId: 'msg-1'
+      });
+    });
+
+    it('takes a reaction off when the user taps it again', async () => {
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.deleteMany.mockResolvedValue({ count: 1 });
+      prisma.messageReaction.findMany.mockResolvedValue([]);
+      mockBroadcastToConversation.mockResolvedValue();
+
+      const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
+
+      expect(prisma.messageReaction.create).not.toHaveBeenCalled();
+      expect(result.reacted).toBe(false);
+      expect(result.reactions).toEqual([]);
+    });
+
+    it('refuses an emoji outside the palette, or a message from another conversation', async () => {
+      await expect(toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '<b>' })).rejects.toMatchObject({ status: 400 });
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-2', deletedAt: null });
+      await expect(toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' })).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("reads one message's reactions, and only from its own conversation", async () => {
+      prisma.message.findUnique.mockResolvedValue({ conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.findMany.mockResolvedValue([row('🎉', 'a', 'A')]);
+      expect(await getMessageReactions('conv-1', 'msg-1')).toEqual({
+        messageId: 'msg-1',
+        reactions: [{ emoji: '🎉', count: 1, users: [{ id: 'a', fullName: 'A' }] }],
+        readAt: expect.any(String)
+      });
+      await expect(getMessageReactions('conv-2', 'msg-1')).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('reports a saved toggle as saved even when reading reactions back fails', async () => {
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.messageReaction.findMany.mockRejectedValue(new Error('pool timeout'));
+      mockBroadcastToConversation.mockResolvedValue();
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
+
+      expect(result).toEqual({ messageId: 'msg-1', reacted: true, reactedAt: expect.any(String), reactions: null, readAt: null });
+      expect(mockBroadcastToConversation).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('answers 503 before the reactions table exists', async () => {
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.deleteMany.mockRejectedValue(Object.assign(new Error('missing'), { code: 'P2021' }));
+
+      await expect(toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' })).rejects.toMatchObject({
+        status: 503,
+        code: 'REACTIONS_UNAVAILABLE'
+      });
+    });
+
+    it('still lists messages, without reactions, before the table exists', async () => {
+      const msg = { id: 'msg-1', conversationId: 'conv-1', body: 'hi', createdAt: new Date(), sender: { id: 'x' } };
+      prisma.message.findMany
+        .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'P2021' }))
+        .mockResolvedValueOnce([msg]);
+
+      const messages = await listMessages('conv-1');
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0].reactions).toEqual([]);
+    });
+  });
+
+  describe('message broadcasts', () => {
+    it('announces a new message without its body', async () => {
+      prisma.message.create.mockResolvedValue({
+        id: 'msg-9', conversationId: 'conv-1', body: 'secret', createdAt: new Date(), sender: { id: 'u' }
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      prisma.conversation.update.mockResolvedValue({});
+      mockBroadcastToConversation.mockResolvedValue();
+
+      await sendMessage({ conversationId: 'conv-1', sender: { id: 'u' }, body: 'secret' });
+
+      expect(mockBroadcastToConversation).toHaveBeenCalledWith('conv-1', 'message:created', {
+        conversationId: 'conv-1',
+        messageId: 'msg-9'
+      });
+    });
+  });
+
+  describe('thread listing', () => {
+    it("drops a coffee chat thread from a member's list once they are off the coffee chat", async () => {
+      staff({ onSession: [], removed: ['member-1'] });
+      prisma.conversation.findMany.mockResolvedValue([
+        { id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:int-1:abc', participants: [{ lastReadAt: null }], messages: [] }
+      ]);
+      prisma.message.count.mockResolvedValue(0);
+
+      expect(await listConversationsForUser({ id: 'member-1', role: 'MEMBER' })).toEqual([]);
+    });
+
+    it('keeps it while they staff it', async () => {
+      staff({ onSession: ['member-1'] });
+      prisma.conversation.findMany.mockResolvedValue([
+        { id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:int-1:abc', participants: [{ lastReadAt: null }], messages: [] }
+      ]);
+      prisma.message.count.mockResolvedValue(0);
+
+      const list = await listConversationsForUser({ id: 'member-1', role: 'MEMBER' });
+      expect(list.map((c) => c.id)).toEqual(['conv-t']);
     });
   });
 });

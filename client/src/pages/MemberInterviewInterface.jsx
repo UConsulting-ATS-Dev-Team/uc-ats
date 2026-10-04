@@ -639,7 +639,7 @@ export default function MemberInterviewInterface() {
           </div>
         </div>
       )}
-      <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} />
+      <InterviewChatWidget interviewId={interviewId} interviewTitle={interview?.title} interviewType={interview?.interviewType} />
       <InterviewQuestionPanel
         interviewId={interviewId}
         round={interview?.interviewType}

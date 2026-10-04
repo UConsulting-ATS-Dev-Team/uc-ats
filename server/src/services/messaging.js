@@ -1,6 +1,7 @@
 import prisma from '../prismaClient.js';
 import { broadcastToConversation, channelNameFor } from './realtime.js';
 import { interviewStaffIds, interviewsStaffedBy } from './interviewRoster.js';
+import { interviewIdOfThread, userCanAccessThread } from './interviewThreads.js';
 
 // An interview conversation's members are whoever staffs the interview now
 // (interviewRoster.js): session assignments where it has sessions. Reading only the
@@ -17,7 +18,44 @@ const senderSelect = {
   role: true
 };
 
-function serializeMessage(msg) {
+/// The reactions on offer. A fixed palette rather than any emoji: what arrives in
+/// a request body is checked against it, and it keeps the picker one row.
+export const REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '👎', '🎉', '👀'];
+
+const reactionInclude = {
+  reactions: {
+    orderBy: { createdAt: 'asc' },
+    select: { emoji: true, user: { select: { id: true, fullName: true } } }
+  }
+};
+
+/** Reaction rows folded to one entry per emoji, in the order each was first used. */
+export function summarizeReactions(rows = []) {
+  const byEmoji = new Map();
+  for (const row of rows) {
+    const entry = byEmoji.get(row.emoji) ?? { emoji: row.emoji, count: 0, users: [] };
+    entry.count += 1;
+    entry.users.push({ id: row.user.id, fullName: row.user.fullName });
+    byEmoji.set(row.emoji, entry);
+  }
+  return [...byEmoji.values()];
+}
+
+// message_reactions arrives in its own migration. Until it is applied, chats
+// load and send as before and simply show no reactions.
+const isMissingTable = (err) => err?.code === 'P2021' || err?.code === 'P2022';
+
+/**
+ * Tell a conversation's open clients that something changed. Content-free: the
+ * channel is joined with the anon key, so anyone who once learned the id could
+ * keep listening after losing access. Clients fetch the change through the API,
+ * which checks access on every request.
+ */
+function nudgeConversation(conversationId, event, { messageId }) {
+  broadcastToConversation(conversationId, event, { conversationId, messageId }).catch(() => {});
+}
+
+function serializeMessage(msg, reactionsReadAt = null) {
   return {
     id: msg.id,
     conversationId: msg.conversationId,
@@ -25,7 +63,11 @@ function serializeMessage(msg) {
     createdAt: msg.createdAt,
     editedAt: msg.editedAt,
     deletedAt: msg.deletedAt,
-    sender: msg.sender
+    sender: msg.sender,
+    reactions: summarizeReactions(msg.reactions),
+    // When the reactions were read. A client keeps the newest read it has seen
+    // of a message's reactions, whichever request it came from.
+    reactionsReadAt
   };
 }
 
@@ -112,6 +154,9 @@ async function ensureParticipantRow(conversationId, userId) {
 
 export async function userCanAccessConversation(conversation, user) {
   if (!conversation || !user) return false;
+  // A coffee chat thread is private to the people in it, admins included
+  // (interviewThreads.js), so it is checked before the admin shortcut.
+  if (interviewIdOfThread(conversation)) return userCanAccessThread(conversation, user);
   if (user.role === 'ADMIN') return true;
 
   // Interview conversations are authorized by who staffs the interview now, not stale
@@ -129,13 +174,113 @@ export async function userCanAccessConversation(conversation, user) {
 export async function listMessages(conversationId, { before, limit = MESSAGE_PAGE_SIZE } = {}) {
   const where = { conversationId };
   if (before) where.createdAt = { lt: new Date(before) };
-  const rows = await prisma.message.findMany({
+  const query = {
     where,
     orderBy: { createdAt: 'desc' },
-    take: Math.min(Math.max(parseInt(limit, 10) || MESSAGE_PAGE_SIZE, 1), 200),
-    include: { sender: { select: senderSelect } }
+    take: Math.min(Math.max(parseInt(limit, 10) || MESSAGE_PAGE_SIZE, 1), 200)
+  };
+  let rows;
+  // Taken before the read starts, so the read sees at least this moment.
+  const readAt = new Date().toISOString();
+  try {
+    rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect }, ...reactionInclude } });
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    rows = await prisma.message.findMany({ ...query, include: { sender: { select: senderSelect } } });
+  }
+  return rows.reverse().map((row) => serializeMessage(row, readAt));
+}
+
+/** One message's reactions, for a client told they changed. */
+export async function getMessageReactions(conversationId, messageId) {
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { conversationId: true, deletedAt: true }
   });
-  return rows.reverse().map(serializeMessage);
+  // The conversation was authorized; the message id came from the URL.
+  if (!message || message.conversationId !== conversationId || message.deletedAt) {
+    const err = new Error('Message not found');
+    err.status = 404;
+    throw err;
+  }
+  const readAt = new Date().toISOString();
+  try {
+    const rows = await prisma.messageReaction.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' },
+      select: reactionInclude.reactions.select
+    });
+    return { messageId, reactions: summarizeReactions(rows), readAt };
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    return { messageId, reactions: [], readAt };
+  }
+}
+
+/**
+ * Put an emoji on a message, or take it off if the user already put that one on.
+ * Returns the message's reactions afterwards and tells the conversation.
+ */
+export async function toggleReaction({ conversationId, messageId, user, emoji }) {
+  if (!REACTION_EMOJI.includes(emoji)) {
+    const err = new Error('Unknown reaction');
+    err.status = 400;
+    throw err;
+  }
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { id: true, conversationId: true, deletedAt: true }
+  });
+  // The conversation was authorized; the message id came from the URL.
+  if (!message || message.conversationId !== conversationId || message.deletedAt) {
+    const err = new Error('Message not found');
+    err.status = 404;
+    throw err;
+  }
+
+  try {
+    // Delete-or-insert is one decision: under the lock, two taps at once land
+    // one after the other and cancel out, instead of both seeing nothing to
+    // delete and both inserting.
+    const lockKey = `reaction:${messageId}:${user.id}:${emoji}`;
+    // Whether the user's emoji is on the message now, so a client that cannot
+    // read the reactions back still knows which way the toggle went.
+    const reacted = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      const removed = await tx.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
+      if (removed.count > 0) return false;
+      await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
+      return true;
+    });
+    // When `reacted` became true: after the commit, so a read stamped later
+    // has seen it and a read stamped earlier may not have.
+    const reactedAt = new Date().toISOString();
+    nudgeConversation(conversationId, 'message:reactions', { messageId });
+    // Read back after the commit, stamped like any other read: a read stamped
+    // inside the transaction would claim to be newer than reads that ran before
+    // the commit, yet see less than they do once it lands.
+    // The toggle is saved by now, so a failed read-back must not report it as
+    // failed: the client would undo the tap, and a retry would toggle it back.
+    // It answers with no reactions and the client reads them itself.
+    const readAt = new Date().toISOString();
+    try {
+      const rows = await prisma.messageReaction.findMany({
+        where: { messageId },
+        orderBy: { createdAt: 'asc' },
+        select: reactionInclude.reactions.select
+      });
+      return { messageId, reacted, reactedAt, reactions: summarizeReactions(rows), readAt };
+    } catch (err) {
+      console.error('[toggleReaction] saved, but reading reactions back failed:', err);
+      return { messageId, reacted, reactedAt, reactions: null, readAt: null };
+    }
+  } catch (err) {
+    if (!isMissingTable(err)) throw err;
+    const unavailable = new Error('Reactions are not available yet');
+    unavailable.status = 503;
+    unavailable.code = 'REACTIONS_UNAVAILABLE';
+    throw unavailable;
+  }
 }
 
 export async function sendMessage({ conversationId, sender, body }) {
@@ -157,7 +302,7 @@ export async function sendMessage({ conversationId, sender, body }) {
   });
 
   const payload = serializeMessage(created);
-  broadcastToConversation(conversationId, 'message:created', payload).catch(() => {});
+  nudgeConversation(conversationId, 'message:created', { messageId: created.id });
 
   // Tail writes — not on the response-path. Best-effort, fire-and-forget.
   ensureParticipantRow(conversationId, sender.id).catch(() => {});
@@ -242,8 +387,14 @@ async function interviewIdsWithChatsFor(user) {
 export async function listConversationsForUser(user) {
   const assignedInterviewIds = user.role === 'ADMIN' ? [] : await interviewIdsWithChatsFor(user);
 
+  // Admins see every conversation except coffee chat threads they are not in.
   const where = user.role === 'ADMIN'
-    ? {}
+    ? {
+        OR: [
+          { contextType: { not: 'DIRECT_MESSAGE' } },
+          { participants: { some: { userId: user.id } } }
+        ]
+      }
     : {
         OR: [
           {
@@ -273,8 +424,16 @@ export async function listConversationsForUser(user) {
     }
   });
 
+  // A member keeps their participant row in a coffee chat thread after being
+  // taken off the coffee chat; the thread drops out of their list with access.
+  const staffed = new Set(assignedInterviewIds);
+  const visible = conversations.filter((c) => {
+    const threadInterviewId = interviewIdOfThread(c);
+    return !threadInterviewId || user.role === 'ADMIN' || staffed.has(threadInterviewId);
+  });
+
   const result = [];
-  for (const c of conversations) {
+  for (const c of visible) {
     // Interview participants may be missing if a member was assigned after the
     // conversation was created; ensure a row exists so lastReadAt is tracked.
     if (c.contextType === 'INTERVIEW' && !c.participants[0]) {
