@@ -451,17 +451,14 @@
   overflow: hidden;
 }
 
-/* No room for windows side by side: show the newest one, over everything. */
+/* No room for windows side by side: CoffeeChatThreads mounts only the newest
+   (windowsThatFit), drawn full width over everything. */
 @media (max-width: 900px) {
   .chat-thread-window {
     right: 16px;
     left: 16px;
     width: auto;
     z-index: 1302;
-  }
-
-  .chat-thread-window:not(.chat-thread-window--newest) {
-    display: none;
   }
 }
 

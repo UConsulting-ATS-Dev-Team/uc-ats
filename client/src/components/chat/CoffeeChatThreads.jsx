@@ -19,6 +19,32 @@ export const MAX_THREAD_PARTICIPANTS = 6;
 export const MAX_OPEN_WINDOWS = 3;
 const POLL_MS = 30000;
 
+// Layout, matching ChatWidget.css: a 340px window plus a 16px gap each, beside the
+// launcher (56px) or the open list (380px), inside a 24px margin. At or below
+// NARROW_PX one full-width window shows at a time.
+const WINDOW_PX = 340 + 16;
+const NARROW_PX = 900;
+
+/**
+ * How many chat windows fit beside the launcher or list at this width. Only
+ * these are mounted: a window that is not drawn must not mark messages read.
+ */
+export function windowsThatFit(viewportWidth, listOpen) {
+  if (viewportWidth <= NARROW_PX) return 1;
+  const used = 24 * 2 + (listOpen ? 380 : 56) + 16;
+  return Math.max(1, Math.min(MAX_OPEN_WINDOWS, Math.floor((viewportWidth - used) / WINDOW_PX)));
+}
+
+function useViewportWidth() {
+  const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth));
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
 const nameOf = (person) => person?.fullName || person?.email || 'Someone';
 
 export function threadTitle(people) {
@@ -45,7 +71,7 @@ function ThreadWindow({ thread, index, listOpen, onClose, onActivity }) {
 
   return (
     <div
-      className={`chat-thread-window${index === 0 ? ' chat-thread-window--newest' : ''}`}
+      className="chat-thread-window"
       style={{ '--chat-window-index': index, '--chat-list-offset': listOpen ? 1 : 0 }}
       role="dialog"
       aria-label={`Chat with ${threadTitle(thread.people)}`}
@@ -162,6 +188,7 @@ export default function CoffeeChatThreads({ interviewId }) {
   const [data, setData] = useState({ people: [], threads: [] });
   const [loadError, setLoadError] = useState('');
   const [openIds, setOpenIds] = useState([]);
+  const viewportWidth = useViewportWidth();
 
   const refresh = useCallback(async () => {
     if (!interviewId) return;
@@ -207,9 +234,11 @@ export default function CoffeeChatThreads({ interviewId }) {
   if (!user || !interviewId) return null;
 
   const threadsById = new Map(data.threads.map((t) => [t.id, t]));
-  const openThreads = openIds.map((id) => threadsById.get(id) ?? { id, people: [] });
-  // An open window is being read, so its messages are not waiting on you.
-  const unread = data.threads.reduce((sum, t) => sum + (openIds.includes(t.id) ? 0 : t.unreadCount || 0), 0);
+  // The newest open chats that fit on screen. The rest stay open and come back
+  // when there is room, but are not drawn, so they count as unread meanwhile.
+  const shownIds = openIds.slice(-windowsThatFit(viewportWidth, listOpen));
+  const openThreads = shownIds.map((id) => threadsById.get(id) ?? { id, people: [] });
+  const unread = data.threads.reduce((sum, t) => sum + (shownIds.includes(t.id) ? 0 : t.unreadCount || 0), 0);
 
   return (
     <>
@@ -268,7 +297,7 @@ export default function CoffeeChatThreads({ interviewId }) {
                   <li key={thread.id}>
                     <button
                       type="button"
-                      className={`chat-thread-row${openIds.includes(thread.id) ? ' chat-thread-row--open' : ''}`}
+                      className={`chat-thread-row${shownIds.includes(thread.id) ? ' chat-thread-row--open' : ''}`}
                       onClick={() => openThread(thread.id)}
                       data-no-track
                     >
@@ -281,7 +310,7 @@ export default function CoffeeChatThreads({ interviewId }) {
                             : 'No messages yet'}
                         </span>
                       </span>
-                      {thread.unreadCount > 0 && !openIds.includes(thread.id) && (
+                      {thread.unreadCount > 0 && !shownIds.includes(thread.id) && (
                         <span className="chat-thread-row__unread">{thread.unreadCount}</span>
                       )}
                     </button>

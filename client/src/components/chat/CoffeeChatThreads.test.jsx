@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import CoffeeChatThreads, { threadTitle } from './CoffeeChatThreads';
+import CoffeeChatThreads, { threadTitle, windowsThatFit } from './CoffeeChatThreads';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
@@ -44,6 +44,31 @@ describe('CoffeeChatThreads', () => {
   beforeEach(() => {
     mockGet.mockReset();
     mockPost.mockReset();
+    // Wide enough for the list and three windows side by side.
+    window.innerWidth = 1600;
+  });
+
+  it('fits as many windows as the screen has room for', () => {
+    expect(windowsThatFit(1600, true)).toBe(3);
+    expect(windowsThatFit(1280, true)).toBe(2);
+    expect(windowsThatFit(1280, false)).toBe(3);
+    expect(windowsThatFit(1000, true)).toBe(1);
+    expect(windowsThatFit(800, false)).toBe(1);
+  });
+
+  it('draws only the newest chat on a narrow screen and keeps the others unread', async () => {
+    window.innerWidth = 800;
+    serveConversations(() => [thread('t0', [PEOPLE[0]], { unreadCount: 4 }), thread('t1', [PEOPLE[1]])]);
+    render(<CoffeeChatThreads interviewId="cc-1" />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Open chats' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Ana/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^Ben/ }));
+
+    await waitFor(() => expect(screen.getAllByRole('dialog', { name: /^Chat with/ })).toHaveLength(1));
+    expect(screen.getByRole('dialog', { name: 'Chat with Ben' })).toBeInTheDocument();
+    // Ana's window is no longer drawn, so her chat shows its unread count again.
+    expect(within(screen.getByRole('button', { name: /^Ana/ })).getByText('4')).toBeInTheDocument();
   });
 
   it('names a thread by the other people in it', () => {

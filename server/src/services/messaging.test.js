@@ -4,6 +4,7 @@ import {
   listConversationsForUser,
   syncInterviewParticipants,
   listMessages,
+  sendMessage,
   toggleReaction,
   summarizeReactions
 } from './messaging.js';
@@ -50,13 +51,20 @@ vi.mock('../prismaClient.js', () => ({
     },
     messageReaction: {
       deleteMany: vi.fn(),
-      upsert: vi.fn(),
+      create: vi.fn(),
       findMany: vi.fn()
-    }
+    },
+    $executeRaw: vi.fn(),
+    // The toggle runs in a transaction; the mock hands the same client back as tx.
+    $transaction: vi.fn()
   }
 }));
 
 import prisma from '../prismaClient.js';
+
+beforeEach(() => {
+  prisma.$transaction.mockImplementation((fn) => fn(prisma));
+});
 
 describe('messaging service', () => {
   beforeEach(() => {
@@ -285,12 +293,13 @@ describe('messaging service', () => {
 
       const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
 
-      expect(prisma.messageReaction.upsert).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(prisma.messageReaction.create).toHaveBeenCalledWith({ data: { messageId: 'msg-1', userId: 'member-1', emoji: '👍' } });
       expect(result.reactions).toEqual([{ emoji: '👍', count: 1, users: [{ id: 'member-1', fullName: 'Me' }] }]);
+      // Content-free: who reacted is fetched through the API, not broadcast.
       expect(mockBroadcastToConversation).toHaveBeenCalledWith('conv-1', 'message:reactions', {
         conversationId: 'conv-1',
-        messageId: 'msg-1',
-        reactions: result.reactions
+        messageId: 'msg-1'
       });
     });
 
@@ -302,7 +311,7 @@ describe('messaging service', () => {
 
       const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
 
-      expect(prisma.messageReaction.upsert).not.toHaveBeenCalled();
+      expect(prisma.messageReaction.create).not.toHaveBeenCalled();
       expect(result.reactions).toEqual([]);
     });
 
@@ -332,6 +341,47 @@ describe('messaging service', () => {
 
       expect(messages).toHaveLength(1);
       expect(messages[0].reactions).toEqual([]);
+    });
+  });
+
+  describe('message broadcasts', () => {
+    it('announces a new message without its body', async () => {
+      prisma.message.create.mockResolvedValue({
+        id: 'msg-9', conversationId: 'conv-1', body: 'secret', createdAt: new Date(), sender: { id: 'u' }
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      prisma.conversation.update.mockResolvedValue({});
+      mockBroadcastToConversation.mockResolvedValue();
+
+      await sendMessage({ conversationId: 'conv-1', sender: { id: 'u' }, body: 'secret' });
+
+      expect(mockBroadcastToConversation).toHaveBeenCalledWith('conv-1', 'message:created', {
+        conversationId: 'conv-1',
+        messageId: 'msg-9'
+      });
+    });
+  });
+
+  describe('thread listing', () => {
+    it("drops a coffee chat thread from a member's list once they are off the coffee chat", async () => {
+      staff({ onSession: [], removed: ['member-1'] });
+      prisma.conversation.findMany.mockResolvedValue([
+        { id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:int-1:abc', participants: [{ lastReadAt: null }], messages: [] }
+      ]);
+      prisma.message.count.mockResolvedValue(0);
+
+      expect(await listConversationsForUser({ id: 'member-1', role: 'MEMBER' })).toEqual([]);
+    });
+
+    it('keeps it while they staff it', async () => {
+      staff({ onSession: ['member-1'] });
+      prisma.conversation.findMany.mockResolvedValue([
+        { id: 'conv-t', contextType: 'DIRECT_MESSAGE', contextId: 'interview:int-1:abc', participants: [{ lastReadAt: null }], messages: [] }
+      ]);
+      prisma.message.count.mockResolvedValue(0);
+
+      const list = await listConversationsForUser({ id: 'member-1', role: 'MEMBER' });
+      expect(list.map((c) => c.id)).toEqual(['conv-t']);
     });
   });
 });

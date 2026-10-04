@@ -169,6 +169,33 @@ describe('useConversation', () => {
       expect(result.current.messages[0].reactions).toEqual(serverReactions);
     });
 
+    it('keeps a newer tap on top when an older answer arrives late', async () => {
+      resolve.mockResolvedValue(conv);
+      mockGet.mockResolvedValue([msg]);
+      const answers = [];
+      mockPost.mockImplementation(() => new Promise((r) => answers.push(r)));
+
+      const { result } = renderHook(() => useConversation({ resolve, currentUser }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      // 👍 on, then ❤️ on, before either answer is back.
+      let first;
+      let second;
+      act(() => { first = result.current.react('msg-1', '👍'); });
+      act(() => { second = result.current.react('msg-1', '❤️'); });
+
+      // The first answer knows only about 👍. ❤️ must survive it.
+      const me = { id: 'user-1', fullName: 'Test User' };
+      await act(async () => { answers[0]({ reactions: [{ emoji: '👍', count: 1, users: [me] }] }); await first; });
+      expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
+
+      await act(async () => {
+        answers[1]({ reactions: [{ emoji: '👍', count: 1, users: [me] }, { emoji: '❤️', count: 1, users: [me] }] });
+        await second;
+      });
+      expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
+    });
+
     it('puts the reactions back when the server refuses', async () => {
       resolve.mockResolvedValue(conv);
       mockGet.mockResolvedValue([msg]);

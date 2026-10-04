@@ -45,6 +45,16 @@ export function summarizeReactions(rows = []) {
 // load and send as before and simply show no reactions.
 const isMissingTable = (err) => err?.code === 'P2021' || err?.code === 'P2022';
 
+/**
+ * Tell a conversation's open clients that something changed. Content-free: the
+ * channel is joined with the anon key, so anyone who once learned the id could
+ * keep listening after losing access. Clients fetch the change through the API,
+ * which checks access on every request.
+ */
+function nudgeConversation(conversationId, event, { messageId }) {
+  broadcastToConversation(conversationId, event, { conversationId, messageId }).catch(() => {});
+}
+
 function serializeMessage(msg) {
   return {
     id: msg.id,
@@ -197,19 +207,25 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
     throw err;
   }
 
-  const key = { messageId_userId_emoji: { messageId, userId: user.id, emoji } };
   try {
-    const removed = await prisma.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
-    if (removed.count === 0) {
-      await prisma.messageReaction.upsert({ where: key, create: { messageId, userId: user.id, emoji }, update: {} });
-    }
-    const rows = await prisma.messageReaction.findMany({
-      where: { messageId },
-      orderBy: { createdAt: 'asc' },
-      select: reactionInclude.reactions.select
+    // Delete-or-insert is one decision: under the lock, two taps at once land
+    // one after the other and cancel out, instead of both seeing nothing to
+    // delete and both inserting.
+    const lockKey = `reaction:${messageId}:${user.id}:${emoji}`;
+    const reactions = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      const removed = await tx.messageReaction.deleteMany({ where: { messageId, userId: user.id, emoji } });
+      if (removed.count === 0) {
+        await tx.messageReaction.create({ data: { messageId, userId: user.id, emoji } });
+      }
+      const rows = await tx.messageReaction.findMany({
+        where: { messageId },
+        orderBy: { createdAt: 'asc' },
+        select: reactionInclude.reactions.select
+      });
+      return summarizeReactions(rows);
     });
-    const reactions = summarizeReactions(rows);
-    broadcastToConversation(conversationId, 'message:reactions', { conversationId, messageId, reactions }).catch(() => {});
+    nudgeConversation(conversationId, 'message:reactions', { messageId });
     return { messageId, reactions };
   } catch (err) {
     if (!isMissingTable(err)) throw err;
@@ -239,7 +255,7 @@ export async function sendMessage({ conversationId, sender, body }) {
   });
 
   const payload = serializeMessage(created);
-  broadcastToConversation(conversationId, 'message:created', payload).catch(() => {});
+  nudgeConversation(conversationId, 'message:created', { messageId: created.id });
 
   // Tail writes — not on the response-path. Best-effort, fire-and-forget.
   ensureParticipantRow(conversationId, sender.id).catch(() => {});
@@ -361,8 +377,16 @@ export async function listConversationsForUser(user) {
     }
   });
 
+  // A member keeps their participant row in a coffee chat thread after being
+  // taken off the coffee chat; the thread drops out of their list with access.
+  const staffed = new Set(assignedInterviewIds);
+  const visible = conversations.filter((c) => {
+    const threadInterviewId = interviewIdOfThread(c);
+    return !threadInterviewId || user.role === 'ADMIN' || staffed.has(threadInterviewId);
+  });
+
   const result = [];
-  for (const c of conversations) {
+  for (const c of visible) {
     // Interview participants may be missing if a member was assigned after the
     // conversation was created; ensure a row exists so lastReadAt is tracked.
     if (c.contextType === 'INTERVIEW' && !c.participants[0]) {
