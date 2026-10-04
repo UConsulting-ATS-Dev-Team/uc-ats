@@ -179,12 +179,13 @@ const linkExisting = async (user, profile) => {
  * to match. Without this they became a talent-portal account, which has no UID
  * and therefore never sees their application or interview scheduling.
  *
- * Only the candidate's own address counts, in either UCLA spelling. An
- * application's address does not: it is typed on a form, and form sync files an
- * application under the UID it names even when the address is someone else's,
- * so an application address proves nothing about whose UID that is. Null when
- * nobody or more than one candidate has the address, or when another account
- * already holds the UID.
+ * A matching address alone proves nothing about the UID: form sync files an
+ * application under whatever UID the form names, so someone can type another
+ * person's UID with their own address. The UID is only handed over when the
+ * candidate's address and every application filed under it are this address
+ * (either UCLA spelling), so an application someone else filed under the UID
+ * blocks it. Null when nobody or more than one candidate matches, when the
+ * candidate has no application, or when another account already holds the UID.
  */
 const findApplicantStudentId = async (email) => {
   const spellings = emailVariants(email).map((variant) => ({ equals: variant, mode: 'insensitive' }));
@@ -192,28 +193,44 @@ const findApplicantStudentId = async (email) => {
 
   const candidates = await prisma.candidate.findMany({
     where: { OR: spellings.map((spelling) => ({ email: spelling })) },
-    select: { studentId: true },
+    select: { studentId: true, email: true, applications: { select: { email: true } } },
     take: 2
   });
   if (candidates.length !== 1 || !candidates[0].studentId) return null;
 
-  const { studentId } = candidates[0];
-  const holder = await prisma.user.findUnique({ where: { studentId }, select: { id: true } });
-  return holder ? null : studentId;
+  const [candidate] = candidates;
+  const key = emailIdentityKey(email);
+  const addresses = [candidate.email, ...candidate.applications.map((application) => application.email)];
+  if (candidate.applications.length === 0 || addresses.some((address) => emailIdentityKey(address || '') !== key)) {
+    return null;
+  }
+
+  const holder = await prisma.user.findUnique({ where: { studentId: candidate.studentId }, select: { id: true } });
+  return holder ? null : candidate.studentId;
 };
 
 /**
- * Whether a talent-portal account can be handed over without stranding
- * anything: its stored address is still the one Google just verified (a user
- * can change their stored address without verifying it, so it proves nothing on
- * its own), and it holds no talent-portal resume, whose sharing controls an
- * applicant account cannot reach.
+ * Whether this talent-portal account is the one Google just verified: its
+ * stored address still matches. A user can change their stored address without
+ * verifying it, so on its own it proves nothing.
  */
-const isEmptyTalentAccountFor = async (user, profile) => {
-  if (!user.isExternalTalent || user.studentId || user.role !== 'USER') return false;
-  if (emailIdentityKey(user.email) !== emailIdentityKey(profile.email)) return false;
-  const resumes = await prisma.externalResume.count({ where: { userId: user.id } });
-  return resumes === 0;
+const isTalentAccountFor = (user, profile) =>
+  user.isExternalTalent === true &&
+  !user.studentId &&
+  user.role === 'USER' &&
+  emailIdentityKey(user.email) === emailIdentityKey(profile.email);
+
+/**
+ * Inside a hand-over transaction: lock the talent account's row and confirm it
+ * is still an empty talent account. The talent resume upload takes the same
+ * lock, so a resume cannot land between this check and the hand-over and be
+ * stranded on an account that no longer reaches the talent portal.
+ */
+const lockEmptyTalentAccount = async (tx, userId) => {
+  const [row] = await tx.$queryRaw`
+    SELECT "isExternalTalent", "studentId" FROM users WHERE id = ${userId} FOR UPDATE`;
+  if (!row || row.isExternalTalent !== true || row.studentId) return false;
+  return (await tx.externalResume.count({ where: { userId } })) === 0;
 };
 
 /**
@@ -268,16 +285,17 @@ const createFromGoogle = async (profile) => {
  * applied - becomes that applicant's account. Anything else is returned as is.
  */
 const adoptApplicant = async (user, profile) => {
-  if (!(await isEmptyTalentAccountFor(user, profile))) return user;
+  if (!isTalentAccountFor(user, profile)) return user;
 
   const studentId = await findApplicantStudentId(profile.email);
   if (!studentId) return user;
 
   try {
-    const updated = await prisma.user.update({
-      where: { id: user.id },
-      data: { isExternalTalent: false, studentId }
+    const updated = await prisma.$transaction(async (tx) => {
+      if (!(await lockEmptyTalentAccount(tx, user.id))) return null;
+      return tx.user.update({ where: { id: user.id }, data: { isExternalTalent: false, studentId } });
     });
+    if (!updated) return user;
     invalidateUserCache(updated.id);
     return updated;
   } catch (error) {
@@ -310,7 +328,7 @@ const findUclaTwin = async (email) => {
  * nothing to move.
  */
 const moveGoogleToTwin = async (talent, profile) => {
-  if (!(await isEmptyTalentAccountFor(talent, profile))) return null;
+  if (!isTalentAccountFor(talent, profile)) return null;
 
   const twin = await findUclaTwin(profile.email);
   if (!twin || twin.isExternalTalent || twin.googleId || twin.isActive === false) return null;
@@ -322,12 +340,24 @@ const moveGoogleToTwin = async (talent, profile) => {
     twinData.emailVerificationExpiry = null;
   }
 
-  // One transaction, so a failure (say another sign-in linked the twin first)
-  // leaves Google where it was instead of on neither account.
-  const [, moved] = await prisma.$transaction([
-    prisma.user.update({ where: { id: talent.id }, data: { googleId: null, googleLinkedAt: null } }),
-    prisma.user.update({ where: { id: twin.id }, data: twinData })
-  ]);
+  const TWIN_TAKEN = Symbol('twin taken');
+  let moved;
+  try {
+    moved = await prisma.$transaction(async (tx) => {
+      if (!(await lockEmptyTalentAccount(tx, talent.id))) return null;
+      await tx.user.update({ where: { id: talent.id }, data: { googleId: null, googleLinkedAt: null } });
+      // Only if the twin is still unlinked. Otherwise another sign-in got there
+      // first, and throwing rolls back the line above so Google stays put.
+      const { count } = await tx.user.updateMany({ where: { id: twin.id, googleId: null }, data: twinData });
+      if (count === 0) throw TWIN_TAKEN;
+      return tx.user.findUnique({ where: { id: twin.id } });
+    });
+  } catch (error) {
+    if (error === TWIN_TAKEN) return null;
+    throw error;
+  }
+  if (!moved) return null;
+
   invalidateUserCache(talent.id);
   invalidateUserCache(moved.id);
   return moved;
