@@ -9,6 +9,7 @@ import {
 import AuthenticatedImage from '../components/AuthenticatedImage';
 import { headshotSrc } from '../utils/headshotUrl';
 import apiClient from '../utils/api';
+import useEvaluationSaves from '../hooks/useEvaluationSaves';
 import AccessControl from '../components/AccessControl';
 import InterviewChatWidget from '../components/chat/InterviewChatWidget';
 import InterviewQuestionPanel from '../components/interview/InterviewQuestionPanel';
@@ -34,7 +35,6 @@ export default function MemberInterviewInterface() {
   const [evaluations, setEvaluations] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [autoSaveTimeouts, setAutoSaveTimeouts] = useState({});
   const [saveStatus, setSaveStatus] = useState({});
   const [groupSelectionOpen, setGroupSelectionOpen] = useState(false);
   const [groupSearchTerm, setGroupSearchTerm] = useState('');
@@ -173,55 +173,32 @@ export default function MemberInterviewInterface() {
     scheduleAutoSave(applicationId);
   };
 
-  const scheduleAutoSave = (applicationId) => {
-    // Clear existing timeout for this application
-    if (autoSaveTimeouts[applicationId]) {
-      clearTimeout(autoSaveTimeouts[applicationId]);
-    }
+  const postEvaluation = (applicationId) => apiClient.post('/member/evaluations', {
+    interviewId,
+    applicationId,
+    ...getEvaluation(applicationId, evaluationsRef.current)
+  });
 
-    // Set new timeout for auto-save (2 seconds after last change)
-    const timeoutId = setTimeout(() => {
-      autoSaveEvaluation(applicationId);
-    }, 2000);
-
-    setAutoSaveTimeouts(prev => ({
-      ...prev,
-      [applicationId]: timeoutId
-    }));
-  };
-
-  const autoSaveEvaluation = async (applicationId) => {
-    try {
-      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
-      
-      await apiClient.post('/member/evaluations', {
-        interviewId,
-        applicationId,
-        ...evaluation
-      });
-      
-      // Auto-save completed successfully - no visual feedback needed
-    } catch (error) {
+  // One save per candidate at a time, retried if an autosave fails: see the hook.
+  const { scheduleAutoSave, saveNow } = useEvaluationSaves({
+    scope: `${interviewId}:${currentUser?.id}`,
+    send: postEvaluation,
+    onAutoSaveError: (applicationId, error) => {
       console.error('Auto-save failed:', error);
       setSaveStatus(prev => ({
         ...prev,
         [applicationId]: { type: 'error', message: 'Auto-save failed', timestamp: Date.now() }
       }));
-    }
-  };
-
+    },
+    onSaved: (applicationId) => {
+      setSaveStatus(({ [applicationId]: _, ...rest }) => rest);
+    },
+  });
 
   const saveEvaluation = async (applicationId) => {
     try {
       setSaving(true);
-      const evaluation = getEvaluation(applicationId);
-      
-      await apiClient.post('/member/evaluations', {
-        interviewId,
-        applicationId,
-        ...evaluation
-      });
-      
+      await saveNow(applicationId);
       alert('Evaluation saved successfully');
     } catch (error) {
       console.error('Failed to save evaluation:', error);
@@ -234,16 +211,7 @@ export default function MemberInterviewInterface() {
   const saveAllEvaluations = async () => {
     try {
       setSaving(true);
-      const promises = applications.map(app => {
-        const evaluation = getEvaluation(app.id);
-        return apiClient.post('/member/evaluations', {
-          interviewId,
-          applicationId: app.id,
-          ...evaluation
-        });
-      });
-      
-      await Promise.all(promises);
+      await Promise.all(applications.map(app => saveNow(app.id)));
       setAllEvaluationsSaved(true);
       setShowNextActionModal(true);
     } catch (error) {

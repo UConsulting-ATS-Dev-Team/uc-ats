@@ -77,6 +77,47 @@ describe('MemberInterviewInterface', () => {
     );
   });
 
+  // With 40 interviewers saving, a response can take long enough that the next save
+  // goes out before it returns. Both used to be sent at once, so the older notes could
+  // land last and overwrite the newer ones.
+  it('sends Save only after a slow autosave before it has finished, so the newer notes land last', async () => {
+    renderPage();
+    await screen.findByText('Taylor Kim');
+    const notes = screen.getByPlaceholderText('Add your interview notes here...');
+    vi.useFakeTimers();
+    let finishAutosave;
+    apiClient.post.mockImplementationOnce(() => new Promise((resolve) => { finishAutosave = resolve; }));
+
+    fireEvent.change(notes, { target: { value: 'Great energy' } });
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    fireEvent.change(notes, { target: { value: 'Great energy, asked sharp questions' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await act(async () => {});
+
+    const sent = () => apiClient.post.mock.calls.map(([, body]) => body.notes);
+    expect(sent()).toEqual(['Great energy']);
+
+    await act(async () => { finishAutosave({}); });
+    expect(sent()).toEqual(['Great energy', 'Great energy, asked sharp questions']);
+  });
+
+  it('shows a failed autosave, retries it, and clears the notice once it lands', async () => {
+    renderPage();
+    await screen.findByText('Taylor Kim');
+    vi.useFakeTimers();
+    apiClient.post.mockRejectedValueOnce(new Error('503'));
+
+    fireEvent.change(screen.getByPlaceholderText('Add your interview notes here...'), {
+      target: { value: 'Great energy' },
+    });
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    expect(screen.getByText('Auto-save failed')).toBeTruthy();
+
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    expect(apiClient.post).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Auto-save failed')).toBeNull();
+  });
+
   it("offers this member's sessions under Interview Another Group", async () => {
     renderPage();
     await screen.findByText('Taylor Kim');

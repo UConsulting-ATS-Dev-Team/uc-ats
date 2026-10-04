@@ -1,8 +1,7 @@
 import express from 'express';
 import {
-  firstRoundEvaluationWrite,
-  interviewEvaluationWrite,
-  readFirstRoundEvaluation
+  readFirstRoundEvaluation,
+  saveInterviewEvaluation
 } from '../services/interviewEvaluations.js';
 import multer from 'multer';
 import prisma from '../prismaClient.js';
@@ -3486,17 +3485,14 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
   try {
     const { id: interviewId } = req.params;
     // The fields an evaluation saves are read in services/interviewEvaluations.js.
-    const { applicationId, decision, rubricScores } = req.body;
+    const { applicationId, rubricScores } = req.body;
     const evaluatorId = req.user.id;
-    
-    console.log('Creating evaluation:', { interviewId, applicationId, evaluatorId, decision, rubricScores });
     
     // Validate required fields
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
     
-    // Check if this is a first round interview
     const interview = await prisma.interview.findUnique({
       where: { id: interviewId }
     });
@@ -3505,107 +3501,21 @@ router.post('/interviews/:id/evaluations', async (req, res) => {
       return res.status(404).json({ error: 'Interview not found' });
     }
     
-    // Handle first round interviews with dedicated table
-    if (interview.interviewType === 'ROUND_ONE') {
-      // Check if first round evaluation already exists
-      const existingFirstRoundEvaluation = await prisma.firstRoundInterviewEvaluation.findFirst({
-        where: {
-          interviewId,
-          applicationId,
-          evaluatorId
-        }
-      });
-      
-      // Only what this save sends: see services/interviewEvaluations.js.
-      const firstRoundData = {
-        ...firstRoundEvaluationWrite(req.body),
-        updatedAt: new Date()
-      };
-      
-      let evaluation;
-      if (existingFirstRoundEvaluation) {
-        // Update existing first round evaluation
-        evaluation = await prisma.firstRoundInterviewEvaluation.update({
-          where: { id: existingFirstRoundEvaluation.id },
-          data: firstRoundData
+    // First round evaluations live in their own table; the service picks it.
+    const evaluation = await saveInterviewEvaluation(prisma, { interview, applicationId, evaluatorId, body: req.body });
+
+    // Rubric scores belong to the standard table only. No page sends them any more.
+    if (rubricScores && interview.interviewType !== 'ROUND_ONE') {
+      for (const [category, score] of Object.entries(rubricScores)) {
+        await prisma.interviewRubricScore.upsert({
+          where: { evaluationId_category: { evaluationId: evaluation.id, category } },
+          update: { score },
+          create: { evaluationId: evaluation.id, category, score }
         });
-      } else {
-        // Create new first round evaluation
-        evaluation = await prisma.firstRoundInterviewEvaluation.create({
-          data: { interviewId, applicationId, evaluatorId, ...firstRoundData }
-        });
-      }
-      
-      res.json(evaluation);
-    } else {
-      // Handle regular interviews with standard evaluation table
-      const existingEvaluation = await prisma.interviewEvaluation.findFirst({
-        where: {
-          interviewId,
-          applicationId,
-          evaluatorId
-        },
-        include: {
-          rubricScores: true
-        }
-      });
-      
-      if (existingEvaluation) {
-        // Update existing evaluation
-        const updatedEvaluation = await prisma.interviewEvaluation.update({
-          where: { id: existingEvaluation.id },
-          // Only what this save sends: see services/interviewEvaluations.js.
-          data: interviewEvaluationWrite(req.body)
-        });
-        
-        // Update rubric scores
-        if (rubricScores) {
-          for (const [category, score] of Object.entries(rubricScores)) {
-            await prisma.interviewRubricScore.upsert({
-              where: {
-                evaluationId_category: {
-                  evaluationId: existingEvaluation.id,
-                  category
-                }
-              },
-              update: { score },
-              create: {
-                evaluationId: existingEvaluation.id,
-                category,
-                score
-              }
-            });
-          }
-        }
-        
-        res.json(updatedEvaluation);
-      } else {
-        // Create new evaluation
-        const newEvaluation = await prisma.interviewEvaluation.create({
-          data: {
-            interviewId,
-            applicationId,
-            evaluatorId,
-            ...interviewEvaluationWrite(req.body)
-          }
-        });
-        
-        // Create rubric scores
-        if (rubricScores) {
-          for (const [category, score] of Object.entries(rubricScores)) {
-            await prisma.interviewRubricScore.create({
-              data: {
-                evaluationId: newEvaluation.id,
-                category,
-                score
-              }
-            });
-          }
-        }
-        
-        res.json(newEvaluation);
       }
     }
+
+    res.json(evaluation);
   } catch (error) {
     console.error('[POST /api/admin/interviews/:id/evaluations]', error);
     console.error('Request body:', req.body);

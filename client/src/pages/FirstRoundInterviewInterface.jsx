@@ -13,6 +13,7 @@ import {
   ChevronRightIcon
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
+import useEvaluationSaves from '../hooks/useEvaluationSaves';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
@@ -327,12 +328,10 @@ export default function FirstRoundInterviewInterface() {
   }, [currentRotation, interviewStartTime]);
 
   // Autosave runs from a timer set during the edit, so its closure holds the
-  // evaluations from before that edit; it reads these refs instead, which are current
-  // by the time the timer fires. The pending timers live in a ref for the same reason:
-  // state would hand scheduleAutoSave a stale map, and an earlier timer went uncleared.
+  // evaluations from before that edit; it reads this ref instead, which is current
+  // by the time the timer fires.
   const evaluationsRef = useRef(evaluations);
   evaluationsRef.current = evaluations;
-  const autoSaveTimersRef = useRef({});
 
   const getEvaluation = (applicationId, from = evaluations) => {
     const evaluation = from[applicationId] || {};
@@ -406,126 +405,48 @@ export default function FirstRoundInterviewInterface() {
     scheduleAutoSave(applicationId);
   };
 
-  const scheduleAutoSave = (applicationId) => {
-    clearTimeout(autoSaveTimersRef.current[applicationId]);
-    autoSaveTimersRef.current[applicationId] = setTimeout(() => {
-      autoSaveEvaluation(applicationId);
-    }, 2000);
+  const postEvaluation = (applicationId) => {
+    const evaluation = getEvaluation(applicationId, evaluationsRef.current);
+    const isAdmin = window.location.pathname.includes('/admin/');
+    const endpoint = isAdmin ? `/admin/interviews/${interviewId}/evaluations` : '/member/evaluations';
+    return apiClient.post(endpoint, {
+      interviewId,
+      applicationId,
+      decision: evaluation.decision,
+      notes: evaluation.notes,
+      behavioralNotes: evaluation.behavioralNotes,
+      marketSizingNotes: evaluation.marketSizingNotes,
+      behavioralLeadership: evaluation.behavioralLeadership,
+      behavioralProblemSolving: evaluation.behavioralProblemSolving,
+      behavioralInterest: evaluation.behavioralInterest,
+      behavioralTotal: evaluation.behavioralTotal,
+      marketSizingTeamwork: evaluation.marketSizingTeamwork,
+      marketSizingLogic: evaluation.marketSizingLogic,
+      marketSizingCreativity: evaluation.marketSizingCreativity,
+      marketSizingTotal: evaluation.marketSizingTotal
+    });
   };
 
-  const autoSaveEvaluation = async (applicationId) => {
-    try {
-      const evaluation = getEvaluation(applicationId, evaluationsRef.current);
-      const isAdmin = currentUser?.role === 'ADMIN';
-      const endpoint = isAdmin ? `/admin/interviews/${interviewId}/evaluations` : '/member/evaluations';
-      
-      await apiClient.post(endpoint, {
-        interviewId,
-        applicationId,
-        decision: evaluation.decision,
-        notes: evaluation.notes,
-        behavioralNotes: evaluation.behavioralNotes,
-        marketSizingNotes: evaluation.marketSizingNotes,
-        behavioralLeadership: evaluation.behavioralLeadership,
-        behavioralProblemSolving: evaluation.behavioralProblemSolving,
-        behavioralInterest: evaluation.behavioralInterest,
-        behavioralTotal: evaluation.behavioralTotal,
-        marketSizingTeamwork: evaluation.marketSizingTeamwork,
-        marketSizingLogic: evaluation.marketSizingLogic,
-        marketSizingCreativity: evaluation.marketSizingCreativity,
-        marketSizingTotal: evaluation.marketSizingTotal
-      });
-      
-    } catch (error) {
+  // One save per candidate at a time, retried if an autosave fails: see the hook.
+  const { scheduleAutoSave, saveNow } = useEvaluationSaves({
+    scope: `${interviewId}:${currentUser?.id}`,
+    send: postEvaluation,
+    onAutoSaveError: (applicationId, error) => {
       console.error('Auto-save failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
-      });
       setSaveStatus(prev => ({
         ...prev,
         [applicationId]: { type: 'error', message: 'Auto-save failed', timestamp: Date.now() }
       }));
-    }
-  };
-
-  const saveEvaluation = async (applicationId, showAlert = true) => {
-    try {
-      setSaving(true);
-      const evaluation = getEvaluation(applicationId);
-      const isAdmin = window.location.pathname.includes('/admin/');
-      const endpoint = isAdmin ? `/admin/interviews/${interviewId}/evaluations` : '/member/evaluations';
-      
-      await apiClient.post(endpoint, {
-        interviewId,
-        applicationId,
-        decision: evaluation.decision,
-        notes: evaluation.notes,
-        behavioralNotes: evaluation.behavioralNotes,
-        marketSizingNotes: evaluation.marketSizingNotes,
-        behavioralLeadership: evaluation.behavioralLeadership,
-        behavioralProblemSolving: evaluation.behavioralProblemSolving,
-        behavioralInterest: evaluation.behavioralInterest,
-        behavioralTotal: evaluation.behavioralTotal,
-        marketSizingTeamwork: evaluation.marketSizingTeamwork,
-        marketSizingLogic: evaluation.marketSizingLogic,
-        marketSizingCreativity: evaluation.marketSizingCreativity,
-        marketSizingTotal: evaluation.marketSizingTotal
-      });
-      
-      if (showAlert) {
-        alert('Evaluation saved successfully');
-      }
-    } catch (error) {
-      console.error('Failed to save evaluation:', error);
-      console.error('Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        requestData: {
-          interviewId,
-          applicationId,
-          behavioralNotes: evaluation.behavioralNotes,
-          behavioralLeadership: evaluation.behavioralLeadership
-        }
-      });
-      if (showAlert) {
-        alert(`Failed to save evaluation: ${error.response?.data?.error || error.message}`);
-      }
-      throw error; // Re-throw so saveAllEvaluations can catch it
-    } finally {
-      setSaving(false);
-    }
-  };
+    },
+    onSaved: (applicationId) => {
+      setSaveStatus(({ [applicationId]: _, ...rest }) => rest);
+    },
+  });
 
   const saveAllEvaluations = async () => {
     try {
       setSaving(true);
-      const isAdmin = window.location.pathname.includes('/admin/');
-      const endpoint = isAdmin ? `/admin/interviews/${interviewId}/evaluations` : '/member/evaluations';
-      
-      const promises = applications.map(app => {
-        const evaluation = getEvaluation(app.id);
-        return apiClient.post(endpoint, {
-          interviewId,
-          applicationId: app.id,
-          decision: evaluation.decision,
-          notes: evaluation.notes,
-          behavioralNotes: evaluation.behavioralNotes,
-          marketSizingNotes: evaluation.marketSizingNotes,
-          behavioralLeadership: evaluation.behavioralLeadership,
-          behavioralProblemSolving: evaluation.behavioralProblemSolving,
-          behavioralInterest: evaluation.behavioralInterest,
-          behavioralTotal: evaluation.behavioralTotal,
-          marketSizingTeamwork: evaluation.marketSizingTeamwork,
-          marketSizingLogic: evaluation.marketSizingLogic,
-          marketSizingCreativity: evaluation.marketSizingCreativity,
-          marketSizingTotal: evaluation.marketSizingTotal
-        });
-      });
-      
-      await Promise.all(promises);
+      await Promise.all(applications.map(app => saveNow(app.id)));
       alert(`All ${applications.length} evaluation(s) saved successfully`);
     } catch (error) {
       console.error('Failed to save evaluations:', error);
@@ -733,6 +654,14 @@ export default function FirstRoundInterviewInterface() {
           </div>
           
           <div className="header-actions">
+            {(() => {
+              const failing = applications.filter(app => saveStatus[app.id]?.type === 'error');
+              return failing.length > 0 && (
+                <span className="save-status error" role="status">
+                  Auto-save failed for {failing.map(app => app.name).join(', ')}. Save All to try again.
+                </span>
+              );
+            })()}
             <button 
               className="btn-primary"
               onClick={saveAllEvaluations}

@@ -16,6 +16,7 @@ import {
   PencilIcon
 } from '@heroicons/react/24/outline';
 import apiClient from '../utils/api';
+import useEvaluationSaves from '../hooks/useEvaluationSaves';
 import AccessControl from '../components/AccessControl';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import AuthenticatedImage from '../components/AuthenticatedImage';
@@ -43,7 +44,6 @@ export default function FinalRoundInterviewInterface() {
   const [evaluations, setEvaluations] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [autoSaveTimeouts, setAutoSaveTimeouts] = useState({});
   const [saveStatus, setSaveStatus] = useState({});
   const [currentPage, setCurrentPage] = useState(0); // 0 = behavioral, 1 = casing
   const [preview, setPreview] = useState({ open: false, src: '', kind: '', title: '' });
@@ -240,11 +240,12 @@ export default function FinalRoundInterviewInterface() {
     const isAdmin = window.location.pathname.includes('/admin/');
     const basePath = isAdmin ? '/admin' : '/member';
     const entries = Object.entries(decisions);
+    // In the candidate's save queue, so it cannot cross a note save still on its way.
     const results = await Promise.allSettled(
       entries.map(([applicationId, decision]) =>
-        isAdmin
+        runInQueue(applicationId, () => (isAdmin
           ? apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, { applicationId, decision })
-          : apiClient.post(`${basePath}/evaluations`, { interviewId, applicationId, decision })
+          : apiClient.post(`${basePath}/evaluations`, { interviewId, applicationId, decision })))
       )
     );
     const failed = [];
@@ -359,79 +360,41 @@ export default function FinalRoundInterviewInterface() {
     }
   };
 
-  const scheduleAutoSave = (applicationId) => {
-    // Clear existing timeout for this application
-    if (autoSaveTimeouts[applicationId]) {
-      clearTimeout(autoSaveTimeouts[applicationId]);
-    }
-
-    // Set new timeout for auto-save (5 seconds after last change)
-    const timeoutId = setTimeout(() => {
-      autoSaveEvaluation(applicationId);
-    }, 5000);
-
-    setAutoSaveTimeouts(prev => ({
-      ...prev,
-      [applicationId]: timeoutId
-    }));
+  // Notes only: the decision is written by saveDecisions alone.
+  const postEvaluation = (applicationId) => {
+    const isAdmin = window.location.pathname.includes('/admin/');
+    const evaluation = latestEvaluation(applicationId);
+    const notes = {
+      behavioralNotes: evaluation.behavioralNotes,
+      casingNotes: evaluation.casingNotes,
+      candidateDetails: evaluation.candidateDetails
+    };
+    return isAdmin
+      ? apiClient.post(`/admin/interviews/${interviewId}/evaluations`, { applicationId, ...notes })
+      : apiClient.post('/member/evaluations', { interviewId, applicationId, ...notes });
   };
 
-  const autoSaveEvaluation = async (applicationId) => {
-    try {
-      const isAdmin = window.location.pathname.includes('/admin/');
-      const basePath = isAdmin ? '/admin' : '/member';
-      const evaluation = latestEvaluation(applicationId);
-      
-      if (isAdmin) {
-        await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
-          applicationId,
-          behavioralNotes: evaluation.behavioralNotes,
-          casingNotes: evaluation.casingNotes,
-          candidateDetails: evaluation.candidateDetails
-        });
-      } else {
-        await apiClient.post(`${basePath}/evaluations`, {
-          interviewId,
-          applicationId,
-          behavioralNotes: evaluation.behavioralNotes,
-          casingNotes: evaluation.casingNotes,
-          candidateDetails: evaluation.candidateDetails
-        });
-      }
-      
-    } catch (error) {
+  // One save per candidate at a time, retried if an autosave fails: see the hook.
+  const { scheduleAutoSave, saveNow, runInQueue } = useEvaluationSaves({
+    scope: `${interviewId}:${currentUser?.id}`,
+    send: postEvaluation,
+    delayMs: 5000,
+    onAutoSaveError: (applicationId, error) => {
       console.error('Auto-save failed:', error);
       setSaveStatus(prev => ({
         ...prev,
         [applicationId]: { type: 'error', message: 'Auto-save failed', timestamp: Date.now() }
       }));
-    }
-  };
+    },
+    onSaved: (applicationId) => {
+      setSaveStatus(({ [applicationId]: _, ...rest }) => rest);
+    },
+  });
 
   const saveEvaluation = async (applicationId) => {
     try {
-      const isAdmin = window.location.pathname.includes('/admin/');
-      const basePath = isAdmin ? '/admin' : '/member';
       setSaving(true);
-      const evaluation = getEvaluation(applicationId);
-      
-      if (isAdmin) {
-        await apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
-          applicationId,
-          behavioralNotes: evaluation.behavioralNotes,
-          casingNotes: evaluation.casingNotes,
-          candidateDetails: evaluation.candidateDetails
-        });
-      } else {
-        await apiClient.post(`${basePath}/evaluations`, {
-          interviewId,
-          applicationId,
-          behavioralNotes: evaluation.behavioralNotes,
-          casingNotes: evaluation.casingNotes,
-          candidateDetails: evaluation.candidateDetails
-        });
-      }
-      
+      await saveNow(applicationId);
       alert('Evaluation saved successfully');
     } catch (error) {
       console.error('Failed to save evaluation:', error);
@@ -441,38 +404,12 @@ export default function FinalRoundInterviewInterface() {
     }
   };
 
+  // Saving a candidate now takes the place of their pending autosave, and puts it back
+  // if this save fails, so the autosave is still the retry.
   const saveAllEvaluations = async () => {
-    // Pending autosaves would race these requests (two first saves of one evaluation
-    // collide on its unique key) or land after them, so they are cancelled now and
-    // rescheduled if Save All fails: then they are still the retry.
-    const pending = Object.keys(autoSaveTimeouts);
-    Object.values(autoSaveTimeouts).forEach(clearTimeout);
-    setAutoSaveTimeouts({});
     try {
-      const isAdmin = window.location.pathname.includes('/admin/');
-      const basePath = isAdmin ? '/admin' : '/member';
       setSaving(true);
-      const promises = applications.map(app => {
-        const evaluation = getEvaluation(app.id);
-        if (isAdmin) {
-          return apiClient.post(`${basePath}/interviews/${interviewId}/evaluations`, {
-            applicationId: app.id,
-            behavioralNotes: evaluation.behavioralNotes,
-            casingNotes: evaluation.casingNotes,
-            candidateDetails: evaluation.candidateDetails
-          });
-        } else {
-          return apiClient.post(`${basePath}/evaluations`, {
-            interviewId,
-            applicationId: app.id,
-            behavioralNotes: evaluation.behavioralNotes,
-            casingNotes: evaluation.casingNotes,
-            candidateDetails: evaluation.candidateDetails
-          });
-        }
-      });
-      
-      await Promise.all(promises);
+      await Promise.all(applications.map(app => saveNow(app.id)));
       if (applications.some((app) => !getEvaluation(app.id).decision)) {
         setDecisionPromptOpen(true);
       } else {
@@ -480,7 +417,6 @@ export default function FinalRoundInterviewInterface() {
       }
     } catch (error) {
       console.error('Failed to save evaluations:', error);
-      pending.forEach(scheduleAutoSave);
       alert('Failed to save evaluations');
     } finally {
       setSaving(false);

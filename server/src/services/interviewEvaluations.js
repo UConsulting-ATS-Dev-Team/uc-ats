@@ -59,6 +59,44 @@ export function interviewEvaluationWrite(body = {}) {
   return pick(body, STANDARD_FIELDS, STANDARD_JSON_FIELDS);
 }
 
+// One evaluation per (interview, application, evaluator), enforced by a unique index on
+// both tables. Saving used to read that row and then create it if missing, so two saves
+// of a new evaluation arriving together (an autosave and Save, or an autosave and a slow
+// earlier one) both read nothing, and the second create failed on the index with a 500.
+// An upsert on the unique key is a single INSERT ... ON CONFLICT, so it cannot.
+//
+// Prisma only issues the native ON CONFLICT when the where and create agree on the key,
+// which they do here; the P2002 retry covers a client that ever falls back to its
+// read-then-write emulation. Retrying once is enough: after a conflict the row exists.
+const isUniqueViolation = (error) => error?.code === 'P2002';
+
+/**
+ * Write the evaluation `evaluatorId` is saving for `applicationId` in `interview`,
+ * creating it on the first save. Returns the row. First round evaluations come back
+ * as stored; callers read them through readFirstRoundEvaluation when they need `notes`.
+ */
+export async function saveInterviewEvaluation(prisma, { interview, applicationId, evaluatorId, body }) {
+  const firstRound = interview.interviewType === 'ROUND_ONE';
+  const model = firstRound ? prisma.firstRoundInterviewEvaluation : prisma.interviewEvaluation;
+  const data = {
+    ...(firstRound ? firstRoundEvaluationWrite(body) : interviewEvaluationWrite(body)),
+    updatedAt: new Date(),
+  };
+  const key = { interviewId: interview.id, applicationId, evaluatorId };
+  const upsert = () => model.upsert({
+    where: { interviewId_applicationId_evaluatorId: key },
+    update: data,
+    create: { ...key, ...data },
+  });
+
+  try {
+    return await upsert();
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    return upsert();
+  }
+}
+
 /** A first round evaluation as the pages read it: post-grading notes under `notes`. */
 export function readFirstRoundEvaluation(row) {
   if (!row) return row;
