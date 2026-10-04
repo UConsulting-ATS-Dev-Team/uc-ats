@@ -59,6 +59,7 @@ import DecisionGuideEditorDialog from '../components/staging/DecisionGuideEditor
 import LiveVoteResultChip from '../components/staging/LiveVoteResultChip';
 import { stagingMax, useDocumentRubrics } from '../utils/documentRubrics';
 import { rankByScore } from '../utils/stagingRank';
+import { formatDay, formatTimeRange } from '../utils/scheduleFormat';
 
 const EMPTY_LIVE_VOTE_RESULTS = { resume: {}, coffee: {}, firstRound: {}, final: {} };
 const PHASE_LABELS = { resume: 'Resume Review', coffee: 'Coffee Chats', firstRound: 'First Round', final: 'Final Round' };
@@ -354,8 +355,9 @@ export default function Staging() {
   const [isEditingTestFor, setIsEditingTestFor] = useState(false);
   const [savingTestFor, setSavingTestFor] = useState(false);
   
-  const [coffeeChatInterviewFilter, setCoffeeChatInterviewFilter] = useState('all');
-  const [coffeeChatInterviews, setCoffeeChatInterviews] = useState([]);
+  // 'all', 'booked', 'unbooked', or a coffee chat session (slot) id.
+  const [coffeeChatSessionFilter, setCoffeeChatSessionFilter] = useState('all');
+  const [coffeeChatSessions, setCoffeeChatSessions] = useState([]);
   
   const [coffeeChatDecisionFilter, setCoffeeChatDecisionFilter] = useState('all');
   
@@ -781,7 +783,7 @@ export default function Staging() {
 
   useEffect(() => {
     if (currentTab === 1) {
-      fetchCoffeeChatInterviews();
+      fetchCoffeeChatSessions();
     }
   }, [currentTab]);
 
@@ -926,16 +928,27 @@ export default function Staging() {
     return candidate.scores?.overall || null;
   };
 
-  const fetchCoffeeChatInterviews = async () => {
+  // Coffee chat sessions with who holds a seat in each, from the same overview
+  // the Interviews page schedules from. Only CONFIRMED seats count: a waitlisted
+  // candidate always holds a confirmed seat in another session.
+  const fetchCoffeeChatSessions = async () => {
     try {
-      const interviews = await apiClient.get('/admin/interviews');
-      const coffeeChatInterviews = interviews.filter(interview => 
-        interview.interviewType === 'COFFEE_CHAT'
-      );
-      setCoffeeChatInterviews(coffeeChatInterviews);
+      const overview = await apiClient.get('/admin/scheduling/overview');
+      const round = (overview?.rounds || []).find(r => r.round === 2);
+      setCoffeeChatSessions((round?.slots || []).map(slot => ({
+        id: slot.id,
+        label: [
+          `${formatDay(slot.startTime)}, ${formatTimeRange(slot.startTime, slot.endTime)}`,
+          slot.label,
+          slot.isVirtual ? 'Virtual' : null,
+        ].filter(Boolean).join(' · '),
+        applicationIds: new Set(
+          (slot.signups || []).filter(s => s.status === 'CONFIRMED').map(s => s.applicationId)
+        ),
+      })));
     } catch (error) {
-      console.error('Error fetching coffee chat interviews:', error);
-      setCoffeeChatInterviews([]);
+      console.error('Error fetching coffee chat sessions:', error);
+      setCoffeeChatSessions([]);
     }
   };
 
@@ -950,28 +963,6 @@ export default function Staging() {
       console.error('Error fetching first round interviews:', error);
       setFirstRoundInterviews([]);
     }
-  };
-
-  const getApplicationsForInterview = (interviewId) => {
-    const interview = coffeeChatInterviews.find(i => i.id === interviewId);
-    if (!interview) return [];
-
-    let config = {};
-    try {
-      config = typeof interview.description === 'string' 
-        ? JSON.parse(interview.description) 
-        : interview.description || {};
-    } catch (e) {
-      console.warn('Failed to parse interview description:', e);
-      return [];
-    }
-
-    const applicationIds = new Set();
-    config.applicationGroups?.forEach(group => {
-      group.applicationIds?.forEach(appId => applicationIds.add(appId));
-    });
-
-    return adminApplications.filter(app => applicationIds.has(app.id));
   };
 
   const getApplicationsForFirstRoundInterview = (interviewId) => {
@@ -1581,15 +1572,19 @@ export default function Staging() {
       }
     }
 
-    // Coffee Chat Interview Filter - only applies when on coffee chat tab (tab 1)
-    let matchesInterview = true;
-    if (currentTab === 1 && coffeeChatInterviewFilter !== 'all') {
-      const interviewApplications = getApplicationsForInterview(coffeeChatInterviewFilter);
-      const applicationIds = new Set(interviewApplications.map(app => app.id));
-      matchesInterview = applicationIds.has(candidate.id);
+    // Coffee chat session filter - only applies on the coffee chat tab (tab 1)
+    let matchesSession = true;
+    if (currentTab === 1 && coffeeChatSessionFilter !== 'all') {
+      const booked = coffeeChatSessions.some(session => session.applicationIds.has(candidate.id));
+      if (coffeeChatSessionFilter === 'booked') matchesSession = booked;
+      else if (coffeeChatSessionFilter === 'unbooked') matchesSession = !booked;
+      else {
+        const session = coffeeChatSessions.find(session => session.id === coffeeChatSessionFilter);
+        matchesSession = Boolean(session?.applicationIds.has(candidate.id));
+      }
     }
 
-    return matchesStatus && matchesRound && matchesDecision && matchesAttendance && matchesReviewTeam && matchesReferral && matchesSearch && matchesGraduationYear && matchesGender && matchesInterview;
+    return matchesStatus && matchesRound && matchesDecision && matchesAttendance && matchesReviewTeam && matchesReferral && matchesSearch && matchesGraduationYear && matchesGender && matchesSession;
   }).sort((a, b) => {
     const multiplier = sortConfig.direction === 'asc' ? 1 : -1;
 
@@ -1641,7 +1636,7 @@ export default function Staging() {
         return multiplier * diff;
       }
     }
-  }), [tabFilteredCandidates, filters, searchTerm, events, sortConfig, scoreById, perRoundDecisions, currentTab, coffeeChatInterviewFilter, coffeeChatInterviews, adminApplications]);
+  }), [tabFilteredCandidates, filters, searchTerm, events, sortConfig, scoreById, perRoundDecisions, currentTab, coffeeChatSessionFilter, coffeeChatSessions, adminApplications]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const paginatedCandidates = filteredCandidates.slice(
@@ -1699,7 +1694,7 @@ export default function Staging() {
   const processHelp = `Every candidate needs "Yes" or "No" first. ${nextStep}; "No" marks them rejected. No emails are sent here - they wait in Master Communications for you to review and send.`;
   const hasActiveFilters = filters.decision !== 'all' || filters.graduationYear !== 'all' || filters.gender !== 'all' ||
     filters.attendance !== 'all' || filters.referral !== 'all' || filters.reviewTeam !== 'all' || filters.search !== '' ||
-    (currentTab === 1 && coffeeChatInterviewFilter !== 'all');
+    (currentTab === 1 && coffeeChatSessionFilter !== 'all');
   const firstShown = filteredCandidates.length === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
   const lastShown = Math.min(pagination.page * pagination.limit, filteredCandidates.length);
   const totalPages = Math.max(1, Math.ceil(filteredCandidates.length / pagination.limit));
@@ -1754,7 +1749,7 @@ export default function Staging() {
         <Tabs
           className="staging-tabs"
           value={currentTab}
-          onChange={(e, v) => { setCurrentTab(v); setCoffeeChatInterviewFilter('all'); }}
+          onChange={(e, v) => { setCurrentTab(v); setCoffeeChatSessionFilter('all'); }}
           variant="scrollable"
           allowScrollButtonsMobile
         >
@@ -1890,9 +1885,11 @@ export default function Staging() {
             {reviewTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
           </select>
           {currentTab === 1 && (
-            <select className="filter-select" value={coffeeChatInterviewFilter} onChange={(e) => setCoffeeChatInterviewFilter(e.target.value)} aria-label="Coffee chat interview">
-              <option value="all">Interview: All</option>
-              {coffeeChatInterviews.map((interview) => <option key={interview.id} value={interview.id}>{interview.title}</option>)}
+            <select className="filter-select" value={coffeeChatSessionFilter} onChange={(e) => setCoffeeChatSessionFilter(e.target.value)} aria-label="Coffee chat session">
+              <option value="all">Session: All</option>
+              <option value="booked">Booked a session</option>
+              <option value="unbooked">Not booked</option>
+              {coffeeChatSessions.map((session) => <option key={session.id} value={session.id}>{session.label}</option>)}
             </select>
           )}
           <div className="staging-sort">
@@ -1935,7 +1932,7 @@ export default function Staging() {
                     reviewTeam: 'all',
                     search: ''
                   });
-                  setCoffeeChatInterviewFilter('all');
+                  setCoffeeChatSessionFilter('all');
                 }}
               >
                 Clear filters

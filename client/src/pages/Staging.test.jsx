@@ -480,3 +480,82 @@ describe('Staging table', () => {
     expect(select.value).toBe('no');
   });
 });
+
+describe('Staging coffee chat session filter', () => {
+  const inRound2 = (id, firstName) => ({ ...candidate(id, firstName), currentRound: 2 });
+  const respond = snapshot({
+    candidates: [inRound2('c1', 'Alice'), inRound2('c2', 'Bea'), inRound2('c3', 'Cara')],
+    snapshotVersion: 300,
+  });
+  const overview = {
+    rounds: [{
+      round: 2,
+      slots: [
+        {
+          id: 'slot-1',
+          label: 'Morning Block',
+          startTime: '2026-10-06T16:00:00.000Z',
+          endTime: '2026-10-06T17:00:00.000Z',
+          isVirtual: false,
+          signups: [{ applicationId: 'c1', status: 'CONFIRMED' }, { applicationId: 'c2', status: 'WAITLISTED' }],
+        },
+        {
+          id: 'slot-2',
+          label: null,
+          startTime: '2026-10-07T16:00:00.000Z',
+          endTime: '2026-10-07T17:00:00.000Z',
+          isVirtual: true,
+          signups: [{ applicationId: 'c2', status: 'CONFIRMED' }],
+        },
+      ],
+    }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stagingCache.invalidate();
+    apiClient.get.mockImplementation((endpoint, ...rest) => (endpoint === '/admin/scheduling/overview'
+      ? Promise.resolve(overview)
+      : respond(endpoint, ...rest)));
+  });
+
+  afterEach(() => {
+    cleanup();
+    stagingCache.invalidate();
+  });
+
+  const openCoffeeChats = async () => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    fireEvent.click(screen.getByRole('tab', { name: /coffee chat/i }));
+    await screen.findByRole('option', { name: /Morning Block/ });
+  };
+  const pick = (value) => fireEvent.change(screen.getByLabelText('Coffee chat session'), { target: { value } });
+
+  it('shows only the confirmed seats in the chosen session', async () => {
+    await openCoffeeChats();
+    pick('slot-1');
+    await waitFor(() => expect(screen.queryByText('Bea Example')).not.toBeInTheDocument());
+    expect(screen.getByText('Alice Example')).toBeInTheDocument();
+    expect(screen.queryByText('Cara Example')).not.toBeInTheDocument();
+  });
+
+  it('labels a session by its Pacific day and time', async () => {
+    await openCoffeeChats();
+    expect(screen.getByRole('option', { name: 'Tuesday, October 6, 9:00 AM - 10:00 AM · Morning Block' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Wednesday, October 7, 9:00 AM - 10:00 AM · Virtual' })).toBeInTheDocument();
+  });
+
+  it('splits the round into booked and not booked', async () => {
+    await openCoffeeChats();
+    pick('unbooked');
+    await waitFor(() => expect(screen.queryByText('Alice Example')).not.toBeInTheDocument());
+    expect(screen.getByText('Cara Example')).toBeInTheDocument();
+    expect(screen.queryByText('Bea Example')).not.toBeInTheDocument();
+
+    pick('booked');
+    await waitFor(() => expect(screen.queryByText('Cara Example')).not.toBeInTheDocument());
+    expect(screen.getByText('Alice Example')).toBeInTheDocument();
+    expect(screen.getByText('Bea Example')).toBeInTheDocument();
+  });
+});
