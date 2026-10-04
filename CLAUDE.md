@@ -785,13 +785,25 @@ The system follows a **recruiting cycle-based workflow**:
 - Not booked means `currentRound` is the round, not `REJECTED`, and no `CONFIRMED`,
   `WAITLISTED` or `NEEDS_PLACEMENT` signup on a session of a non-cancelled interview of that
   round in the cycle. `findUnbookedApplications` is the one definition; the overview's
-  `unassigned` reads it too. It is recomputed at send time, so anyone who booked since the
-  page loaded is `skipped`.
+  `unassigned` reads it too. It is recomputed at send time and again for each person just
+  before their email, so anyone who booked in between is `skipped`.
 - Refuses with `409 NO_OPEN_SESSIONS` when no session of the round is bookable right now:
-  the email's only job is the link to `/interview-signup`.
+  the email's only job is the link to `/interview-signup`. "Bookable" is
+  `isSelfBookableNow` in [interviewSignupPolicy.js](server/src/services/interviewSignupPolicy.js)
+  (interview not cancelled or completed, inside the signup window, outside the 12-hour
+  cutoff) - the same rule booking refuses on and the candidate page marks slots open by.
+  The overview's `stats.openSessions` counts by it too.
 - There is no reminders table. Each send is a `SIGNUP_REMINDER` row in `communication_logs`
   with `attemptKey` `signup-reminder:<round>:<applicationId>:<sendId>`, and "last reminded"
-  is read back from that key, per round. A `FAILED` row does not count.
+  is read back from that key, per round (on `unassigned` and on booked `signups` alike).
+  `FAILED`, `BOUNCED` and `COMPLAINED` rows do not count; a leftover `SENDING` row does,
+  since it most likely went out.
+- Each person's send is claimed first, the `applicationReceipts.js` pattern: under
+  `pg_try_advisory_xact_lock` on (round, application) it re-checks they are unbooked,
+  refuses if they were reminded for that round within `REMINDER_COOLDOWN_MS` (1 hour), and
+  writes a `SENDING` row that `sendEmail` overwrites. A retry after the proxy cut the
+  response off, or two admins at once, skips instead of sending twice. Five sends run at
+  once (`utils/concurrency.js`) to keep the response short in the first place.
 - Not gated on `SCHEDULING_EMAILS`: that switch holds back the automatic slot mail, and this
   is an admin sending copy they wrote, like accountability reminders.
 

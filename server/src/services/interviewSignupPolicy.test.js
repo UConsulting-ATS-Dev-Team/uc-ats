@@ -7,7 +7,10 @@ import {
   nextInLine,
   planPromotions,
   nextLabelFrom,
-  seatsRemaining, sameTimeAndPlace } from './interviewSignupPolicy.js';
+  seatsRemaining, sameTimeAndPlace,
+  isSelfBookableNow,
+  selfBookingClosesAt,
+  selfBookingRefusal } from './interviewSignupPolicy.js';
 
 const slot = (over = {}) => ({
   id: 's1',
@@ -287,5 +290,41 @@ describe('sameTimeAndPlace', () => {
   it('is false when either slot is missing', () => {
     expect(sameTimeAndPlace(null, at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'))).toBe(false);
     expect(sameTimeAndPlace(at('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z'), null)).toBe(false);
+  });
+});
+
+describe('selfBookingRefusal', () => {
+  const now = new Date('2026-10-03T12:00:00Z');
+  const open = {
+    startTime: new Date('2026-10-05T17:00:00Z'),
+    candidateCapacity: 10,
+    signupOpensAt: null,
+    signupClosesAt: null,
+  };
+
+  it('allows an open slot of an open interview', () => {
+    expect(selfBookingRefusal(open, { status: 'UPCOMING' }, now)).toBeNull();
+    expect(isSelfBookableNow(open, { status: 'UPCOMING' }, now)).toBe(true);
+  });
+
+  it('refuses a cancelled or completed interview', () => {
+    expect(selfBookingRefusal(open, { status: 'COMPLETED' }, now)).toBe('INTERVIEW_CLOSED');
+    expect(selfBookingRefusal(open, { status: 'CANCELLED' }, now)).toBe('INTERVIEW_CLOSED');
+  });
+
+  it('refuses outside the signup window or without self-service', () => {
+    expect(selfBookingRefusal({ ...open, candidateCapacity: null }, null, now)).toBe('NOT_OPEN');
+    expect(selfBookingRefusal({ ...open, signupClosesAt: new Date('2026-10-03T11:00:00Z') }, null, now)).toBe('NOT_OPEN');
+  });
+
+  it('refuses inside the 12-hour cutoff, and allows right at its edge', () => {
+    expect(selfBookingRefusal({ ...open, startTime: new Date('2026-10-03T23:59:00Z') }, null, now)).toBe('CUTOFF');
+    expect(selfBookingRefusal({ ...open, startTime: new Date('2026-10-04T00:00:00Z') }, null, now)).toBeNull();
+  });
+
+  it('closes at the earlier of signupClosesAt and the cutoff', () => {
+    expect(selfBookingClosesAt(open)).toEqual(new Date('2026-10-05T05:00:00Z'));
+    const early = new Date('2026-10-04T00:00:00Z');
+    expect(selfBookingClosesAt({ ...open, signupClosesAt: early })).toEqual(early);
   });
 });

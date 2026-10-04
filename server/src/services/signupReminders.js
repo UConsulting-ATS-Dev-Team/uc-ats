@@ -9,12 +9,19 @@
 // the application it was for. That is enough to answer "when did we last chase
 // this person for this round", which is all the page needs, without a schema
 // change.
+//
+// The same rows make a send safe to repeat. Each person's reminder is claimed
+// first - a SENDING row written under an advisory lock on (round, person), the
+// applicationReceipts.js pattern - and a claim is refused while a reminder for
+// that round went to them within REMINDER_COOLDOWN_MS. A retry after the proxy
+// cut the response off, or a second admin pressing send at the same moment,
+// finds the first one's row and skips.
 
 import { randomUUID } from 'node:crypto';
 import prisma from '../prismaClient.js';
 import { interviewTypesForRound } from '../utils/interviewRounds.js';
 import { formatEmailDateTime } from '../utils/timezoneUtils.js';
-import { isCandidateBookable } from './interviewSignupPolicy.js';
+import { CLOSED_INTERVIEW_STATUSES, isSelfBookableNow, selfBookingClosesAt } from './interviewSignupPolicy.js';
 import { sendEmail } from './emailNotifications.js';
 import { composeEmail, part } from './emailLayout.js';
 import { copySubject } from './emailCopyRender.js';
@@ -32,8 +39,8 @@ const TEMPLATE_KEY = 'interview-signup-reminder';
 const LIVE_SIGNUP_STATUSES = ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'];
 
 export const DEFAULT_SIGNUP_REMINDER_SUBJECT = 'Pick your {{round}} time';
-// No {{deadline}}: it is blank whenever a session has no closing time, and the
-// default has to read well either way.
+// No {{deadline}}: an admin can quote it, but the default has to read well
+// even if it were blank.
 export const DEFAULT_SIGNUP_REMINDER_MESSAGE = [
   'Hi {{firstName}},',
   '',
@@ -44,12 +51,42 @@ export const SIGNUP_REMINDER_MERGE_FIELDS = ['firstName', 'fullName', 'round', '
 
 const ATTEMPT_PREFIX = 'signup-reminder';
 
-/** The sessions of a round's interviews in this cycle, cancelled interviews excluded. */
+/// How long after a reminder another one to the same person for the same round
+/// is refused. Long enough to absorb a retry or a double press; short enough
+/// that a deliberate second nudge later in the day still goes.
+export const REMINDER_COOLDOWN_MS = 60 * 60 * 1000;
+
+// Statuses that mean the reminder never reached the person. A SENDING row
+// left behind by an interrupted send is NOT here: it was claimed right before
+// sendEmail, so it most likely went out, and counting it is the side that
+// avoids a double send.
+const NOT_DELIVERED = ['FAILED', 'BOUNCED', 'COMPLAINED'];
+
+const attemptPrefixFor = (round, applicationId) => `${ATTEMPT_PREFIX}:${round}:${applicationId}:`;
+
+/**
+ * The sessions of a round's interviews in this cycle, cancelled interviews
+ * excluded. A completed interview still counts: a signup on it means the
+ * person sat it, which is booked.
+ */
 const roundSlotsWhere = ({ cycleId, round }) => ({
   interview: {
     cycleId,
     interviewType: { in: interviewTypesForRound(round) },
     status: { notIn: ['CANCELLED'] },
+  },
+});
+
+/** In the round, not rejected, and no live signup on any session of it. */
+const unbookedWhere = ({ cycleId, round }) => ({
+  cycleId,
+  currentRound: round,
+  status: { notIn: ['REJECTED'] },
+  slotSignups: {
+    none: {
+      status: { in: LIVE_SIGNUP_STATUSES },
+      slot: roundSlotsWhere({ cycleId, round }),
+    },
   },
 });
 
@@ -60,39 +97,46 @@ const roundSlotsWhere = ({ cycleId, round }) => ({
  */
 export async function findUnbookedApplications({ cycleId, round }, client = prisma) {
   return client.application.findMany({
-    where: {
-      cycleId,
-      currentRound: round,
-      status: { notIn: ['REJECTED'] },
-      slotSignups: {
-        none: {
-          status: { in: LIVE_SIGNUP_STATUSES },
-          slot: roundSlotsWhere({ cycleId, round }),
-        },
-      },
-    },
+    where: unbookedWhere({ cycleId, round }),
     select: { id: true, firstName: true, lastName: true, email: true, major1: true, graduationYear: true },
     orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
   });
 }
 
-/** The round's sessions a candidate could book right now. */
+/**
+ * The round's sessions a candidate could book right now, by the same rule the
+ * booking path refuses on (isSelfBookableNow): open interview, inside the
+ * signup window, and not within the cutoff before it starts.
+ */
 export async function openSignupSessions({ cycleId, round, now = new Date() }, client = prisma) {
   const slots = await client.interviewSlot.findMany({
-    where: { ...roundSlotsWhere({ cycleId, round }), candidateCapacity: { not: null } },
-    select: { id: true, candidateCapacity: true, signupOpensAt: true, signupClosesAt: true },
+    where: {
+      interview: { cycleId, interviewType: { in: interviewTypesForRound(round) }, status: { notIn: CLOSED_INTERVIEW_STATUSES } },
+      candidateCapacity: { not: null },
+    },
+    select: {
+      id: true,
+      startTime: true,
+      candidateCapacity: true,
+      signupOpensAt: true,
+      signupClosesAt: true,
+      interview: { select: { status: true } },
+    },
   });
-  return slots.filter((slot) => isCandidateBookable(slot, now));
+  return slots.filter((slot) => isSelfBookableNow(slot, slot.interview, now));
 }
 
 /**
- * The last moment anyone can book, formatted for an email, or '' when there is
- * no such moment. A session that never closes means there is no deadline to
- * quote, even if every other session has one.
+ * The last moment anyone can book one of `sessions`, formatted for an email,
+ * or '' when there are none. Each session closes at its signupClosesAt or at
+ * the self-booking cutoff, whichever comes first.
  */
 export function signupDeadline(sessions) {
-  if (!sessions?.length || sessions.some((s) => !s.signupClosesAt)) return '';
-  const latest = sessions.reduce((max, s) => (new Date(s.signupClosesAt) > max ? new Date(s.signupClosesAt) : max), new Date(0));
+  if (!sessions?.length) return '';
+  const latest = sessions.reduce((max, s) => {
+    const closes = selfBookingClosesAt(s);
+    return closes > max ? closes : max;
+  }, new Date(0));
   return formatEmailDateTime(latest);
 }
 
@@ -111,15 +155,16 @@ export function parseAttemptKey(attemptKey) {
 /**
  * Map(round -> Map(applicationId -> Date)) of the latest reminder each person
  * was sent, for every round at once. One query, so the overview can label
- * three rounds without asking three times. A FAILED send never reached anyone
- * and does not count.
+ * three rounds without asking three times. A send that failed, bounced or drew
+ * a complaint never reached anyone and does not count; see NOT_DELIVERED for
+ * why SENDING does.
  */
 export async function lastRemindedByRound({ cycleId, applicationIds } = {}, client = prisma) {
   const rows = await client.communicationLog.findMany({
     where: {
       category: SIGNUP_REMINDER_CATEGORY,
       cycleId,
-      status: { not: 'FAILED' },
+      status: { notIn: NOT_DELIVERED },
       attemptKey: { startsWith: `${ATTEMPT_PREFIX}:` },
     },
     select: { attemptKey: true, sentAt: true },
@@ -171,17 +216,78 @@ export async function renderSignupReminder(
   return { subject: filledSubject, html };
 }
 
+/**
+ * Decide, under a lock on (round, application), whether this person gets a
+ * reminder now, and if so write the SENDING row that claims it.
+ *
+ * Returns 'CLAIMED', or the reason to skip: 'BUSY' (another send holds the
+ * lock), 'BOOKED' (no longer unbooked in this round - booked since the list was
+ * read, rejected, or moved on), 'RECENT' (reminded within the cooldown).
+ *
+ * The claim is written inside the transaction and committed with it, before
+ * sendEmail runs. Once committed it is visible to whoever takes the lock next,
+ * so the lock only has to cover the check and the write, not the send.
+ * sendEmail then overwrites the row through the same attemptKey with how the
+ * send ended.
+ */
+async function claimReminder({ application, cycleId, round, attemptKey, triggeredById, now }, client) {
+  return client.$transaction(
+    async (tx) => {
+      const [{ locked }] =
+        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${attemptPrefixFor(round, application.id)})) AS locked`;
+      if (!locked) return 'BUSY';
+
+      const stillUnbooked = await tx.application.count({
+        where: { ...unbookedWhere({ cycleId, round }), id: application.id },
+      });
+      if (!stillUnbooked) return 'BOOKED';
+
+      const recent = await tx.communicationLog.findFirst({
+        where: {
+          category: SIGNUP_REMINDER_CATEGORY,
+          cycleId,
+          status: { notIn: NOT_DELIVERED },
+          attemptKey: { startsWith: attemptPrefixFor(round, application.id) },
+          sentAt: { gte: new Date(now.getTime() - REMINDER_COOLDOWN_MS) },
+        },
+        select: { id: true },
+      });
+      if (recent) return 'RECENT';
+
+      // sendEmail scopes the key to the address with `|recipient`, trimmed;
+      // the claim has to match it exactly for the send to overwrite it.
+      const recipient = String(application.email).trim();
+      await tx.communicationLog.create({
+        data: {
+          channel: 'email',
+          category: SIGNUP_REMINDER_CATEGORY,
+          trigger: 'MANUAL',
+          status: 'SENDING',
+          recipient,
+          recipientName: reminderValues(application, {}).fullName || null,
+          triggeredById: triggeredById ?? null,
+          cycleId,
+          attemptKey: `${attemptKey}|${recipient}`,
+        },
+      });
+      return 'CLAIMED';
+    },
+    { maxWait: 10 * 1000, timeout: 10 * 1000 }
+  );
+}
+
 // Sends in flight at once. /api reaches Render through Vercel's rewrite proxy,
 // which cuts a long response off: a coffee chat round of 200-300 people sent
 // one at a time outlasts it, the admin sees an error while the sends carry on,
 // and the retry they press next mails everyone a second time. Five matches the
-// other bulk senders (decisionBatches.js, masterCommunications.js).
+// other bulk senders (decisionBatches.js, masterCommunications.js). The claim
+// above is what makes that retry harmless if it happens anyway.
 const SEND_CONCURRENCY = 5;
 
 /**
- * Email each application its reminder, SEND_CONCURRENCY at a time. Never
- * throws for a single failed send; returns
- * { sent: [applicationId], failed: [{ id, email, error }] }.
+ * Email each application its reminder, SEND_CONCURRENCY at a time, each one
+ * claimed first (claimReminder). Never throws for a single person; returns
+ * { sent: [applicationId], skipped: [applicationId], failed: [{ id, email, error }] }.
  *
  * Every send in one batch shares a sendId, which keeps each attemptKey unique
  * (it is a unique column, so a second reminder must not overwrite the first)
@@ -189,13 +295,18 @@ const SEND_CONCURRENCY = 5;
  */
 export async function sendSignupReminders(
   applications,
-  { subject, message, roundLabel, deadline, signupUrl, cycleId, round, triggeredById }
+  { subject, message, roundLabel, deadline, signupUrl, cycleId, round, triggeredById, now = new Date() },
+  client = prisma
 ) {
   const sendId = randomUUID();
   const outcomes = await mapWithConcurrency(
     applications,
     async (application) => {
       try {
+        const attemptKey = `${attemptPrefixFor(round, application.id)}${sendId}`;
+        const claim = await claimReminder({ application, cycleId, round, attemptKey, triggeredById, now }, client);
+        if (claim !== 'CLAIMED') return { skipped: true };
+
         const rendered = await renderSignupReminder(application, { subject, message, roundLabel, deadline, signupUrl });
         const result = await sendEmail(application.email, rendered.subject, rendered.html, [], {
           category: SIGNUP_REMINDER_CATEGORY,
@@ -203,21 +314,24 @@ export async function sendSignupReminders(
           recipientName: reminderValues(application, {}).fullName || null,
           triggeredById,
           cycleId,
-          attemptKey: `${ATTEMPT_PREFIX}:${round}:${application.id}:${sendId}`,
+          attemptKey,
         });
-        return result?.success ? null : result?.error ?? 'Send failed';
+        return result?.success ? { sent: true } : { error: result?.error ?? 'Send failed' };
       } catch (error) {
-        return error?.message ?? String(error);
+        return { error: error?.message ?? String(error) };
       }
     },
     SEND_CONCURRENCY
   );
 
   const sent = [];
+  const skipped = [];
   const failed = [];
   applications.forEach((application, i) => {
-    if (outcomes[i] === null) sent.push(application.id);
-    else failed.push({ id: application.id, email: application.email, error: outcomes[i] });
+    const outcome = outcomes[i];
+    if (outcome.sent) sent.push(application.id);
+    else if (outcome.skipped) skipped.push(application.id);
+    else failed.push({ id: application.id, email: application.email, error: outcome.error });
   });
-  return { sent, failed };
+  return { sent, skipped, failed };
 }

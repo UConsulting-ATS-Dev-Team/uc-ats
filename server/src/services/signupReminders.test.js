@@ -49,29 +49,47 @@ describe('findUnbookedApplications', () => {
 describe('openSignupSessions and signupDeadline', () => {
   const now = new Date('2026-10-03T12:00:00Z');
 
-  it('keeps only sessions a candidate could book now', async () => {
+  const later = new Date('2026-10-10T17:00:00Z');
+  const slot = (id, extra = {}) => ({
+    id,
+    startTime: later,
+    candidateCapacity: 10,
+    signupOpensAt: null,
+    signupClosesAt: null,
+    interview: { status: 'UPCOMING' },
+    ...extra,
+  });
+
+  it('keeps only sessions a candidate could book now, by the booking rule', async () => {
     const client = {
       interviewSlot: {
         findMany: vi.fn().mockResolvedValue([
-          { id: 'open', candidateCapacity: 10, signupOpensAt: null, signupClosesAt: new Date('2026-10-05T00:00:00Z') },
-          { id: 'closed', candidateCapacity: 10, signupOpensAt: null, signupClosesAt: new Date('2026-10-01T00:00:00Z') },
-          { id: 'not-yet', candidateCapacity: 10, signupOpensAt: new Date('2026-10-04T00:00:00Z'), signupClosesAt: null },
+          slot('open', { signupClosesAt: new Date('2026-10-05T00:00:00Z') }),
+          slot('closed', { signupClosesAt: new Date('2026-10-01T00:00:00Z') }),
+          slot('not-yet', { signupOpensAt: new Date('2026-10-04T00:00:00Z') }),
+          slot('completed', { interview: { status: 'COMPLETED' } }),
+          // Starts in 6 hours: inside the 12-hour self-booking cutoff.
+          slot('too-soon', { startTime: new Date('2026-10-03T18:00:00Z') }),
         ]),
       },
     };
     const sessions = await openSignupSessions({ cycleId: 'cycle-1', round: '3', now }, client);
     expect(sessions.map((s) => s.id)).toEqual(['open']);
+    expect(client.interviewSlot.findMany.mock.calls[0][0].where.interview.status).toEqual({
+      notIn: ['CANCELLED', 'COMPLETED'],
+    });
   });
 
-  it('quotes the latest close, and nothing when any open session never closes', () => {
+  it('quotes the latest moment anyone can still book, cutoff included', () => {
     expect(signupDeadline([])).toBe('');
     expect(
       signupDeadline([
-        { signupClosesAt: new Date('2026-10-05T01:00:00Z') },
-        { signupClosesAt: new Date('2026-10-07T01:00:00Z') },
+        slot('a', { signupClosesAt: new Date('2026-10-05T01:00:00Z') }),
+        slot('b', { signupClosesAt: new Date('2026-10-07T01:00:00Z') }),
       ])
     ).toMatch(/October 6, 2026/); // 6 PM Pacific on the 6th
-    expect(signupDeadline([{ signupClosesAt: new Date('2026-10-07T01:00:00Z') }, { signupClosesAt: null }])).toBe('');
+    // No closing time of its own: closes 12 hours before its 10 AM Pacific start.
+    expect(signupDeadline([slot('c')])).toBe('Friday, October 9, 2026, 10:00 PM');
   });
 });
 
@@ -102,7 +120,7 @@ describe('lastRemindedAt', () => {
     expect(c.communicationLog.findMany.mock.calls[0][0].where).toEqual({
       category: 'SIGNUP_REMINDER',
       cycleId: 'cycle-1',
-      status: { not: 'FAILED' },
+      status: { notIn: ['FAILED', 'BOUNCED', 'COMPLAINED'] },
       attemptKey: { startsWith: 'signup-reminder:' },
     });
   });
@@ -151,6 +169,52 @@ describe('renderSignupReminder', () => {
   });
 });
 
+// Enough of Postgres for the claim: a try-lock held for the length of the
+// transaction, the unbooked re-check, and a communication log to find rows in.
+function claimClient({ booked = [], rows = [] } = {}) {
+  const held = new Set();
+  const log = [...rows];
+  const client = {
+    log,
+    $transaction: vi.fn(async (fn) => {
+      const mine = [];
+      const tx = {
+        $queryRaw: vi.fn(async (strings, key) => {
+          if (held.has(key)) return [{ locked: false }];
+          held.add(key);
+          mine.push(key);
+          return [{ locked: true }];
+        }),
+        application: {
+          count: vi.fn(async ({ where }) => (booked.includes(where.id) ? 0 : 1)),
+        },
+        communicationLog: {
+          findFirst: vi.fn(async ({ where }) =>
+            log.find(
+              (row) =>
+                row.attemptKey.startsWith(where.attemptKey.startsWith) &&
+                !where.status.notIn.includes(row.status) &&
+                row.sentAt >= where.sentAt.gte
+            ) ?? null
+          ),
+          create: vi.fn(async ({ data }) => {
+            // Let another transaction run in between, as a real write would.
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            log.push({ ...data, sentAt: new Date() });
+            return data;
+          }),
+        },
+      };
+      try {
+        return await fn(tx);
+      } finally {
+        for (const key of mine) held.delete(key);
+      }
+    }),
+  };
+  return client;
+}
+
 describe('sendSignupReminders', () => {
   it('sends one logged email each and reports a failure without stopping', async () => {
     sendEmail.mockResolvedValueOnce({ success: false, error: 'bounced' }).mockResolvedValueOnce({ success: true });
@@ -166,9 +230,9 @@ describe('sendSignupReminders', () => {
       cycleId: 'cycle-1',
       round: '2',
       triggeredById: 'admin-1',
-    });
+    }, claimClient());
 
-    expect(result).toEqual({ sent: ['app-2'], failed: [{ id: 'app-1', email: 'pat@example.com', error: 'bounced' }] });
+    expect(result).toEqual({ sent: ['app-2'], skipped: [], failed: [{ id: 'app-1', email: 'pat@example.com', error: 'bounced' }] });
     expect(sendEmail).toHaveBeenCalledTimes(2);
     const metas = sendEmail.mock.calls.map((call) => call[4]);
     expect(metas[1]).toEqual({
@@ -198,7 +262,7 @@ describe('sendSignupReminders', () => {
     });
     const people = Array.from({ length: 12 }, (_, i) => ({ id: `p${i}`, firstName: `P${i}`, email: `p${i}@example.com` }));
 
-    const result = await sendSignupReminders(people, { signupUrl: 'https://ats.example/interview-signup', round: '2' });
+    const result = await sendSignupReminders(people, { signupUrl: 'https://ats.example/interview-signup', round: '2' }, claimClient());
 
     expect(peak).toBe(5);
     expect(sendEmail).toHaveBeenCalledTimes(12);
@@ -217,7 +281,84 @@ describe('sendSignupReminders', () => {
     const result = await sendSignupReminders([{ id: 'app-1', firstName: 'Pat', email: 'pat@example.com' }], {
       signupUrl: 'https://ats.example/interview-signup',
       round: '2',
+    }, claimClient());
+    expect(result).toEqual({ sent: [], skipped: [], failed: [{ id: 'app-1', email: 'pat@example.com', error: 'SES down' }] });
+  });
+
+  const pat = { id: 'app-1', firstName: 'Pat', lastName: 'Lee', email: 'pat@example.com' };
+  const opts = { signupUrl: 'https://ats.example/interview-signup', round: '2', cycleId: 'cycle-1', triggeredById: 'admin-1' };
+
+  it('claims each send with a SENDING row under the key sendEmail will overwrite', async () => {
+    sendEmail.mockResolvedValue({ success: true });
+    const client = claimClient();
+
+    await sendSignupReminders([pat], opts, client);
+
+    expect(client.log).toHaveLength(1);
+    const [claim] = client.log;
+    expect(claim).toMatchObject({ status: 'SENDING', category: 'SIGNUP_REMINDER', trigger: 'MANUAL', cycleId: 'cycle-1', recipient: 'pat@example.com' });
+    expect(claim.attemptKey).toBe(`${sendEmail.mock.calls[0][4].attemptKey}|pat@example.com`);
+  });
+
+  it('skips someone reminded for this round within the cooldown', async () => {
+    const client = claimClient({
+      rows: [
+        { attemptKey: 'signup-reminder:2:app-1:earlier|pat@example.com', status: 'SENT', sentAt: new Date(Date.now() - 20 * 60 * 1000) },
+      ],
     });
-    expect(result).toEqual({ sent: [], failed: [{ id: 'app-1', email: 'pat@example.com', error: 'SES down' }] });
+
+    const result = await sendSignupReminders([pat], opts, client);
+
+    expect(result).toEqual({ sent: [], skipped: ['app-1'], failed: [] });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('sends again once the cooldown has passed, or when the earlier one bounced', async () => {
+    sendEmail.mockResolvedValue({ success: true });
+    const client = claimClient({
+      rows: [
+        { attemptKey: 'signup-reminder:2:app-1:old|pat@example.com', status: 'SENT', sentAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+        { attemptKey: 'signup-reminder:2:app-1:recent|pat@example.com', status: 'BOUNCED', sentAt: new Date() },
+        // Another round's reminder is not this round's.
+        { attemptKey: 'signup-reminder:3:app-1:recent|pat@example.com', status: 'SENT', sentAt: new Date() },
+      ],
+    });
+
+    const result = await sendSignupReminders([pat], opts, client);
+    expect(result.sent).toEqual(['app-1']);
+  });
+
+  it('skips someone who booked after the list was read', async () => {
+    const result = await sendSignupReminders([pat], opts, claimClient({ booked: ['app-1'] }));
+    expect(result).toEqual({ sent: [], skipped: ['app-1'], failed: [] });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('sends once when two presses race for the same person', async () => {
+    sendEmail.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { success: true };
+    });
+    const client = claimClient();
+
+    const [first, second] = await Promise.all([
+      sendSignupReminders([pat], opts, client),
+      sendSignupReminders([pat], opts, client),
+    ]);
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect([...first.sent, ...second.sent]).toEqual(['app-1']);
+    expect([...first.skipped, ...second.skipped]).toEqual(['app-1']);
+  });
+
+  it('sends once when a retry follows a finished send', async () => {
+    sendEmail.mockResolvedValue({ success: true });
+    const client = claimClient();
+
+    await sendSignupReminders([pat], opts, client);
+    const retry = await sendSignupReminders([pat], opts, client);
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(retry).toEqual({ sent: [], skipped: ['app-1'], failed: [] });
   });
 });

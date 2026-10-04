@@ -11,7 +11,7 @@
 import prisma from '../prismaClient.js';
 import { MODIFY_CUTOFF_HOURS, canModify } from '../utils/schedulingWindows.js';
 import { interviewTypesForRound } from '../utils/interviewRounds.js';
-import { isCandidateBookable, seatsRemaining } from './interviewSignupPolicy.js';
+import { CLOSED_INTERVIEW_STATUSES, isSelfBookableNow, seatsRemaining } from './interviewSignupPolicy.js';
 
 const LIVE = ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'];
 
@@ -22,7 +22,7 @@ const LIVE = ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'];
  * first served is unusable if you cannot see what is left - but the roster is
  * not the candidate's business, the same rule the GTKUC endpoints follow.
  */
-const toCandidateSlot = (slot, confirmedCount, ownSignup, now) => ({
+const toCandidateSlot = (slot, interview, confirmedCount, ownSignup, now) => ({
   id: slot.id,
   label: slot.label,
   startTime: slot.startTime,
@@ -31,7 +31,8 @@ const toCandidateSlot = (slot, confirmedCount, ownSignup, now) => ({
   capacity: slot.candidateCapacity,
   seatsRemaining: Math.max(0, seatsRemaining(slot, confirmedCount) ?? 0),
   isFull: (seatsRemaining(slot, confirmedCount) ?? 0) <= 0,
-  isOpen: isCandidateBookable(slot, now),
+  // The rule booking refuses on, so a slot inside the cutoff is not offered.
+  isOpen: isSelfBookableNow(slot, interview, now),
   yourStatus: ownSignup?.slotId === slot.id ? ownSignup.status : null,
 });
 
@@ -88,7 +89,7 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
   }
 
   const interviews = await client.interview.findMany({
-    where: { cycleId, interviewType: { in: eligibleTypes }, status: { notIn: ['CANCELLED', 'COMPLETED'] } },
+    where: { cycleId, interviewType: { in: eligibleTypes }, status: { notIn: CLOSED_INTERVIEW_STATUSES } },
     orderBy: { startDate: 'asc' },
     include: { slots: { orderBy: { startTime: 'asc' } } },
   });
@@ -132,7 +133,7 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
       slots: interview.slots
         .filter((slot) => slot.candidateCapacity != null)
         .map((slot) =>
-          toCandidateSlot(slot, confirmedBySlot.get(slot.id) ?? 0, ownByInterview.get(interview.id), now)
+          toCandidateSlot(slot, interview, confirmedBySlot.get(slot.id) ?? 0, ownByInterview.get(interview.id), now)
         ),
     })),
   };
@@ -169,7 +170,7 @@ export async function checkCanBookSlot(application, slotId, cycleId, client = pr
   if (interview.cycleId !== cycleId) {
     return { status: 403, error: 'That time slot is not open to you.' };
   }
-  if (['CANCELLED', 'COMPLETED'].includes(interview.status)) {
+  if (CLOSED_INTERVIEW_STATUSES.includes(interview.status)) {
     return { status: 409, error: 'That interview is no longer taking signups.' };
   }
 

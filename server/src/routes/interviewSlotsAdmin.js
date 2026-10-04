@@ -28,7 +28,7 @@ import {
 } from '../services/interviewerAvailability.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
-import { sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
+import { isSelfBookableNow, sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
 import {
   slotNotificationSubject,
   slotSubjectFormatter,
@@ -256,6 +256,9 @@ router.get('/scheduling/overview', async (req, res) => {
     const eligibleCount = new Map(applicationsByRound.map((row) => [row.currentRound, row._count._all]));
     // Read once for every round, not once per round.
     const remindedByRound = await lastRemindedByRound({ cycleId: cycle.id });
+    const remindedAt = (round, applicationId) =>
+      remindedByRound.get(round)?.get(applicationId)?.toISOString() ?? null;
+    const now = new Date();
 
     const rounds = [];
     for (const [round, roundInterviews] of [...byRound.entries()].sort()) {
@@ -287,6 +290,8 @@ router.get('/scheduling/overview', async (req, res) => {
               heldSeatId: signup.heldSeatId,
               movedById: signup.movedById,
               candidate: signup.application,
+              // So a booked row still shows whether they had to be chased.
+              lastRemindedAt: remindedAt(round, signup.applicationId),
             })),
             interviewers: slot.assignments.map((a) => ({ id: a.id, user: a.user })),
           };
@@ -295,8 +300,14 @@ router.get('/scheduling/overview', async (req, res) => {
 
       const unassigned = (await findUnbookedApplications({ cycleId: cycle.id, round })).map((application) => ({
         ...application,
-        lastRemindedAt: remindedByRound.get(round)?.get(application.id)?.toISOString() ?? null,
+        lastRemindedAt: remindedAt(round, application.id),
       }));
+      // The rule a reminder is refused on (NO_OPEN_SESSIONS), so the page can
+      // say so before anyone presses send.
+      const openSessions = roundInterviews.reduce(
+        (n, interview) => n + interview.slots.filter((slot) => isSelfBookableNow(slot, interview, now)).length,
+        0
+      );
 
       const allSignups = slots.flatMap((s) => s.signups);
       const bookable = slots.filter((s) => s.isBookable);
@@ -322,6 +333,7 @@ router.get('/scheduling/overview', async (req, res) => {
           eligible: eligibleCount.get(round) ?? 0,
           sessions: slots.length,
           bookableSessions: bookable.length,
+          openSessions,
           seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
           confirmed: allSignups.filter((s) => s.status === 'CONFIRMED').length,
           waitlisted: allSignups.filter((s) => s.status === 'WAITLISTED').length,
@@ -409,7 +421,7 @@ router.post('/scheduling/rounds/:round/signup-reminders', async (req, res) => {
     const asked = wanted ? unbooked.filter((a) => wanted.has(a.id)) : unbooked;
     const recipients = asked.filter((a) => a.email);
 
-    const { sent, failed } = await sendSignupReminders(recipients, {
+    const result = await sendSignupReminders(recipients, {
       subject,
       message,
       roundLabel: getRound(round)?.label ?? `Round ${round}`,
@@ -421,11 +433,13 @@ router.post('/scheduling/rounds/:round/signup-reminders', async (req, res) => {
     });
 
     res.json({
-      sent: sent.length,
-      failed,
+      sent: result.sent.length,
+      failed: result.failed,
       // Asked for, but booked, rejected or moved on (or without an address)
-      // by the time it came to sending.
-      skipped: (wanted ? wanted.size : unbooked.length) - recipients.length,
+      // by the time it came to sending - either before the send started, or
+      // in the moment before their own email went - or reminded within the
+      // cooldown, by this press or someone else's.
+      skipped: (wanted ? wanted.size : unbooked.length) - recipients.length + result.skipped.length,
     });
   } catch (error) {
     fail(res, error, 'Failed to send signup reminders');
