@@ -220,8 +220,12 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGr
       data-testid={`slot-${slot.id}`}
       sx={{
         p: 1.5,
-        minWidth: compact ? 200 : 300,
-        flex: compact ? '0 0 auto' : 1,
+        // A compact column gets a fixed width, not its content's. Sized to
+        // content, a wrapping row (the interviewer chips) counts at its
+        // one-line length and one column fills the screen.
+        minWidth: compact ? 240 : 300,
+        width: compact ? 240 : undefined,
+        flex: compact ? '0 0 240px' : 1,
         bgcolor: isOver ? 'action.hover' : undefined,
         borderColor: slot.isOverCapacity ? 'warning.main' : undefined,
         borderWidth: slot.isOverCapacity ? 2 : 1,

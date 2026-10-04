@@ -99,6 +99,38 @@ describe('AdminInterviews round setup', () => {
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Coffee Chats', 'Sessions', 'Interviewers', 'Signups']);
   });
 
+  it('keeps virtual chats out of the sessions gallery', async () => {
+    const slot = (id, overrides) => ({
+      id,
+      interviewId: 'iv1',
+      startTime: '2026-10-04T17:00:00.000Z',
+      endTime: '2026-10-04T19:00:00.000Z',
+      candidateCapacity: 50,
+      signups: [],
+      interviewers: [],
+      isVirtual: false,
+      ...overrides,
+    });
+    withOverview([
+      round({
+        interviews: [
+          { id: 'iv1', title: 'W27 Coffee Chats' },
+          { id: 'iv2', title: 'Asha Virtual Coffee Chat (1)', isVirtual: true },
+        ],
+        slots: [
+          slot('s1', { label: 'Session 1' }),
+          slot('v1', { interviewId: 'iv2', label: 'Virtual 1', candidateCapacity: null, isVirtual: true }),
+        ],
+        stats: stats({ sessions: 1, bookableSessions: 1, seats: 50 }),
+      }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByTestId('slot-s1')).toBeInTheDocument();
+    expect(screen.queryByTestId('slot-v1')).not.toBeInTheDocument();
+    expect(screen.getByText(/1 session ·/)).toBeInTheDocument();
+  });
+
   it('says how many seats short a round is', async () => {
     withOverview([
       round({

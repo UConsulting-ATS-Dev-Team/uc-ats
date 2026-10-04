@@ -81,6 +81,33 @@ describe('InterviewRosterGallery', () => {
     expect(screen.getAllByTestId(/^slot-/)).toHaveLength(2);
   });
 
+  it('gives compact columns a fixed width so wrapping rows cannot stretch one', () => {
+    // Sized to content, a column with many interviewer chips grew wider than
+    // the screen and pushed every other session out of view.
+    const interviewers = Array.from({ length: 12 }, (_, i) => ({
+      id: `as${i}`,
+      user: { id: `u${i}`, fullName: `Interviewer Number ${i}` },
+    }));
+    const roster = coffeeChatRoster({
+      slots: ['one', 'two', 'three', 'four'].map((id, i) =>
+        slot(id, `Session ${i + 1}`, 50, [], i === 0 ? { interviewers } : {})
+      ),
+    });
+    render(
+      <InterviewRosterGallery
+        roster={roster}
+        onMove={vi.fn()}
+        onRemove={vi.fn()}
+        onAssignInterviewer={vi.fn()}
+        onRemoveInterviewer={vi.fn()}
+      />
+    );
+
+    for (const id of ['one', 'two', 'three', 'four']) {
+      expect(screen.getByTestId(`slot-${id}`)).toHaveStyle({ width: '240px', flexGrow: '0', flexShrink: '0' });
+    }
+  });
+
   it('shows an unlabelled slot by its time range', () => {
     const roster = {
       interview: { id: 'iv2', title: 'First Round', interviewType: 'ROUND_ONE' },

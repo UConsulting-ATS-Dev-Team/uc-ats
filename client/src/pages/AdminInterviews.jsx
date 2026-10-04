@@ -257,11 +257,17 @@ export default function AdminInterviews() {
 
   // The gallery takes one roster. A round's sessions may span sibling
   // interviews, and merging them here is what puts morning and afternoon side
-  // by side instead of on two different screens.
+  // by side instead of on two different screens. Virtual chats are left out:
+  // the panel above already shows them, and each one added here was another
+  // column squeezing the in-person sessions off the screen.
   const roster = useMemo(
     () =>
       active
-        ? { interview: { id: active.round, title: active.label }, slots: active.slots, unassigned: active.unassigned }
+        ? {
+            interview: { id: active.round, title: active.label },
+            slots: active.slots.filter((slot) => !slot.isVirtual),
+            unassigned: active.unassigned,
+          }
         : null,
     [active]
   );
