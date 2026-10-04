@@ -13,7 +13,8 @@ import talentRoutes from './talent.js';
 vi.mock('../prismaClient.js', () => {
   const tx = {
     externalResume: { updateMany: vi.fn(), create: vi.fn(), update: vi.fn() },
-    clientResumeAssignment: { updateMany: vi.fn() }
+    clientResumeAssignment: { updateMany: vi.fn() },
+    $queryRaw: vi.fn()
   };
   return {
     default: {
@@ -178,6 +179,40 @@ describe('access gating', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.profile.emailVerified).toBe(false);
+  });
+});
+
+describe('an account that stopped being a talent account', () => {
+  it('stores nothing when a UCLA twin merge retired the account mid-upload', async () => {
+    // A session admitted from the user cache, reaching the lock after the merge
+    // deactivated the account. It is still a talent account, just not a live one.
+    prisma.__tx.$queryRaw.mockResolvedValue([{ isExternalTalent: true, studentId: null, isActive: false }]);
+
+    const res = await uploadRequest({
+      user: verifiedTalent,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Economics', graduationYear: '2027', shareConsent: 'true' }
+    });
+
+    expect(res.status).toBe(409);
+    expect(prisma.__tx.externalResume.create).not.toHaveBeenCalled();
+  });
+
+  it('stores nothing when Google sign-in turned it into an applicant mid-upload', async () => {
+    // The upload passed the gate as a talent account, but by the time it holds
+    // the row lock Google sign-in has handed the account to its applicant.
+    prisma.__tx.$queryRaw.mockResolvedValue([{ isExternalTalent: false }]);
+
+    const res = await uploadRequest({
+      user: verifiedTalent,
+      fileBuffer: Buffer.from('%PDF-1.4'),
+      fields: { major1: 'Economics', graduationYear: '2027', shareConsent: 'true' }
+    });
+
+    expect(res.status).toBe(409);
+    expect(prisma.__tx.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
+    expect(prisma.__tx.externalResume.updateMany).not.toHaveBeenCalled();
+    expect(prisma.__tx.externalResume.create).not.toHaveBeenCalled();
   });
 });
 

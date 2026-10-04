@@ -8,6 +8,8 @@
 //
 // The transactional half lives in interviewSignups.js and calls into here.
 
+import { MODIFY_CUTOFF_HOURS } from '../utils/schedulingWindows.js';
+
 /// A cascade is bounded rather than run to exhaustion. Promoting someone
 /// releases the fallback seat they were holding, which can free a seat in
 /// another slot, which can have its own waitlist. The chain terminates in
@@ -28,6 +30,43 @@ export function isCandidateBookable(slot, now = new Date()) {
   if (slot.signupClosesAt && new Date(slot.signupClosesAt) < now) return false;
   return true;
 }
+
+/// Interviews in these states take no more signups, whatever their sessions say.
+export const CLOSED_INTERVIEW_STATUSES = Object.freeze(['CANCELLED', 'COMPLETED']);
+
+/**
+ * The moment a candidate can no longer book this slot themselves: its own
+ * signupClosesAt, or MODIFY_CUTOFF_HOURS before it starts, whichever is first.
+ */
+export function selfBookingClosesAt(slot) {
+  const cutoff = new Date(new Date(slot.startTime).getTime() - MODIFY_CUTOFF_HOURS * 60 * 60 * 1000);
+  if (!slot.signupClosesAt) return cutoff;
+  const closes = new Date(slot.signupClosesAt);
+  return closes < cutoff ? closes : cutoff;
+}
+
+/**
+ * Why a candidate cannot book this slot themselves right now, or null if they
+ * can. The one rule for self-service booking: the booking path refuses on it,
+ * the candidate page marks slots open by it, and a signup reminder is only sent
+ * while some slot passes it.
+ *
+ *   INTERVIEW_CLOSED  the interview is cancelled or completed
+ *   NOT_OPEN          not self-service, or outside its signup window
+ *   CUTOFF            inside the last MODIFY_CUTOFF_HOURS before it starts
+ *
+ * `interview` may be omitted by a caller that has already filtered closed
+ * interviews out in its query.
+ */
+export function selfBookingRefusal(slot, interview, now = new Date()) {
+  if (interview && CLOSED_INTERVIEW_STATUSES.includes(interview.status)) return 'INTERVIEW_CLOSED';
+  if (!isCandidateBookable(slot, now)) return 'NOT_OPEN';
+  if (now > selfBookingClosesAt(slot)) return 'CUTOFF';
+  return null;
+}
+
+export const isSelfBookableNow = (slot, interview, now = new Date()) =>
+  selfBookingRefusal(slot, interview, now) === null;
 
 export const seatsRemaining = (slot, confirmedCount) =>
   slot.candidateCapacity == null ? null : slot.candidateCapacity - confirmedCount;

@@ -3,7 +3,9 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
-import { emailVariants } from '../utils/mailingListImport.js';
+import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
+import { lockTalentAccount } from './talentAccountLock.js';
+import { findUclaTwin, isMergeRetired } from './uclaTwinAccounts.js';
 
 /**
  * Sign in with Google.
@@ -179,30 +181,57 @@ const linkExisting = async (user, profile) => {
  * to match. Without this they became a talent-portal account, which has no UID
  * and therefore never sees their application or interview scheduling.
  *
- * Matches the candidate's address or any of their applications', in either UCLA
- * spelling. Null when nobody or more than one candidate applied under it, or
- * when another account already holds the UID: in each case there is no single
- * applicant this person can safely become.
+ * A matching address alone proves nothing about the UID: form sync files an
+ * application under whatever UID the form names, so someone can type another
+ * person's UID with their own address. The UID is only handed over when the
+ * candidate's address and every application filed under it are this address
+ * (either UCLA spelling), so an application someone else filed under the UID
+ * blocks it. Null when nobody or more than one candidate matches, when the
+ * candidate has no application, or when another account already holds the UID.
  */
 const findApplicantStudentId = async (email) => {
   const spellings = emailVariants(email).map((variant) => ({ equals: variant, mode: 'insensitive' }));
   if (spellings.length === 0) return null;
 
   const candidates = await prisma.candidate.findMany({
-    where: {
-      OR: [
-        ...spellings.map((spelling) => ({ email: spelling })),
-        { applications: { some: { OR: spellings.map((spelling) => ({ email: spelling })) } } }
-      ]
-    },
-    select: { studentId: true },
+    where: { OR: spellings.map((spelling) => ({ email: spelling })) },
+    select: { studentId: true, email: true, applications: { select: { email: true } } },
     take: 2
   });
   if (candidates.length !== 1 || !candidates[0].studentId) return null;
 
-  const { studentId } = candidates[0];
-  const holder = await prisma.user.findUnique({ where: { studentId }, select: { id: true } });
-  return holder ? null : studentId;
+  const [candidate] = candidates;
+  const key = emailIdentityKey(email);
+  const addresses = [candidate.email, ...candidate.applications.map((application) => application.email)];
+  if (candidate.applications.length === 0 || addresses.some((address) => emailIdentityKey(address || '') !== key)) {
+    return null;
+  }
+
+  const holder = await prisma.user.findUnique({ where: { studentId: candidate.studentId }, select: { id: true } });
+  return holder ? null : candidate.studentId;
+};
+
+/**
+ * Whether this talent-portal account is the one Google just verified: its
+ * stored address still matches. A user can change their stored address without
+ * verifying it, so on its own it proves nothing.
+ */
+const isTalentAccountFor = (user, profile) =>
+  user.isExternalTalent === true &&
+  !user.studentId &&
+  user.role === 'USER' &&
+  emailIdentityKey(user.email) === emailIdentityKey(profile.email);
+
+/**
+ * Inside a hand-over transaction: lock the talent account's row and confirm it
+ * is still an empty talent account. The talent resume upload takes the same
+ * lock, so a resume cannot land between this check and the hand-over and be
+ * stranded on an account that no longer reaches the talent portal.
+ */
+const lockEmptyTalentAccount = async (tx, userId) => {
+  const row = await lockTalentAccount(tx, userId);
+  if (!row || row.isExternalTalent !== true || row.studentId) return false;
+  return (await tx.externalResume.count({ where: { userId } })) === 0;
 };
 
 /**
@@ -225,19 +254,30 @@ const findApplicantStudentId = async (email) => {
  */
 const createFromGoogle = async (profile) => {
   const studentId = await findApplicantStudentId(profile.email);
-  return prisma.user.create({
-    data: {
-      email: profile.email,
-      password: null,
-      fullName: profile.fullName || profile.email.split('@')[0],
-      role: 'USER',
-      isExternalTalent: !studentId,
-      ...(studentId ? { studentId } : {}),
-      emailVerifiedAt: new Date(),
-      googleId: profile.googleId,
-      googleLinkedAt: new Date()
-    }
-  });
+  const create = (uid) =>
+    prisma.user.create({
+      data: {
+        email: profile.email,
+        password: null,
+        fullName: profile.fullName || profile.email.split('@')[0],
+        role: 'USER',
+        isExternalTalent: !uid,
+        ...(uid ? { studentId: uid } : {}),
+        emailVerifiedAt: new Date(),
+        googleId: profile.googleId,
+        googleLinkedAt: new Date()
+      }
+    });
+
+  try {
+    return await create(studentId);
+  } catch (error) {
+    // Another account took the UID after it was checked. That account is the
+    // applicant's, so this one is a plain talent account, as it was before.
+    const target = [].concat(error?.meta?.target || []).join(',');
+    if (studentId && error?.code === 'P2002' && target.includes('studentId')) return create(null);
+    throw error;
+  }
 };
 
 /**
@@ -245,19 +285,18 @@ const createFromGoogle = async (profile) => {
  * - made by Google sign-in before the check above existed, or before they
  * applied - becomes that applicant's account. Anything else is returned as is.
  */
-const adoptApplicant = async (user) => {
-  if (!user.isExternalTalent || user.studentId || !user.emailVerifiedAt || user.role !== 'USER') {
-    return user;
-  }
+const adoptApplicant = async (user, profile) => {
+  if (!isTalentAccountFor(user, profile)) return user;
 
-  const studentId = await findApplicantStudentId(user.email);
+  const studentId = await findApplicantStudentId(profile.email);
   if (!studentId) return user;
 
   try {
-    const updated = await prisma.user.update({
-      where: { id: user.id },
-      data: { isExternalTalent: false, studentId }
+    const updated = await prisma.$transaction(async (tx) => {
+      if (!(await lockEmptyTalentAccount(tx, user.id))) return null;
+      return tx.user.update({ where: { id: user.id }, data: { isExternalTalent: false, studentId } });
     });
+    if (!updated) return user;
     invalidateUserCache(updated.id);
     return updated;
   } catch (error) {
@@ -268,39 +307,45 @@ const adoptApplicant = async (user) => {
 };
 
 /**
- * The account under the other UCLA spelling of this address, or null. x@g.ucla.edu
- * and x@ucla.edu are one mailbox, so someone who registered with one and signs in
- * with Google as the other is the same person. Before this they were given a
- * second, empty talent-portal account instead.
- */
-const findUclaTwin = async (email) => {
-  const twins = emailVariants(email).slice(1);
-  if (twins.length === 0) return null;
-  const matches = await prisma.user.findMany({
-    where: { OR: twins.map((twin) => ({ email: { equals: twin, mode: 'insensitive' } })) },
-    take: 2
-  });
-  return matches.length === 1 ? matches[0] : null;
-};
-
-/**
  * A Google sign-in that lands on an empty talent-portal account while the same
  * person has a real account under the other UCLA spelling moves Google onto the
- * real one. The talent account is kept, without Google, so nothing it holds is
- * lost. Null when there is nothing to move.
+ * real one. The talent account is kept, without Google. Null when there is
+ * nothing to move.
  */
 const moveGoogleToTwin = async (talent, profile) => {
-  if (!talent.isExternalTalent || talent.studentId || talent.role !== 'USER') return null;
+  if (!isTalentAccountFor(talent, profile)) return null;
 
-  const twin = await findUclaTwin(talent.email);
+  const twin = await findUclaTwin(profile.email);
   if (!twin || twin.isExternalTalent || twin.googleId || twin.isActive === false) return null;
 
-  await prisma.user.update({
-    where: { id: talent.id },
-    data: { googleId: null, googleLinkedAt: null }
-  });
+  const twinData = { googleId: profile.googleId, googleLinkedAt: new Date() };
+  if (!twin.emailVerifiedAt) {
+    twinData.emailVerifiedAt = new Date();
+    twinData.emailVerificationToken = null;
+    twinData.emailVerificationExpiry = null;
+  }
+
+  const TWIN_TAKEN = Symbol('twin taken');
+  let moved;
+  try {
+    moved = await prisma.$transaction(async (tx) => {
+      if (!(await lockEmptyTalentAccount(tx, talent.id))) return null;
+      await tx.user.update({ where: { id: talent.id }, data: { googleId: null, googleLinkedAt: null } });
+      // Only if the twin is still unlinked. Otherwise another sign-in got there
+      // first, and throwing rolls back the line above so Google stays put.
+      const { count } = await tx.user.updateMany({ where: { id: twin.id, googleId: null }, data: twinData });
+      if (count === 0) throw TWIN_TAKEN;
+      return tx.user.findUnique({ where: { id: twin.id } });
+    });
+  } catch (error) {
+    if (error === TWIN_TAKEN) return null;
+    throw error;
+  }
+  if (!moved) return null;
+
   invalidateUserCache(talent.id);
-  return linkExisting(twin, profile);
+  invalidateUserCache(moved.id);
+  return moved;
 };
 
 /**
@@ -313,21 +358,26 @@ export const resolveGoogleUser = async (profile) => {
   if (byGoogleId) {
     const user = assertActive(byGoogleId);
     const moved = await moveGoogleToTwin(user, profile);
-    return { user: moved || (await adoptApplicant(user)), isNewAccount: false };
+    return { user: moved || (await adoptApplicant(user, profile)), isNewAccount: false };
   }
 
   const byEmail = await findByEmail(profile.email);
-  if (byEmail) {
-    // Checked before the write, so a deactivated account is not quietly linked.
-    assertActive(byEmail);
-    return { user: await adoptApplicant(await linkExisting(byEmail, profile)), isNewAccount: false };
+  if (byEmail && byEmail.isActive !== false) {
+    return { user: await adoptApplicant(await linkExisting(byEmail, profile), profile), isNewAccount: false };
   }
 
+  // No account under this spelling, or only one a UCLA twin merge retired
+  // (scripts/merge-ucla-twin-accounts.js): the account under the other spelling
+  // is the same person. An account an admin deactivated is not a merge
+  // retirement and keeps refusing below, rather than handing out the twin.
   const twin = await findUclaTwin(profile.email);
-  if (twin && !twin.googleId) {
+  if (twin && !twin.googleId && (byEmail ? isMergeRetired(byEmail) && twin.isActive !== false : true)) {
     assertActive(twin);
-    return { user: await adoptApplicant(await linkExisting(twin, profile)), isNewAccount: false };
+    return { user: await adoptApplicant(await linkExisting(twin, profile), profile), isNewAccount: false };
   }
+
+  // Checked before any write, so a deactivated account is not quietly linked.
+  if (byEmail) assertActive(byEmail);
 
   try {
     return { user: await createFromGoogle(profile), isNewAccount: true };

@@ -18,6 +18,7 @@ import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
+import { lockTalentAccount } from '../services/talentAccountLock.js';
 import {
   EXTERNAL_GENDERS,
   FULL_NAME_MAX_LENGTH,
@@ -174,6 +175,15 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
     // member: an assignment already committed to a client keeps pointing at the
     // exact file that was assigned.
     const created = await prisma.$transaction(async (tx) => {
+      // Same row lock Google sign-in takes before turning a talent account into
+      // an applicant's: either this resume lands first and the account stays a
+      // talent account, or the account changed first and nothing is stored.
+      const owner = await lockTalentAccount(tx, req.user.id);
+      // isActive too: a session admitted from the user cache can outlive the
+      // account being retired by a UCLA twin merge, and a resume stored on the
+      // retired account would be unreachable from the one that replaced it.
+      if (owner?.isExternalTalent !== true || owner.isActive === false) return null;
+
       await tx.externalResume.updateMany({
         where: { userId: req.user.id, isCurrent: true },
         data: { isCurrent: false }
@@ -194,6 +204,10 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
         }
       });
     });
+
+    if (!created) {
+      return res.status(409).json({ error: 'This account is no longer a talent-portal account. Sign in again.' });
+    }
 
     const relPath = `external-resumes/${created.id}/resume.pdf`;
     try {

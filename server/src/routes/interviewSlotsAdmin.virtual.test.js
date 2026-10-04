@@ -15,6 +15,11 @@ vi.mock('../prismaClient.js', () => ({
   },
 }));
 vi.mock('../services/activeCycle.js', () => ({ resolveAdminCycle: vi.fn(async () => ({ id: 'c1', name: 'Fall' })) }));
+// The overview also shows when each person was last reminded to book; nobody here was.
+vi.mock('../services/signupReminders.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  lastRemindedByRound: vi.fn(async () => new Map()),
+}));
 
 const prisma = (await import('../prismaClient.js')).default;
 const routes = (await import('./interviewSlotsAdmin.js')).default;

@@ -12,6 +12,7 @@ import {
   sendWelcomeEmail
 } from '../services/emailNotifications.js';
 import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
+import { findAccountForSignIn } from '../services/uclaTwinAccounts.js';
 import { recordLoginFailed, recordLoginOk } from '../services/analytics/securityEvents.js';
 import { limitConcurrency } from '../utils/limitConcurrency.js';
 import {
@@ -234,10 +235,9 @@ router.post('/login', async (req, res) => {
     
     // Case-insensitive: rows created before the Google migration could hold the
     // address exactly as it was typed, and somebody who signed up as
-    // `Joe@ucla.edu` types `joe@ucla.edu` soon enough.
-    const user = await prisma.user.findFirst({
-      where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
-    });
+    // `Joe@ucla.edu` types `joe@ucla.edu` soon enough. Either UCLA spelling
+    // reaches the person's active account (see findAccountForSignIn).
+    const user = await findAccountForSignIn(normalizeEmail(email));
 
     // Every refusal below is reported for Site Analytics' brute-force detection.
     // Fire-and-forget: it can neither fail nor slow the answer.
@@ -373,11 +373,9 @@ router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
 
   try {
-    // Case-insensitive for the same reason as /login: this has to find the
-    // account somebody actually has, not the one whose casing they remembered.
-    const user = await prisma.user.findFirst({
-      where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } }
-    });
+    // The same lookup as /login: this has to find the account somebody actually
+    // has, not the one whose casing or UCLA spelling they remembered.
+    const user = await findAccountForSignIn(normalizeEmail(email));
 
     if (!user) {
       // Don't reveal if email exists

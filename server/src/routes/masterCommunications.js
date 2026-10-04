@@ -470,18 +470,42 @@ router.delete('/audiences/:id', requireAuth, requireAdmin, audienceRoute(
   (req) => deleteSavedAudience(req.params.id)
 ));
 
-// The choice the filter builder offers that the page does not already load:
-// past email sends to pick from.
+// The choices the filter builder offers that the page does not already load:
+// past email sends and coffee chat sessions to pick from.
 router.get('/audience-options', requireAuth, requireAdmin, audienceRoute(
   'GET /api/master-communications/audience-options',
   async () => {
-    const campaigns = await prisma.messageLog.findMany({
-      where: { channel: 'email' },
-      orderBy: { sentAt: 'desc' },
-      take: 100,
-      select: { id: true, subject: true, sentAt: true, recipientCount: true },
-    });
-    return { campaigns };
+    const [campaigns, coffeeChatSessions] = await Promise.all([
+      prisma.messageLog.findMany({
+        where: { channel: 'email' },
+        orderBy: { sentAt: 'desc' },
+        take: 100,
+        select: { id: true, subject: true, sentAt: true, recipientCount: true },
+      }),
+      prisma.interviewSlot.findMany({
+        where: { interview: { interviewType: 'COFFEE_CHAT' } },
+        // Not capped: a cycle has a handful of sessions, and a saved audience
+        // naming an old one must still show its label rather than an id.
+        orderBy: { startTime: 'desc' },
+        select: {
+          id: true, label: true, startTime: true, endTime: true,
+          interview: { select: { title: true, cycleId: true } },
+          _count: { select: { signups: { where: { status: 'CONFIRMED' } } } },
+        },
+      }),
+    ]);
+    return {
+      campaigns,
+      coffeeChatSessions: coffeeChatSessions.map((s) => ({
+        id: s.id,
+        label: s.label,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        interviewTitle: s.interview.title,
+        cycleId: s.interview.cycleId,
+        confirmedCount: s._count.signups,
+      })),
+    };
   }
 ));
 

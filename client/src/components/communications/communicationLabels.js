@@ -13,6 +13,7 @@ export const CATEGORY_LABELS = {
   INTERVIEW_SLOT: 'Interview slot',
   REVIEWER_REMINDER: 'Reviewer reminder',
   ACCOUNTABILITY_REMINDER: 'Accountability reminder',
+  SIGNUP_REMINDER: 'Signup reminder',
   MASTER_COMMUNICATION: 'Master communication',
   DECISION_BATCH: 'Decision batch',
   TEST: 'Test send',

@@ -24,6 +24,7 @@ import {
   Bookmark as BookmarkIcon,
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
+import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
 import {
   RULES,
   RULE_GROUPS,
@@ -68,6 +69,14 @@ function CsvField({ label, value, onChange }) {
   );
 }
 
+// "Morning Block · Monday, October 13", or the time range when the session has
+// no label. In Pacific, like the interview pages, so the picker never shows a
+// different time from the one the session runs at.
+function sessionName(s) {
+  const day = formatDay(s.startTime);
+  return s.label ? `${s.label} · ${day}` : `${day}, ${formatTimeRange(s.startTime, s.endTime)}`;
+}
+
 function FieldEditor({ field, params, onParam, options }) {
   const value = params[field.key];
   const multi = (items, render) => (
@@ -94,6 +103,8 @@ function FieldEditor({ field, params, onParam, options }) {
       return multi(options.events, labelOf(options.events));
     case 'campaigns':
       return multi(options.campaigns, labelOf(options.campaigns));
+    case 'sessions':
+      return multi(options.sessions, labelOf(options.sessions));
     case 'multi':
       return multi(field.options, labelOf(field.options));
     case 'select':
@@ -365,6 +376,7 @@ function SaveDialog({ open, onClose, onSave }) {
 export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycles = [], events = [], onError, onSuccess }) {
   const [saved, setSaved] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [saveOpen, setSaveOpen] = useState(false);
 
   const loadSaved = async () => {
@@ -380,7 +392,10 @@ export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycle
     loadSaved();
     apiClient
       .get('/master-communications/audience-options')
-      .then((data) => setCampaigns(data.campaigns || []))
+      .then((data) => {
+        setCampaigns(data.campaigns || []);
+        setSessions(data.coffeeChatSessions || []);
+      })
       .catch(() => {});
   }, []);
 
@@ -398,8 +413,14 @@ export default function AudienceBuilder({ tree, savedAudienceId, onChange, cycle
         value: c.id,
         label: `${c.subject || '(no subject)'} · ${new Date(c.sentAt).toLocaleDateString()} · ${c.recipientCount}`,
       })),
+      sessions: sessions.map((s) => ({
+        value: s.id,
+        label: [s.interviewTitle, sessionName(s), cycleName[s.cycleId], `${s.confirmedCount} booked`]
+          .filter(Boolean)
+          .join(' · '),
+      })),
     };
-  }, [cycles, events, campaigns]);
+  }, [cycles, events, campaigns, sessions]);
 
   const activeCycleIds = useMemo(() => cycles.filter((c) => c.isActive).map((c) => c.id), [cycles]);
   const presetList = useMemo(() => presets({ activeCycleIds }), [activeCycleIds]);

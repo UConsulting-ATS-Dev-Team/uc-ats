@@ -5,6 +5,7 @@ import { sendSlackMessage } from './slackService.js';
 import { recordCommunications } from './communicationLog.js';
 import { resolveAudience, summarizeSources } from './audiences/audiencePeople.js';
 import { normalizeAudienceTree } from './audiences/audienceFilters.js';
+import { mapWithConcurrency } from '../utils/concurrency.js';
 import { getSavedAudience, markSavedAudienceUsed } from './audiences/savedAudiences.js';
 import { applySuppressions, unsubscribeFooterHtml, unsubscribeUrls } from './emailSuppression.js';
 
@@ -90,26 +91,6 @@ function renderMessage(text, recipient) {
   });
 }
 
-async function withConcurrency(items, fn, concurrency = 5) {
-  const results = new Array(items.length);
-  const queue = items.map((item, index) => ({ item, index }));
-  const workers = [];
-
-  for (let i = 0; i < concurrency; i++) {
-    workers.push(
-      (async () => {
-        while (queue.length > 0) {
-          const { item, index } = queue.shift();
-          results[index] = await fn(item);
-        }
-      })()
-    );
-  }
-
-  await Promise.all(workers);
-  return results;
-}
-
 function markdownToHtml(text) {
   if (!text) return text;
   return marked.parse(text, { breaks: true });
@@ -147,7 +128,7 @@ async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency =
     return { recipientId: r.id, success: false, error: lastError };
   };
 
-  return withConcurrency(
+  return mapWithConcurrency(
     recipients,
     async (r) => {
       const result = await sendTo(r);
