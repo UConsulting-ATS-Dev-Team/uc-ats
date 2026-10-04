@@ -32,6 +32,7 @@ import {
   ErrorOutline as ErrorIcon,
 } from '@mui/icons-material';
 import apiClient from '../utils/api';
+import { describePlacement, placeCandidates } from '../utils/placeCandidates';
 import { useAuth } from '../context/AuthContext';
 import AccessControl from '../components/AccessControl';
 import InterviewRosterGallery from '../components/interviews/InterviewRosterGallery';
@@ -306,22 +307,21 @@ export default function AdminInterviews() {
     return run(() => apiClient.delete(`/admin/interviews/slot-signups/${signup.id}`), 'Removed.').catch(() => {});
   };
 
-  const handlePlace = (application) => {
-    const slots = active?.slots?.filter((s) => s.isBookable) ?? [];
-    if (slots.length === 0) {
-      setError('There are no bookable sessions in this round yet. Add some first.');
-      return Promise.resolve();
+  // People in the round who never booked, put into the session the admin chose
+  // in the dialog. Partial success is normal (one person booked themselves a
+  // second ago), so the names that failed are reported after the reload.
+  const handlePlace = async (applications, slot, { force = false } = {}) => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await placeCandidates({ applications, slot, force });
+      const { ok, bad } = describePlacement(result, slot);
+      if (ok) setToast(ok);
+      await load();
+      if (bad) setError(bad);
+    } finally {
+      setBusy(false);
     }
-    const target = slots.find((s) => s.candidateCapacity == null || s.confirmedCount < s.candidateCapacity) ?? slots[0];
-    return run(
-      () =>
-        apiClient.post(`/admin/interviews/${target.interviewId}/slot-signups`, {
-          slotId: target.id,
-          applicationId: application.id,
-          force: true,
-        }),
-      'Scheduled.'
-    ).catch(() => {});
   };
 
   if (loading) {
@@ -595,6 +595,7 @@ export default function AdminInterviews() {
                         reminderDefaults={data?.reminderDefaults}
                         busy={busy}
                         onRemind={remindUnbooked}
+                        onPlace={handlePlace}
                       />
                     )}
                     {view === 'interviewers' && (

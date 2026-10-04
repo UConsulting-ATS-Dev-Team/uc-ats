@@ -38,6 +38,7 @@ import {
   Warning as WarningIcon,
 } from '@mui/icons-material';
 import { formatDay, formatTimeRange } from '../../utils/scheduleFormat';
+import PlaceCandidatesDialog from './PlaceCandidatesDialog';
 
 /// A slot's heading: its own name, else its time range. Coffee chats are named
 /// blocks; first round sittings are just times.
@@ -410,6 +411,8 @@ export default function InterviewRosterGallery({
 }) {
   const [filter, setFilter] = useState('');
   const [pendingMove, setPendingMove] = useState(null);
+  // null while closed, else the ids to open it with already ticked.
+  const [placing, setPlacing] = useState(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
@@ -541,13 +544,18 @@ export default function InterviewRosterGallery({
         <Paper variant="outlined" sx={{ mt: 3, p: 2 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
             <PersonOffIcon fontSize="small" color="disabled" />
-            <Typography variant="subtitle2">
+            <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
               Haven't booked yet ({roster.unassigned.length})
             </Typography>
+            {onPlace && (
+              <Button size="small" startIcon={<PersonAddIcon />} onClick={() => setPlacing([])}>
+                Add to a session
+              </Button>
+            )}
           </Stack>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            In this round, but have not picked a session. They normally book themselves — click one only
-            to place them by hand.
+            In this round, but have not picked a session. They normally book themselves. Add them here when
+            they have not.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
             {roster.unassigned.map((application) => (
@@ -555,11 +563,26 @@ export default function InterviewRosterGallery({
                 key={application.id}
                 size="small"
                 label={fullName(application)}
-                onClick={onPlace ? () => onPlace(application) : undefined}
+                onClick={onPlace ? () => setPlacing([application.id]) : undefined}
               />
             ))}
           </Stack>
         </Paper>
+      )}
+
+      {onPlace && (
+        <PlaceCandidatesDialog
+          open={placing !== null}
+          candidates={roster.unassigned ?? []}
+          slots={slots}
+          initialSelected={placing}
+          slotHeading={slotHeading}
+          onClose={() => setPlacing(null)}
+          onPlace={(applications, slot, options) => {
+            setPlacing(null);
+            onPlace(applications, slot, options);
+          }}
+        />
       )}
 
       <Dialog open={Boolean(pendingMove)} onClose={() => setPendingMove(null)}>

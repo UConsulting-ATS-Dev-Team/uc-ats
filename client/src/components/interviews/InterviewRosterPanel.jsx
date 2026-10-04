@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Snackbar, Stack, Typography } from '@mui/material';
 import apiClient from '../../utils/api';
 import InterviewRosterGallery from './InterviewRosterGallery';
+import { describePlacement, placeCandidates } from '../../utils/placeCandidates';
 import InterviewSlotSetup from './InterviewSlotSetup';
 
 /**
@@ -87,31 +88,16 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
     }
   };
 
-  const handlePlace = async (application) => {
-    const slots = roster?.slots ?? [];
-    if (slots.length === 0) return;
-    // Deliberately simple: put them in the first session with room, or the
-    // first session at all, and let the admin drag them somewhere better. A
-    // picker here would be a third way to choose a slot on a page that already
-    // has two.
-    const target =
-      slots.find(
-        (s) =>
-          s.candidateCapacity == null ||
-          s.signups.filter((x) => x.status === 'CONFIRMED').length < s.candidateCapacity
-      ) ?? slots[0];
-
+  const handlePlace = async (applications, slot, { force = false } = {}) => {
     setBusy(true);
+    setError('');
     try {
-      await apiClient.post(`/admin/interviews/${interviewId}/slot-signups`, {
-        slotId: target.id,
-        applicationId: application.id,
-        force: true,
-      });
+      const result = await placeCandidates({ applications, slot, interviewId, force });
+      const { ok, bad } = describePlacement(result, slot);
+      if (ok) setToast(ok);
       await load();
       onRosterChanged?.();
-    } catch (e) {
-      setError(e.message || 'Failed to schedule that candidate.');
+      if (bad) setError(bad);
     } finally {
       setBusy(false);
     }

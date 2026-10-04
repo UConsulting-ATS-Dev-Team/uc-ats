@@ -24,8 +24,9 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Search as SearchIcon, Send as SendIcon } from '@mui/icons-material';
+import { PersonAdd as PersonAddIcon, Search as SearchIcon, Send as SendIcon } from '@mui/icons-material';
 import { formatTimeRange } from '../../utils/scheduleFormat';
+import PlaceCandidatesDialog from './PlaceCandidatesDialog';
 
 /**
  * Signups - who in this round has booked a session, who has not, and a way to
@@ -134,7 +135,9 @@ function StatusChip({ row }) {
   return <Chip size="small" label="Not booked" />;
 }
 
-export default function RoundSignupStatus({ round, reminderDefaults, busy, onRemind }) {
+export default function RoundSignupStatus({ round, reminderDefaults, busy, onRemind, onPlace }) {
+  // null while closed, else the ids to open the add dialog with ticked.
+  const [placing, setPlacing] = useState(null);
   const rows = useMemo(() => buildSignupRows(round), [round]);
   const notBooked = useMemo(() => rows.filter((r) => r.status === 'NOT_BOOKED'), [rows]);
   const count = (status) => rows.filter((r) => r.status === status).length;
@@ -278,6 +281,18 @@ export default function RoundSignupStatus({ round, reminderDefaults, busy, onRem
             ))}
         </Typography>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+          {onPlace && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<PersonAddIcon />}
+              onClick={() => setPlacing(selectedIds)}
+              disabled={busy || notBooked.length === 0}
+              data-track="add-unbooked-to-session"
+            >
+              {selectedIds.length > 0 ? `Add selected to a session (${selectedIds.length})` : 'Add to a session'}
+            </Button>
+          )}
           {remindButton(
             `Remind selected (${selectedIds.length})`,
             () => openReminder(selectedIds),
@@ -443,6 +458,22 @@ export default function RoundSignupStatus({ round, reminderDefaults, busy, onRem
           </Button>
         </DialogActions>
       </Dialog>
+
+      {onPlace && (
+        <PlaceCandidatesDialog
+          open={placing !== null}
+          candidates={round?.unassigned ?? []}
+          slots={round?.slots ?? []}
+          initialSelected={placing}
+          slotHeading={slotHeading}
+          onClose={() => setPlacing(null)}
+          onPlace={(applications, slot, options) => {
+            setPlacing(null);
+            setSelected(new Set());
+            onPlace(applications, slot, options);
+          }}
+        />
+      )}
     </Paper>
   );
 }

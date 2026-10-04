@@ -859,12 +859,25 @@ export async function placeCandidate({
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
     }
 
+    // Looked for across the whole round, not just this interview: a coffee chat
+    // day is two sibling interviews, and someone already in the morning block
+    // must be moved, not handed a second seat in the afternoon.
     const existing = await tx.interviewSlotSignup.findMany({
-      where: { interviewId, applicationId, status: { in: LIVE_STATUSES } },
+      where: {
+        applicationId,
+        status: { in: LIVE_STATUSES },
+        slot: {
+          interview: {
+            cycleId: slot.interview.cycleId,
+            interviewType: slot.interview.interviewType,
+            status: { notIn: ['CANCELLED', 'COMPLETED'] },
+          },
+        },
+      },
       select: SIGNUP_SELECT,
     });
 
-    // Already somewhere in this interview: that is a move, and moving keeps the
+    // Already somewhere in this round: that is a move, and moving keeps the
     // audit trail and the waitlist bookkeeping intact.
     const live = existing.find((row) => row.status === 'CONFIRMED') ?? existing[0];
     if (live) {
@@ -886,6 +899,9 @@ export async function placeCandidate({
         status: 'CONFIRMED',
         placedById: actorId,
         signedUpAt: now,
+        // Placed by hand or not, a coffee chat candidate needs a rotation group
+        // to be called up at a table.
+        groupLabel: await nextGroupLabel(tx, slot),
       },
       select: SIGNUP_SELECT,
     });
