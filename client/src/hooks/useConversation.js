@@ -266,7 +266,10 @@ export default function useConversation({ resolve, currentUser }) {
     showReactions(messageId);
     try {
       const result = await apiClient.post(`/conversations/${conversation.id}/messages/${messageId}/reactions`, { emoji });
-      acceptReactions(messageId, result.reactions, result.readAt);
+      // Saved, but the server could not read the reactions back: keep the tap
+      // shown until a read of our own lands.
+      if (result.reactions) acceptReactions(messageId, result.reactions, result.readAt);
+      else await refetchReactions(conversation.id, messageId);
     } catch (err) {
       setError(err.message || 'Failed to react');
     } finally {
@@ -275,7 +278,7 @@ export default function useConversation({ resolve, currentUser }) {
       else pending.delete(messageId);
       showReactions(messageId);
     }
-  }, [conversation, currentUser, acceptReactions, showReactions]);
+  }, [conversation, currentUser, acceptReactions, showReactions, refetchReactions]);
 
   const markRead = useCallback(async () => {
     if (!conversation) return;

@@ -339,6 +339,20 @@ describe('messaging service', () => {
       await expect(getMessageReactions('conv-2', 'msg-1')).rejects.toMatchObject({ status: 404 });
     });
 
+    it('reports a saved toggle as saved even when reading reactions back fails', async () => {
+      prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
+      prisma.messageReaction.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.messageReaction.findMany.mockRejectedValue(new Error('pool timeout'));
+      mockBroadcastToConversation.mockResolvedValue();
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await toggleReaction({ conversationId: 'conv-1', messageId: 'msg-1', user, emoji: '👍' });
+
+      expect(result).toEqual({ messageId: 'msg-1', reactions: null, readAt: null });
+      expect(mockBroadcastToConversation).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
     it('answers 503 before the reactions table exists', async () => {
       prisma.message.findUnique.mockResolvedValue({ id: 'msg-1', conversationId: 'conv-1', deletedAt: null });
       prisma.messageReaction.deleteMany.mockRejectedValue(Object.assign(new Error('missing'), { code: 'P2021' }));

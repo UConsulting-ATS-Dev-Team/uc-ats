@@ -254,13 +254,21 @@ export async function toggleReaction({ conversationId, messageId, user, emoji })
     // Read back after the commit, stamped like any other read: a read stamped
     // inside the transaction would claim to be newer than reads that ran before
     // the commit, yet see less than they do once it lands.
+    // The toggle is saved by now, so a failed read-back must not report it as
+    // failed: the client would undo the tap, and a retry would toggle it back.
+    // It answers with no reactions and the client reads them itself.
     const readAt = new Date().toISOString();
-    const rows = await prisma.messageReaction.findMany({
-      where: { messageId },
-      orderBy: { createdAt: 'asc' },
-      select: reactionInclude.reactions.select
-    });
-    return { messageId, reactions: summarizeReactions(rows), readAt };
+    try {
+      const rows = await prisma.messageReaction.findMany({
+        where: { messageId },
+        orderBy: { createdAt: 'asc' },
+        select: reactionInclude.reactions.select
+      });
+      return { messageId, reactions: summarizeReactions(rows), readAt };
+    } catch (err) {
+      console.error('[toggleReaction] saved, but reading reactions back failed:', err);
+      return { messageId, reactions: null, readAt: null };
+    }
   } catch (err) {
     if (!isMissingTable(err)) throw err;
     const unavailable = new Error('Reactions are not available yet');

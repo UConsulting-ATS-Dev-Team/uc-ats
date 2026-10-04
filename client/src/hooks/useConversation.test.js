@@ -235,6 +235,26 @@ describe('useConversation', () => {
       expect(result.current.messages[0].reactions.map((r) => r.emoji)).toEqual(['👍', '❤️']);
     });
 
+    it('reads reactions back itself when the server saved the tap but could not', async () => {
+      const mine = [{ emoji: '👍', count: 1, users: [me] }];
+      let read;
+      mockGet.mockImplementation((url) =>
+        url.endsWith('/reactions') ? new Promise((r) => { read = r; }) : Promise.resolve([msg])
+      );
+      mockPost.mockResolvedValue({ messageId: 'msg-1', reactions: null, readAt: null });
+      const result = await mount();
+
+      let pending;
+      act(() => { pending = result.current.react('msg-1', '👍'); });
+      await waitFor(() => expect(read).toBeDefined());
+      // Still shown while the read is out.
+      expect(result.current.messages[0].reactions).toEqual(mine);
+
+      await act(async () => { read({ messageId: 'msg-1', reactions: mine, readAt: at(3) }); await pending; });
+      expect(result.current.messages[0].reactions).toEqual(mine);
+      expect(result.current.error).toBeNull();
+    });
+
     it('drops a refused tap and says why', async () => {
       mockGet.mockResolvedValue([msg]);
       mockPost.mockRejectedValue(new Error('Reactions are not available yet'));
