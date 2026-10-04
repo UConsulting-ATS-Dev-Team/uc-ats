@@ -3,6 +3,7 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
+import { emailVariants } from '../utils/mailingListImport.js';
 
 /**
  * Sign in with Google.
@@ -171,11 +172,49 @@ const linkExisting = async (user, profile) => {
 };
 
 /**
- * Somebody with no account here at all. They become a talent-portal account:
- * role USER with isExternalTalent, and deliberately no Candidate row, because
- * they have not applied to anything and inventing one would put a stranger in
- * the recruiting pipeline. graduationClass is left null - Google cannot tell us
- * and the talent profile asks for it.
+ * The applicant this verified address belongs to, as a UID, or null.
+ *
+ * Applying through the Google Form makes a Candidate but no account, so an
+ * applicant who never registered and then signs in with Google has no User row
+ * to match. Without this they became a talent-portal account, which has no UID
+ * and therefore never sees their application or interview scheduling.
+ *
+ * Matches the candidate's address or any of their applications', in either UCLA
+ * spelling. Null when nobody or more than one candidate applied under it, or
+ * when another account already holds the UID: in each case there is no single
+ * applicant this person can safely become.
+ */
+const findApplicantStudentId = async (email) => {
+  const spellings = emailVariants(email).map((variant) => ({ equals: variant, mode: 'insensitive' }));
+  if (spellings.length === 0) return null;
+
+  const candidates = await prisma.candidate.findMany({
+    where: {
+      OR: [
+        ...spellings.map((spelling) => ({ email: spelling })),
+        { applications: { some: { OR: spellings.map((spelling) => ({ email: spelling })) } } }
+      ]
+    },
+    select: { studentId: true },
+    take: 2
+  });
+  if (candidates.length !== 1 || !candidates[0].studentId) return null;
+
+  const { studentId } = candidates[0];
+  const holder = await prisma.user.findUnique({ where: { studentId }, select: { id: true } });
+  return holder ? null : studentId;
+};
+
+/**
+ * Somebody with no account here at all. An applicant (see
+ * findApplicantStudentId) gets the account /register would have made them:
+ * role USER with their UID, so the candidate pages find their application.
+ *
+ * Anyone else becomes a talent-portal account: role USER with
+ * isExternalTalent, and deliberately no Candidate row, because they have not
+ * applied to anything and inventing one would put a stranger in the recruiting
+ * pipeline. graduationClass is left null - Google cannot tell us and the talent
+ * profile asks for it.
  *
  * Deliberately NOT gated on isUclaEmail, unlike /register-external, which
  * refuses anything outside ucla.edu. That asymmetry is a decision, not an
@@ -184,19 +223,49 @@ const linkExisting = async (user, profile) => {
  * longer implies its owner is a verified UCLA student. Add isUclaEmail here if
  * that ever needs to be true again.
  */
-const createFromGoogle = (profile) =>
-  prisma.user.create({
+const createFromGoogle = async (profile) => {
+  const studentId = await findApplicantStudentId(profile.email);
+  return prisma.user.create({
     data: {
       email: profile.email,
       password: null,
       fullName: profile.fullName || profile.email.split('@')[0],
       role: 'USER',
-      isExternalTalent: true,
+      isExternalTalent: !studentId,
+      ...(studentId ? { studentId } : {}),
       emailVerifiedAt: new Date(),
       googleId: profile.googleId,
       googleLinkedAt: new Date()
     }
   });
+};
+
+/**
+ * A talent-portal account whose verified address turns out to be an applicant's
+ * - made by Google sign-in before the check above existed, or before they
+ * applied - becomes that applicant's account. Anything else is returned as is.
+ */
+const adoptApplicant = async (user) => {
+  if (!user.isExternalTalent || user.studentId || !user.emailVerifiedAt || user.role !== 'USER') {
+    return user;
+  }
+
+  const studentId = await findApplicantStudentId(user.email);
+  if (!studentId) return user;
+
+  try {
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { isExternalTalent: false, studentId }
+    });
+    invalidateUserCache(updated.id);
+    return updated;
+  } catch (error) {
+    // Another account took the UID in between. Leave this one as it was.
+    if (error?.code === 'P2002') return user;
+    throw error;
+  }
+};
 
 /**
  * Resolution order. googleId first so that somebody who renames their Google
@@ -206,14 +275,14 @@ const createFromGoogle = (profile) =>
 export const resolveGoogleUser = async (profile) => {
   const byGoogleId = await prisma.user.findUnique({ where: { googleId: profile.googleId } });
   if (byGoogleId) {
-    return { user: assertActive(byGoogleId), isNewAccount: false };
+    return { user: await adoptApplicant(assertActive(byGoogleId)), isNewAccount: false };
   }
 
   const byEmail = await findByEmail(profile.email);
   if (byEmail) {
     // Checked before the write, so a deactivated account is not quietly linked.
     assertActive(byEmail);
-    return { user: await linkExisting(byEmail, profile), isNewAccount: false };
+    return { user: await adoptApplicant(await linkExisting(byEmail, profile)), isNewAccount: false };
   }
 
   try {
