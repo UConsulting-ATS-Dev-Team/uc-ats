@@ -934,7 +934,7 @@ export default function Staging() {
   const fetchCoffeeChatSessions = async () => {
     try {
       const overview = await apiClient.get('/admin/scheduling/overview');
-      const round = (overview?.rounds || []).find(r => r.round === 2);
+      const round = (overview?.rounds || []).find(r => String(r.round) === '2');
       setCoffeeChatSessions((round?.slots || []).map(slot => ({
         id: slot.id,
         label: [

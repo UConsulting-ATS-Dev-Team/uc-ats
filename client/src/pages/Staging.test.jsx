@@ -489,7 +489,7 @@ describe('Staging coffee chat session filter', () => {
   });
   const overview = {
     rounds: [{
-      round: 2,
+      round: '2',
       slots: [
         {
           id: 'slot-1',
