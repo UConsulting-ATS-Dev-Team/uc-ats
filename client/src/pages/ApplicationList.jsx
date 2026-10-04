@@ -133,7 +133,7 @@ export default function ApplicationList() {
   }, [applicants]);
 
   const formatStatus = (status) => {
-    return status.toLowerCase().replace('_', ' ');
+    return status.toLowerCase();
   };
 
   const handleFilterChange = (filterType, value) => {

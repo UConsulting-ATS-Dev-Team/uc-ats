@@ -216,6 +216,20 @@
   --logo-u: #38bdf8;
 }
 
+/* Fields nothing else styles would get the browser's own dark field: a grey
+   box off the palette with a placeholder too dim to read. :where() keeps this
+   at zero specificity, so any class or MUI rule still wins. */
+:where([data-theme="dark"]) :where(textarea, select, input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="submit"], [type="button"])) {
+  background-color: var(--bg-gray-light);
+  color: var(--text-primary);
+  border: 1px solid var(--border-medium);
+}
+
+:where([data-theme="dark"]) :where(textarea, input)::placeholder {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
 /* Touch target minimums on mobile (Apple HIG 44pt, WCAG 2.5.5).
    Scoped to elements that act as buttons; excludes dense table icon buttons
    via the .dense-action escape hatch. */
