@@ -1,11 +1,12 @@
 // Booking, cancelling and moving a candidate's place in an interview slot.
 //
-// Every operation here runs inside a Serializable transaction, and every fact
-// that decides an outcome is read inside it. That is the whole point: capacity
-// cannot be enforced by checking and then writing, because two requests for the
-// last seat both check successfully. Under Serializable, Postgres notices that
-// each insert falls inside the other's predicate read and aborts one, which
-// withSerializableTransaction retries into an honest "this slot is full".
+// Capacity cannot be enforced by checking and then writing, because two requests
+// for the last seat both check successfully. So every operation here that
+// changes who holds a seat first locks the round's sessions (lockRoundSlots /
+// lockRoundOfSlot), then reads every fact that decides the outcome, then writes,
+// all in one transaction. Holding the lock, it is the only writer in that round,
+// and under Read Committed each read after the lock sees everything the
+// previous holder committed.
 //
 // The GTKUC booking route (routes/candidate.js) does check-then-write at Read
 // Committed and can overbook. It predates this and is worth fixing separately;
@@ -16,6 +17,7 @@
 // transaction runs its body again, and an email sent inside one goes twice.
 
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import prisma from '../prismaClient.js';
 import { createKeyedBatchQueue } from '../utils/keyedBatchQueue.js';
 import {
@@ -88,6 +90,62 @@ async function lockRoundSlots(tx, interview) {
     ORDER BY s.id
     FOR UPDATE OF s`;
 }
+
+/**
+ * lockRoundSlots for the round a slot belongs to, found and locked in one
+ * statement.
+ *
+ * Every write that changes who holds a seat - booking, cancelling, moving,
+ * promoting, placing - takes this lock first. Capacity is a count over rows
+ * none of them can lock individually, and Serialisable cannot referee between
+ * a Serialisable writer and the Read Committed booking batch: SSI only sees
+ * transactions that are themselves Serialisable. So they all queue on the same
+ * rows instead, and each reads only after it holds them.
+ *
+ * It must be the transaction's first statement. Under Read Committed each
+ * statement after it reads what is committed by then, which is everything the
+ * previous holder wrote.
+ */
+async function lockRoundOfSlot(tx, slotId) {
+  await tx.$queryRaw`
+    SELECT s.id
+    FROM interview_slots s
+    JOIN interviews i ON i.id = s."interviewId"
+    JOIN (
+      SELECT ri."cycleId", ri."interviewType"
+      FROM interview_slots rs
+      JOIN interviews ri ON ri.id = rs."interviewId"
+      WHERE rs.id = ${slotId}
+    ) target ON target."cycleId" = i."cycleId" AND target."interviewType" = i."interviewType"
+    WHERE i.status NOT IN ('CANCELLED', 'COMPLETED')
+    ORDER BY s.id
+    FOR UPDATE OF s`;
+}
+
+/** lockRoundOfSlot, starting from a signup rather than a slot. */
+async function lockRoundOfSignup(tx, signupId) {
+  await tx.$queryRaw`
+    SELECT s.id
+    FROM interview_slots s
+    JOIN interviews i ON i.id = s."interviewId"
+    JOIN (
+      SELECT ri."cycleId", ri."interviewType"
+      FROM interview_slot_signups su
+      JOIN interview_slots rs ON rs.id = su."slotId"
+      JOIN interviews ri ON ri.id = rs."interviewId"
+      WHERE su.id = ${signupId}
+    ) target ON target."cycleId" = i."cycleId" AND target."interviewType" = i."interviewType"
+    WHERE i.status NOT IN ('CANCELLED', 'COMPLETED')
+    ORDER BY s.id
+    FOR UPDATE OF s`;
+}
+
+/**
+ * Transaction options for anything that holds the round lock. Read Committed,
+ * because the lock is doing the work: under Serialisable a writer that queued
+ * on the lock still reads from a snapshot taken before it got it, and aborts.
+ */
+const ROUND_LOCKED = { isolationLevel: 'ReadCommitted', maxRetries: 5, timeout: 20000, maxWait: 15000 };
 
 /**
  * The rotation group an arriving candidate joins.
@@ -172,7 +230,7 @@ async function drainWaitlist(tx, startSlotId, now) {
         });
       }
 
-      // Conditional claim. Serializable already rules out a concurrent writer,
+      // Conditional claim. The round lock already rules out a concurrent writer,
       // so a zero count means an assumption broke rather than a lost race -
       // throwing rolls the whole transaction back rather than leaving the
       // released seat orphaned.
@@ -246,7 +304,7 @@ async function loadRoundState(tx, round, applicationIds) {
     select: { id: true, cycleId: true, title: true, interviewType: true, status: true, location: true },
   });
   const interviewIds = interviews.map((row) => row.id);
-  if (interviewIds.length === 0) return { slots: [], existing: [] };
+  if (interviewIds.length === 0) return { slots: [], existing: [], latestAt: 0 };
 
   const slotRows = await tx.interviewSlot.findMany({
     where: { interviewId: { in: interviewIds } },
@@ -261,6 +319,14 @@ async function loadRoundState(tx, round, applicationIds) {
     where: { interviewId: { in: interviewIds }, applicationId: { in: applicationIds }, status: { in: LIVE_STATUSES } },
     select: SIGNUP_SELECT,
   });
+  const latest = await tx.interviewSlotSignup.aggregate({
+    where: { interviewId: { in: interviewIds } },
+    _max: { signedUpAt: true, waitlistedAt: true },
+  });
+  const latestAt = Math.max(
+    latest._max.signedUpAt?.getTime() ?? 0,
+    latest._max.waitlistedAt?.getTime() ?? 0
+  );
 
   const interviewById = new Map(interviews.map((row) => [row.id, row]));
   const slots = slotRows.map((slot) => {
@@ -275,7 +341,7 @@ async function loadRoundState(tx, round, applicationIds) {
         .map((row) => ({ groupLabel: row.groupLabel, count: row._count._all })),
     };
   });
-  return { slots, existing };
+  return { slots, existing, latestAt };
 }
 
 /** Seat someone in `slot` in memory, returning the group label they get. */
@@ -315,7 +381,7 @@ function plannedSignup(data) {
  * fails this claim alone.
  */
 function decideClaim(claim, state, now, rows) {
-  const { applicationId, slotId, arrivedAt } = claim;
+  const { applicationId, slotId, at } = claim;
   const slot = state.slots.find((s) => s.id === slotId);
   if (!slot) {
     // Present when the claim was queued, gone now: the slot was deleted, or its
@@ -363,7 +429,7 @@ function decideClaim(claim, state, now, rows) {
         applicationId,
         status: 'CONFIRMED',
         groupLabel: takeSeat(slot),
-        signedUpAt: arrivedAt,
+        signedUpAt: at,
       })
     );
     return { outcome: 'CONFIRMED', confirmed, waitlisted: null, slot, interview };
@@ -373,7 +439,7 @@ function decideClaim(claim, state, now, rows) {
 
   if (!fallback) {
     const needsPlacement = keep(
-      plannedSignup({ slotId, interviewId: interview.id, applicationId, status: 'NEEDS_PLACEMENT', signedUpAt: arrivedAt })
+      plannedSignup({ slotId, interviewId: interview.id, applicationId, status: 'NEEDS_PLACEMENT', signedUpAt: at })
     );
     return { outcome: 'NEEDS_PLACEMENT', needsPlacement, slot, interview };
   }
@@ -387,7 +453,7 @@ function decideClaim(claim, state, now, rows) {
       applicationId,
       status: 'CONFIRMED',
       groupLabel: takeSeat(fallback),
-      signedUpAt: arrivedAt,
+      signedUpAt: at,
     })
   );
   const waitlisted = keep(
@@ -396,10 +462,10 @@ function decideClaim(claim, state, now, rows) {
       interviewId: interview.id,
       applicationId,
       status: 'WAITLISTED',
-      signedUpAt: arrivedAt,
-      // FCFS for promotion. Each claim's own arrival time, never the batch's:
-      // a shared timestamp would leave nextInLine ordering a batch by random id.
-      waitlistedAt: arrivedAt,
+      signedUpAt: at,
+      // FCFS for promotion. Each claim's own time, never the batch's: a shared
+      // timestamp would leave nextInLine ordering a batch by random id.
+      waitlistedAt: at,
       heldSeatId: confirmed.id,
     })
   );
@@ -430,10 +496,18 @@ async function runClaimBatch(round, claims) {
       await lockRoundSlots(tx, round);
       const state = await loadRoundState(tx, round, [...new Set(claims.map((claim) => claim.applicationId))]);
 
+      // Timestamps follow the order seats are handed out in: this batch after
+      // everything already in the round, and claims within it in arrival
+      // order, a millisecond apart. Taken from the round rather than from each
+      // server's clock, so two instances whose batches interleave, or whose
+      // clocks disagree, still leave signedUpAt and waitlistedAt in the order
+      // the lock decided.
+      const firstAt = Math.max(now.getTime(), state.latestAt + 1);
+
       const rows = [];
-      const outcomes = claims.map((claim) => {
+      const outcomes = claims.map((claim, i) => {
         try {
-          return { value: decideClaim(claim, state, now, rows) };
+          return { value: decideClaim({ ...claim, at: new Date(firstAt + i) }, state, now, rows) };
         } catch (error) {
           if (error instanceof SlotTransactionError) return { error };
           throw error;
@@ -444,21 +518,33 @@ async function runClaimBatch(round, claims) {
       if (rows.length > 0) await tx.interviewSlotSignup.createMany({ data: rows });
       return outcomes;
     },
-    { isolationLevel: 'ReadCommitted', maxRetries: 5, timeout: 20000, maxWait: 15000 }
+    ROUND_LOCKED
   );
 }
 
+// Failures that say the database is unreachable or overloaded, not that any one
+// claim is wrong. withSerializableTransaction has already retried them; going
+// round again claim by claim would hold the whole round's queue through a
+// timeout per claim.
+const DATABASE_UNAVAILABLE = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2028', 'P2034']);
+
+/** Could running each claim alone get past this error? Only if a claim caused it. */
+const isClaimSpecific = (error) =>
+  error instanceof Prisma.PrismaClientKnownRequestError && !DATABASE_UNAVAILABLE.has(error.code);
+
 /**
- * The batch runner the queue calls. A batch that fails outright is retried one
- * claim at a time, so a single bad claim - say, a unique index tripped by an
- * admin placing that candidate at the same moment - fails only itself.
+ * The batch runner the queue calls. A batch that fails on something a claim
+ * caused - say, a unique index tripped by an admin placing that candidate at the
+ * same moment - is retried one claim at a time, so the bad claim fails only
+ * itself. A batch that fails because the database is down fails every claim at
+ * once.
  */
 async function runClaimBatchIsolatingFailures(_key, claims) {
   const { round } = claims[0];
   try {
     return await runClaimBatch(round, claims);
   } catch (error) {
-    if (claims.length === 1) return [{ error }];
+    if (claims.length === 1 || !isClaimSpecific(error)) return claims.map(() => ({ error }));
     console.error(`[claimWithFallback] batch of ${claims.length} failed; retrying one at a time`, error);
     const outcomes = [];
     for (const claim of claims) {
@@ -511,26 +597,7 @@ export async function claimWithFallback({ applicationId, slotId, cycleId }) {
   }
 
   const round = { cycleId: interview.cycleId, interviewType: interview.interviewType };
-  return enqueueClaim(`${round.cycleId}:${round.interviewType}`, {
-    applicationId,
-    slotId,
-    round,
-    arrivedAt: nextArrivalTime(),
-  });
-}
-
-let lastArrival = 0;
-
-/**
- * Now, but strictly later than the previous claim this process queued.
- *
- * Taken as the claim joins the queue, so the order seats are handed out in and
- * the order of the timestamps agree. Two claims in the same millisecond would
- * otherwise tie, and nextInLine breaks a tie by random id.
- */
-function nextArrivalTime() {
-  lastArrival = Math.max(Date.now(), lastArrival + 1);
-  return new Date(lastArrival);
+  return enqueueClaim(`${round.cycleId}:${round.interviewType}`, { applicationId, slotId, round });
 }
 
 /**
@@ -545,6 +612,7 @@ export async function cancelSignup({ signupId, actorId = null, reason = null, is
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: { include: { interview: { select: { id: true, title: true, interviewType: true } } } } },
@@ -589,7 +657,7 @@ export async function cancelSignup({ signupId, actorId = null, reason = null, is
       promotions: [...promotions, ...alsoDrained],
       interview: signup.slot.interview,
     };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -615,6 +683,9 @@ export async function moveSignup({
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    // The booking's round. A target in another round is refused below, so this
+    // is the only round a move can change.
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: true },
@@ -702,7 +773,7 @@ export async function moveSignup({
     // time from a reshuffle that lands on the same one - the difference between
     // an email a candidate needs and one that worries them for nothing.
     return { moved, vacatedSlotId, releasedSeatId, promotions, overCapacity, target, fromSlot: signup.slot, fromStatus: signup.status };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -720,6 +791,7 @@ export async function promoteFromWaitlist({ signupId, actorId, force = false }) 
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSignup(tx, signupId);
     const signup = await tx.interviewSlotSignup.findUnique({
       where: { id: signupId },
       include: { slot: true },
@@ -764,7 +836,7 @@ export async function promoteFromWaitlist({ signupId, actorId, force = false }) 
     const promotions = releasedSlotId ? await drainWaitlist(tx, releasedSlotId, now) : [];
 
     return { promoted, releasedSlotId, promotions, overCapacity };
-  });
+  }, ROUND_LOCKED);
 }
 
 /**
@@ -781,6 +853,7 @@ export async function placeCandidate({
   const now = new Date();
 
   return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSlot(tx, slotId);
     const slot = await loadSlotForBooking(tx, slotId);
     if (slot.interviewId !== interviewId) {
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
@@ -818,7 +891,7 @@ export async function placeCandidate({
     });
 
     return { placed, overCapacity, slot };
-  });
+  }, ROUND_LOCKED);
 }
 
-export { drainWaitlist, loadSlotsWithCounts, LIVE_STATUSES };
+export { drainWaitlist, isClaimSpecific, loadSlotsWithCounts, LIVE_STATUSES };

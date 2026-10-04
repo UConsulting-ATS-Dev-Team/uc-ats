@@ -279,6 +279,50 @@ describeDb('claimWithFallback against real PostgreSQL', () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  it('holds capacity when moves and bookings race for the same session', async () => {
+    await seed({ morning: 10, afternoon: 60, applications: 40 });
+    const { claimWithFallback, moveSignup } = await loadInstance();
+    const { cycle, morningSlot, afternoonSlot, apps } = fixture;
+
+    // Twenty people already sit in the afternoon and will try to move to the
+    // morning, while twenty others book the morning at the same moment.
+    const movers = apps.slice(0, 20);
+    const bookers = apps.slice(20);
+    const seats = await Promise.all(
+      movers.map((app) => claimWithFallback({ applicationId: app.id, slotId: afternoonSlot.id, cycleId: cycle.id }))
+    );
+
+    const results = await settle([
+      ...seats.map((seat) => moveSignup({ signupId: seat.confirmed.id, toSlotId: morningSlot.id })),
+      ...bookers.map((app) => claimWithFallback({ applicationId: app.id, slotId: morningSlot.id, cycleId: cycle.id })),
+    ]);
+
+    const morning = await db.interviewSlotSignup.count({ where: { slotId: morningSlot.id, status: 'CONFIRMED' } });
+    expect(morning).toBe(10);
+    // Everyone who did not get the morning was told so, not failed.
+    expect(results.filter((r) => r.outcome === 'ERROR').every((r) => r.message === 'OVER_CAPACITY')).toBe(true);
+    await assertInvariants();
+  }, 60000);
+
+  it('keeps seat order and timestamp order in step across two instances', async () => {
+    await seed({ morning: 15, afternoon: 15, applications: 40 });
+    const serverA = await loadInstance();
+    const serverB = await loadInstance();
+    const { cycle, morningSlot, apps } = fixture;
+
+    await settle(
+      apps.map((app, i) =>
+        (i % 2 === 0 ? serverA : serverB).claimWithFallback({ applicationId: app.id, slotId: morningSlot.id, cycleId: cycle.id })
+      )
+    );
+
+    const rows = await db.interviewSlotSignup.findMany({ where: { slotId: morningSlot.id } });
+    const seated = rows.filter((r) => r.status === 'CONFIRMED').map((r) => r.signedUpAt.getTime());
+    const waiting = rows.filter((r) => r.status === 'WAITLISTED').map((r) => r.waitlistedAt.getTime());
+    expect(Math.max(...seated)).toBeLessThan(Math.min(...waiting));
+    expect(new Set(rows.map((r) => r.signedUpAt.getTime())).size).toBe(rows.length);
+  }, 60000);
+
   it('holds capacity when two server instances book the same round at once', async () => {
     await seed({ morning: 15, afternoon: 15, applications: 40 });
     const serverA = await loadInstance();
