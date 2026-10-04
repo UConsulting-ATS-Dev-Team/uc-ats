@@ -217,7 +217,7 @@ export default function MemberDashboard() {
       <Box sx={{ maxWidth: 1200, mx: 'auto', p: 0 }}>
       {/* Welcome Section */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+        <Typography variant="h3" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
           Welcome, {user?.fullName}.
         </Typography>
       </Box>
@@ -234,7 +234,7 @@ export default function MemberDashboard() {
             <Box
               sx={{
                 bgcolor: 'primary.main',
-                color: 'white',
+                color: 'primary.contrastText',
                 p: 2,
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -242,12 +242,12 @@ export default function MemberDashboard() {
                 borderRadius: '4px 4px 0 0'
               }}
             >
-              <Typography variant="h6" component="h2" sx={{ color: 'white', fontWeight: 700 }}>
+              <Typography variant="h6" component="h2" sx={{ color: 'primary.contrastText', fontWeight: 700 }}>
                 Your Tasks
               </Typography>
               <Chip
                 label={`${tasks.filter(task => task.status === 'pending').length} Pending`}
-                sx={{ bgcolor: 'white', color: 'primary.dark', fontWeight: 600 }}
+                sx={{ bgcolor: 'primary.contrastText', color: 'primary.main', fontWeight: 600 }}
                 size="small"
               />
             </Box>
@@ -313,7 +313,7 @@ export default function MemberDashboard() {
             <Box
               sx={{
                 bgcolor: 'primary.main',
-                color: 'white',
+                color: 'primary.contrastText',
                 p: 2,
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -321,14 +321,14 @@ export default function MemberDashboard() {
                 borderRadius: '4px 4px 0 0'
               }}
             >
-              <Typography variant="h6" component="h2" sx={{ color: 'white', fontWeight: 700 }}>
+              <Typography variant="h6" component="h2" sx={{ color: 'primary.contrastText', fontWeight: 700 }}>
                 Resources
               </Typography>
               <Button
                 variant="text"
                 endIcon={<ArrowTopRightOnSquareIcon />}
                 onClick={() => handleViewMore('resources')}
-                sx={{ color: 'white' }}
+                sx={{ color: 'primary.contrastText' }}
                 size="small"
               >
                 View More
@@ -361,7 +361,7 @@ export default function MemberDashboard() {
                       sx={{
                         border: 1,
                         borderColor: 'grey.300',
-                        '&:hover': { bgcolor: 'grey.100' }
+                        '&:hover': { bgcolor: 'action.hover' }
                       }}
                     >
                       <ArrowDownTrayIcon sx={{ fontSize: 16 }} />
@@ -372,7 +372,7 @@ export default function MemberDashboard() {
                       sx={{
                         border: 1,
                         borderColor: 'grey.300',
-                        '&:hover': { bgcolor: 'grey.100' }
+                        '&:hover': { bgcolor: 'action.hover' }
                       }}
                     >
                       <ArrowTopRightOnSquareIcon sx={{ fontSize: 16 }} />
@@ -389,7 +389,7 @@ export default function MemberDashboard() {
       {!teamLoading && (
         <Paper sx={{ p: 3, mt: 4 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-            <Typography variant="h5" component="h2" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 700, color: 'text.primary' }}>
               Review Team
             </Typography>
             <Button
@@ -404,7 +404,7 @@ export default function MemberDashboard() {
           
           {!userTeam ? (
             <Box sx={{ textAlign: 'center', p: 4 }}>
-              <GroupIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
+              <GroupIcon sx={{ fontSize: 60, color: 'text.muted', mb: 2 }} />
               <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
                 No Team Assigned
               </Typography>

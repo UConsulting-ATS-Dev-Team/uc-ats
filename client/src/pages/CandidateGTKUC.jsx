@@ -167,7 +167,7 @@ export default function CandidateGTKUC() {
           mb: 2,
         }}
       >
-        <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.dark' }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, color: 'text.primary' }}>
           {picking ? 'Pick a new time' : 'Available Meeting Slots'}
         </Typography>
         {picking && (
@@ -189,7 +189,7 @@ export default function CandidateGTKUC() {
       )}
       {availableSlots.length === 0 ? (
         <Box sx={{ textAlign: 'center', p: 4 }}>
-          <ScheduleIcon sx={{ fontSize: 60, color: 'grey.400', mb: 2 }} />
+          <ScheduleIcon sx={{ fontSize: 60, color: 'text.muted', mb: 2 }} />
           <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
             No Available Meeting Slots
           </Typography>

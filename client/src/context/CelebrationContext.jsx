@@ -78,7 +78,7 @@ const StaticSuccess = ({ active }) => {
         bottom: '24px',
         transform: 'translateX(-50%)',
         padding: '12px 24px',
-        backgroundColor: '#ffffff',
+        backgroundColor: 'var(--bg-white)',
         border: '2px solid #4ecdc4',
         borderRadius: '8px',
         boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
@@ -86,7 +86,7 @@ const StaticSuccess = ({ active }) => {
         pointerEvents: 'none',
         fontSize: '1rem',
         fontWeight: 600,
-        color: '#2c3e50',
+        color: 'var(--text-primary)',
         display: 'flex',
         alignItems: 'center',
         gap: '8px'

@@ -209,7 +209,7 @@ export default function CandidateDetail() {
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  backgroundColor: '#f3f4f6',
+                  backgroundColor: 'var(--bg-gray-lighter)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center'
@@ -227,7 +227,7 @@ export default function CandidateDetail() {
                   border: 'none',
                   borderRadius: '4px',
                   cursor: deletingCandidate || (candidate.applications && candidate.applications.length > 0) ? 'not-allowed' : 'pointer',
-                  backgroundColor: deletingCandidate || (candidate.applications && candidate.applications.length > 0) ? '#e5e7eb' : '#fee2e2',
+                  backgroundColor: deletingCandidate || (candidate.applications && candidate.applications.length > 0) ? 'var(--bg-gray-medium)' : 'var(--status-error-bg)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',

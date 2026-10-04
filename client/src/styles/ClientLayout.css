@@ -111,7 +111,7 @@
 
 .logout-btn:hover {
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .logout-btn:focus {
@@ -187,7 +187,7 @@
 
 .nav-item.active {
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .nav-icon {
@@ -202,7 +202,7 @@
 }
 
 .nav-item.active .nav-icon {
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .nav-item:hover .nav-icon {
@@ -210,7 +210,7 @@
 }
 
 .nav-item.active:hover .nav-icon {
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 /* Mobile sidebar overlay */

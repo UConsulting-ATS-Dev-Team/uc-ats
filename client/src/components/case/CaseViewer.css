@@ -61,7 +61,7 @@
   padding: 6px 8px;
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--border-radius-sm, 0.375rem);
-  background: #fff;
+  background: var(--bg-white, #fff);
   color: var(--primary-dark, #042742);
 }
 
@@ -79,18 +79,18 @@
   padding: 4px 10px;
   border: 1px solid var(--primary-blue, #0c74c1);
   color: var(--primary-blue, #0c74c1);
-  background: #fff;
+  background: var(--bg-white, #fff);
   border-radius: var(--border-radius-sm, 0.375rem);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .case-viewer__jump:hover {
   background: var(--primary-blue, #0c74c1);
-  color: #fff;
+  color: var(--text-on-primary, #fff);
 }
 .case-viewer__jump.is-active {
   background: var(--primary-blue, #0c74c1);
-  color: #fff;
+  color: var(--text-on-primary, #fff);
 }
 .case-viewer__jump--guide {
   border-color: #f59e0b;
@@ -99,7 +99,7 @@
 .case-viewer__jump--guide:hover,
 .case-viewer__jump--guide.is-active {
   background: #f59e0b;
-  color: #fff;
+  color: var(--text-on-primary, #fff);
 }
 
 /* Main stage */
@@ -111,7 +111,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #fff;
+  background: var(--bg-white, #fff);
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--border-radius-sm, 0.375rem);
   overflow: hidden;
@@ -124,6 +124,7 @@
 
 .case-viewer__img {
   display: block;
+  background: #fff;
 }
 
 .case-viewer__io-badge {
@@ -133,7 +134,7 @@
   z-index: 2;
   font-size: 0.7rem;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-on-primary, #fff);
   background: #f59e0b;
   padding: 4px 10px;
   border-radius: var(--border-radius-sm, 0.375rem);
@@ -164,7 +165,7 @@
   transition: background 0.15s ease;
 }
 .case-viewer__nav:hover:not(:disabled) {
-  background: var(--primary-dark, #042742);
+  background: rgb(4, 39, 66);
 }
 .case-viewer__nav:disabled {
   opacity: 0.3;
@@ -225,13 +226,13 @@
   padding: 8px 14px;
   border-radius: var(--border-radius-sm, 0.375rem);
   border: 1px solid var(--border-color, #e5e7eb);
-  background: #fff;
+  background: var(--bg-white, #fff);
   color: var(--primary-dark, #042742);
   cursor: pointer;
 }
 .case-viewer__btn--primary {
   background: var(--primary-dark, #042742);
-  color: #fff;
+  color: var(--text-on-primary, #fff);
   border-color: var(--primary-dark, #042742);
 }
 .case-viewer__btn:disabled {
@@ -278,7 +279,7 @@
   z-index: 1300;
 }
 .case-viewer__confirm {
-  background: #fff;
+  background: var(--bg-white, #fff);
   border-radius: var(--border-radius, 0.5rem);
   padding: 20px;
   max-width: 380px;
@@ -300,6 +301,21 @@
   gap: 8px;
 }
 
+/* These light values have no token; dark mode swaps in the status tokens. */
+[data-theme="dark"] .case-viewer__badge-overridden {
+  color: var(--status-info-text);
+  background: var(--status-info-bg);
+}
+[data-theme="dark"] .case-viewer__jump--guide:not(:hover):not(.is-active) {
+  color: var(--status-warning-text);
+}
+[data-theme="dark"] .case-viewer__stage.is-interviewer-only {
+  background: var(--status-warning-bg);
+}
+[data-theme="dark"] .case-viewer__confirm {
+  border: 1px solid var(--border-medium);
+}
+
 /* Split pane inside the Case Interview tab */
 .case-split {
   display: grid;
@@ -315,7 +331,7 @@
   top: 12px;
   max-height: 78vh;
   overflow-y: auto;
-  background: #fff;
+  background: var(--bg-white, #fff);
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--border-radius, 0.5rem);
   padding: 12px;
@@ -332,7 +348,7 @@
   padding: 4px 8px;
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--border-radius-sm, 0.375rem);
-  background: #fff;
+  background: var(--bg-white, #fff);
   color: var(--primary-dark, #042742);
   cursor: pointer;
 }
@@ -361,7 +377,7 @@
   justify-content: center;
   gap: 12px;
   color: var(--text-secondary, #64748b);
-  background: #fff;
+  background: var(--bg-white, #fff);
   border: 1px dashed var(--border-color, #e5e7eb);
   border-radius: var(--border-radius-sm, 0.375rem);
   font-size: 0.9rem;

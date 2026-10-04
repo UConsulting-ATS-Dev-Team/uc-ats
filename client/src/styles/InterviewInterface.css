@@ -175,7 +175,7 @@
   gap: 0.5rem;
   padding: 0.5rem 1rem;
   background-color: var(--primary-blue);
-  color: var(--text-white);  border: none;
+  color: var(--text-on-primary);  border: none;
   border-radius: var(--border-radius);
   cursor: pointer;
   font-size: 0.875rem;
@@ -323,7 +323,7 @@
 .score-btn.selected {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
-  color: var(--text-white);}
+  color: var(--text-on-primary);}
 
 /* Decision Section */
 .decision-options {
@@ -593,7 +593,7 @@
   top: 1px;
   width: 6px;
   height: 10px;
-  border: solid var(--text-white);  border-width: 0 2px 2px 0;
+  border: solid var(--text-on-primary);  border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 
@@ -622,7 +622,7 @@
 
 .evaluation-badge {
   background-color: var(--status-success-border);
-  color: var(--text-white);  font-size: 0.75rem;
+  color: var(--text-on-primary);  font-size: 0.75rem;
   font-weight: 500;
   padding: 0.25rem 0.5rem;
   border-radius: 12px;
@@ -654,7 +654,7 @@
 
 .btn-primary {
   background-color: var(--primary-blue);
-  color: var(--text-white);  border: none;
+  color: var(--text-on-primary);  border: none;
   padding: 0.75rem 1.5rem;
   border-radius: var(--border-radius);
   font-size: 0.875rem;

@@ -12,15 +12,22 @@ export const ROLE_LABELS = {
   ANON: 'Signed out',
 };
 
+/**
+ * A line colour that must sit beside primary.main on one chart. Dark mode's
+ * info.main is the same blue as primary.main, so it takes the chart purple there.
+ */
+export const distinctFromPrimary = (theme) =>
+  theme.palette.mode === 'dark' ? theme.palette.custom.chart[5] : theme.palette.info.main;
+
 /** A theme colour per role, so a role looks the same on every chart. */
 export function roleColors(theme) {
   return {
     ADMIN: theme.palette.primary.main,
     MEMBER: theme.palette.secondary.main,
     CANDIDATE: theme.palette.success.main,
-    TALENT: theme.palette.info.main,
+    TALENT: distinctFromPrimary(theme),
     CLIENT: theme.palette.warning.main,
-    ANON: theme.palette.grey[500],
+    ANON: theme.palette.text.secondary,
   };
 }
 

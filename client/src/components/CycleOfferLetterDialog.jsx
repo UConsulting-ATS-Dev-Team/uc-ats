@@ -482,7 +482,7 @@ export default function CycleOfferLetterDialog({ cycleId, open, onClose }) {
                         <img
                           src={signaturePreview}
                           alt="President signature"
-                          style={{ maxWidth: 200, maxHeight: 80, objectFit: 'contain', border: '1px solid #e5e7eb', borderRadius: 4 }}
+                          style={{ maxWidth: 200, maxHeight: 80, objectFit: 'contain', border: '1px solid var(--border-medium)', borderRadius: 4, background: '#ffffff' }}
                         />
                       )}
                     </Stack>
@@ -493,7 +493,7 @@ export default function CycleOfferLetterDialog({ cycleId, open, onClose }) {
                       <img
                         src={signaturePreview}
                         alt="New signature preview"
-                        style={{ maxWidth: 200, maxHeight: 80, objectFit: 'contain', border: '1px solid #e5e7eb', borderRadius: 4 }}
+                        style={{ maxWidth: 200, maxHeight: 80, objectFit: 'contain', border: '1px solid var(--border-medium)', borderRadius: 4, background: '#ffffff' }}
                       />
                     </Stack>
                   )}
@@ -555,7 +555,7 @@ export default function CycleOfferLetterDialog({ cycleId, open, onClose }) {
                   <iframe
                     src={previewUrl}
                     title="Offer Letter Preview"
-                    style={{ width: '100%', height: '500px', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                    style={{ width: '100%', height: '500px', border: '1px solid var(--border-medium)', borderRadius: '8px' }}
                   />
                 )}
               </Stack>

@@ -132,7 +132,7 @@
 
 .logout-btn:hover {
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .logout-btn:focus {
@@ -227,13 +227,13 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   transition: all 0.2s;
 }
 
 .nav-section-header:hover {
   background-color: var(--bg-primary);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .nav-section-chevron {
@@ -320,7 +320,7 @@ button.nav-item:hover .nav-icon {
 
 .nav-item.active {
   background-color: var(--primary-blue);
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .nav-icon {
@@ -335,7 +335,7 @@ button.nav-item:hover .nav-icon {
 }
 
 .nav-item.active .nav-icon {
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 .nav-item:hover .nav-icon {
@@ -343,7 +343,7 @@ button.nav-item:hover .nav-icon {
 }
 
 .nav-item.active:hover .nav-icon {
-  color: var(--text-white);
+  color: var(--text-on-primary);
 }
 
 /* Mobile sidebar overlay */

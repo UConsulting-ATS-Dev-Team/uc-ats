@@ -172,7 +172,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
   const inputStyle = {
     width: '100%',
     padding: '10px 12px',
-    border: '1px solid #d1d5db',
+    border: '1px solid var(--border-medium)',
     borderRadius: '8px',
     fontSize: '0.875rem',
     fontFamily: 'inherit',
@@ -186,34 +186,34 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
     gap: '6px',
     fontSize: '0.875rem',
     fontWeight: '500',
-    color: '#374151'
+    color: 'var(--text-primary)'
   };
 
   const templateReady = template && template.presidentName?.trim() && template.signaturePath;
 
   return (
-    <div className="info-section" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+    <div className="info-section" style={{ backgroundColor: 'var(--bg-gray-light)', border: '1px solid var(--status-success-border)' }}>
       <h2 className="section-title">Offer Letter</h2>
 
       <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '4px' }}>
+        <div style={{ fontSize: '0.875rem', color: 'var(--text-primary)', marginBottom: '4px' }}>
           <strong>Candidate:</strong> {application.firstName} {application.lastName} ({application.email})
         </div>
         {lastSent ? (
-          <div style={{ fontSize: '0.875rem', color: '#15803d' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--status-success-text)' }}>
             Offer letter sent on {new Date(lastSent.createdAt).toLocaleString()}
             {lastSent.user?.fullName ? ` by ${lastSent.user.fullName}` : ''}.
           </div>
         ) : (
-          <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>
             No offer letter has been sent yet.
           </div>
         )}
         {templateLoading && (
-          <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Loading template...</div>
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>Loading template...</div>
         )}
         {!templateReady && !templateLoading && (
-          <div style={{ fontSize: '0.875rem', color: '#92400e', marginTop: '4px' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--status-warning-text)', marginTop: '4px' }}>
             Offer letter template is not ready. Configure the president name and signature in Cycle Management before sending.
           </div>
         )}
@@ -224,8 +224,8 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
           onClick={() => openForm(Boolean(lastSent))}
           style={{
             padding: '10px 16px',
-            backgroundColor: '#10b981',
-            color: 'white',
+            backgroundColor: 'var(--status-success-text)',
+            color: 'var(--text-on-primary)',
             border: 'none',
             borderRadius: '8px',
             fontSize: '0.875rem',
@@ -240,7 +240,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
           <form onSubmit={handlePreview}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '1rem' }}>
               <label style={labelStyle}>
-                Position <span style={{ color: '#dc2626' }}>*</span>
+                Position <span style={{ color: 'var(--status-error-text)' }}>*</span>
                 <input
                   type="text"
                   value={form.position}
@@ -262,7 +262,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
               </label>
 
               <label style={labelStyle}>
-                Response Deadline <span style={{ color: '#dc2626' }}>*</span>
+                Response Deadline <span style={{ color: 'var(--status-error-text)' }}>*</span>
                 <input
                   type="text"
                   value={form.responseDeadline}
@@ -285,11 +285,11 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
               {error && (
                 <div
                   style={{
-                    color: '#dc2626',
+                    color: 'var(--status-error-text)',
                     fontSize: '0.875rem',
                     padding: '8px 12px',
-                    backgroundColor: '#fef2f2',
-                    border: '1px solid #fecaca',
+                    backgroundColor: 'var(--status-error-bg)',
+                    border: '1px solid var(--status-error-border)',
                     borderRadius: '6px'
                   }}
                 >
@@ -300,11 +300,11 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
               {success && (
                 <div
                   style={{
-                    color: '#15803d',
+                    color: 'var(--status-success-text)',
                     fontSize: '0.875rem',
                     padding: '8px 12px',
-                    backgroundColor: '#dcfce7',
-                    border: '1px solid #bbf7d0',
+                    backgroundColor: 'var(--status-success-bg)',
+                    border: '1px solid var(--status-success-border)',
                     borderRadius: '6px'
                   }}
                 >
@@ -319,8 +319,8 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                   title={templateReady ? '' : 'Configure president name and signature in Cycle Management before previewing'}
                   style={{
                     padding: '10px 16px',
-                    backgroundColor: !templateReady || previewing ? '#9ca3af' : '#3b82f6',
-                    color: 'white',
+                    backgroundColor: !templateReady || previewing ? 'var(--text-muted)' : 'var(--link-default)',
+                    color: 'var(--text-on-primary)',
                     border: 'none',
                     borderRadius: '8px',
                     fontSize: '0.875rem',
@@ -335,9 +335,9 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                   onClick={closeForm}
                   style={{
                     padding: '10px 16px',
-                    backgroundColor: 'white',
-                    color: '#374151',
-                    border: '1px solid #d1d5db',
+                    backgroundColor: 'var(--bg-white)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-medium)',
                     borderRadius: '8px',
                     fontSize: '0.875rem',
                     fontWeight: '500',
@@ -368,7 +368,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
             >
               <div
                 style={{
-                  backgroundColor: 'white',
+                  backgroundColor: 'var(--bg-white)',
                   borderRadius: '12px',
                   width: '100%',
                   maxWidth: '900px',
@@ -381,7 +381,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                 <div
                   style={{
                     padding: '16px',
-                    borderBottom: '1px solid #e5e7eb',
+                    borderBottom: '1px solid var(--border-light)',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center'
@@ -396,7 +396,7 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                       border: 'none',
                       fontSize: '1.25rem',
                       cursor: 'pointer',
-                      color: '#6b7280'
+                      color: 'var(--text-tertiary)'
                     }}
                   >
                     &times;
@@ -406,13 +406,13 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                   <iframe
                     src={previewUrl}
                     title="Offer Letter Preview"
-                    style={{ width: '100%', height: '500px', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                    style={{ width: '100%', height: '500px', border: '1px solid var(--border-light)', borderRadius: '8px' }}
                   />
                 </div>
                 <div
                   style={{
                     padding: '16px',
-                    borderTop: '1px solid #e5e7eb',
+                    borderTop: '1px solid var(--border-light)',
                     display: 'flex',
                     gap: '12px',
                     justifyContent: 'flex-end'
@@ -423,9 +423,9 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                     onClick={closePreview}
                     style={{
                       padding: '10px 16px',
-                      backgroundColor: 'white',
-                      color: '#374151',
-                      border: '1px solid #d1d5db',
+                      backgroundColor: 'var(--bg-white)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-medium)',
                       borderRadius: '8px',
                       fontSize: '0.875rem',
                       fontWeight: '500',
@@ -440,8 +440,8 @@ export default function OfferLetterSection({ application, comments = [], isAdmin
                     disabled={sending}
                     style={{
                       padding: '10px 16px',
-                      backgroundColor: sending ? '#9ca3af' : '#10b981',
-                      color: 'white',
+                      backgroundColor: sending ? 'var(--text-muted)' : 'var(--status-success-text)',
+                      color: 'var(--text-on-primary)',
                       border: 'none',
                       borderRadius: '8px',
                       fontSize: '0.875rem',

@@ -195,7 +195,7 @@ const FeatureRequestModal = ({ open, onClose }) => {
             {issueUrl ? (
               <>
                 Thanks — your request was submitted.{' '}
-                <a href={issueUrl} target="_blank" rel="noopener noreferrer">
+                <a href={issueUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--link-default)' }}>
                   View the issue
                 </a>
                 .

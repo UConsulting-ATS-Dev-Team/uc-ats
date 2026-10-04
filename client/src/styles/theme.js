@@ -94,13 +94,13 @@ export const themeTokens = {
       primary: '#f8fafc',
       secondary: '#94a3b8',
       tertiary: '#cbd5e1',
-      muted: '#64748b',
+      muted: '#8291a7',
       inverse: '#0b1220',
     },
-    divider: '#1e293b',
+    divider: '#2a3a52',
     border: {
-      light: '#1e293b',
-      medium: '#334155',
+      light: '#2a3a52',
+      medium: '#475569',
       focus: '#38bdf8',
     },
     action: {

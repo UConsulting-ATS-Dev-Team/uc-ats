@@ -15,7 +15,7 @@ import MemberResumeCard from '../components/MemberResumeCard';
 const MemberTalentNetwork = () => (
   <Box sx={{ maxWidth: 900, mx: 'auto', p: 0 }}>
     <Box sx={{ mb: 3 }}>
-      <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+      <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
         Talent Partner Network
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>

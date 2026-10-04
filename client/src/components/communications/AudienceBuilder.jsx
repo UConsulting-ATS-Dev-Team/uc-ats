@@ -243,7 +243,7 @@ function GroupEditor({ node, isRoot, onChange, onRemove, options, depth = 1 }) {
       sx={{
         p: 1.5,
         bgcolor: depth % 2 === 0 ? 'action.hover' : 'background.paper',
-        borderColor: node.negate ? 'error.light' : undefined,
+        borderColor: node.negate ? 'error.main' : undefined,
       }}
     >
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>

@@ -30,7 +30,7 @@
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
   background-color: var(--primary-blue);
-  color: white;
+  color: var(--text-on-primary);
   border: none;
   border-radius: var(--border-radius);
   font-size: 0.9rem;
@@ -202,7 +202,7 @@
 
 .edit-resource-btn:hover {
   background-color: var(--status-info-text);
-  color: white;
+  color: var(--text-on-primary);
 }
 
 .delete-resource-btn {
@@ -213,7 +213,7 @@
 
 .delete-resource-btn:hover {
   background-color: var(--status-error-text);
-  color: white;
+  color: var(--text-on-primary);
 }
 
 /* Modal Styles */
@@ -306,7 +306,7 @@
 .form-group select:focus {
   outline: none;
   border-color: var(--primary-blue);
-  box-shadow: 0 0 0 3px rgba(12, 116, 193, 0.1);
+  box-shadow: var(--shadow-focus);
 }
 
 .checkbox-label {
@@ -343,7 +343,7 @@
 
 .btn-primary {
   background-color: var(--primary-blue);
-  color: white;
+  color: var(--text-on-primary);
 }
 
 .btn-primary:hover {

@@ -1068,14 +1068,14 @@ export default function AssignedInterviews() {
                                     {/* Test For Note (Admin) */}
                                     {application.testFor && (
                                       <div className="evaluation-notes" style={{ 
-                                        backgroundColor: '#eff6ff', 
-                                        borderLeft: '4px solid #2563eb',
+                                        backgroundColor: 'var(--status-info-bg)', 
+                                        borderLeft: '4px solid var(--status-info-border)',
                                         padding: '12px',
                                         marginBottom: '12px',
                                         borderRadius: '4px'
                                       }}>
                                         <p className="notes-label" style={{ 
-                                          color: '#1e40af', 
+                                          color: 'var(--status-info-text)', 
                                           fontWeight: '600',
                                           marginBottom: '6px',
                                           fontSize: '0.875rem'
@@ -1083,7 +1083,7 @@ export default function AssignedInterviews() {
                                           Test For (Admin Note):
                                         </p>
                                         <p className="notes-content" style={{ 
-                                          color: '#1e40af',
+                                          color: 'var(--status-info-text)',
                                           margin: 0,
                                           fontSize: '0.875rem',
                                           lineHeight: '1.5',

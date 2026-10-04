@@ -262,7 +262,7 @@ export default function Candidates() {
           ))}
         </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <FunnelIcon style={{ width: 20, height: 20, color: '#64748b' }} />
+          <FunnelIcon style={{ width: 20, height: 20, color: 'var(--text-secondary)' }} />
           <select className="filter-select" value={sort} onChange={(e) => setSort(e.target.value)}>
             <option value="name-az">Sort By: Name (A-Z)</option>
             <option value="name-za">Sort By: Name (Z-A)</option>
@@ -336,7 +336,7 @@ export default function Candidates() {
                             )}
                           </div>
                         ) : (
-                          <span style={{ color: '#94a3b8' }}>—</span>
+                          <span style={{ color: 'var(--text-muted)' }}>—</span>
                         )}
                       </td>
                       <td data-label="Referrals">N/A</td>

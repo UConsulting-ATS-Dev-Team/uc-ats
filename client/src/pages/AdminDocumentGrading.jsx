@@ -743,7 +743,7 @@ export default function AdminDocumentGrading() {
       <Box sx={{ p: 3 }}>
       {/* Main Title */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 4 }}>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark' }}>
+        <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'text.primary' }}>
           Admin Document Grading
         </Typography>
         <Button variant="outlined" startIcon={<RuleIcon />} onClick={() => setRubricEditorOpen(true)}>
@@ -757,7 +757,7 @@ export default function AdminDocumentGrading() {
         <Paper sx={{ p: 3, mb: 4 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Box>
-              <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 1 }}>
+              <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 1 }}>
                 {gradeOnlyAssigned ? 'My Review Team Applications' : 'All Applications Overview'}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -808,7 +808,7 @@ export default function AdminDocumentGrading() {
 
       {/* Progress Section */}
       <Paper sx={{ p: 3, mb: 4 }}>
-        <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 3 }}>
+        <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 3 }}>
           {gradeOnlyAssigned ? 'My Document Grading Progress' : 'Overall Document Grading Progress'}
         </Typography>
         
@@ -869,7 +869,7 @@ export default function AdminDocumentGrading() {
 
       {/* Start Grading Section */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 3 }}>
+        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 3 }}>
           Start Grading
         </Typography>
 

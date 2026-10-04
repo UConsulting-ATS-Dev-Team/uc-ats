@@ -151,7 +151,9 @@ const Login = () => {
               {googleSignInEnabled && (
                 <>
                   <Divider sx={{ mb: 3 }}>or</Divider>
-                  <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
+                  {/* Google's iframe is a light document; under a dark
+                      color-scheme the browser paints an opaque box behind it. */}
+                  <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3, colorScheme: 'light' }}>
                     <GoogleLogin
                       onSuccess={handleGoogleSuccess}
                       onError={() => setError('Google sign-in was cancelled or failed. Try again.')}

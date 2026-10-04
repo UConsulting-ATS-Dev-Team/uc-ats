@@ -23,23 +23,23 @@ function ApplicationDetailModal({ application, isOpen, onClose }) {
 
   const getStatusColor = (status) => {
     switch (status.toLowerCase()) {
-      case 'submitted': return '#fef3c7';
-      case 'under_review': return '#dbeafe';
-      case 'accepted': return '#d1fae5';
-      case 'rejected': return '#fee2e2';
-      case 'waitlisted': return '#f3e8ff';
-      default: return '#f3f4f6';
+      case 'submitted': return 'var(--status-warning-bg)';
+      case 'under_review': return 'var(--status-info-bg)';
+      case 'accepted': return 'var(--status-success-bg)';
+      case 'rejected': return 'var(--status-error-bg)';
+      case 'waitlisted': return 'var(--status-purple-bg)';
+      default: return 'var(--bg-gray-lighter)';
     }
   };
 
   const getStatusTextColor = (status) => {
     switch (status.toLowerCase()) {
-      case 'submitted': return '#92400e';
-      case 'under_review': return '#1e40af';
-      case 'accepted': return '#065f46';
-      case 'rejected': return '#991b1b';
-      case 'waitlisted': return '#7c3aed';
-      default: return '#374151';
+      case 'submitted': return 'var(--status-warning-text)';
+      case 'under_review': return 'var(--status-info-text)';
+      case 'accepted': return 'var(--status-success-text)';
+      case 'rejected': return 'var(--status-error-text)';
+      case 'waitlisted': return 'var(--status-purple-text)';
+      default: return 'var(--text-primary)';
     }
   };
 

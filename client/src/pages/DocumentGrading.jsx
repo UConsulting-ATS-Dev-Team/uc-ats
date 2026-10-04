@@ -445,14 +445,14 @@ export default function DocumentGrading() {
       <Confetti active={showConfetti} />
       
       {/* Main Title */}
-      <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'primary.dark', mb: 4 }}>
+      <Typography variant="h4" component="h1" sx={{ fontWeight: 700, color: 'text.primary', mb: 4 }}>
         Document Grading
       </Typography>
 
       {/* Member Team Summary */}
       {!loading && !error && (
         <Paper sx={{ p: 3, mb: 4 }}>
-          <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 2 }}>
+          <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 2 }}>
             Your Review Teams
           </Typography>
           {applications.length > 0 ? (
@@ -485,7 +485,7 @@ export default function DocumentGrading() {
 
       {/* Progress Section */}
       <Paper sx={{ p: 3, mb: 4 }}>
-        <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 3 }}>
+        <Typography variant="h6" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 3 }}>
           Document Grading Progress
         </Typography>
         
@@ -527,7 +527,7 @@ export default function DocumentGrading() {
 
       {/* Start Grading Section */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 3 }}>
+        <Typography variant="h5" component="h2" sx={{ fontWeight: 600, color: 'text.primary', mb: 3 }}>
           Start Grading
         </Typography>
 
@@ -815,7 +815,7 @@ export default function DocumentGrading() {
           </Typography>
           <Box sx={{ 
             backgroundColor: 'success.light', 
-            color: 'success.contrastText', 
+            color: 'success.dark', 
             p: 2, 
             borderRadius: 2,
             mb: 2
