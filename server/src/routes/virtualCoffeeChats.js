@@ -31,6 +31,9 @@ const fail = (res, error, fallback) => {
   return res.status(500).json({ error: fallback });
 };
 
+/// The admin cycle a change is scoped to. The service refuses a chat from any other.
+const scope = async () => ({ cycleId: (await resolveAdminCycle(prisma))?.id ?? null });
+
 const idList = (value) => (Array.isArray(value) ? value.filter((id) => typeof id === 'string') : []);
 
 // GET /api/admin/virtual-coffee-chats
@@ -70,7 +73,7 @@ router.post('/', async (req, res) => {
 // PATCH /api/admin/virtual-coffee-chats/:id   { title?, day?, start?, end?, meetingUrl?, notes? }
 router.patch('/:id', async (req, res) => {
   try {
-    res.json(await updateVirtualCoffeeChat(req.params.id, req.body ?? {}));
+    res.json(await updateVirtualCoffeeChat(req.params.id, req.body ?? {}, await scope()));
   } catch (error) {
     fail(res, error, 'Failed to update that virtual coffee chat');
   }
@@ -79,7 +82,7 @@ router.patch('/:id', async (req, res) => {
 // POST /api/admin/virtual-coffee-chats/:id/cancel
 router.post('/:id/cancel', async (req, res) => {
   try {
-    res.json(await cancelVirtualCoffeeChat(req.params.id, req.user.id));
+    res.json(await cancelVirtualCoffeeChat(req.params.id, req.user.id, await scope()));
   } catch (error) {
     fail(res, error, 'Failed to cancel that virtual coffee chat');
   }
@@ -88,7 +91,7 @@ router.post('/:id/cancel', async (req, res) => {
 // POST /api/admin/virtual-coffee-chats/:id/applicants   { applicationIds: [] }
 router.post('/:id/applicants', async (req, res) => {
   try {
-    const applicants = await addApplicants(req.params.id, idList(req.body?.applicationIds), req.user.id);
+    const applicants = await addApplicants(req.params.id, idList(req.body?.applicationIds), req.user.id, await scope());
     res.json({ applicants, chat: await getVirtualCoffeeChat(req.params.id) });
   } catch (error) {
     fail(res, error, 'Failed to add those applicants');
@@ -98,7 +101,7 @@ router.post('/:id/applicants', async (req, res) => {
 // DELETE /api/admin/virtual-coffee-chats/:id/applicants/:signupId
 router.delete('/:id/applicants/:signupId', async (req, res) => {
   try {
-    res.json(await removeApplicant(req.params.id, req.params.signupId, req.user.id));
+    res.json(await removeApplicant(req.params.id, req.params.signupId, req.user.id, await scope()));
   } catch (error) {
     fail(res, error, 'Failed to remove that applicant');
   }
@@ -107,7 +110,7 @@ router.delete('/:id/applicants/:signupId', async (req, res) => {
 // POST /api/admin/virtual-coffee-chats/:id/interviewers   { userIds: [] }
 router.post('/:id/interviewers', async (req, res) => {
   try {
-    const interviewers = await addInterviewers(req.params.id, idList(req.body?.userIds));
+    const interviewers = await addInterviewers(req.params.id, idList(req.body?.userIds), await scope());
     res.json({ interviewers, chat: await getVirtualCoffeeChat(req.params.id) });
   } catch (error) {
     fail(res, error, 'Failed to add those interviewers');
@@ -117,7 +120,7 @@ router.post('/:id/interviewers', async (req, res) => {
 // DELETE /api/admin/virtual-coffee-chats/:id/interviewers/:assignmentId
 router.delete('/:id/interviewers/:assignmentId', async (req, res) => {
   try {
-    res.json(await removeInterviewer(req.params.id, req.params.assignmentId, req.user.id));
+    res.json(await removeInterviewer(req.params.id, req.params.assignmentId, req.user.id, await scope()));
   } catch (error) {
     fail(res, error, 'Failed to remove that interviewer');
   }

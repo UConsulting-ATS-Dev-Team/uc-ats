@@ -352,7 +352,14 @@ The system follows a **recruiting cycle-based workflow**:
 - Candidates cannot book one, since its capacity is null. They cannot switch or cancel
   out of one either (`409 VIRTUAL_CHAT_LOCKED`), and see no in-person times while they
   hold one (`reason: SCHEDULED_BY_RECRUITMENT`). Members cannot claim or drop it. The
-  generic slot endpoints refuse to add a session to one or give it seats.
+  generic interview and session endpoints refuse to add a session, give it seats, change
+  its time, link or status, reschedule it, or delete it (`409`): only the chat's own
+  routes email the people in it.
+- Every change is scoped to the admin cycle, like the list, so a stale tab cannot edit
+  last cycle's chats.
+- Cancelling closes the interview under the round lock first (`closeInterviewToBookings`)
+  and only then releases the seats it reports. `placeCandidate` and `moveSignup` refuse a
+  cancelled interview, so nothing can join one mid-cancel.
 - Placing someone sends `CONFIRMATION` (or `MOVED_BY_ADMIN` if they were moved);
   interviewers get `INTERVIEWER_ASSIGNED`. Changing the time or link emails everyone;
   removing someone or cancelling emails those affected. A virtual chat's email adds a

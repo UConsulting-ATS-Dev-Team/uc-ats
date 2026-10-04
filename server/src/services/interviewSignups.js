@@ -275,6 +275,9 @@ async function loadSlotForBooking(tx, slotId) {
     include: { interview: { select: { id: true, cycleId: true, title: true, interviewType: true, status: true, location: true } } },
   });
   if (!slot) throw new SlotTransactionError(404, 'That time slot no longer exists');
+  if (slot.interview.status === 'CANCELLED') {
+    throw new SlotTransactionError(409, 'That interview has been cancelled');
+  }
   return slot;
 }
 
@@ -757,6 +760,7 @@ export async function moveSignup({
     // If they were waitlisted and holding a seat elsewhere, that seat is now
     // surplus - release it, and let its slot's queue have it.
     let releasedSeatId = null;
+    let releasedPromotions = [];
     if (signup.heldSeatId) {
       const released = await tx.interviewSlotSignup.update({
         where: { id: signup.heldSeatId },
@@ -764,10 +768,12 @@ export async function moveSignup({
         select: { id: true, slotId: true },
       });
       releasedSeatId = released.id;
-      await drainWaitlist(tx, released.slotId, now);
+      // Returned with the rest: somebody promoted into the released seat is
+      // owed the same email as somebody promoted into the vacated one.
+      releasedPromotions = await drainWaitlist(tx, released.slotId, now);
     }
 
-    const promotions = await drainWaitlist(tx, vacatedSlotId, now);
+    const promotions = [...(await drainWaitlist(tx, vacatedSlotId, now)), ...releasedPromotions];
 
     // fromSlot travels with the result so callers can tell a real change of
     // time from a reshuffle that lands on the same one - the difference between
@@ -911,6 +917,30 @@ export async function placeCandidate({
     });
 
     return { placed, overCapacity, slot };
+  }, ROUND_LOCKED);
+}
+
+/**
+ * Mark an interview CANCELLED while holding its round lock, and return the seats
+ * still live in it.
+ *
+ * Under the lock no placement or move can be half-done, and every one after it
+ * reads CANCELLED in loadSlotForBooking and is refused. So the seats returned
+ * here are all the seats there will ever be, and releasing them leaves nobody
+ * booked into a cancelled interview. Returns null when it was already closed.
+ */
+export async function closeInterviewToBookings({ interviewId, slotId }) {
+  return withSerializableTransaction(prisma, async (tx) => {
+    await lockRoundOfSlot(tx, slotId);
+    const closed = await tx.interview.updateMany({
+      where: { id: interviewId, status: { notIn: ['CANCELLED', 'COMPLETED'] } },
+      data: { status: 'CANCELLED' },
+    });
+    if (closed.count === 0) return null;
+    return tx.interviewSlotSignup.findMany({
+      where: { interviewId, status: { in: LIVE_STATUSES } },
+      select: { id: true },
+    });
   }, ROUND_LOCKED);
 }
 

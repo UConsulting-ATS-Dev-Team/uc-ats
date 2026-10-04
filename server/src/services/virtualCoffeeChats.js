@@ -29,7 +29,13 @@ import config from '../config.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { isCandidateEligibleForInterview, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 import { combine } from './slotPlanner.js';
-import { cancelSignup, moveSignup, placeCandidate, LIVE_STATUSES } from './interviewSignups.js';
+import {
+  cancelSignup,
+  closeInterviewToBookings,
+  moveSignup,
+  placeCandidate,
+  LIVE_STATUSES,
+} from './interviewSignups.js';
 import {
   flushNotifications,
   queueNotificationsBulk,
@@ -103,10 +109,17 @@ export function parseChatDetails(body = {}, { partial = false } = {}) {
   return out;
 }
 
-/** Load a virtual chat by its interview id, or throw 404 / 409. */
-async function loadChat(chatId, { allowClosed = false } = {}) {
+/**
+ * Load a virtual chat by its interview id, or throw 404 / 409.
+ *
+ * Scoped to the admin cycle the request is working in, the same cycle the list
+ * comes from. A tab left open across a cycle change must not be able to edit,
+ * staff or cancel last cycle's chats and email the people in them.
+ */
+async function loadChat(chatId, cycleId, { allowClosed = false } = {}) {
+  if (!cycleId) throw new SlotTransactionError(409, 'There is no active cycle');
   const interview = await prisma.interview.findFirst({
-    where: { id: chatId, isVirtual: true },
+    where: { id: chatId, isVirtual: true, cycleId },
     include: { slots: { orderBy: { startTime: 'asc' } } },
   });
   if (!interview) throw new SlotTransactionError(404, 'That virtual coffee chat no longer exists');
@@ -244,6 +257,13 @@ export async function listEligibleApplicants(cycleId) {
   });
 }
 
+/** Every requested id marked SKIPPED with the error, for a step that failed outright. */
+function failedFor(ids, key, error) {
+  if (!(error?.status && error?.message)) console.error('[virtualCoffeeChats] create step failed', error);
+  const reason = error?.status && error?.message ? error.message : 'Could not be added; try again from the chat';
+  return [...new Set(ids ?? [])].map((id) => ({ [key]: id, outcome: 'SKIPPED', reason }));
+}
+
 /**
  * Create a chat, and optionally fill it in the same action. Returns the chat
  * plus a per-person outcome for everyone asked for, so a partial result is
@@ -276,8 +296,15 @@ export async function createVirtualCoffeeChat({ cycleId, actorId, body = {} }) {
     select: { id: true },
   });
 
-  const interviewers = await addInterviewers(interview.id, body.interviewerIds ?? []);
-  const applicants = await addApplicants(interview.id, body.applicationIds ?? [], actorId);
+  // The chat exists from here on. A failure filling it is reported per person
+  // rather than thrown: an error response would leave the form open, and a
+  // retry would create a second chat beside this one.
+  const interviewers = await addInterviewers(interview.id, body.interviewerIds ?? [], { cycleId }).catch((error) =>
+    failedFor(body.interviewerIds, 'userId', error)
+  );
+  const applicants = await addApplicants(interview.id, body.applicationIds ?? [], actorId, { cycleId }).catch(
+    (error) => failedFor(body.applicationIds, 'applicationId', error)
+  );
   return { chat: await getVirtualCoffeeChat(interview.id), interviewers, applicants };
 }
 
@@ -285,8 +312,8 @@ export async function createVirtualCoffeeChat({ cycleId, actorId, body = {} }) {
  * Edit the title, time, link or notes. A new time or link is emailed to
  * everyone in the chat. A title or notes edit is not.
  */
-export async function updateVirtualCoffeeChat(chatId, body = {}) {
-  const { interview, slot } = await loadChat(chatId);
+export async function updateVirtualCoffeeChat(chatId, body = {}, { cycleId } = {}) {
+  const { interview, slot } = await loadChat(chatId, cycleId);
   const details = parseChatDetails(body, { partial: true });
 
   const interviewData = {};
@@ -339,10 +366,10 @@ export async function updateVirtualCoffeeChat(chatId, body = {}) {
  *   ALREADY_HERE nothing to do
  *   SKIPPED      not in the coffee chat round, rejected, or not found (`reason`)
  */
-export async function addApplicants(chatId, applicationIds, actorId) {
+export async function addApplicants(chatId, applicationIds, actorId, { cycleId } = {}) {
   const ids = [...new Set((applicationIds ?? []).filter((id) => typeof id === 'string' && id))];
   if (ids.length === 0) return [];
-  const { interview, slot } = await loadChat(chatId);
+  const { interview, slot } = await loadChat(chatId, cycleId);
 
   const applications = await prisma.application.findMany({
     where: { id: { in: ids } },
@@ -425,8 +452,8 @@ export async function addApplicants(chatId, applicationIds, actorId) {
 }
 
 /** Take one applicant out of a chat, and tell them. */
-export async function removeApplicant(chatId, signupId, actorId) {
-  const { slot } = await loadChat(chatId);
+export async function removeApplicant(chatId, signupId, actorId, { cycleId } = {}) {
+  const { slot } = await loadChat(chatId, cycleId);
   const signup = await prisma.interviewSlotSignup.findFirst({
     where: { id: signupId, slotId: slot.id },
     select: { id: true },
@@ -444,55 +471,67 @@ export async function removeApplicant(chatId, signupId, actorId) {
  * session is not refused: an admin scheduling a call by hand knows more than
  * the calendar does, and the coverage view already reports clashes.
  */
-export async function addInterviewers(chatId, userIds) {
+export async function addInterviewers(chatId, userIds, { cycleId } = {}) {
   const ids = [...new Set((userIds ?? []).filter((id) => typeof id === 'string' && id))];
   if (ids.length === 0) return [];
-  const { slot } = await loadChat(chatId);
+  const { slot } = await loadChat(chatId, cycleId);
 
   const staff = await prisma.user.findMany({
     where: { id: { in: ids }, role: { in: ['MEMBER', 'ADMIN'] }, isActive: true },
     select: { id: true },
   });
   const staffIds = new Set(staff.map((u) => u.id));
-  const existing = await prisma.interviewSlotAssignment.findMany({
-    where: { slotId: slot.id, userId: { in: ids } },
-    select: { id: true, userId: true, removedAt: true },
+
+  const outcomes = await prisma.$transaction(async (tx) => {
+    // Holding the interview row while writing means a cancellation is either
+    // already visible here, or waits and then sees these rows to take back.
+    const [row] = await tx.$queryRaw`SELECT status FROM interviews WHERE id = ${slot.interviewId} FOR UPDATE`;
+    if (!row || ['CANCELLED', 'COMPLETED'].includes(row.status)) {
+      throw new SlotTransactionError(409, 'That virtual coffee chat has been cancelled or completed');
+    }
+
+    const existing = await tx.interviewSlotAssignment.findMany({
+      where: { slotId: slot.id, userId: { in: ids } },
+      select: { id: true, userId: true, removedAt: true },
+    });
+    const existingByUser = new Map(existing.map((r) => [r.userId, r]));
+
+    const result = [];
+    for (const userId of ids) {
+      if (!staffIds.has(userId)) {
+        result.push({ userId, outcome: 'SKIPPED', reason: 'Not an active member' });
+        continue;
+      }
+      const prior = existingByUser.get(userId);
+      if (prior && !prior.removedAt) {
+        result.push({ userId, outcome: 'ALREADY_HERE' });
+        continue;
+      }
+      if (prior) {
+        await tx.interviewSlotAssignment.update({
+          where: { id: prior.id },
+          data: { removedAt: null, removedBy: null },
+        });
+      } else {
+        await tx.interviewSlotAssignment.create({
+          data: { slotId: slot.id, interviewId: slot.interviewId, userId },
+        });
+      }
+      result.push({ userId, outcome: 'ASSIGNED' });
+    }
+    return result;
   });
-  const existingByUser = new Map(existing.map((row) => [row.userId, row]));
 
-  const outcomes = [];
-  const assigned = [];
-  for (const userId of ids) {
-    if (!staffIds.has(userId)) {
-      outcomes.push({ userId, outcome: 'SKIPPED', reason: 'Not an active member' });
-      continue;
-    }
-    const row = existingByUser.get(userId);
-    if (row && !row.removedAt) {
-      outcomes.push({ userId, outcome: 'ALREADY_HERE' });
-      continue;
-    }
-    if (row) {
-      await prisma.interviewSlotAssignment.update({
-        where: { id: row.id },
-        data: { removedAt: null, removedBy: null },
-      });
-    } else {
-      await prisma.interviewSlotAssignment.create({
-        data: { slotId: slot.id, interviewId: slot.interviewId, userId },
-      });
-    }
-    outcomes.push({ userId, outcome: 'ASSIGNED' });
-    assigned.push({ slotId: slot.id, userId });
-  }
-
-  await notifyInterviewersBulk(assigned, 'INTERVIEWER_ASSIGNED');
+  await notifyInterviewersBulk(
+    outcomes.filter((o) => o.outcome === 'ASSIGNED').map((o) => ({ slotId: slot.id, userId: o.userId })),
+    'INTERVIEWER_ASSIGNED'
+  );
   return outcomes;
 }
 
 /** Take a member off a chat, and tell them. */
-export async function removeInterviewer(chatId, assignmentId, actorId) {
-  const { slot } = await loadChat(chatId);
+export async function removeInterviewer(chatId, assignmentId, actorId, { cycleId } = {}) {
+  const { slot } = await loadChat(chatId, cycleId);
   const assignment = await prisma.interviewSlotAssignment.findFirst({
     where: { id: assignmentId, slotId: slot.id, removedAt: null },
     select: { id: true, userId: true },
@@ -510,39 +549,41 @@ export async function removeInterviewer(chatId, assignmentId, actorId) {
 /**
  * Call a chat off. Everyone in it is told, and the interview is marked
  * CANCELLED rather than deleted, so any evaluation already written survives.
- * Applicants come out first: once the interview is cancelled it drops out of
- * the round lock, and their seats should be released under it.
+ *
+ * Closed first, under the round lock, and only then is the roster read. Any
+ * placement racing this one has either finished (and its seat is in the list)
+ * or will see CANCELLED and be refused, so nobody is left booked into a call
+ * that is not happening.
  */
-export async function cancelVirtualCoffeeChat(chatId, actorId) {
-  const { interview, slot } = await loadChat(chatId);
-  const chat = await getVirtualCoffeeChat(interview.id);
+export async function cancelVirtualCoffeeChat(chatId, actorId, { cycleId } = {}) {
+  const { interview, slot } = await loadChat(chatId, cycleId);
+
+  const seats = await closeInterviewToBookings({ interviewId: interview.id, slotId: slot.id });
+  if (!seats) throw new SlotTransactionError(409, 'That virtual coffee chat has been cancelled or completed');
 
   const cancelled = [];
-  for (const applicant of chat.applicants) {
-    await cancelSignup({
-      signupId: applicant.signupId,
-      actorId,
-      isAdmin: true,
-      reason: 'Virtual coffee chat cancelled',
-    });
-    cancelled.push({ signupId: applicant.signupId, type: 'CANCELLATION' });
+  for (const seat of seats) {
+    await cancelSignup({ signupId: seat.id, actorId, isAdmin: true, reason: 'Virtual coffee chat cancelled' });
+    cancelled.push({ signupId: seat.id, type: 'CANCELLATION' });
   }
 
-  const now = new Date();
-  await prisma.$transaction([
-    prisma.interviewSlotAssignment.updateMany({
-      where: { slotId: slot.id, removedAt: null },
-      data: { removedAt: now, removedBy: actorId },
-    }),
-    prisma.interview.update({ where: { id: interview.id }, data: { status: 'CANCELLED' } }),
-  ]);
+  // Read after the status change, which waited on any interviewer add holding
+  // the interview row, so this sees every assignment there will be.
+  const staffed = await prisma.interviewSlotAssignment.findMany({
+    where: { slotId: slot.id, removedAt: null },
+    select: { userId: true },
+  });
+  await prisma.interviewSlotAssignment.updateMany({
+    where: { slotId: slot.id, removedAt: null },
+    data: { removedAt: new Date(), removedBy: actorId },
+  });
 
   await notifyCandidates(cancelled);
   await notifyInterviewersBulk(
-    chat.interviewers.map((i) => ({ slotId: slot.id, userId: i.user.id })),
+    staffed.map((row) => ({ slotId: slot.id, userId: row.userId })),
     'INTERVIEWER_REMOVED'
   );
-  return { cancelled: true, applicants: cancelled.length, interviewers: chat.interviewers.length };
+  return { cancelled: true, applicants: cancelled.length, interviewers: staffed.length };
 }
 
 /**

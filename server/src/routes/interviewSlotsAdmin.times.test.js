@@ -11,7 +11,8 @@ vi.mock('../prismaClient.js', () => {
   return {
     default: {
       interviewSlot,
-      interview: { update: vi.fn() },
+      // The virtual coffee chat guard asks first; these are in-person interviews.
+      interview: { update: vi.fn(), findUnique: vi.fn(async () => ({ isVirtual: false })) },
       $transaction: vi.fn((arg) => Promise.all(arg)),
     },
   };

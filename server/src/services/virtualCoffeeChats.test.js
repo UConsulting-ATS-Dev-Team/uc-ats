@@ -17,7 +17,8 @@ vi.mock('../prismaClient.js', () => {
       interviewSlotAssignment: model(),
       application: model(),
       user: model(),
-      $transaction: vi.fn((arg) => (Array.isArray(arg) ? Promise.all(arg) : arg({}))),
+      $queryRaw: vi.fn(),
+      $transaction: vi.fn(),
     },
   };
 });
@@ -27,6 +28,7 @@ vi.mock('./interviewSignups.js', () => ({
   placeCandidate: vi.fn(),
   moveSignup: vi.fn(),
   cancelSignup: vi.fn(),
+  closeInterviewToBookings: vi.fn(),
 }));
 
 vi.mock('./interviewSlotComms.js', () => ({
@@ -57,6 +59,8 @@ const {
   updateVirtualCoffeeChat,
 } = await import('./virtualCoffeeChats.js');
 
+const SCOPE = { cycleId: 'c1' };
+
 const chatInterview = (overrides = {}) => ({
   id: 'chat-1',
   cycleId: 'c1',
@@ -77,7 +81,8 @@ const chatInterview = (overrides = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  prisma.$transaction.mockImplementation((arg) => (Array.isArray(arg) ? Promise.all(arg) : arg({})));
+  prisma.$transaction.mockImplementation((arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(prisma)));
+  prisma.$queryRaw.mockResolvedValue([{ status: 'UPCOMING' }]);
   prisma.interview.findFirst.mockResolvedValue(chatInterview());
   prisma.interviewSlotSignup.findMany.mockResolvedValue([]);
 });
@@ -151,7 +156,7 @@ describe('addApplicants', () => {
       { id: 'su-promoted', slotId: 'slot-m', application: { email: 'wl@ucla.edu' }, slot: { interview: { title: 'Coffee Chat - Round 1' } } },
     ]);
 
-    const outcomes = await addApplicants('chat-1', ['new', 'inperson', 'later', 'rejected', 'elsewhere', 'missing'], 'admin-1');
+    const outcomes = await addApplicants('chat-1', ['new', 'inperson', 'later', 'rejected', 'elsewhere', 'missing'], 'admin-1', SCOPE);
 
     expect(outcomes).toEqual([
       { applicationId: 'new', outcome: 'PLACED', signupId: 'su-new' },
@@ -183,18 +188,18 @@ describe('addApplicants', () => {
     signups.placeCandidate.mockRejectedValue(
       Object.assign(new Error('That candidate is already in this time slot'), { status: 409 })
     );
-    expect(await addApplicants('chat-1', ['a1'], 'admin-1')).toEqual([{ applicationId: 'a1', outcome: 'ALREADY_HERE' }]);
+    expect(await addApplicants('chat-1', ['a1'], 'admin-1', SCOPE)).toEqual([{ applicationId: 'a1', outcome: 'ALREADY_HERE' }]);
   });
 
   it('refuses a cancelled chat', async () => {
     prisma.interview.findFirst.mockResolvedValue(chatInterview({ status: 'CANCELLED' }));
-    await expect(addApplicants('chat-1', ['a1'], 'admin-1')).rejects.toMatchObject({ status: 409 });
+    await expect(addApplicants('chat-1', ['a1'], 'admin-1', SCOPE)).rejects.toMatchObject({ status: 409 });
   });
 
   it('only finds interviews flagged virtual', async () => {
     prisma.interview.findFirst.mockResolvedValue(null);
-    await expect(addApplicants('in-person', ['a1'], 'admin-1')).rejects.toMatchObject({ status: 404 });
-    expect(prisma.interview.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'in-person', isVirtual: true });
+    await expect(addApplicants('in-person', ['a1'], 'admin-1', SCOPE)).rejects.toMatchObject({ status: 404 });
+    expect(prisma.interview.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'in-person', isVirtual: true, cycleId: 'c1' });
   });
 });
 
@@ -203,7 +208,7 @@ describe('addInterviewers', () => {
     prisma.user.findMany.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
     prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ id: 'as-2', userId: 'm2', removedAt: new Date() }]);
 
-    const outcomes = await addInterviewers('chat-1', ['m1', 'm2', 'candidate']);
+    const outcomes = await addInterviewers('chat-1', ['m1', 'm2', 'candidate'], SCOPE);
 
     expect(outcomes).toEqual([
       { userId: 'm1', outcome: 'ASSIGNED' },
@@ -230,7 +235,7 @@ describe('addInterviewers', () => {
 describe('removeInterviewer', () => {
   it('only removes an assignment on this chat', async () => {
     prisma.interviewSlotAssignment.findFirst.mockResolvedValue(null);
-    await expect(removeInterviewer('chat-1', 'as-other', 'admin-1')).rejects.toMatchObject({ status: 404 });
+    await expect(removeInterviewer('chat-1', 'as-other', 'admin-1', SCOPE)).rejects.toMatchObject({ status: 404 });
     expect(prisma.interviewSlotAssignment.findFirst.mock.calls[0][0].where).toMatchObject({ slotId: 'slot-v' });
   });
 });
@@ -256,7 +261,7 @@ describe('updateVirtualCoffeeChat', () => {
       { id: 'su-1', slotId: 'slot-v', application: { email: 'a@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
     ]);
 
-    await updateVirtualCoffeeChat('chat-1', { meetingUrl: 'https://meet.google.com/abc' });
+    await updateVirtualCoffeeChat('chat-1', { meetingUrl: 'https://meet.google.com/abc' }, SCOPE);
 
     expect(comms.queueNotificationsBulk.mock.calls[0][0]).toEqual([
       expect.objectContaining({ recipient: 'a@ucla.edu', type: 'MOVED_BY_ADMIN' }),
@@ -266,36 +271,77 @@ describe('updateVirtualCoffeeChat', () => {
 
   it('emails nobody for a title change', async () => {
     prisma.interview.findFirst.mockResolvedValueOnce(chatInterview()).mockResolvedValue(withPeople());
-    await updateVirtualCoffeeChat('chat-1', { title: 'Evening chat' });
+    await updateVirtualCoffeeChat('chat-1', { title: 'Evening chat' }, SCOPE);
     expect(comms.queueNotificationsBulk).not.toHaveBeenCalled();
     expect(invites.notifyInterviewersBulk).not.toHaveBeenCalled();
   });
 });
 
 describe('cancelVirtualCoffeeChat', () => {
-  it('releases every seat before marking the chat cancelled, and tells everyone', async () => {
+  it('closes the chat under the round lock first, then releases the seats it reports', async () => {
     const order = [];
-    prisma.interview.findFirst
-      .mockResolvedValueOnce(chatInterview())
-      .mockResolvedValue({
-        ...chatInterview(),
-        _count: { evaluations: 1 },
-        slots: [
-          {
-            ...chatInterview().slots[0],
-            signups: [{ id: 'su-1', status: 'CONFIRMED', applicationId: 'a1', application: {} }],
-            assignments: [{ id: 'as-1', user: { id: 'm1' } }],
-          },
-        ],
-      });
-    signups.cancelSignup.mockImplementation(async () => order.push('cancel-seat'));
-    prisma.interview.update.mockImplementation(async () => order.push('cancel-chat'));
+    signups.closeInterviewToBookings.mockImplementation(async () => {
+      order.push('close');
+      // Includes a seat added after the page loaded: the list comes from the
+      // close, not from a roster read before it.
+      return [{ id: 'su-1' }, { id: 'su-late' }];
+    });
+    signups.cancelSignup.mockImplementation(async ({ signupId }) => order.push(`release ${signupId}`));
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'm1' }]);
 
-    const result = await cancelVirtualCoffeeChat('chat-1', 'admin-1');
+    const result = await cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE);
 
-    expect(order).toEqual(['cancel-seat', 'cancel-chat']);
-    expect(prisma.interview.update).toHaveBeenCalledWith({ where: { id: 'chat-1' }, data: { status: 'CANCELLED' } });
+    expect(order).toEqual(['close', 'release su-1', 'release su-late']);
+    expect(signups.closeInterviewToBookings).toHaveBeenCalledWith({ interviewId: 'chat-1', slotId: 'slot-v' });
     expect(invites.notifyInterviewersBulk).toHaveBeenCalledWith([{ slotId: 'slot-v', userId: 'm1' }], 'INTERVIEWER_REMOVED');
-    expect(result).toEqual({ cancelled: true, applicants: 1, interviewers: 1 });
+    expect(result).toEqual({ cancelled: true, applicants: 2, interviewers: 1 });
+  });
+
+  it('refuses a chat that another request already cancelled', async () => {
+    signups.closeInterviewToBookings.mockResolvedValue(null);
+    await expect(cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE)).rejects.toMatchObject({ status: 409 });
+    expect(signups.cancelSignup).not.toHaveBeenCalled();
+  });
+});
+
+describe('cycle scoping', () => {
+  it('will not touch a chat outside the admin cycle', async () => {
+    prisma.interview.findFirst.mockResolvedValue(null);
+    await expect(cancelVirtualCoffeeChat('old-chat', 'admin-1', { cycleId: 'c2' })).rejects.toMatchObject({ status: 404 });
+    expect(prisma.interview.findFirst.mock.calls[0][0].where).toMatchObject({ id: 'old-chat', cycleId: 'c2' });
+  });
+
+  it('refuses outright when there is no cycle, rather than matching any', async () => {
+    await expect(updateVirtualCoffeeChat('chat-1', { title: 'x' }, { cycleId: null })).rejects.toMatchObject({ status: 409 });
+    expect(prisma.interview.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('addInterviewers and cancellation', () => {
+  it('re-reads the status under a row lock and refuses once the chat is cancelled', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 'm1' }]);
+    prisma.$queryRaw.mockResolvedValue([{ status: 'CANCELLED' }]);
+    await expect(addInterviewers('chat-1', ['m1'], SCOPE)).rejects.toMatchObject({ status: 409 });
+    expect(prisma.interviewSlotAssignment.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('createVirtualCoffeeChat when filling it fails', () => {
+  it('still returns the chat, with the failure reported per person', async () => {
+    prisma.interview.create.mockResolvedValue({ id: 'chat-1' });
+    prisma.user.findMany.mockRejectedValue(new Error('connection reset'));
+    prisma.application.findMany.mockResolvedValue([]);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await createVirtualCoffeeChat({
+      cycleId: 'c1',
+      actorId: 'admin-1',
+      body: { day: '2026-10-09', start: '19:00', end: '19:30', interviewerIds: ['m1'], applicationIds: [] },
+    });
+
+    expect(result.interviewers).toEqual([
+      { userId: 'm1', outcome: 'SKIPPED', reason: 'Could not be added; try again from the chat' },
+    ]);
+    spy.mockRestore();
   });
 });

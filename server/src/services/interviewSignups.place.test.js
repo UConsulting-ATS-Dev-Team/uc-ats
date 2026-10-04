@@ -63,4 +63,63 @@ describe('placeCandidate', () => {
 
     expect(result.moveInstead).toBe('su-wait');
   });
+
+  it('refuses a cancelled interview, so a placement racing its cancellation finds nothing to join', async () => {
+    tx.interviewSlot.findUnique.mockResolvedValue({ ...virtualSlot, interview: { ...virtualSlot.interview, status: 'CANCELLED' } });
+    await expect(
+      placeCandidate({ interviewId: 'chat-1', slotId: 'slot-v', applicationId: 'a1', actorId: 'admin-1', force: true })
+    ).rejects.toMatchObject({ status: 409 });
+    expect(tx.interviewSlotSignup.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('moveSignup', () => {
+  it('reports who was promoted into the seat a waitlisted candidate gives up', async () => {
+    // Ada waits for the morning while holding an afternoon seat. Moving her
+    // into a virtual chat releases the afternoon seat, and Ben, waiting for
+    // the afternoon, is promoted into it. He is owed an email, so he has to be
+    // in what moveSignup returns.
+    const ada = {
+      id: 'su-ada',
+      slotId: 'slot-am',
+      interviewId: 'morning',
+      applicationId: 'a-ada',
+      status: 'WAITLISTED',
+      heldSeatId: 'su-ada-pm',
+      slot: { id: 'slot-am', startTime: new Date('2030-01-01T17:00:00Z') },
+    };
+    const ben = {
+      id: 'su-ben',
+      slotId: 'slot-pm',
+      interviewId: 'morning',
+      applicationId: 'a-ben',
+      status: 'WAITLISTED',
+      waitlistedAt: new Date('2029-12-01T00:00:00Z'),
+      heldSeatId: null,
+    };
+    tx.interview = { findUnique: vi.fn().mockResolvedValue({ cycleId: 'c1', interviewType: 'COFFEE_CHAT' }) };
+    tx.interviewSlotSignup.findUnique = vi.fn().mockResolvedValue(ada);
+    tx.interviewSlotSignup.update = vi.fn(async ({ where }) =>
+      where.id === 'su-ada-pm' ? { id: 'su-ada-pm', slotId: 'slot-pm' } : { id: where.id }
+    );
+    tx.interviewSlotSignup.updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    tx.interviewSlot.findUnique.mockImplementation(async ({ where }) => {
+      if (where.id === 'slot-v') return virtualSlot;
+      if (where.id === 'slot-pm') return { id: 'slot-pm', candidateCapacity: 1, interviewId: 'morning' };
+      return { id: 'slot-am', candidateCapacity: 2, interviewId: 'morning' };
+    });
+    // Afternoon has room once Ada's seat is released, then is full again.
+    let pmCounts = 0;
+    tx.interviewSlotSignup.count.mockImplementation(async ({ where }) => {
+      if (where.slotId === 'slot-pm') return pmCounts++ === 0 ? 0 : 1;
+      if (where.slotId === 'slot-am') return 2;
+      return 0;
+    });
+    tx.interviewSlotSignup.findMany.mockImplementation(async ({ where }) => (where.slotId === 'slot-pm' ? [ben] : []));
+
+    const { moveSignup } = await import('./interviewSignups.js');
+    const result = await moveSignup({ signupId: 'su-ada', toSlotId: 'slot-v', actorId: 'admin-1', isAdmin: true, force: true });
+
+    expect(result.promotions.map((p) => p.signupId)).toEqual(['su-ben']);
+  });
 });
