@@ -93,14 +93,18 @@ export default function useEvaluationSaves({
 
   /**
    * Save `id` now, after any save of it already on the way. Rejects if this save
-   * fails, so Save and Save All can report it; an autosave it replaced is put back,
-   * so the edit is still retried.
+   * fails, so Save and Save All can report it. A failed Save then hands over to an
+   * autosave, which retries on the backoff: this Save stopped any earlier autosave
+   * from retrying, so without it an outage would leave the notes unsaved.
    */
   const saveNow = useCallback((id) => {
-    requests.current[id] = (requests.current[id] || 0) + 1;
-    const hadAutoSave = cancelAutoSave(id);
+    const request = (requests.current[id] || 0) + 1;
+    requests.current[id] = request;
+    cancelAutoSave(id);
     const run = sendQueued(id);
-    if (hadAutoSave) run.catch(() => { if (!timers.current[id]) scheduleAutoSave(id); });
+    run.catch(() => {
+      if (!unmounted.current && requests.current[id] === request) scheduleAutoSave(id);
+    });
     return run;
   }, [cancelAutoSave, scheduleAutoSave, sendQueued]);
 

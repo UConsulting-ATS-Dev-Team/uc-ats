@@ -186,6 +186,41 @@ describe('useEvaluationSaves', () => {
     expect(server.sends).toHaveLength(2);
   });
 
+  it('keeps retrying when an autosave and the Save after it both fail', async () => {
+    const server = fakeServer();
+    const { result } = renderHook(() => useEvaluationSaves({ send: server.send }));
+
+    act(() => result.current.scheduleAutoSave('a1'));
+    await advance(2000);
+    let saved;
+    act(() => { saved = result.current.saveNow('a1'); });
+    const outcome = saved.then(() => 'saved', () => 'failed');
+    await act(async () => { server.sends[0].reject(new Error('503')); });
+    await act(async () => { server.sends[1].reject(new Error('503')); });
+    expect(await outcome).toBe('failed');
+
+    await advance(2000);
+    expect(server.sends).toHaveLength(3);
+    await act(async () => { server.sends[2].resolve(); });
+    await advance(30000);
+    expect(server.sends).toHaveLength(3);
+  });
+
+  it('retries a failed Save that had no autosave waiting', async () => {
+    const server = fakeServer();
+    const { result } = renderHook(() => useEvaluationSaves({ send: server.send }));
+
+    let saved;
+    act(() => { saved = result.current.saveNow('a1'); });
+    const outcome = saved.then(() => 'saved', () => 'failed');
+    await advance(0);
+    await act(async () => { server.sends[0].reject(new Error('503')); });
+    expect(await outcome).toBe('failed');
+
+    await advance(2000);
+    expect(server.sends).toHaveLength(2);
+  });
+
   it('does not retry an autosave that fails after the page is left', async () => {
     const server = fakeServer();
     const onAutoSaveError = vi.fn();
