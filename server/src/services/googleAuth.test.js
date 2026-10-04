@@ -229,4 +229,28 @@ describe('resolveGoogleUser and applicants', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(user.id).toBe('applicant-1');
   });
+
+  it('reaches the account under the other UCLA spelling when this spelling was retired by a merge', async () => {
+    const applicant = applicantAccount();
+    const retired = { ...talentFor(), googleId: null, isActive: false };
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(JSON.stringify(where).includes('naina@ucla.edu') ? [applicant] : [retired]));
+
+    const { user } = await resolveGoogleUser(profile);
+
+    expect(user.id).toBe('applicant-1');
+    expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'applicant-1' } }));
+  });
+
+  it('still refuses a retired account when there is no active account under the other spelling', async () => {
+    const retired = { ...talentFor(), googleId: null, isActive: false };
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(JSON.stringify(where).includes('naina@ucla.edu') ? [] : [retired]));
+
+    await expect(resolveGoogleUser(profile)).rejects.toMatchObject({ code: 'ACCOUNT_DEACTIVATED' });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 });

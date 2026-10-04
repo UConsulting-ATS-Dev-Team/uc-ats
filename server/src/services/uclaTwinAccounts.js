@@ -62,6 +62,11 @@ export const findAccountForSignIn = async (email, client = prisma) => {
  */
 export function decideMerge(users, resumes = []) {
   if (users.length !== 2) return { ok: false, reason: `expected 2 accounts, found ${users.length}` };
+  // Re-checked rather than trusted from the plan: an address can be edited
+  // between the plan and the locked write.
+  if (emailIdentityKey(users[0].email) !== emailIdentityKey(users[1].email)) {
+    return { ok: false, reason: 'the accounts no longer share a UCLA inbox' };
+  }
 
   const talent = users.filter((u) => u.role === 'USER' && u.isExternalTalent === true);
   if (talent.length !== 1) {

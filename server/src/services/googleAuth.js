@@ -362,17 +362,22 @@ export const resolveGoogleUser = async (profile) => {
   }
 
   const byEmail = await findByEmail(profile.email);
-  if (byEmail) {
-    // Checked before the write, so a deactivated account is not quietly linked.
-    assertActive(byEmail);
+  if (byEmail && byEmail.isActive !== false) {
     return { user: await adoptApplicant(await linkExisting(byEmail, profile), profile), isNewAccount: false };
   }
 
+  // No account under this spelling, or only one a UCLA twin merge retired
+  // (scripts/merge-ucla-twin-accounts.js): the account under the other spelling
+  // is the same person. A deactivated twin is only reported when there is no
+  // retired row of our own to report instead.
   const twin = await findUclaTwin(profile.email);
-  if (twin && !twin.googleId) {
+  if (twin && !twin.googleId && (twin.isActive !== false || !byEmail)) {
     assertActive(twin);
     return { user: await adoptApplicant(await linkExisting(twin, profile), profile), isNewAccount: false };
   }
+
+  // Checked before any write, so a deactivated account is not quietly linked.
+  if (byEmail) assertActive(byEmail);
 
   try {
     return { user: await createFromGoogle(profile), isNewAccount: true };

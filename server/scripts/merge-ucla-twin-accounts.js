@@ -37,48 +37,71 @@ try {
   console.log(`${apply ? 'APPLY' : 'DRY RUN'}: ${plan.length} pair(s) sharing a UCLA inbox`);
   console.log(`  to merge: ${ready.length}   left alone: ${refused.length}\n`);
 
+  // Written after every pair, so an interrupted run still leaves a record of
+  // each merge that committed before it stopped.
+  const outDir = join(__dirname, 'output');
+  fs.mkdirSync(outDir, { recursive: true });
+  const outFile = join(outDir, `merge-ucla-twin-accounts-${apply ? 'apply' : 'dryrun'}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
   const record = [];
-  for (const { decision: d } of ready) {
-    const what = [
-      d.moveResumeIds.length && `${d.moveResumeIds.length} resume(s)`,
-      d.moveGoogle && 'Google link',
-      d.fillVerified && 'verified address',
-    ].filter(Boolean).join(', ') || 'nothing to move';
-    console.log(`  keep ${label(d.keep)}  <-  retire ${label(d.retire)}   [${what}]`);
+  const save = (entry) => {
+    record.push(entry);
+    fs.writeFileSync(outFile, JSON.stringify(record, null, 2));
+  };
 
-    let result = d;
+  let failed = 0;
+  for (const { decision: planned } of ready) {
+    const what = [
+      planned.moveResumeIds.length && `${planned.moveResumeIds.length} resume(s)`,
+      planned.moveGoogle && 'Google link',
+      planned.fillVerified && 'verified address',
+    ].filter(Boolean).join(', ') || 'nothing to move';
+    console.log(`  keep ${label(planned.keep)}  <-  retire ${label(planned.retire)}   [${what}]`);
+
+    // The record describes what the transaction did, re-decided under lock, not
+    // what the plan expected - the two differ if the pair changed in between.
+    let d = planned;
     if (apply) {
       // Each pair is its own transaction, so one failure rolls back only that
       // pair and the rest still run.
       try {
-        result = await mergeUclaTwinPair(d.keep.id, d.retire.id, prisma);
+        d = await mergeUclaTwinPair(planned.keep.id, planned.retire.id, prisma);
       } catch (error) {
-        result = { ok: false, reason: `failed: ${error.code ?? ''} ${error.message.split('\n').filter(Boolean).pop()}`.trim() };
+        d = { ok: false, reason: `failed: ${error.code ?? ''} ${error.message.split('\n').filter(Boolean).pop()}`.trim() };
       }
-      if (!result.ok) console.log(`    SKIPPED at write time: ${result.reason}`);
+      if (!d.ok) {
+        failed += 1;
+        console.log(`    SKIPPED at write time: ${d.reason}`);
+      }
     }
-    record.push({
-      keep: { id: d.keep.id, email: d.keep.email },
-      retire: { id: d.retire.id, email: d.retire.email, googleId: d.retire.googleId },
-      movedResumeIds: d.moveResumeIds,
-      demotedResumeIds: d.demoteResumeIds,
-      movedGoogle: d.moveGoogle,
-      applied: apply && result.ok,
-      ...(result.ok ? {} : { skipped: result.reason }),
-    });
+    save(d.ok
+      ? {
+          keep: { id: d.keep.id, email: d.keep.email },
+          retire: { id: d.retire.id, email: d.retire.email, googleId: d.retire.googleId },
+          movedResumeIds: d.moveResumeIds,
+          demotedResumeIds: d.demoteResumeIds,
+          movedGoogle: d.moveGoogle,
+          filledVerifiedAt: d.fillVerified,
+          applied: apply,
+        }
+      : {
+          keep: { id: planned.keep.id, email: planned.keep.email },
+          retire: { id: planned.retire.id, email: planned.retire.email },
+          applied: false,
+          skipped: d.reason,
+        });
   }
 
   for (const { users, decision } of refused) {
     console.log(`  LEFT ALONE ${users.map(label).join(' + ')}: ${decision.reason}`);
-    record.push({ users: users.map((u) => ({ id: u.id, email: u.email })), refused: decision.reason });
+    save({ users: users.map((u) => ({ id: u.id, email: u.email })), refused: decision.reason });
   }
 
-  const outDir = join(__dirname, 'output');
-  fs.mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, `merge-ucla-twin-accounts-${apply ? 'apply' : 'dryrun'}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
-  fs.writeFileSync(outFile, JSON.stringify(record, null, 2));
   console.log(`\nRecord: ${outFile}`);
   if (!apply) console.log('Nothing was written. Re-run with --apply to merge.');
+  if (failed) {
+    console.log(`${failed} pair(s) were not merged. Re-run to retry them.`);
+    process.exitCode = 1;
+  }
 } finally {
   await prisma.$disconnect();
 }

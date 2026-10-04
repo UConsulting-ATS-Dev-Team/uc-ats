@@ -179,7 +179,10 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
       // an applicant's: either this resume lands first and the account stays a
       // talent account, or the account changed first and nothing is stored.
       const owner = await lockTalentAccount(tx, req.user.id);
-      if (owner?.isExternalTalent !== true) return null;
+      // isActive too: a session admitted from the user cache can outlive the
+      // account being retired by a UCLA twin merge, and a resume stored on the
+      // retired account would be unreachable from the one that replaced it.
+      if (owner?.isExternalTalent !== true || owner.isActive === false) return null;
 
       await tx.externalResume.updateMany({
         where: { userId: req.user.id, isCurrent: true },

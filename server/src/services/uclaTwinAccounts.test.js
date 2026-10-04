@@ -65,6 +65,7 @@ describe('decideMerge', () => {
     ['different Google accounts', [applicant({ googleId: 'g-2' }), talent()], 'each account is linked to a different Google account'],
     ['different UIDs', [applicant(), talent({ studentId: '999' })], 'the accounts carry different UIDs'],
     ['three accounts', [applicant(), talent(), talent({ id: 'x' })], 'expected 2 accounts, found 3'],
+    ['accounts whose addresses no longer match', [applicant({ email: 'someone@ucla.edu' }), talent()], 'the accounts no longer share a UCLA inbox'],
     ['a pair an earlier run merged', [applicant({ googleId: 'g-1' }), talent({ isActive: false, googleId: null })], 'already merged'],
   ])('refuses %s', (_name, users, reason) => {
     expect(decideMerge(users)).toEqual({ ok: false, reason });
