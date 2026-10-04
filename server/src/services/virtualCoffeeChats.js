@@ -429,21 +429,23 @@ export async function addApplicants(chatId, applicationIds, actorId, { cycleId }
         force: true,
         reason: 'Moved to a virtual coffee chat',
       });
-      const from = await prisma.interview.findUnique({
-        where: { id: moved.fromSlot.interviewId },
-        select: { title: true },
-      });
-      outcomes.push({
-        applicationId,
-        outcome: 'MOVED',
-        signupId: moved.moved.id,
-        from: moved.fromSlot.label || from?.title || null,
-      });
+      // The move has committed. Queue its emails before anything else can
+      // fail, and treat naming the old session as a nicety: a failed lookup
+      // must not report a moved applicant as skipped.
       toNotify.push({ signupId: moved.moved.id, type: 'MOVED_BY_ADMIN' });
       // Their old seat may have let somebody off a waitlist.
       for (const promotion of moved.promotions ?? []) {
         toNotify.push({ signupId: promotion.signupId, type: 'PROMOTED' });
       }
+      const from =
+        moved.fromSlot.label ||
+        (
+          await prisma.interview
+            .findUnique({ where: { id: moved.fromSlot.interviewId }, select: { title: true } })
+            .catch(() => null)
+        )?.title ||
+        null;
+      outcomes.push({ applicationId, outcome: 'MOVED', signupId: moved.moved.id, from });
     } catch (error) {
       if (error?.status === 409 && /already in this time slot/i.test(error.message)) {
         outcomes.push({ applicationId, outcome: 'ALREADY_HERE' });
@@ -585,6 +587,7 @@ export async function cancelVirtualCoffeeChat(chatId, actorId, { cycleId } = {})
       await cancelSignup({ signupId: seat.id, actorId, isAdmin: true, reason: 'Virtual coffee chat cancelled' });
       cancelled.push({ signupId: seat.id, type: 'CANCELLATION' });
     } catch (error) {
+      if (error?.status === 409 || error?.status === 404) continue;
       failed += 1;
       console.error('[virtualCoffeeChats] could not release a seat while cancelling', error);
     }

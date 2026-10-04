@@ -328,6 +328,26 @@ describe('cancelVirtualCoffeeChat', () => {
     spy.mockRestore();
   });
 
+  it('does not count a seat another cancellation already released as a failure', async () => {
+    signups.closeInterviewToBookings.mockResolvedValue([{ id: 'su-1' }, { id: 'su-taken' }]);
+    signups.cancelSignup.mockReset();
+    signups.cancelSignup.mockImplementation(async ({ signupId }) => {
+      if (signupId === 'su-taken') {
+        throw Object.assign(new Error('That booking has already been cancelled'), { status: 409 });
+      }
+    });
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([]);
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([
+      { id: 'su-1', slotId: 'slot-v', application: { email: 'one@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
+    ]);
+
+    const result = await cancelVirtualCoffeeChat('chat-1', 'admin-1', SCOPE);
+
+    expect(result.applicants).toBe(1);
+    // Only the seat this request released is emailed; the other request emails its own.
+    expect(comms.queueNotificationsBulk.mock.calls[0][0].map((e) => e.signupId)).toEqual(['su-1']);
+  });
+
   it('can be run again on a chat a failed cancellation left behind', async () => {
     prisma.interview.findFirst.mockResolvedValue(chatInterview({ status: 'CANCELLED' }));
     signups.closeInterviewToBookings.mockResolvedValue([{ id: 'su-bad' }]);
@@ -346,6 +366,30 @@ describe('cancelVirtualCoffeeChat', () => {
     expect(prisma.interview.findMany.mock.calls[0][0].where.OR).toEqual([
       { status: { not: 'CANCELLED' } },
       { slots: { some: { signups: { some: { status: { in: ['CONFIRMED', 'WAITLISTED', 'NEEDS_PLACEMENT'] } } } } } },
+    ]);
+  });
+});
+
+describe('addApplicants after a move has committed', () => {
+  it('reports and emails the move even if naming the old session fails', async () => {
+    prisma.application.findMany.mockResolvedValue([{ id: 'a1', cycleId: 'c1', currentRound: '2', status: 'UNDER_REVIEW' }]);
+    signups.placeCandidate.mockReset();
+    signups.placeCandidate.mockResolvedValue({ placed: null, moveInstead: 'su-old' });
+    signups.moveSignup.mockResolvedValue({
+      moved: { id: 'su-old' },
+      fromSlot: { interviewId: 'morning', label: null },
+      promotions: [],
+    });
+    prisma.interview.findUnique.mockRejectedValue(new Error('connection reset'));
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([
+      { id: 'su-old', slotId: 'slot-v', application: { email: 'a1@ucla.edu' }, slot: { interview: { title: 'Virtual Coffee Chat' } } },
+    ]);
+
+    const outcomes = await addApplicants('chat-1', ['a1'], 'admin-1', SCOPE);
+
+    expect(outcomes).toEqual([{ applicationId: 'a1', outcome: 'MOVED', signupId: 'su-old', from: null }]);
+    expect(comms.queueNotificationsBulk.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ recipient: 'a1@ucla.edu', type: 'MOVED_BY_ADMIN' }),
     ]);
   });
 });
