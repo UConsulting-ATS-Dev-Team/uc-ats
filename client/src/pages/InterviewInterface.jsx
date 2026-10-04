@@ -194,7 +194,7 @@ export default function InterviewInterface() {
 
   // One save per candidate at a time, retried if an autosave fails: see the hook.
   const { scheduleAutoSave, saveNow } = useEvaluationSaves({
-    scope: interviewId,
+    scope: `${interviewId}:${currentUser?.id}`,
     send: postEvaluation,
     onAutoSaveError: (applicationId, error) => {
       console.error('Auto-save failed:', error);

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef } from 'react';
 
 // Saving an interview evaluation from the interview pages: an autosave a moment after
 // the last edit, plus Save and Save All. One instance per page, keyed by application.
-// `scope` is the interview, so the same candidate in two interviews never shares a queue.
+// `scope` names the interview and the interviewer, so neither the same candidate in two
+// interviews nor two people signed in on one browser ever share a queue.
 //
 // Saves of one candidate's evaluation go out one at a time. They used to be sent the
 // moment they were asked for, so a slow autosave could land after the save that
@@ -23,8 +24,13 @@ import { useCallback, useEffect, useRef } from 'react';
 // The queues live outside the page for that reason: if the interviewer reopens the
 // interview at once, the new page's saves wait behind the old page's last one, so the
 // old notes cannot land after the new ones.
+//
+// A save waits at most QUEUE_WAIT_LIMIT_MS for the one ahead of it. A request that has
+// hung that long is not worth holding newer notes back for, and without the limit one
+// stalled request would block every later save of that candidate.
 
 export const AUTOSAVE_RETRY_DELAYS_MS = [2000, 5000, 15000];
+export const QUEUE_WAIT_LIMIT_MS = 20000;
 
 // The last save queued for each scope and application, across every page instance.
 const queueTails = new Map();
@@ -57,7 +63,14 @@ export default function useEvaluationSaves({
   // Runs `task` once every save already queued for `id` has finished, failed or not.
   const enqueue = useCallback((id, task) => {
     const key = `${latest.current.scope ?? ''}\u0000${id}`;
-    const run = (queueTails.get(key) || Promise.resolve()).catch(() => {}).then(task);
+    const previous = queueTails.get(key);
+    const turn = previous
+      ? new Promise((resolve) => {
+        const limit = setTimeout(resolve, QUEUE_WAIT_LIMIT_MS);
+        previous.catch(() => {}).then(() => { clearTimeout(limit); resolve(); });
+      })
+      : Promise.resolve();
+    const run = turn.then(task);
     queueTails.set(key, run);
     const forget = () => { if (queueTails.get(key) === run) queueTails.delete(key); };
     run.then(forget, forget);

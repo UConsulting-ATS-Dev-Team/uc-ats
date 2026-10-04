@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import useEvaluationSaves from './useEvaluationSaves';
+import useEvaluationSaves, { QUEUE_WAIT_LIMIT_MS } from './useEvaluationSaves';
 
 async function advance(ms) {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
@@ -247,6 +247,21 @@ describe('useEvaluationSaves', () => {
 
     await act(async () => { oldPage.sends[0].resolve(); });
     expect(newPage.sends.map((s) => s.notes)).toEqual(['Typed after reopening']);
+  });
+
+  it('stops waiting for a save that has hung, so later notes still go out', async () => {
+    const server = fakeServer();
+    const { result } = renderHook(() => useEvaluationSaves({ scope, send: server.send }));
+
+    act(() => { result.current.saveNow('a1'); });
+    await advance(0);
+    server.notes.current = 'Typed while the first save hung';
+    act(() => { result.current.saveNow('a1'); });
+    await advance(QUEUE_WAIT_LIMIT_MS - 1);
+    expect(server.sends).toHaveLength(1);
+
+    await advance(1);
+    expect(server.sends.map((s) => s.notes)).toEqual(['', 'Typed while the first save hung']);
   });
 
   it('keeps the same candidate in two interviews in separate queues', async () => {

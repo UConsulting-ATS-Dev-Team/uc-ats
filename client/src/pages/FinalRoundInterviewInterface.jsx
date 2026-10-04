@@ -376,7 +376,7 @@ export default function FinalRoundInterviewInterface() {
 
   // One save per candidate at a time, retried if an autosave fails: see the hook.
   const { scheduleAutoSave, saveNow, runInQueue } = useEvaluationSaves({
-    scope: interviewId,
+    scope: `${interviewId}:${currentUser?.id}`,
     send: postEvaluation,
     delayMs: 5000,
     onAutoSaveError: (applicationId, error) => {
