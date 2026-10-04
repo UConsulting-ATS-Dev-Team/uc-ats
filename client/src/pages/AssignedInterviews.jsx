@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -358,7 +358,7 @@ export default function AssignedInterviews() {
       setCandidateQuestionCount(0);
 
       // Don't load questions here - we'll load them when groups are selected
-      setBehavioralQuestionsConfig([]);
+      clearBehavioralQuestions();
     }, tutorialCategoryForInterviewType(interview?.interviewType));
   };
 
@@ -389,14 +389,26 @@ export default function AssignedInterviews() {
     });
   };
 
+  // Every pick, and closing the picker, starts a new load. A response is applied
+  // only while its load is still the latest, so switching from group A to B
+  // cannot have A's questions land late and be saved as B's.
+  const questionsLoadRef = useRef(0);
+
+  const clearBehavioralQuestions = () => {
+    questionsLoadRef.current += 1;
+    setBehavioralQuestionsConfig([]);
+  };
+
   const loadBehavioralQuestionsForGroups = async (groupIds) => {
     if (groupIds.length === 0) {
-      setBehavioralQuestionsConfig([]);
+      clearBehavioralQuestions();
       return;
     }
 
+    const load = ++questionsLoadRef.current;
     try {
       const configRes = await apiClient.get(`/member/interviews/${selectedInterviewForStart}/config?groupIds=${groupIds.join(',')}`);
+      if (load !== questionsLoadRef.current) return;
       const questionsByGroup = configRes.behavioralQuestions || {};
       
       // Flatten questions from all groups
@@ -407,6 +419,7 @@ export default function AssignedInterviews() {
       
       setBehavioralQuestionsConfig(allQuestions);
     } catch (error) {
+      if (load !== questionsLoadRef.current) return;
       console.warn('Failed to load behavioral questions for groups:', error);
       setBehavioralQuestionsConfig([]);
     }
@@ -467,7 +480,7 @@ export default function AssignedInterviews() {
     setGroupSelectionOpen(false);
     setSelectedInterviewForStart(null);
     setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
+    clearBehavioralQuestions();
     setShowBehavioralQuestionsConfig(false);
   };
 
@@ -509,7 +522,7 @@ export default function AssignedInterviews() {
     setSelectedInterviewForStart(null);
     setGroupSearchTerm('');
     setSelectedGroups([]);
-    setBehavioralQuestionsConfig([]);
+    clearBehavioralQuestions();
     setShowBehavioralQuestionsConfig(false);
   };
 
