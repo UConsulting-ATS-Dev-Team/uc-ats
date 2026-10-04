@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import useEvaluationSaves, { QUEUE_WAIT_LIMIT_MS } from './useEvaluationSaves';
+import useEvaluationSaves from './useEvaluationSaves';
 
 async function advance(ms) {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
@@ -249,7 +249,7 @@ describe('useEvaluationSaves', () => {
     expect(newPage.sends.map((s) => s.notes)).toEqual(['Typed after reopening']);
   });
 
-  it('stops waiting for a save that has hung, so later notes still go out', async () => {
+  it('waits for a save that has hung rather than risk it landing last', async () => {
     const server = fakeServer();
     const { result } = renderHook(() => useEvaluationSaves({ scope, send: server.send }));
 
@@ -257,11 +257,26 @@ describe('useEvaluationSaves', () => {
     await advance(0);
     server.notes.current = 'Typed while the first save hung';
     act(() => { result.current.saveNow('a1'); });
-    await advance(QUEUE_WAIT_LIMIT_MS - 1);
+    await advance(120000);
     expect(server.sends).toHaveLength(1);
 
-    await advance(1);
+    await act(async () => { server.sends[0].reject(new Error('504')); });
     expect(server.sends.map((s) => s.notes)).toEqual(['', 'Typed while the first save hung']);
+  });
+
+  it('keeps two interviewers on one browser in separate queues', async () => {
+    const first = fakeServer();
+    const second = fakeServer();
+    const a = renderHook(() => useEvaluationSaves({ scope: `${scope}:m1`, send: first.send }));
+    const b = renderHook(() => useEvaluationSaves({ scope: `${scope}:m2`, send: second.send }));
+
+    act(() => {
+      a.result.current.saveNow('a1');
+      b.result.current.saveNow('a1');
+    });
+    await advance(0);
+    expect(first.sends).toHaveLength(1);
+    expect(second.sends).toHaveLength(1);
   });
 
   it('keeps the same candidate in two interviews in separate queues', async () => {

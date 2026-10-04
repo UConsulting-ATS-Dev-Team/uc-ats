@@ -25,12 +25,12 @@ import { useCallback, useEffect, useRef } from 'react';
 // interview at once, the new page's saves wait behind the old page's last one, so the
 // old notes cannot land after the new ones.
 //
-// A save waits at most QUEUE_WAIT_LIMIT_MS for the one ahead of it. A request that has
-// hung that long is not worth holding newer notes back for, and without the limit one
-// stalled request would block every later save of that candidate.
+// A save waits for the one ahead of it however long that takes. Giving up after a time
+// limit would let the hung request finish later and overwrite newer notes, since the
+// server cannot tell an old write from a new one. Waiting costs only time: once the
+// hung request settles, the next save sends the latest notes.
 
 export const AUTOSAVE_RETRY_DELAYS_MS = [2000, 5000, 15000];
-export const QUEUE_WAIT_LIMIT_MS = 20000;
 
 // The last save queued for each scope and application, across every page instance.
 const queueTails = new Map();
@@ -63,14 +63,7 @@ export default function useEvaluationSaves({
   // Runs `task` once every save already queued for `id` has finished, failed or not.
   const enqueue = useCallback((id, task) => {
     const key = `${latest.current.scope ?? ''}\u0000${id}`;
-    const previous = queueTails.get(key);
-    const turn = previous
-      ? new Promise((resolve) => {
-        const limit = setTimeout(resolve, QUEUE_WAIT_LIMIT_MS);
-        previous.catch(() => {}).then(() => { clearTimeout(limit); resolve(); });
-      })
-      : Promise.resolve();
-    const run = turn.then(task);
+    const run = (queueTails.get(key) || Promise.resolve()).catch(() => {}).then(task);
     queueTails.set(key, run);
     const forget = () => { if (queueTails.get(key) === run) queueTails.delete(key); };
     run.then(forget, forget);
