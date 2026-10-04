@@ -268,6 +268,42 @@ const adoptApplicant = async (user) => {
 };
 
 /**
+ * The account under the other UCLA spelling of this address, or null. x@g.ucla.edu
+ * and x@ucla.edu are one mailbox, so someone who registered with one and signs in
+ * with Google as the other is the same person. Before this they were given a
+ * second, empty talent-portal account instead.
+ */
+const findUclaTwin = async (email) => {
+  const twins = emailVariants(email).slice(1);
+  if (twins.length === 0) return null;
+  const matches = await prisma.user.findMany({
+    where: { OR: twins.map((twin) => ({ email: { equals: twin, mode: 'insensitive' } })) },
+    take: 2
+  });
+  return matches.length === 1 ? matches[0] : null;
+};
+
+/**
+ * A Google sign-in that lands on an empty talent-portal account while the same
+ * person has a real account under the other UCLA spelling moves Google onto the
+ * real one. The talent account is kept, without Google, so nothing it holds is
+ * lost. Null when there is nothing to move.
+ */
+const moveGoogleToTwin = async (talent, profile) => {
+  if (!talent.isExternalTalent || talent.studentId || talent.role !== 'USER') return null;
+
+  const twin = await findUclaTwin(talent.email);
+  if (!twin || twin.isExternalTalent || twin.googleId || twin.isActive === false) return null;
+
+  await prisma.user.update({
+    where: { id: talent.id },
+    data: { googleId: null, googleLinkedAt: null }
+  });
+  invalidateUserCache(talent.id);
+  return linkExisting(twin, profile);
+};
+
+/**
  * Resolution order. googleId first so that somebody who renames their Google
  * address still lands in their own account instead of having a second one made
  * for the new address.
@@ -275,7 +311,9 @@ const adoptApplicant = async (user) => {
 export const resolveGoogleUser = async (profile) => {
   const byGoogleId = await prisma.user.findUnique({ where: { googleId: profile.googleId } });
   if (byGoogleId) {
-    return { user: await adoptApplicant(assertActive(byGoogleId)), isNewAccount: false };
+    const user = assertActive(byGoogleId);
+    const moved = await moveGoogleToTwin(user, profile);
+    return { user: moved || (await adoptApplicant(user)), isNewAccount: false };
   }
 
   const byEmail = await findByEmail(profile.email);
@@ -283,6 +321,12 @@ export const resolveGoogleUser = async (profile) => {
     // Checked before the write, so a deactivated account is not quietly linked.
     assertActive(byEmail);
     return { user: await adoptApplicant(await linkExisting(byEmail, profile)), isNewAccount: false };
+  }
+
+  const twin = await findUclaTwin(profile.email);
+  if (twin && !twin.googleId) {
+    assertActive(twin);
+    return { user: await adoptApplicant(await linkExisting(twin, profile)), isNewAccount: false };
   }
 
   try {
