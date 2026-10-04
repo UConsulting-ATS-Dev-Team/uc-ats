@@ -1371,9 +1371,18 @@ router.post('/interviews/:id/slot-signups', async (req, res) => {
     }
 
     // The seat is already committed; a failed email must not report it as a
-    // failed placement, or the retry would 409 against the seat just made.
-    await notifyPlaced(result).catch((e) => console.error('[interviewSlotsAdmin] placement email failed', e));
-    res.status(201).json({ placed: true, signupId: result.placed.id, overCapacity: result.overCapacity });
+    // failed placement, or the retry would 409 against the seat just made. It
+    // is reported instead, so the page can name who was not told.
+    const emailQueued = await notifyPlaced(result).catch((e) => {
+      console.error('[interviewSlotsAdmin] placement email failed', e);
+      return false;
+    });
+    res.status(201).json({
+      placed: true,
+      signupId: result.placed.id,
+      overCapacity: result.overCapacity,
+      emailQueued,
+    });
   } catch (error) {
     fail(res, error, 'Failed to place that candidate');
   }
@@ -1571,13 +1580,14 @@ async function notifyMoved(result) {
 }
 
 /// Someone placed by hand never chose a time, so this email is the only way
-/// they learn when to show up. Same confirmation a self-booking gets.
+/// they learn when to show up. Same confirmation a self-booking gets. Resolves
+/// to whether the email was queued.
 async function notifyPlaced(result) {
   const application = await prisma.application.findUnique({
     where: { id: result.placed.applicationId },
     select: { email: true },
   });
-  if (!application?.email) return;
+  if (!application?.email) return false;
   const subject = await slotNotificationSubject('CONFIRMATION', result.slot.interview.title);
   const ids = await prisma.$transaction((tx) =>
     queueNotifications(tx, [
@@ -1591,6 +1601,7 @@ async function notifyPlaced(result) {
     ])
   );
   flushNotifications(ids, renderBody).catch((e) => console.error('[interviewSlotsAdmin] flush failed', e));
+  return true;
 }
 
 async function notifyPromotions(promotions, { flush = true } = {}) {

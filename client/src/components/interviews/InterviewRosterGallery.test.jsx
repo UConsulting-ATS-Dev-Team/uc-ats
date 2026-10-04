@@ -259,10 +259,26 @@ describe('InterviewRosterGallery', () => {
   });
 
   describe('adding people who have not booked', () => {
-    const stragglers = () =>
-      coffeeChatRoster({
+    // Far-future sessions: the dialog hides ones that have ended, and the
+    // shared fixture's date will not stay in the future.
+    const stragglers = () => {
+      const roster = coffeeChatRoster({
         unassigned: [candidate('a8', 'Late', 'Comer'), candidate('a9', 'Forgotten', 'Person')],
       });
+      roster.slots = roster.slots.map((s) => ({ ...s, startTime: '2099-10-06T16:00:00Z', endTime: '2099-10-06T18:00:00Z' }));
+      return roster;
+    };
+
+    it('does not offer a session that has already ended', async () => {
+      const roster = stragglers();
+      roster.slots[0] = { ...roster.slots[0], startTime: '2020-01-01T16:00:00Z', endTime: '2020-01-01T18:00:00Z' };
+      render(<InterviewRosterGallery roster={roster} onMove={vi.fn()} onRemove={vi.fn()} onPlace={vi.fn()} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add to a session' }));
+      await userEvent.click(within(screen.getByRole('dialog')).getByRole('combobox'));
+      expect(screen.queryByRole('option', { name: /Morning Block/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /Afternoon Block/ })).toBeInTheDocument();
+    });
 
     it('lets the admin choose the session instead of picking one for them', async () => {
       // The old chip placed silently into the first session with room. Morning

@@ -85,25 +85,28 @@ describe('POST /interviews/:id/slot-signups', () => {
       },
     ]);
     expect(flushNotifications).toHaveBeenCalledWith(['n-1'], expect.any(Function));
+    expect(await res.json()).toMatchObject({ placed: true, emailQueued: true });
   });
 
-  it('still reports the placement when the email cannot be queued', async () => {
+  it('still reports the placement when the email cannot be queued, and says so', async () => {
     // The seat is committed. A 500 here would send the admin to retry, which
-    // then 409s against the seat that was just made.
+    // then 409s against the seat that was just made; emailQueued: false is
+    // what lets the page name who was never told.
     queueNotifications.mockRejectedValueOnce(new Error('db down'));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const res = await place({ slotId: 'slot-1', applicationId: 'app-1' });
 
     expect(res.status).toBe(201);
-    expect(await res.json()).toMatchObject({ placed: true, signupId: 'su-1' });
+    expect(await res.json()).toMatchObject({ placed: true, signupId: 'su-1', emailQueued: false });
     spy.mockRestore();
   });
 
-  it('emails nobody when the application has no address', async () => {
+  it('emails nobody when the application has no address, and says so', async () => {
     prisma.application.findUnique.mockResolvedValue({ email: null });
     const res = await place({ slotId: 'slot-1', applicationId: 'app-1' });
     expect(res.status).toBe(201);
     expect(queueNotifications).not.toHaveBeenCalled();
+    expect(await res.json()).toMatchObject({ emailQueued: false });
   });
 });

@@ -750,6 +750,9 @@ export async function moveSignup({
         movedById: actorId,
         movedAt: now,
         moveReason: reason,
+        // A group belongs to its session, so the old label means nothing in the
+        // new one. Null when the new session is not grouped.
+        groupLabel: await nextGroupLabel(tx, target),
       },
       select: SIGNUP_SELECT,
     });
@@ -858,10 +861,14 @@ export async function placeCandidate({
     if (slot.interviewId !== interviewId) {
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
     }
+    // The confirmation that follows carries a calendar invite; one for a
+    // session that is over, or an interview that was called off, is noise.
+    if (['CANCELLED', 'COMPLETED'].includes(slot.interview.status) || slot.endTime <= now) {
+      throw new SlotTransactionError(409, 'That session has already ended');
+    }
 
     // Looked for across the whole round, not just this interview: a coffee chat
-    // day is two sibling interviews, and someone already in the morning block
-    // must be moved, not handed a second seat in the afternoon.
+    // day is two sibling interviews, and a seat in the morning block counts.
     const existing = await tx.interviewSlotSignup.findMany({
       where: {
         applicationId,
@@ -877,15 +884,15 @@ export async function placeCandidate({
       select: SIGNUP_SELECT,
     });
 
-    // Already somewhere in this round: that is a move, and moving keeps the
-    // audit trail and the waitlist bookkeeping intact.
-    const live = existing.find((row) => row.status === 'CONFIRMED') ?? existing[0];
-    if (live) {
-      if (live.slotId === slotId && live.status === 'CONFIRMED') {
-        throw new SlotTransactionError(409, 'That candidate is already in this time slot');
-      }
-      return { placed: null, moveInstead: live.id };
+    // Someone who holds a seat or a waitlist place chose it, most likely after
+    // the admin's page loaded. Placing is for people with neither, so refuse
+    // rather than move them out of what they picked; the roster's own move
+    // action is there for a deliberate change.
+    if (existing.some((row) => row.status === 'CONFIRMED' || row.status === 'WAITLISTED')) {
+      throw new SlotTransactionError(409, 'That candidate has already booked a session in this round');
     }
+    // Stuck in NEEDS_PLACEMENT: give that row the seat, which keeps its history.
+    if (existing.length > 0) return { placed: null, moveInstead: existing[0].id };
 
     const confirmed = await countConfirmed(tx, slotId);
     const overCapacity = slot.candidateCapacity != null && confirmed >= slot.candidateCapacity;

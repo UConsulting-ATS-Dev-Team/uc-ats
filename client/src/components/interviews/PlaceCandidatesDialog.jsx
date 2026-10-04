@@ -39,7 +39,12 @@ export default function PlaceCandidatesDialog({ open, candidates, slots, initial
   const [slotId, setSlotId] = useState('');
   const [filter, setFilter] = useState('');
 
-  const bookable = useMemo(() => slots.filter((slot) => slot.isBookable !== false), [slots]);
+  // An ended session is refused by the server anyway; offering it would only
+  // set up an error.
+  const bookable = useMemo(
+    () => slots.filter((slot) => slot.isBookable !== false && new Date(slot.endTime) > new Date()),
+    [slots]
+  );
   const spansInterviews = new Set(bookable.map((slot) => slot.interviewId).filter(Boolean)).size > 1;
 
   useEffect(() => {

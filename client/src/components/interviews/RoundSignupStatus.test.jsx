@@ -141,8 +141,10 @@ describe('RoundSignupStatus', () => {
 
   it('adds the selected people to the session chosen, and clears the selection', async () => {
     const onPlace = vi.fn();
+    const r = round();
+    r.slots = r.slots.map((s) => ({ ...s, startTime: '2099-10-06T16:00:00Z', endTime: '2099-10-06T18:00:00Z' }));
     render(
-      <RoundSignupStatus round={round()} reminderDefaults={defaults} busy={false} onRemind={vi.fn()} onPlace={onPlace} />
+      <RoundSignupStatus round={r} reminderDefaults={defaults} busy={false} onRemind={vi.fn()} onPlace={onPlace} />
     );
 
     await userEvent.click(within(screen.getByTestId('signup-row-app-d')).getByRole('checkbox'));

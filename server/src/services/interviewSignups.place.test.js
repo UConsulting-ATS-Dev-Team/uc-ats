@@ -154,22 +154,76 @@ describeDb('placeCandidate against real PostgreSQL', () => {
     expect(labels[2]).not.toBe(labels[0]);
   });
 
-  it('moves someone already in the sibling interview rather than seating them twice', async () => {
+  it('leaves alone someone who booked the sibling interview after the page loaded', async () => {
+    // Neither a second seat in the afternoon nor a move out of the morning they
+    // chose: the admin's view is stale, so the placement is refused.
     const { am, pm, apps } = fixture;
     const morning = await place(am, apps[0]);
 
-    const result = await place(pm, apps[0]);
-
-    expect(result).toEqual({ placed: null, moveInstead: morning.placed.id });
-    const live = await db.interviewSlotSignup.count({
+    await expect(place(pm, apps[0])).rejects.toMatchObject({
+      status: 409,
+      message: 'That candidate has already booked a session in this round',
+    });
+    const live = await db.interviewSlotSignup.findMany({
       where: { applicationId: apps[0].id, status: 'CONFIRMED' },
     });
-    expect(live).toBe(1);
+    expect(live.map((row) => row.id)).toEqual([morning.placed.id]);
   });
 
-  it('refuses to place someone into the session they already hold', async () => {
+  it('refuses someone who is waitlisted in the round', async () => {
+    const { am, pm, apps } = fixture;
+    const seat = await place(pm, apps[0]);
+    await db.interviewSlotSignup.create({
+      data: {
+        slotId: am.slots[0].id,
+        interviewId: am.id,
+        applicationId: apps[0].id,
+        status: 'WAITLISTED',
+        waitlistedAt: new Date(),
+        heldSeatId: seat.placed.id,
+      },
+    });
+    await expect(place(am, apps[0])).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('hands a stuck NEEDS_PLACEMENT row to the move, which gives it a group', async () => {
+    const { am, pm, apps } = fixture;
+    const stuck = await db.interviewSlotSignup.create({
+      data: { slotId: am.slots[0].id, interviewId: am.id, applicationId: apps[0].id, status: 'NEEDS_PLACEMENT' },
+    });
+
+    const result = await place(pm, apps[0]);
+    expect(result).toEqual({ placed: null, moveInstead: stuck.id });
+
+    await service.moveSignup({ signupId: stuck.id, toSlotId: pm.slots[0].id, actorId: fixture.admin.id, isAdmin: true });
+    const row = await db.interviewSlotSignup.findUnique({ where: { id: stuck.id } });
+    expect(row).toMatchObject({ status: 'CONFIRMED', slotId: pm.slots[0].id, groupLabel: '1A' });
+  });
+
+  it('relabels a seat moved into another grouped session', async () => {
+    const { am, pm, apps } = fixture;
+    await place(pm, apps[1]);
+    await place(pm, apps[2]); // the afternoon's 1A is now full
+    const { placed } = await place(am, apps[0]);
+
+    await service.moveSignup({ signupId: placed.id, toSlotId: pm.slots[0].id, actorId: fixture.admin.id, isAdmin: true });
+
+    const row = await db.interviewSlotSignup.findUnique({ where: { id: placed.id } });
+    expect(row.groupLabel).toBe('1B');
+  });
+
+  it('refuses a session that has already ended', async () => {
     const { am, apps } = fixture;
-    await place(am, apps[0]);
+    await db.interviewSlot.update({
+      where: { id: am.slots[0].id },
+      data: { startTime: future(-4), endTime: future(-2) },
+    });
+    await expect(place(am, apps[0])).rejects.toMatchObject({ status: 409, message: 'That session has already ended' });
+  });
+
+  it('refuses an interview marked completed', async () => {
+    const { am, apps } = fixture;
+    await db.interview.update({ where: { id: am.id }, data: { status: 'COMPLETED' } });
     await expect(place(am, apps[0])).rejects.toMatchObject({ status: 409 });
   });
 });
