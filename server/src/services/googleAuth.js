@@ -4,6 +4,7 @@ import config from '../config.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
 import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
+import { lockTalentAccount } from './talentAccountLock.js';
 
 /**
  * Sign in with Google.
@@ -227,8 +228,7 @@ const isTalentAccountFor = (user, profile) =>
  * stranded on an account that no longer reaches the talent portal.
  */
 const lockEmptyTalentAccount = async (tx, userId) => {
-  const [row] = await tx.$queryRaw`
-    SELECT "isExternalTalent", "studentId" FROM users WHERE id = ${userId} FOR UPDATE`;
+  const row = await lockTalentAccount(tx, userId);
   if (!row || row.isExternalTalent !== true || row.studentId) return false;
   return (await tx.externalResume.count({ where: { userId } })) === 0;
 };

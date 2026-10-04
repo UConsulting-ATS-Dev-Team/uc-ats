@@ -18,6 +18,7 @@ import multer from 'multer';
 import prisma from '../prismaClient.js';
 import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
+import { lockTalentAccount } from '../services/talentAccountLock.js';
 import {
   EXTERNAL_GENDERS,
   FULL_NAME_MAX_LENGTH,
@@ -177,8 +178,7 @@ router.post('/resume', requireVerifiedEmail, resumeUploadMiddleware, async (req,
       // Same row lock Google sign-in takes before turning a talent account into
       // an applicant's: either this resume lands first and the account stays a
       // talent account, or the account changed first and nothing is stored.
-      const [owner] = await tx.$queryRaw`
-        SELECT "isExternalTalent" FROM users WHERE id = ${req.user.id} FOR UPDATE`;
+      const owner = await lockTalentAccount(tx, req.user.id);
       if (owner?.isExternalTalent !== true) return null;
 
       await tx.externalResume.updateMany({
