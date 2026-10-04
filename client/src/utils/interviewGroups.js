@@ -22,12 +22,12 @@ export function groupsForMember(config, userId) {
 // Props for one row of a group picker. The row is the control: it takes the
 // click and the keyboard, and the input inside it is only drawn. When the input
 // handled clicks as well, a click on the box toggled the group twice.
-export function groupRowProps({ selected, disabled, onToggle, kind = 'checkbox' }) {
+export function groupRowProps({ selected, disabled, onToggle }) {
   const toggle = () => {
     if (!disabled) onToggle();
   };
   return {
-    role: kind,
+    role: 'checkbox',
     'aria-checked': selected,
     'aria-disabled': disabled,
     tabIndex: disabled ? -1 : 0,

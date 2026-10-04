@@ -770,17 +770,18 @@ export default function AssignedInterviews() {
                             const isFinalRound = interview?.interviewType === 'FINAL_ROUND' || interview?.interviewType === 'ROUND_TWO';
                             const isRoundOne = interview?.interviewType === 'ROUND_ONE';
                             const maxGroups = isFinalRound ? 1 : (isRoundOne ? 3 : 3);
-                            const isDisabled = !isSelected && selectedGroups.length >= maxGroups;
-                            
+                            // A one-group round swaps the pick (handleGroupToggle), so
+                            // the other groups stay open rather than needing a deselect.
+                            const isDisabled = !isFinalRound && !isSelected && selectedGroups.length >= maxGroups;
+
                             return (
-                              <div 
-                                key={group.id} 
+                              <div
+                                key={group.id}
                                 className={`group-selection-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}`}
                                 {...groupRowProps({
                                   selected: isSelected,
                                   disabled: isDisabled,
-                                  onToggle: () => handleGroupToggle(group.id),
-                                  kind: isFinalRound ? 'radio' : 'checkbox'
+                                  onToggle: () => handleGroupToggle(group.id)
                                 })}
                               >
                                 <div className="group-checkbox">
