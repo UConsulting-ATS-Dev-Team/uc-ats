@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const prisma = vi.hoisted(() => ({
   user: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
   candidate: { findMany: vi.fn() },
+  externalResume: { count: vi.fn() },
+  $transaction: vi.fn(),
 }));
 vi.mock('../prismaClient.js', () => ({ default: prisma }));
 vi.mock('../middleware/auth.js', () => ({ invalidateUserCache: vi.fn() }));
@@ -15,6 +17,8 @@ describe('resolveGoogleUser and applicants', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     prisma.user.findMany.mockResolvedValue([]);
+    prisma.externalResume.count.mockResolvedValue(0);
+    prisma.$transaction.mockImplementation((ops) => Promise.all(ops));
     prisma.user.create.mockImplementation(({ data }) => Promise.resolve({ id: 'u-new', ...data }));
     prisma.user.update.mockImplementation(({ data }) => Promise.resolve({ id: 'u-1', ...data }));
   });
@@ -130,5 +134,77 @@ describe('resolveGoogleUser and applicants', () => {
     expect(isNewAccount).toBe(false);
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(user.id).toBe('applicant-1');
+  });
+
+  describe('review fixes', () => {
+    const talentFor = (email) => ({
+      id: 'u-1', email, role: 'USER', isActive: true,
+      isExternalTalent: true, studentId: null, googleId: 'g-1', emailVerifiedAt: new Date(),
+    });
+
+    it('ignores a stored address that is not the one Google verified', async () => {
+      prisma.user.findUnique.mockImplementation(({ where }) =>
+        Promise.resolve(where.googleId ? talentFor('victim@ucla.edu') : null));
+      prisma.candidate.findMany.mockResolvedValue([{ studentId: '306917258' }]);
+
+      const { user } = await resolveGoogleUser({ ...profile, email: 'attacker@g.ucla.edu' });
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(user.isExternalTalent).toBe(true);
+    });
+
+    it('leaves a talent account that holds a portal resume as it is', async () => {
+      prisma.user.findUnique.mockImplementation(({ where }) =>
+        Promise.resolve(where.googleId ? talentFor('naina@g.ucla.edu') : null));
+      prisma.candidate.findMany.mockResolvedValue([{ studentId: '306917258' }]);
+      prisma.externalResume.count.mockResolvedValue(1);
+
+      const { user } = await resolveGoogleUser(profile);
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(user.isExternalTalent).toBe(true);
+    });
+
+    it('matches applicants on the candidate address only, never an application address', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.candidate.findMany.mockResolvedValue([]);
+
+      await resolveGoogleUser(profile);
+
+      expect(JSON.stringify(prisma.candidate.findMany.mock.calls[0][0].where)).not.toContain('applications');
+    });
+
+    it('falls back to a talent account when the UID is taken between the check and the create', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.candidate.findMany.mockResolvedValue([{ studentId: '306917258' }]);
+      prisma.user.create
+        .mockRejectedValueOnce(Object.assign(new Error('unique'), { code: 'P2002', meta: { target: ['studentId'] } }))
+        .mockImplementationOnce(({ data }) => Promise.resolve({ id: 'u-new', ...data }));
+
+      const { user } = await resolveGoogleUser(profile);
+
+      expect(prisma.user.create).toHaveBeenCalledTimes(2);
+      expect(user.isExternalTalent).toBe(true);
+      expect(user.studentId).toBeUndefined();
+    });
+
+    it('moves Google between the two accounts in one transaction', async () => {
+      const applicant = {
+        id: 'applicant-1', email: 'naina@ucla.edu', role: 'USER', isActive: true,
+        isExternalTalent: false, studentId: '306917258', googleId: null, emailVerifiedAt: new Date(),
+      };
+      prisma.user.findUnique.mockImplementation(({ where }) =>
+        Promise.resolve(where.googleId ? talentFor('naina@g.ucla.edu') : null));
+      prisma.user.findMany.mockResolvedValue([applicant]);
+      prisma.user.update.mockImplementation(({ where, data }) =>
+        Promise.resolve({ ...(where.id === applicant.id ? applicant : talentFor('naina@g.ucla.edu')), ...data }));
+
+      const { user } = await resolveGoogleUser(profile);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$transaction.mock.calls[0][0]).toHaveLength(2);
+      expect(user.id).toBe('applicant-1');
+    });
   });
 });
