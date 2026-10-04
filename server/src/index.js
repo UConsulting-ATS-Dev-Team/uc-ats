@@ -40,6 +40,7 @@ import talentRoutes from './routes/talent.js';
 import candidateOnboardingRoutes from './routes/candidateOnboarding.js';
 import candidateInterviewSignupRoutes from './routes/candidateInterviewSignups.js';
 import interviewSlotsAdminRoutes from './routes/interviewSlotsAdmin.js';
+import virtualCoffeeChatRoutes from './routes/virtualCoffeeChats.js';
 import interviewSlotsMemberRoutes from './routes/interviewSlotsMember.js';
 import talentPoolAdminRoutes from './routes/talentPoolAdmin.js';
 import featureRequestRoutes from './routes/featureRequests.js';
@@ -127,6 +128,7 @@ app.use('/api/admin/email-health', requireAuth, requireAdmin, emailHealthRoutes)
 app.use('/api/admin/candidate-communications', requireAuth, requireAdmin, candidateCommunicationsRoutes);
 app.use('/api/admin/luma', requireAuth, requireAdmin, lumaAdminRoutes);
 app.use('/api/admin/analytics', requireAuth, requireAdmin, analyticsAdminRoutes);
+app.use('/api/admin/virtual-coffee-chats', requireAuth, requireAdmin, virtualCoffeeChatRoutes);
 // Before the catch-all admin router so its slot routes are matched first.
 app.use('/api/admin', requireAuth, requireAdmin, interviewSlotsAdminRoutes);
 app.use('/api/admin', adminRoutes);

@@ -328,8 +328,8 @@ async function sendOne(notificationId, renderBody) {
   const notification = await prisma.interviewSlotNotification.findUnique({
     where: { id: notificationId },
     include: {
-      slot: { include: { interview: { select: { title: true, location: true, interviewType: true } } } },
-      interview: { select: { title: true, location: true, interviewType: true } },
+      slot: { include: { interview: { select: { title: true, location: true, interviewType: true, isVirtual: true } } } },
+      interview: { select: { title: true, location: true, interviewType: true, isVirtual: true } },
       signup: { include: { application: { select: { firstName: true, lastName: true, email: true } } } },
     },
   });

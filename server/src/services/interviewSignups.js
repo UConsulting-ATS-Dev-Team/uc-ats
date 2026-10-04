@@ -859,14 +859,34 @@ export async function placeCandidate({
       throw new SlotTransactionError(400, 'That slot belongs to a different interview');
     }
 
+    // Searched across the whole round, not just this interview. Sibling
+    // interviews share one pool (see loadRoundState), so somebody holding a seat
+    // in the morning block, or in a virtual coffee chat, would otherwise be
+    // given a second seat here.
     const existing = await tx.interviewSlotSignup.findMany({
-      where: { interviewId, applicationId, status: { in: LIVE_STATUSES } },
+      where: {
+        applicationId,
+        status: { in: LIVE_STATUSES },
+        slot: {
+          interview: {
+            cycleId: slot.interview.cycleId,
+            interviewType: slot.interview.interviewType,
+            status: { notIn: ['CANCELLED', 'COMPLETED'] },
+          },
+        },
+      },
       select: SIGNUP_SELECT,
     });
 
-    // Already somewhere in this interview: that is a move, and moving keeps the
-    // audit trail and the waitlist bookkeeping intact.
-    const live = existing.find((row) => row.status === 'CONFIRMED') ?? existing[0];
+    // Already somewhere in this round: that is a move, and moving keeps the
+    // audit trail and the waitlist bookkeeping intact. A waitlist row is the one
+    // to move when there is one: moving it confirms them here and releases the
+    // seat it was holding. Moving the held seat instead would leave the waitlist
+    // entry behind, and its later promotion would pull them back out of here.
+    const live =
+      existing.find((row) => row.status === 'WAITLISTED') ??
+      existing.find((row) => row.status === 'CONFIRMED') ??
+      existing[0];
     if (live) {
       if (live.slotId === slotId && live.status === 'CONFIRMED') {
         throw new SlotTransactionError(409, 'That candidate is already in this time slot');

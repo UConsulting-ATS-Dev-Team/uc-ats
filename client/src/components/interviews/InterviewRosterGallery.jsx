@@ -232,7 +232,9 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGr
       </Typography>
       <Typography variant="caption" color="text.secondary" display="block">
         {formatDay(slot.startTime)}
-        {slot.location ? ` · ${slot.location}` : ''}
+        {/* A virtual chat's location is its meeting link, too long for a
+            column heading; the Virtual coffee chats panel shows it in full. */}
+        {slot.isVirtual ? ' · Video call' : slot.location ? ` · ${slot.location}` : ''}
       </Typography>
       {/* Only when a round spans more than one interview, which is how a coffee
           chat morning and afternoon are actually modelled. Repeating the same
@@ -246,7 +248,8 @@ function SlotColumn({ slot, slots, compact, filter, onMove, onRemove, onChangeGr
         <Chip
           size="small"
           variant="outlined"
-          label="Not open to signup"
+          color={slot.isVirtual ? 'secondary' : 'default'}
+          label={slot.isVirtual ? 'Virtual · admin scheduled' : 'Not open to signup'}
           sx={{ mt: 0.5, height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
         />
       )}

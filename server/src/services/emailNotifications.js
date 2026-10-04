@@ -1090,6 +1090,12 @@ export const renderInterviewSlotEmail = async (
   const showDetails = hasSession && !['CANCELLATION', 'AVAILABILITY_REQUEST', 'INTERVIEWER_REMOVED'].includes(type);
 
   const where = slot.location || interview.location || '';
+  // A virtual coffee chat keeps its meeting link in location. Offered as a
+  // button too, because a link inside a card row is easy to miss.
+  const joinUrl = interview.isVirtual && /^https?:\/\//i.test(where) ? where : null;
+  // Nobody changes a virtual chat from the signup page; recruitment set it.
+  const primaryLabel =
+    interview.isVirtual && ctaLabel === 'View or change your time' ? 'View your interview' : ctaLabel;
   // Who the interviewer is seeing. Arrives already narrowed to interviewer
   // notifications, so a candidate's own email can never grow this line.
   const roster = describeRoster(notification.candidateRoster);
@@ -1114,7 +1120,8 @@ export const renderInterviewSlotEmail = async (
             ],
           })
         : null,
-      part.button(ctaUrl, ctaLabel),
+      showDetails && joinUrl ? part.button(joinUrl, 'Join the call') : null,
+      part.button(ctaUrl, primaryLabel),
       part.signOff('Best regards,\nUConsulting Recruitment'),
     ].filter(Boolean),
   });

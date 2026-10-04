@@ -40,7 +40,11 @@ export async function getOwnSignups(applicationId, client = prisma) {
   const signups = await client.interviewSlotSignup.findMany({
     where: { applicationId, status: { in: LIVE } },
     include: {
-      slot: { include: { interview: { select: { id: true, title: true, interviewType: true, location: true } } } },
+      slot: {
+        include: {
+          interview: { select: { id: true, title: true, interviewType: true, location: true, isVirtual: true } },
+        },
+      },
     },
     orderBy: { signedUpAt: 'asc' },
   });
@@ -59,8 +63,9 @@ export async function getOwnSignups(applicationId, client = prisma) {
         location: signup.slot.location || signup.slot.interview.location,
       },
       // Computed here rather than in the page, so one rule governs both the
-      // button state and what the server will actually allow.
-      canModify: canModify(signup.slot.startTime),
+      // button state and what the server will actually allow. A virtual coffee
+      // chat is recruitment's to change, never the candidate's.
+      canModify: !signup.slot.interview.isVirtual && canModify(signup.slot.startTime),
     })),
   };
 }
@@ -107,10 +112,18 @@ export async function getBookingOptions(application, cycleId, client = prisma) {
     where: { applicationId: application.id, status: { in: LIVE } },
     select: { id: true, slotId: true, interviewId: true, status: true },
   });
+
+  // Somebody recruitment has put in a virtual coffee chat for this round is
+  // scheduled. Offering them the in-person times as well would invite a booking
+  // the server refuses, or a switch that undoes recruitment's placement.
+  const virtualIds = new Set(interviews.filter((i) => i.isVirtual).map((i) => i.id));
+  if (own.some((row) => virtualIds.has(row.interviewId))) {
+    return { modifyCutoffHours: MODIFY_CUTOFF_HOURS, interviews: [], reason: 'SCHEDULED_BY_RECRUITMENT' };
+  }
   const ownByInterview = new Map(own.map((row) => [row.interviewId, row]));
 
-  const visible = interviews.filter((interview) =>
-    interview.slots.some((slot) => slot.candidateCapacity != null)
+  const visible = interviews.filter(
+    (interview) => !interview.isVirtual && interview.slots.some((slot) => slot.candidateCapacity != null)
   );
 
   return {

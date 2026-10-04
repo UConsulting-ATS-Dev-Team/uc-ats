@@ -23,8 +23,9 @@ import {
   LocationOn as LocationIcon,
   LockClock as LockClockIcon,
   Schedule as ScheduleIcon,
+  Videocam as VideoIcon,
 } from '@mui/icons-material';
-import { formatDateTime, formatTimeRange } from '../utils/scheduleFormat';
+import { formatDateTime, formatDay, formatTimeRange } from '../utils/scheduleFormat';
 
 const DEFAULT_MODIFY_CUTOFF_HOURS = 12;
 
@@ -67,6 +68,11 @@ export default function CandidateInterviewSignup() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Recruitment places people in virtual coffee chats by hand, so these are
+  // never among the bookable options. Shown on their own, with the link and
+  // without change or cancel buttons: the server refuses both.
+  const virtualSignups = useMemo(() => signups.filter((signup) => signup.interview?.isVirtual), [signups]);
 
   const signupByInterview = useMemo(
     () => new Map(signups.map((signup) => [signup.interview.id, signup])),
@@ -139,7 +145,9 @@ export default function CandidateInterviewSignup() {
           Interview Scheduling
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          Pick the time that works for you. You can change it up to {cutoffHours} hours beforehand.
+          {interviews.length === 0 && virtualSignups.length > 0
+            ? 'Your interview is below.'
+            : `Pick the time that works for you. You can change it up to ${cutoffHours} hours beforehand.`}
         </Typography>
 
         {error && (
@@ -153,7 +161,45 @@ export default function CandidateInterviewSignup() {
           </Alert>
         )}
 
-        {interviews.length === 0 && (
+        {virtualSignups.map((signup) => {
+          const link = /^https?:\/\//i.test(signup.slot.location ?? '') ? signup.slot.location : null;
+          return (
+            <Paper key={signup.id} variant="outlined" sx={{ p: 3, mb: 4 }} data-testid="virtual-chat-booking">
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <VideoIcon color="primary" />
+                  <Typography variant="h6">{signup.interview.title}</Typography>
+                </Stack>
+                <Chip size="small" color="success" icon={<CheckCircleIcon />} label="Scheduled" />
+              </Stack>
+              <Typography variant="body1">
+                {formatDay(signup.slot.startTime)} · {formatTimeRange(signup.slot.startTime, signup.slot.endTime)}
+              </Typography>
+              {link ? (
+                <Button
+                  variant="contained"
+                  startIcon={<VideoIcon />}
+                  href={link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ mt: 2 }}
+                >
+                  Join the call
+                </Button>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  The meeting link will be emailed to you before the chat.
+                </Typography>
+              )}
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Recruitment scheduled this virtual coffee chat for you. If the time no longer works, email
+                recruitment rather than booking another time.
+              </Alert>
+            </Paper>
+          );
+        })}
+
+        {interviews.length === 0 && virtualSignups.length === 0 && (
           <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
             <ScheduleIcon color="disabled" sx={{ fontSize: 48, mb: 1 }} />
             <Typography variant="h6" gutterBottom>

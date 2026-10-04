@@ -61,6 +61,10 @@ const fail = (res, error, fallback) => {
 /// round can be set up before anybody reaches it.
 const SCHEDULABLE_ROUNDS = ['2', '3', '4'];
 
+/// A virtual coffee chat is one call: its session is created with it, and its
+/// time is changed from the Virtual coffee chats panel.
+const VIRTUAL_HAS_ONE_SESSION = 'A virtual coffee chat has exactly one session. Change its time from the chat instead.';
+
 const parseTime = (value) => {
   if (value == null) return null;
   const date = new Date(value);
@@ -202,6 +206,7 @@ router.get('/scheduling/overview', async (req, res) => {
         location: true,
         startDate: true,
         status: true,
+        isVirtual: true,
         slots: {
           orderBy: { startTime: 'asc' },
           include: {
@@ -264,6 +269,7 @@ router.get('/scheduling/overview', async (req, res) => {
             confirmedCount: confirmed.length,
             isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
             isBookable: slot.candidateCapacity != null,
+            isVirtual: interview.isVirtual,
             signups: slot.signups.map((signup) => ({
               id: signup.id,
               status: signup.status,
@@ -309,12 +315,22 @@ router.get('/scheduling/overview', async (req, res) => {
           interviewTypesForRound(round).find((type) => type !== 'ROUND_TWO') ??
           interviewTypesForRound(round)[0] ??
           null,
-        interviews: roundInterviews.map((i) => ({ id: i.id, title: i.title, startDate: i.startDate, status: i.status })),
+        interviews: roundInterviews.map((i) => ({
+          id: i.id,
+          title: i.title,
+          startDate: i.startDate,
+          status: i.status,
+          isVirtual: i.isVirtual,
+        })),
         slots,
         unassigned,
         stats: {
           eligible: eligibleCount.get(round) ?? 0,
-          sessions: slots.length,
+          // Virtual coffee chats are counted apart: they are never open to
+          // signup by design, and counting them here would raise "none are
+          // open to candidates" for a round that only has virtual chats so far.
+          sessions: slots.filter((s) => !s.isVirtual).length,
+          virtualSessions: slots.filter((s) => s.isVirtual).length,
           bookableSessions: bookable.length,
           seats: bookable.reduce((n, s) => n + (s.candidateCapacity ?? 0), 0),
           confirmed: allSignups.filter((s) => s.status === 'CONFIRMED').length,
@@ -1081,8 +1097,9 @@ router.post('/interviews/:id/slots', async (req, res) => {
     if (!start || !end) return res.status(400).json({ error: 'A valid start and end time are required' });
     if (end <= start) return res.status(400).json({ error: 'The end time must be after the start time' });
 
-    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true, isVirtual: true } });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
 
     const slot = await prisma.interviewSlot.create({
       data: {
@@ -1111,9 +1128,10 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
 
     const interview = await prisma.interview.findUnique({
       where: { id },
-      select: { id: true, interviewType: true, startDate: true, endDate: true },
+      select: { id: true, interviewType: true, startDate: true, endDate: true, isVirtual: true },
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
 
     const rows = [];
 
@@ -1194,6 +1212,17 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.notes !== undefined) data.notes = body.notes || null;
     if (body.candidateCapacity !== undefined) {
       data.candidateCapacity = body.candidateCapacity == null ? null : Number(body.candidateCapacity);
+    }
+    // A seat count is what opens a session to self-signup, and nobody signs up
+    // for a virtual coffee chat.
+    if (data.candidateCapacity != null) {
+      const owner = await prisma.interviewSlot.findUnique({
+        where: { id: slotId },
+        select: { interview: { select: { isVirtual: true } } },
+      });
+      if (owner?.interview?.isVirtual) {
+        return res.status(400).json({ error: 'A virtual coffee chat cannot be opened to candidate signup' });
+      }
     }
     if (body.interviewerCapacity !== undefined) {
       data.interviewerCapacity = body.interviewerCapacity == null ? null : Number(body.interviewerCapacity);

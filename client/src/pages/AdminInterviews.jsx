@@ -40,6 +40,7 @@ import OtherInterviews from '../components/interviews/OtherInterviews';
 import InterviewStaffingSignup from '../components/interviews/InterviewStaffingSignup';
 import InterviewManageList from '../components/interviews/InterviewManageList';
 import InterviewerCoverage from '../components/interviews/InterviewerCoverage';
+import VirtualCoffeeChats from '../components/interviews/VirtualCoffeeChats';
 
 /**
  * Interviews - one page, two audiences.
@@ -234,6 +235,16 @@ export default function AdminInterviews() {
 
   const rounds = data?.rounds ?? [];
   const active = rounds[tab] ?? null;
+  // Virtual coffee chats are interviews too, but they are set up and changed
+  // from their own panel: each is one admin-scheduled call, with nothing to add
+  // sessions to or open for signup. The in-person setup below leaves them out.
+  const inPersonRound = useMemo(
+    () => (active ? { ...active, interviews: active.interviews.filter((i) => !i.isVirtual) } : null),
+    [active]
+  );
+  const inPerson = inPersonRound?.interviews ?? [];
+  const virtualPanel =
+    active?.interviewType === 'COFFEE_CHAT' ? <VirtualCoffeeChats onChanged={load} /> : null;
 
   // The gallery takes one roster. A round's sessions may span sibling
   // interviews, and merging them here is what puts morning and afternoon side
@@ -439,7 +450,7 @@ export default function AdminInterviews() {
                 {/* A round with no interview yet is the normal state early
                     in a cycle, not an error. One message and the thing to do
                     next; the stats, tabs and gallery would all be empty too. */}
-                {active && active.interviews.length === 0 && (
+                {active && inPerson.length === 0 && (
                   <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', mb: 2 }}>
                     <Typography variant="h6" gutterBottom>
                       No {active.label.toLowerCase()} yet
@@ -456,8 +467,9 @@ export default function AdminInterviews() {
                     </Button>
                   </Paper>
                 )}
+                {active && inPerson.length === 0 && virtualPanel}
 
-                {active && active.interviews.length > 0 && (
+                {active && inPerson.length > 0 && (
                   <>
                     {/* Setting up the round, in one place: whether everyone
                         fits, and each interview with what you do to it. */}
@@ -474,8 +486,9 @@ export default function AdminInterviews() {
                         </Button>
                       </Stack>
                       <Divider sx={{ mt: 1.5 }} />
-                      <InterviewManageList round={active} onChanged={load} />
+                      <InterviewManageList round={inPersonRound} onChanged={load} />
                     </Paper>
+                    {virtualPanel}
 
                     {/* The invariant recruitment works to: every advancing
                         candidate gets a seat. Checked here rather than
@@ -511,7 +524,7 @@ export default function AdminInterviews() {
                             disabled={busy}
                             onClick={() =>
                               Promise.all(
-                                active.interviews.map((i) =>
+                                inPerson.map((i) =>
                                   apiClient.post(`/admin/interviews/${i.id}/adopt-sessions`, {}).catch(() => null)
                                 )
                               ).then(() => load())
@@ -549,9 +562,9 @@ export default function AdminInterviews() {
                     )}
                     {view === 'interviewers' && (
                       <Stack spacing={3}>
-                        {active.interviews.map((interview) => (
+                        {inPerson.map((interview) => (
                           <Box key={interview.id}>
-                            {active.interviews.length > 1 && (
+                            {inPerson.length > 1 && (
                               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                                 {interview.title}
                               </Typography>

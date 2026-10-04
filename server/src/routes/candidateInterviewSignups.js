@@ -61,6 +61,24 @@ function respondToError(res, error, fallbackMessage) {
   return res.status(500).json({ error: fallbackMessage });
 }
 
+/**
+ * A booking of the caller's, with whether it is a virtual coffee chat.
+ *
+ * Recruitment places people in virtual chats by hand, often because the
+ * in-person times did not work for them, so the candidate cannot move or
+ * cancel one from here; they ask recruitment instead.
+ */
+const findOwnedSignup = (signupId, applicationId) =>
+  prisma.interviewSlotSignup.findFirst({
+    where: { id: signupId, applicationId },
+    select: { id: true, slot: { select: { interview: { select: { isVirtual: true } } } } },
+  });
+
+const VIRTUAL_LOCKED = {
+  error: 'Recruitment scheduled your virtual coffee chat. Email them if you need to change it.',
+  code: 'VIRTUAL_CHAT_LOCKED',
+};
+
 /** The caller's application in the candidate-facing cycle, or a 404-ish null. */
 async function resolveOwnApplication(req) {
   const cycle = await resolveCandidateCycle(prisma);
@@ -141,11 +159,9 @@ router.patch('/:id', async (req, res) => {
     if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
 
-    const owned = await prisma.interviewSlotSignup.findFirst({
-      where: { id: req.params.id, applicationId: application.id },
-      select: { id: true },
-    });
+    const owned = await findOwnedSignup(req.params.id, application.id);
     if (!owned) return res.status(404).json({ error: 'That booking is not yours' });
+    if (owned.slot.interview.isVirtual) return res.status(409).json(VIRTUAL_LOCKED);
 
     // Switching times is booking a different slot, so it gets the same guard.
     const denied = await checkCanBookSlot(application, slotId, cycle.id);
@@ -168,11 +184,9 @@ router.delete('/:id', async (req, res) => {
     if (!cycle) return res.status(409).json({ error: 'There is no open recruiting cycle' });
     if (!application) return res.status(404).json({ error: 'We could not find your application' });
 
-    const owned = await prisma.interviewSlotSignup.findFirst({
-      where: { id: req.params.id, applicationId: application.id },
-      select: { id: true },
-    });
+    const owned = await findOwnedSignup(req.params.id, application.id);
     if (!owned) return res.status(404).json({ error: 'That booking is not yours' });
+    if (owned.slot.interview.isVirtual) return res.status(409).json(VIRTUAL_LOCKED);
 
     const result = await cancelSignup({ signupId: req.params.id, actorId: null });
     const ids = await queueForPromotions(result.promotions, null);
