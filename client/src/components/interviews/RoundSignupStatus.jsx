@@ -85,7 +85,11 @@ export function buildSignupRows(round) {
       waitlistedFor: sorted
         .filter((s) => s.signup.status === 'WAITLISTED' && s !== best)
         .map((s) => sessionName(s.slot)),
-      lastRemindedAt: null,
+      // Latest across their signups: a reminder is per person, not per seat.
+      lastRemindedAt: signups.reduce((latest, { signup }) => {
+        const at = signup.lastRemindedAt;
+        return at && (!latest || new Date(at) > new Date(latest)) ? at : latest;
+      }, null),
     });
   }
 
@@ -182,9 +186,13 @@ export default function RoundSignupStatus({ round, reminderDefaults, busy, onRem
       return next;
     });
 
-  const noOpenSessions = (round?.stats?.bookableSessions ?? 0) === 0;
+  // openSessions is what a candidate could book right now (window open, before
+  // the cutoff, interview not over). bookableSessions only says a session has
+  // seats, so it is the fallback for an overview that predates openSessions.
+  const openSessions = round?.stats?.openSessions ?? round?.stats?.bookableSessions ?? 0;
+  const noOpenSessions = openSessions === 0;
   const remindDisabledReason = noOpenSessions
-    ? 'No session in this round is open for signup, so there is nothing to book yet.'
+    ? 'No session in this round is open for signup right now, so there is nothing to book.'
     : '';
 
   const openReminder = (ids) => {
@@ -400,7 +408,7 @@ export default function RoundSignupStatus({ round, reminderDefaults, busy, onRem
           <DialogContent>
             <Typography variant="body2" color="text.secondary" mb={2}>
               Each person gets their own email with this message and a link to book. Anyone who books before
-              you send is skipped.
+              you send is skipped. Anyone reminded for this round in the last hour is skipped.
             </Typography>
             {sendError && (
               <Alert severity="error" sx={{ mb: 2 }}>

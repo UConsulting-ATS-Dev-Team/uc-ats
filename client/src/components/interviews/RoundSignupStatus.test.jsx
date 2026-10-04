@@ -13,7 +13,15 @@ const candidate = (id, first, last) => ({
   graduationYear: '2027',
 });
 
-const signup = (id, status, applicationId, cand) => ({ id, status, applicationId, groupLabel: null, candidate: cand });
+const signup = (id, status, applicationId, cand, over = {}) => ({
+  id,
+  status,
+  applicationId,
+  groupLabel: null,
+  candidate: cand,
+  lastRemindedAt: null,
+  ...over,
+});
 
 const slot = (id, label, signups, over = {}) => ({
   id,
@@ -63,6 +71,17 @@ describe('buildSignupRows', () => {
       ['app-e', 'NOT_BOOKED'],
     ]);
     expect(rows.find((r) => r.applicationId === 'app-d').lastRemindedAt).toBe('2026-10-01T00:00:00Z');
+  });
+
+  it('gives a signed-up person the latest reminder across their collapsed signups', () => {
+    const r = round({
+      slots: [
+        slot('s1', 'Morning', [signup('x1', 'WAITLISTED', 'app-a', ana, { lastRemindedAt: '2026-10-02T00:00:00Z' })]),
+        slot('s2', 'Afternoon', [signup('x3', 'CONFIRMED', 'app-a', ana, { lastRemindedAt: '2026-09-30T00:00:00Z' })]),
+      ],
+      unassigned: [],
+    });
+    expect(buildSignupRows(r)[0]).toMatchObject({ status: 'BOOKED', lastRemindedAt: '2026-10-02T00:00:00Z' });
   });
 
   it('names the interview in the session when the round spans several', () => {
@@ -126,7 +145,14 @@ describe('RoundSignupStatus', () => {
     expect(screen.getByTestId('signup-summary')).toHaveTextContent('1 in this round · 0 booked · 1 need placing · 0 not booked');
   });
 
-  it('disables reminding when no session is open', () => {
+  it('disables reminding when no session is open for signup right now', () => {
+    // Sessions with seats, but none a candidate can book at the moment.
+    const r = round({ stats: { ...round().stats, bookableSessions: 2, openSessions: 0 } });
+    render(<RoundSignupStatus round={r} reminderDefaults={defaults} busy={false} onRemind={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Remind all not booked/ })).toBeDisabled();
+  });
+
+  it('falls back to bookableSessions when the overview has no openSessions', () => {
     const r = round({ stats: { ...round().stats, bookableSessions: 0 } });
     render(<RoundSignupStatus round={r} reminderDefaults={defaults} busy={false} onRemind={vi.fn()} />);
     expect(screen.getByRole('button', { name: /Remind all not booked/ })).toBeDisabled();

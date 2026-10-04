@@ -287,7 +287,7 @@ export default function AdminInterviews() {
         message,
       });
       const parts = [`Reminder sent to ${result.sent}.`];
-      if (result.skipped > 0) parts.push(`${result.skipped} skipped — booked since, or no longer in this round.`);
+      if (result.skipped > 0) parts.push(`${result.skipped} skipped — booked since, reminded in the last hour, or no longer in this round.`);
       setToast(parts.join(' '));
       await load();
       // After the reload, which clears the page error.
