@@ -170,6 +170,37 @@ describe('useEvaluationSaves', () => {
     expect(onSaved).toHaveBeenCalledWith('a1');
   });
 
+  it('does not retry an autosave that failed after a Save was asked for', async () => {
+    const server = fakeServer();
+    const onAutoSaveError = vi.fn();
+    const { result } = renderHook(() => useEvaluationSaves({ send: server.send, onAutoSaveError }));
+
+    act(() => result.current.scheduleAutoSave('a1'));
+    await advance(2000);
+    let saved;
+    act(() => { saved = result.current.saveNow('a1'); });
+    await act(async () => { server.sends[0].reject(new Error('503')); });
+    await act(async () => { server.sends[1].resolve(); await saved; });
+
+    await advance(30000);
+    expect(server.sends).toHaveLength(2);
+  });
+
+  it('does not retry an autosave that fails after the page is left', async () => {
+    const server = fakeServer();
+    const onAutoSaveError = vi.fn();
+    const { result, unmount } = renderHook(() => useEvaluationSaves({ send: server.send, onAutoSaveError }));
+
+    act(() => result.current.scheduleAutoSave('a1'));
+    await advance(2000);
+    unmount();
+    await act(async () => { server.sends[0].reject(new Error('503')); });
+
+    await advance(30000);
+    expect(server.sends).toHaveLength(1);
+    expect(onAutoSaveError).not.toHaveBeenCalled();
+  });
+
   it('runs a one-off write in its place in the queue', async () => {
     const server = fakeServer();
     const decision = vi.fn(() => Promise.resolve());

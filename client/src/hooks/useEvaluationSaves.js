@@ -11,8 +11,10 @@ import { useCallback, useEffect, useRef } from 'react';
 // latest. A save asked for while one is already waiting shares that one.
 //
 // A failed autosave is retried on a backoff instead of waiting for the next edit,
-// which may never come (the interviewer moves on to the next candidate). An edit made
-// meanwhile replaces the retry with its own autosave. `onAutoSaveError` is told about
+// which may never come (the interviewer moves on to the next candidate). It is retried
+// only if nothing newer was asked for since it started: an edit brings its own
+// autosave, and a Save already sent the notes after it. Nothing is retried once the
+// page is gone, or a retry could land after the notes saved on the page reopened. `onAutoSaveError` is told about
 // every failure and `onSaved` about every save that lands, so the page can show
 // "Auto-save failed" and take it down once a retry, a later autosave or Save gets through.
 //
@@ -32,6 +34,9 @@ export default function useEvaluationSaves({
   latest.current = { send, delayMs, retryDelaysMs, onAutoSaveError, onSaved };
 
   const timers = useRef({});
+  // Bumped by every edit and every Save, so a failed autosave can tell it is stale.
+  const requests = useRef({});
+  const unmounted = useRef(false);
   const tails = useRef({});
   const waiting = useRef({});
 
@@ -61,10 +66,11 @@ export default function useEvaluationSaves({
   }, [enqueue]);
 
   const autoSave = useCallback((id, attempt = 0) => {
+    const request = requests.current[id];
     sendQueued(id).catch((error) => {
+      if (unmounted.current) return;
       latest.current.onAutoSaveError?.(id, error);
-      // A newer edit already scheduled its own autosave, which is the retry.
-      if (timers.current[id]) return;
+      if (requests.current[id] !== request) return;
       const delay = latest.current.retryDelaysMs[attempt];
       if (delay === undefined) return;
       timers.current[id] = setTimeout(() => {
@@ -76,6 +82,8 @@ export default function useEvaluationSaves({
 
   /** Autosave `id` once edits to it have paused for `delayMs`. */
   const scheduleAutoSave = useCallback((id) => {
+    if (unmounted.current) return;
+    requests.current[id] = (requests.current[id] || 0) + 1;
     cancelAutoSave(id);
     timers.current[id] = setTimeout(() => {
       delete timers.current[id];
@@ -89,6 +97,7 @@ export default function useEvaluationSaves({
    * so the edit is still retried.
    */
   const saveNow = useCallback((id) => {
+    requests.current[id] = (requests.current[id] || 0) + 1;
     const hadAutoSave = cancelAutoSave(id);
     const run = sendQueued(id);
     if (hadAutoSave) run.catch(() => { if (!timers.current[id]) scheduleAutoSave(id); });
@@ -98,11 +107,15 @@ export default function useEvaluationSaves({
   /** Run a one-off write of `id` (e.g. just its decision) in its place in the queue. */
   const runInQueue = useCallback((id, task) => enqueue(id, task), [enqueue]);
 
-  useEffect(() => () => {
-    for (const id of Object.keys(timers.current)) {
-      cancelAutoSave(id);
-      sendQueued(id).catch((error) => console.error('Auto-save on leaving failed:', error));
-    }
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+      for (const id of Object.keys(timers.current)) {
+        cancelAutoSave(id);
+        sendQueued(id).catch((error) => console.error('Auto-save on leaving failed:', error));
+      }
+    };
   }, [cancelAutoSave, sendQueued]);
 
   return { scheduleAutoSave, saveNow, runInQueue };
