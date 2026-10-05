@@ -14,7 +14,11 @@
 //
 // Nobody deactivated, and no Talent Partner Network client account, is ever in
 // the universe - deactivation is how this app records that someone has left,
-// and clients are companies, not students.
+// and clients are companies, not students. The exception is the account a UCLA
+// twin merge retired (x@g.ucla.edu folded into x@ucla.edu, see
+// uclaTwinAccounts.js): it is the same person's spare, not a departure, and is
+// read as if it did not exist. Otherwise it would hide the active account it was
+// merged into, since both spellings are one person here.
 //
 // Sealed records (Candidate.recordsLockedAt, see utils/lockedRecords.js) are
 // read as identity only, always - an executive unlock does not change it. A
@@ -30,6 +34,7 @@ import prisma from '../../prismaClient.js';
 import { normalizeEmail, emailIdentityKey } from '../../utils/mailingListImport.js';
 import { getRound } from '../../utils/roundProgression.js';
 import { redactApplication } from '../../utils/lockedRecords.js';
+import { isMergeRetired } from '../uclaTwinAccounts.js';
 import { evaluateAudienceTree, normalizeAudienceTree } from './audienceFilters.js';
 
 const STAFF_ROLES = ['MEMBER', 'ADMIN'];
@@ -81,11 +86,11 @@ function makeAliases() {
  * answers a whole tree.
  */
 export async function loadAudienceContext(client = prisma) {
-  const [users, loadedApplications, candidates, contacts, signups, lumaGuests, externalResumes, memberResumes, cycles] =
+  const [loadedUsers, loadedApplications, candidates, contacts, signups, lumaGuests, externalResumes, memberResumes, cycles] =
     await Promise.all([
       client.user.findMany({
         select: {
-          id: true, email: true, fullName: true, role: true, isActive: true, createdAt: true,
+          id: true, email: true, fullName: true, role: true, isActive: true, deactivatedBy: true, createdAt: true,
           isExternalTalent: true, emailVerifiedAt: true, graduationClass: true, phoneNumber: true,
         },
       }),
@@ -126,6 +131,10 @@ export async function loadAudienceContext(client = prisma) {
       }),
       client.recruitingCycle.findMany({ select: { id: true, isActive: true } }),
     ]);
+
+  // A twin merge's retired account is not a person of its own (see the top of
+  // this file). An admin's deactivation still is, and still excludes them.
+  const users = loadedUsers.filter((u) => !isMergeRetired(u));
 
   // 0. Cut sealed records down to identity before anything reads them.
   const sealed = candidates.filter((c) => c.recordsLockedAt);
