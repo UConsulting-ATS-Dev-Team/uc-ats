@@ -106,6 +106,31 @@ describe('who is never reached', () => {
     expect(emails(await resolveAudience(everyoneButMembers, { client }))).toEqual(['student@ucla.edu']);
     expect(emails(await resolveAudience(all(rule('applied')), { client }))).toEqual([]);
   });
+
+  // The 2026-10-04 twin merge retired five applicants' x@g.ucla.edu accounts,
+  // and a First Round send then listed 39 of 44.
+  it("still reaches someone whose UCLA twin account a merge retired", async () => {
+    const client = fakeClient({
+      users: [
+        user({ email: 'joe@g.ucla.edu', isActive: false, deactivatedBy: 'ucla-twin-merge' }),
+        user({ email: 'joe@ucla.edu' }),
+      ],
+      applications: [app({ email: 'joe@g.ucla.edu', currentRound: '3' })],
+    });
+    const result = await resolveAudience(all(rule('reachedRound', { round: '3' })), { client });
+    expect(emails(result)).toEqual(['joe@ucla.edu']);
+  });
+
+  it('still leaves out a twin an admin deactivated', async () => {
+    const client = fakeClient({
+      users: [
+        user({ email: 'joe@g.ucla.edu', isActive: false, deactivatedBy: 'admin-id' }),
+        user({ email: 'joe@ucla.edu' }),
+      ],
+      applications: [app({ email: 'joe@g.ucla.edu' })],
+    });
+    expect(emails(await resolveAudience(all(rule('applied')), { client }))).toEqual([]);
+  });
 });
 
 // A sealed record (utils/lockedRecords.js) is identity only to an audience:
