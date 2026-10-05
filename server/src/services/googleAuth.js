@@ -3,8 +3,8 @@ import prisma from '../prismaClient.js';
 import config from '../config.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 import { normalizeEmail, FULL_NAME_MAX_LENGTH } from '../utils/externalTalent.js';
-import { emailVariants, emailIdentityKey } from '../utils/mailingListImport.js';
-import { lockTalentAccount } from './talentAccountLock.js';
+import { emailIdentityKey } from '../utils/mailingListImport.js';
+import { findApplicantStudentId, linkTalentAccountToUid, lockEmptyTalentAccount } from './applicantAccounts.js';
 import { findUclaTwin, isMergeRetired } from './uclaTwinAccounts.js';
 
 /**
@@ -174,44 +174,6 @@ const linkExisting = async (user, profile) => {
 };
 
 /**
- * The applicant this verified address belongs to, as a UID, or null.
- *
- * Applying through the Google Form makes a Candidate but no account, so an
- * applicant who never registered and then signs in with Google has no User row
- * to match. Without this they became a talent-portal account, which has no UID
- * and therefore never sees their application or interview scheduling.
- *
- * A matching address alone proves nothing about the UID: form sync files an
- * application under whatever UID the form names, so someone can type another
- * person's UID with their own address. The UID is only handed over when the
- * candidate's address and every application filed under it are this address
- * (either UCLA spelling), so an application someone else filed under the UID
- * blocks it. Null when nobody or more than one candidate matches, when the
- * candidate has no application, or when another account already holds the UID.
- */
-const findApplicantStudentId = async (email) => {
-  const spellings = emailVariants(email).map((variant) => ({ equals: variant, mode: 'insensitive' }));
-  if (spellings.length === 0) return null;
-
-  const candidates = await prisma.candidate.findMany({
-    where: { OR: spellings.map((spelling) => ({ email: spelling })) },
-    select: { studentId: true, email: true, applications: { select: { email: true } } },
-    take: 2
-  });
-  if (candidates.length !== 1 || !candidates[0].studentId) return null;
-
-  const [candidate] = candidates;
-  const key = emailIdentityKey(email);
-  const addresses = [candidate.email, ...candidate.applications.map((application) => application.email)];
-  if (candidate.applications.length === 0 || addresses.some((address) => emailIdentityKey(address || '') !== key)) {
-    return null;
-  }
-
-  const holder = await prisma.user.findUnique({ where: { studentId: candidate.studentId }, select: { id: true } });
-  return holder ? null : candidate.studentId;
-};
-
-/**
  * Whether this talent-portal account is the one Google just verified: its
  * stored address still matches. A user can change their stored address without
  * verifying it, so on its own it proves nothing.
@@ -223,20 +185,8 @@ const isTalentAccountFor = (user, profile) =>
   emailIdentityKey(user.email) === emailIdentityKey(profile.email);
 
 /**
- * Inside a hand-over transaction: lock the talent account's row and confirm it
- * is still an empty talent account. The talent resume upload takes the same
- * lock, so a resume cannot land between this check and the hand-over and be
- * stranded on an account that no longer reaches the talent portal.
- */
-const lockEmptyTalentAccount = async (tx, userId) => {
-  const row = await lockTalentAccount(tx, userId);
-  if (!row || row.isExternalTalent !== true || row.studentId) return false;
-  return (await tx.externalResume.count({ where: { userId } })) === 0;
-};
-
-/**
  * Somebody with no account here at all. An applicant (see
- * findApplicantStudentId) gets the account /register would have made them:
+ * resolveApplicantForEmail in applicantAccounts.js) gets the account /register would have made them:
  * role USER with their UID, so the candidate pages find their application.
  *
  * Anyone else becomes a talent-portal account: role USER with
@@ -291,19 +241,8 @@ const adoptApplicant = async (user, profile) => {
   const studentId = await findApplicantStudentId(profile.email);
   if (!studentId) return user;
 
-  try {
-    const updated = await prisma.$transaction(async (tx) => {
-      if (!(await lockEmptyTalentAccount(tx, user.id))) return null;
-      return tx.user.update({ where: { id: user.id }, data: { isExternalTalent: false, studentId } });
-    });
-    if (!updated) return user;
-    invalidateUserCache(updated.id);
-    return updated;
-  } catch (error) {
-    // Another account took the UID in between. Leave this one as it was.
-    if (error?.code === 'P2002') return user;
-    throw error;
-  }
+  const addressKey = emailIdentityKey(profile.email);
+  return (await linkTalentAccountToUid(user.id, studentId, { addressKey })) || user;
 };
 
 /**

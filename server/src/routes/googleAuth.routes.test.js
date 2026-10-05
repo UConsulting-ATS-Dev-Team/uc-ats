@@ -8,16 +8,26 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import prisma from '../prismaClient.js';
 import authRoutes from './auth.js';
 import { invalidateUserCache } from '../middleware/auth.js';
 
-vi.mock('../prismaClient.js', () => ({
-  default: {
+vi.mock('../prismaClient.js', () => {
+  const client = {
     user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-    candidate: { create: vi.fn(), findMany: vi.fn().mockResolvedValue([]) }
-  }
-}));
+    candidate: { create: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+    application: { findMany: vi.fn().mockResolvedValue([{ email: 'diya@g.ucla.edu' }]) },
+    externalResume: { count: vi.fn().mockResolvedValue(0) },
+    $queryRaw: vi.fn((strings) => Promise.resolve(
+      strings.join('').includes('FROM candidates')
+        ? [{ id: 'cand-1', email: 'diya@g.ucla.edu' }]
+        : [{ isExternalTalent: true, studentId: null }]
+    )),
+    $transaction: vi.fn((work) => work(client))
+  };
+  return { default: client };
+});
 
 vi.mock('../services/emailNotifications.js', () => ({
   sendPasswordResetEmail: vi.fn().mockResolvedValue({ success: true }),
@@ -326,6 +336,23 @@ describe('accounts with no password', () => {
     // otherwise turn into a 500 on an ordinary sign-in attempt.
     expect(res.status).toBe(401);
     expect((await res.json()).code).toBe('GOOGLE_ACCOUNT');
+  });
+
+  it('signs a verified talent account whose address is an applicant\'s in as that applicant', async () => {
+    const password = await bcrypt.hash('correct horse', 4);
+    prisma.user.findFirst.mockResolvedValue(
+      existingUser({ password, isExternalTalent: true, studentId: null, email: 'diya@g.ucla.edu' })
+    );
+    prisma.candidate.findMany.mockResolvedValueOnce([
+      { studentId: '306917258', email: 'diya@g.ucla.edu', applications: [{ email: 'diya@g.ucla.edu' }] }
+    ]);
+
+    const res = await post('/api/auth/login', { email: 'diya@g.ucla.edu', password: 'correct horse' });
+
+    // Before, a talent account made with a password stayed one, and every
+    // candidate page - interview sign-up included - sent it to /talent/profile.
+    expect(res.status).toBe(200);
+    expect((await res.json()).user).toMatchObject({ isExternalTalent: false, studentId: '306917258' });
   });
 
   it('still refuses an unknown address in the same words as a wrong password', async () => {

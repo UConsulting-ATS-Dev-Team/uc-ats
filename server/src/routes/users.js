@@ -5,6 +5,7 @@ import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import prisma from '../prismaClient.js';
 import { revokeTalentPoolAccess } from '../services/talentPoolAccess.js';
 import { normalizePhoneNumber } from '../utils/phone.js';
+import { emailIdentityKey } from '../utils/mailingListImport.js';
 import { storeProfileImage, removeProfileImage } from '../services/profileImageStorage.js';
 
 const router = express.Router();
@@ -210,7 +211,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const updateData = {};
     if (fullName) updateData.fullName = fullName;
     if (graduationClass !== undefined) updateData.graduationClass = graduationClass;
-    if (email) updateData.email = email;
+    if (email) {
+      updateData.email = email;
+      // emailVerifiedAt proves the address it was set for, not whatever is stored
+      // later. Kept, it would vouch for an address nobody has read: the talent
+      // portal's resume gate and the hand-over to an applicant's account
+      // (services/applicantAccounts.js) both trust it. A pending link for the
+      // old address goes too, or redeeming it would verify the new one.
+      const current = await prisma.user.findUnique({ where: { id }, select: { email: true } });
+      if (current && emailIdentityKey(current.email) !== emailIdentityKey(email)) {
+        updateData.emailVerifiedAt = null;
+        updateData.emailVerificationToken = null;
+        updateData.emailVerificationExpiry = null;
+      }
+    }
     if (phoneNumber !== undefined) {
       // Admins only, even on your own record. An admin picks iMessage recipients
       // by name and never sees the number behind them, so a member who can write
@@ -247,6 +261,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
         createdAt: true
       }
     });
+
+    // The auth cache holds email and emailVerifiedAt; without this the old pair
+    // keeps answering for this account for up to five minutes.
+    invalidateUserCache(id);
 
     res.json(updatedUser);
   } catch (error) {

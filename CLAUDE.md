@@ -132,6 +132,10 @@ npm run setup-candidate-relations
 # One-time mailing-list import (dry run; add --apply to upload to Drive)
 npm run import-mailing-list -- <csv>
 
+# Link talent-portal accounts that belong to applicants (dry run; --apply links;
+# --link=<userId>:<UID> --apply links one account an admin has identified)
+node scripts/link-talent-accounts.js
+
 # Fold a candidate's duplicate applications in a cycle into one
 # (dry run; add --apply to merge; --cycle=<id> for a cycle other than the candidate one)
 npm run merge-duplicate-applications
@@ -1204,6 +1208,31 @@ The system follows a **recruiting cycle-based workflow**:
   server gate and `ProtectedRoute` branch on that flag, not on the role.
 - User cache with 5-minute TTL to reduce DB queries
 - Use `requireAuth` middleware for protected routes, `requireAdmin` for admin-only
+
+**Talent accounts that belong to applicants:**
+- A talent account has no UID, and `ProtectedRoute` sends it to `/talent/profile` from every
+  page, interview sign-up included. An applicant ends up with one by signing up on the
+  talent form, or by signing in with Google under an address their application does not use.
+- Every rule is in [server/src/services/applicantAccounts.js](server/src/services/applicantAccounts.js).
+  A talent account becomes the applicant's (`isExternalTalent: false`, `studentId` set) when
+  an address it has **verified** is the applicant's, and every application under that UID
+  is from that address (either UCLA spelling). This runs on Google sign-in, password
+  sign-in and email verification. It does not run when another account already holds the
+  UID, or when the talent account holds a talent-portal resume.
+- The talent profile also asks for a UID ("Applied to UConsulting?"). A typed UID goes into
+  `User.claimedStudentId` and **never** into `studentId`, which the candidate pages trust.
+  It becomes `studentId` only once the 8-digit code mailed to the address on that
+  application is entered (`POST /api/talent/uid`, `/uid/confirm`: 15 minutes, five tries).
+  An account may try one UID a minute whatever the answer, and no answer names an
+  address, so the endpoint is a slow way to learn which UIDs have applied. The code is
+  left out of the communications log's preview.
+- Every hand-over re-reads the addresses under the UID with the candidate row locked
+  (`FOR UPDATE`), so an application filed from another address after the proof stops it.
+- Changing the stored address (`PATCH /api/users/:id`) clears `emailVerifiedAt` and any
+  pending verification link: verification proves one address, not whatever is stored later.
+- `scripts/link-talent-accounts.js` links existing accounts by the same rule. Accounts it
+  cannot link are listed with their reason, any applicant with the same name, and any
+  typed UID. A name is not proof, so those are linked one at a time with `--link`.
 
 **Ending a dead session:**
 - `requireAuth` answers an expired or malformed token, a deleted user and a deactivated

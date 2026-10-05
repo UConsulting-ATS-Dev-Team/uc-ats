@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import TalentProfile from './TalentProfile';
 import apiClient from '../utils/api';
 
@@ -72,7 +73,7 @@ describe('missing graduation year', () => {
   it('asks for it, since nothing else in this page would', async () => {
     mockMe({ profile: profile({ graduationYear: '' }), resume: null });
 
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
 
     expect(await screen.findByText(/add your graduation year/i)).toBeInTheDocument();
   });
@@ -80,7 +81,7 @@ describe('missing graduation year', () => {
   it('stays quiet once it is there', async () => {
     mockMe({ profile: profile({ graduationYear: '2027' }), resume: null });
 
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
 
     // Full name is the one field unique to the details card - the resume form
     // below has a graduation year of its own.
@@ -95,14 +96,14 @@ describe('unverified account', () => {
   });
 
   it('says which address to check rather than just "unverified"', async () => {
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     // Appears twice: the header subtitle and the warning banner.
     await waitFor(() => expect(screen.getAllByText(/joski@g\.ucla\.edu/i).length).toBeGreaterThan(0));
     expect(screen.getByText(/verification link/i)).toBeInTheDocument();
   });
 
   it('disables the upload controls, so the gate is visible before it is hit', async () => {
-    const { container } = render(<TalentProfile />);
+    const { container } = render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /upload resume/i })).toBeDisabled()
     );
@@ -115,7 +116,7 @@ describe('unverified account', () => {
 
   it('resends the verification email on request', async () => {
     const user = userEvent.setup();
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole('button', { name: /resend/i })).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /resend/i }));
@@ -125,7 +126,7 @@ describe('unverified account', () => {
   });
 
   it('still allows a name fix before the link arrives', async () => {
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /save details/i })).toBeEnabled()
     );
@@ -138,7 +139,7 @@ describe('verified account with a shared resume', () => {
   });
 
   it('shows how many organizations can actually see it', async () => {
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() =>
       expect(screen.getByText(/3 organization\(s\) can see it/i)).toBeInTheDocument()
     );
@@ -147,7 +148,7 @@ describe('verified account with a shared resume', () => {
   it('warns before a withdrawal that pulls the resume back from partners', async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole('button', { name: /stop sharing/i })).toBeEnabled());
 
     await user.click(screen.getByRole('button', { name: /stop sharing/i }));
@@ -161,7 +162,7 @@ describe('verified account with a shared resume', () => {
   it('withdraws when the warning is accepted', async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole('button', { name: /stop sharing/i })).toBeEnabled());
 
     await user.click(screen.getByRole('button', { name: /stop sharing/i }));
@@ -176,7 +177,7 @@ describe('verified account with a shared resume', () => {
 describe('a first upload', () => {
   it('prefills the resume year from the one given at signup', async () => {
     mockMe({ profile: profile({ graduationYear: '2029' }), resume: null });
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() => {
       const years = screen.getAllByLabelText(/graduation year/i);
       // Both the details form and the resume form carry it.
@@ -186,7 +187,7 @@ describe('a first upload', () => {
 
   it('keeps upload disabled until a file is chosen', async () => {
     mockMe({ profile: profile(), resume: null });
-    render(<TalentProfile />);
+    render(<MemoryRouter><TalentProfile /></MemoryRouter>);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /upload resume/i })).toBeDisabled()
     );
