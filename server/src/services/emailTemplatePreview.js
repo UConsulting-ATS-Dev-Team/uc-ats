@@ -551,7 +551,9 @@ function slotEntry(type, meta, { suffix = '', label, description, options } = {}
     // notification worded differently, and it is edited with the one it varies.
     copyKey: slotCopyKey(type),
     render: async () => ({
-      subject: await slotNotificationSubject(type, SAMPLE_INTERVIEW_TITLE),
+      subject: await slotNotificationSubject(type, SAMPLE_INTERVIEW_TITLE, {
+        sessionChanged: Boolean(renderOptions.sessionChanged),
+      }),
       html: await renderInterviewSlotEmail(notification, renderOptions),
     }),
   };
@@ -574,6 +576,23 @@ SLOT.push(
     description:
       'The same notification worded for a member who signed themselves up, rather than one an admin placed.',
     options: { selfSignup: true },
+  })
+);
+
+// A session retimed or given a new room, rather than somebody moved out of it,
+// is worded as such for both the candidates and the interviewers in it.
+SLOT.push(
+  slotEntry('MOVED_BY_ADMIN', SLOT_META.MOVED_BY_ADMIN, {
+    suffix: '-session-changed',
+    label: 'Interview session changed by recruitment',
+    description: 'The same notification worded for a session whose time or location an admin edited.',
+    options: { sessionChanged: true },
+  }),
+  slotEntry('INTERVIEWER_MOVED', SLOT_META.INTERVIEWER_MOVED, {
+    suffix: '-session-changed',
+    label: 'Your session has changed (time or place)',
+    description: 'The same notification worded for a session whose time or location an admin edited.',
+    options: { sessionChanged: true, fromSlotName: null },
   })
 );
 

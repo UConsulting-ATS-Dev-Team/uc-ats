@@ -88,8 +88,10 @@ export async function notifyInterviewer(
  *
  * Takes pairs that already exist in the database; it reads the addresses and
  * titles itself so callers do not have to carry them out of their transaction.
+ * `sessionChanged` words it for a session that was retimed or moved room,
+ * rather than an interviewer moved between sessions.
  */
-export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED') {
+export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED', { sessionChanged = false } = {}) {
   const wanted = (pairs ?? []).filter((p) => p?.slotId && p?.userId);
   if (wanted.length === 0) return [];
 
@@ -108,7 +110,7 @@ export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED
     const titleById = new Map(slots.map((s) => [s.id, s.interview?.title]));
 
     // One read of this type's wording, applied to every session's title.
-    const subjectFor = await slotSubjectFormatter(type);
+    const subjectFor = await slotSubjectFormatter(type, { sessionChanged });
     const entries = wanted
       .filter((p) => emailById.get(p.userId) && titleById.get(p.slotId))
       .map((p) => ({
@@ -120,7 +122,7 @@ export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED
     if (entries.length === 0) return [];
 
     const ids = await queueNotificationsBulk(entries);
-    flushInBackground(ids, {}, 'notifyInterviewersBulk');
+    flushInBackground(ids, { sessionChanged }, 'notifyInterviewersBulk');
     return ids;
   } catch (error) {
     console.error('[notifyInterviewersBulk]', error);

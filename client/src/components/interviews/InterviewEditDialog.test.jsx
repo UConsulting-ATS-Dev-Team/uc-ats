@@ -200,6 +200,87 @@ describe('InterviewEditDialog', () => {
     });
   });
 
+  describe('telling the people in a session', () => {
+    const booked = () =>
+      slot({
+        location: 'Anderson 1234',
+        signups: [
+          { id: 's1', status: 'CONFIRMED' },
+          { id: 's2', status: 'CONFIRMED' },
+          { id: 's3', status: 'WAITLISTED' },
+        ],
+        interviewers: [{ id: 'a1' }],
+      });
+
+    const changeRoom = async (room = 'YRL 2') => {
+      await screen.findByText('Sessions (1)');
+      const location = screen.getAllByLabelText(/^location$/i)[1];
+      await userEvent.clear(location);
+      await userEvent.type(location, room);
+    };
+
+    it('offers, ticked, to email them when the room changes, and sends notify', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: true } });
+      openDialog([booked()]);
+      await changeRoom();
+
+      const box = screen.getByRole('checkbox', { name: /email the 2 booked candidates and 1 interviewer/i });
+      expect(box).toBeChecked();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(apiClient.patch).toHaveBeenCalledWith(
+          '/admin/interviews/slots/slot-1',
+          expect.objectContaining({ location: 'YRL 2', notify: true })
+        );
+      });
+      expect(await screen.findByText(/emailing 2 candidates and 1 interviewer/i)).toBeInTheDocument();
+    });
+
+    it('sends no notify when the box is unticked', async () => {
+      openDialog([booked()]);
+      await changeRoom();
+      await userEvent.click(screen.getByRole('checkbox', { name: /email the/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(apiClient.patch).toHaveBeenCalled());
+      expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('notify');
+    });
+
+    it('does not offer it for a seat change', async () => {
+      openDialog([booked()]);
+      const seats = await screen.findByLabelText(/^seats$/i);
+      await userEvent.clear(seats);
+      await userEvent.type(seats, '6');
+
+      expect(screen.queryByRole('checkbox', { name: /email the/i })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      await waitFor(() => expect(apiClient.patch).toHaveBeenCalled());
+      expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('notify');
+    });
+
+    it('does not offer it for an empty session', async () => {
+      openDialog([slot({ location: 'Anderson 1234' })]);
+      await changeRoom();
+      expect(screen.queryByRole('checkbox', { name: /email the/i })).not.toBeInTheDocument();
+    });
+
+    it('offers it for a new time too', async () => {
+      openDialog([booked()]);
+      setValue(await screen.findByLabelText(/^start$/i), '08:30');
+      expect(await screen.findByRole('checkbox', { name: /email the/i })).toBeChecked();
+    });
+
+    it('says so when scheduling emails are switched off', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: false } });
+      openDialog([booked()]);
+      await changeRoom();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(await screen.findByText(/scheduling emails are switched off, so nobody was emailed/i)).toBeInTheDocument();
+    });
+  });
+
   it('will not offer to move a day that has no sessions', async () => {
     openDialog([]);
     await screen.findByText('Sessions (0)');

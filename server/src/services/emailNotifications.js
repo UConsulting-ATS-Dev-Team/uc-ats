@@ -1035,8 +1035,8 @@ export const SLOT_NOTIFICATION_SUBJECTS = Object.fromEntries(
  * `subject` column has always come from. So an edit reaches the notifications
  * queued after it and leaves anything already waiting to go out alone.
  */
-export const slotNotificationSubject = async (type, interviewTitle) =>
-  (await slotSubjectFormatter(type))(interviewTitle);
+export const slotNotificationSubject = async (type, interviewTitle, options) =>
+  (await slotSubjectFormatter(type, options))(interviewTitle);
 
 /**
  * The same, read once and then applied to many interview titles.
@@ -1046,9 +1046,10 @@ export const slotNotificationSubject = async (type, interviewTitle) =>
  * turn one action into dozens of reads for an answer that cannot change between
  * them.
  */
-export const slotSubjectFormatter = async (type) => {
+export const slotSubjectFormatter = async (type, { sessionChanged = false } = {}) => {
   const copy = await resolveEmailCopy(slotCopyKey(type));
-  return (interviewTitle) => copySubject(copy.subject, { interviewTitle });
+  const subject = (sessionChanged && copy.subjectSessionChanged) || copy.subject;
+  return (interviewTitle) => copySubject(subject, { interviewTitle });
 };
 
 export const renderInterviewSlotEmail = async (
@@ -1059,6 +1060,7 @@ export const renderInterviewSlotEmail = async (
     preferredSlotName = null,
     fromSlotName = null,
     selfSignup = false,
+    sessionChanged = false,
   } = {}
 ) => {
   const slot = notification.slot ?? {};
@@ -1079,14 +1081,19 @@ export const renderInterviewSlotEmail = async (
     candidateName: [application.firstName, application.lastName].filter(Boolean).join(' ') || 'A candidate',
   };
 
-  // The two notifications whose wording forks on how the change happened.
-  // Which half is used is decided by the send path, never by an edit: somebody
-  // who claimed a session themselves must not read that they "have been placed"
-  // in it, and a move we cannot name the old session for must not print an
-  // empty one.
+  // The notifications whose wording forks on how the change happened. Which
+  // half is used is decided by the send path, never by an edit: somebody who
+  // claimed a session themselves must not read that they "have been placed" in
+  // it, a move we cannot name the old session for must not print an empty one,
+  // and somebody whose session was retimed or given a new room was not moved.
   let body = copy.body;
+  let heading = copy.heading;
   if (type === 'INTERVIEWER_ASSIGNED' && selfSignup) body = copy.bodySelfSignup;
   if (type === 'INTERVIEWER_MOVED' && !fromSlotName) body = copy.bodyNoPrevious;
+  if (sessionChanged) {
+    body = copy.bodySessionChanged || body;
+    heading = copy.headingSessionChanged || heading;
+  }
 
   // Nothing to show in a details card when there is no session yet, or when the
   // point of the message is that a booking is gone.
@@ -1110,7 +1117,7 @@ export const renderInterviewSlotEmail = async (
     values,
     brand: 'UConsulting',
     parts: [
-      part.heading(copy.heading),
+      part.heading(heading),
       part.copy(body),
       showDetails
         ? part.card({
