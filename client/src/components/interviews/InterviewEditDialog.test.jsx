@@ -303,6 +303,19 @@ describe('InterviewEditDialog', () => {
 
       expect(await screen.findByText(/scheduling emails are switched off, so nobody was emailed/i)).toBeInTheDocument();
     });
+
+    it('still reports a queue failure when scheduling emails are switched off', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({
+        notified: { candidates: 2, interviewers: 0, failed: ['interviewers'], emailsOn: false },
+      });
+      openDialog([booked()]);
+      await changeRoom();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(
+        await screen.findByText(/switched off, and the interviewers could not be recorded to email later/i)
+      ).toBeInTheDocument();
+    });
   });
 
   it('will not offer to move a day that has no sessions', async () => {

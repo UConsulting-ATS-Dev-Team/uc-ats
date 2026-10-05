@@ -72,12 +72,17 @@ const sessionSavedMessage = (result) => {
   const notified = result?.notified;
   if (!notified) return 'Session updated.';
   if (notified.unchanged) return 'Session updated. Its time and place are as before, so nobody was emailed.';
-  if (!notified.emailsOn) return 'Session updated. Scheduling emails are switched off, so nobody was emailed.';
   const who = [
     notified.candidates ? plural(notified.candidates, 'candidate') : null,
     notified.interviewers ? plural(notified.interviewers, 'interviewer') : null,
   ].filter(Boolean);
+  // Checked before the switch: with scheduling email off, notices are still
+  // recorded to send later, and a half that failed has nothing recorded.
   const failed = notified.failed ?? [];
+  if (failed.length && !notified.emailsOn) {
+    return `Session updated. Scheduling emails are switched off, and the ${failed.join(' and ')} could not be recorded to email later. Tell them yourself.`;
+  }
+  if (!notified.emailsOn) return 'Session updated. Scheduling emails are switched off, so nobody was emailed.';
   if (failed.length) {
     const lead = who.length ? `Emailing ${who.join(' and ')}, but the` : 'The';
     return `Session updated. ${lead} ${failed.join(' and ')} could not be emailed. Tell them yourself.`;
