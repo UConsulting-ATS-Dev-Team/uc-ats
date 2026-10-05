@@ -12,6 +12,7 @@ import {
   isFreeAt,
   makeRow,
   nextRow,
+  rowInstants,
   pickerOptions,
   sharedRooms,
   summarize,
@@ -226,6 +227,14 @@ describe('sessions ending at midnight', () => {
       startTime: '2026-10-07T06:00:00.000Z',
       endTime: '2026-10-07T07:00:00.000Z',
     });
+  });
+
+  it('refuses 00:00 to 00:00 rather than reading it as a whole day', () => {
+    const empty = makeRow({ start: '00:00', end: '00:00' }, firstRound);
+    expect(validateRow(empty)).toEqual({ end: 'Must end after it starts' });
+    // And the instants agree: both ends at the same moment, never a day apart.
+    const { start, end } = rowInstants(empty);
+    expect(end.getTime()).toBe(start.getTime());
   });
 
   it('still refuses any other end before the start', () => {

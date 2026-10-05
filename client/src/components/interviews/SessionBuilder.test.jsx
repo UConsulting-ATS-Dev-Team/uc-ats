@@ -201,15 +201,27 @@ describe('SessionBuilder', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
-  it('closes after creating even when the page cannot refresh, and says so', async () => {
+  it('closes as soon as the sessions are created, without waiting on the refresh', async () => {
+    // A refresh that never finishes must not hold the dialog on "Creating…".
+    const onCreated = vi.fn(() => new Promise(() => {}));
+    const { onClose } = open({ onCreated });
+    await loaded();
+    await userEvent.click(screen.getByRole('button', { name: 'Create 1 session' }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onCreated).toHaveBeenCalledWith({ created: 1, assigned: 1, slots: [] });
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so when the page cannot refresh after creating', async () => {
     const onCreated = vi.fn().mockRejectedValue(new Error('refresh failed'));
     const { onClose } = open({ onCreated });
     await loaded();
     await userEvent.click(screen.getByRole('button', { name: 'Create 1 session' }));
 
-    // The sessions exist; staying open would invite a second, duplicate create.
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(await screen.findByText(/Created 1 session, but the page could not refresh/)).toBeInTheDocument();
+    // The sessions exist; nothing is sent a second time.
     expect(apiClient.post).toHaveBeenCalledTimes(1);
   });
 

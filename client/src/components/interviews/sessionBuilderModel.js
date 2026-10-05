@@ -48,11 +48,16 @@ export const fromMinutes = (minutes) => {
 const MIDNIGHT = 24 * 60;
 
 /**
- * An end time in minutes. "00:00" as an end is midnight at the close of the
- * row's day, so a 23:00-00:00 hour can be drafted; any other end at or before
- * the start is still a session that runs backwards, and is refused.
+ * Whether an end of "00:00" means midnight at the close of the day, so a
+ * 23:00-00:00 hour can be drafted. Only after a start later than 00:00:
+ * 00:00-00:00 is a session of no length, not one of a whole day. Validation
+ * and the instants both read this, so a row that passes the check is one the
+ * server will take.
  */
-export const endMinutes = (time) => (time === '00:00' ? MIDNIGHT : toMinutes(time));
+export const endsAtMidnight = (start, end) => end === '00:00' && (toMinutes(start) ?? 0) > 0;
+
+/** An end time in minutes past the start's midnight (see endsAtMidnight). Any other end at or before the start is refused. */
+export const endMinutes = (start, end) => (endsAtMidnight(start, end) ? MIDNIGHT : toMinutes(end));
 
 /** An end in minutes as "HH:mm", with midnight written "00:00" (see endMinutes). */
 const endFromMinutes = (minutes) => (minutes >= MIDNIGHT ? '00:00' : fromMinutes(minutes));
@@ -90,7 +95,7 @@ export const makeRow = (partial = {}, { interviewType, location = '', day = '' }
 };
 
 const lengthOf = (row, fallback) => {
-  const length = (endMinutes(row.end) ?? 0) - (toMinutes(row.start) ?? 0);
+  const length = (endMinutes(row.start, row.end) ?? 0) - (toMinutes(row.start) ?? 0);
   return length > 0 ? length : fallback;
 };
 
@@ -104,7 +109,7 @@ export const nextRow = (rows, context = {}) => {
   const last = rows[rows.length - 1];
   if (!last) return makeRow({ start: '09:00', day: context.day ?? '' }, context);
   // After a session that runs to midnight, the next one starts the next day.
-  const pastMidnight = last.end === '00:00' && last.day;
+  const pastMidnight = endsAtMidnight(last.start, last.end) && last.day;
   const start = pastMidnight ? 0 : (toMinutes(last.end) ?? 9 * 60);
   return makeRow(
     {
@@ -130,7 +135,7 @@ export const duplicateRow = (row) => makeRow({ ...row, interviewerIds: [], prist
 /** How many start times and rooms a fill covers, before any rows are made. */
 export const fillShape = ({ start, end, minutes, rooms = 1 }) => {
   const from = toMinutes(start);
-  const to = endMinutes(end);
+  const to = endMinutes(start, end);
   const length = Number(minutes);
   const roomCount = Math.max(1, Math.min(MAX_ROOMS, Number(rooms) || 1));
   const times = from == null || to == null || !(length > 0) || to <= from ? 0 : Math.floor((to - from) / length);
@@ -144,7 +149,7 @@ export const fillShape = ({ start, end, minutes, rooms = 1 }) => {
  */
 export const fillRange = ({ day, start, end, minutes, rooms = 1, seats }, context = {}) => {
   const from = toMinutes(start);
-  const to = endMinutes(end);
+  const to = endMinutes(start, end);
   const length = Number(minutes);
   const roomCount = Math.max(1, Math.min(MAX_ROOMS, Number(rooms) || 1));
   if (from == null || to == null || !(length > 0)) return [];
@@ -180,7 +185,7 @@ export const appendRows = (rows, added) => {
 
 /** The row's start and end as instants, or null for either half that is not filled in. */
 export const rowInstants = (row) => {
-  const endDay = row.day && row.end === '00:00' && row.start !== '00:00' ? addDays(row.day, 1) : row.day;
+  const endDay = row.day && endsAtMidnight(row.start, row.end) ? addDays(row.day, 1) : row.day;
   return {
     start: row.day && row.start ? fromPacificInput(`${row.day}T${row.start}`) : null,
     end: row.day && row.end ? fromPacificInput(`${endDay}T${row.end}`) : null,
@@ -306,7 +311,7 @@ export const validateRow = (row) => {
   if (!row.day) errors.day = 'Pick a day';
   if (!row.start) errors.start = 'Pick a start';
   if (!row.end) errors.end = 'Pick an end';
-  if (row.start && row.end && endMinutes(row.end) <= toMinutes(row.start)) errors.end = 'Must end after it starts';
+  if (row.start && row.end && endMinutes(row.start, row.end) <= toMinutes(row.start)) errors.end = 'Must end after it starts';
   if (!isCount(row.candidateCapacity)) errors.candidateCapacity = 'Whole number';
   if (!isCount(row.interviewerCapacity)) errors.interviewerCapacity = 'Whole number';
   if (!isCount(row.groupSize, 1)) errors.groupSize = 'Whole number';

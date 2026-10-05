@@ -399,18 +399,19 @@ export default function SessionBuilder({
       setSaving(false);
       return;
     }
-    // The sessions exist from here on, so the dialog closes whatever the
-    // caller's refresh does. Left open, a second press of Create would make
-    // every one of them twice.
-    try {
-      await onCreated?.(result);
-    } catch {
-      setAfterCreate(
-        `Created ${plural(result?.created ?? rows.length, 'session')}, but the page could not refresh. Reload to see them.`
-      );
-    }
+    // The sessions exist from here on, so the dialog closes at once. Waiting on
+    // the caller's refresh left it stuck on "Creating…" with Cancel disabled
+    // when that refresh stalled, and left open, a second press of Create would
+    // make every session twice.
     setSaving(false);
     onClose?.();
+    Promise.resolve()
+      .then(() => onCreated?.(result))
+      .catch(() =>
+        setAfterCreate(
+          `Created ${plural(result?.created ?? rows.length, 'session')}, but the page could not refresh. Reload to see them.`
+        )
+      );
   };
 
   return (
