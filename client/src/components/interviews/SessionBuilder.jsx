@@ -15,6 +15,7 @@ import {
   ListItemText,
   MenuItem,
   Paper,
+  Snackbar,
   Stack,
   TextField,
   Tooltip,
@@ -294,6 +295,8 @@ export default function SessionBuilder({
   const [showErrors, setShowErrors] = useState(false);
   const [fillOpen, setFillOpen] = useState(false);
   const [fill, setFill] = useState({});
+  // Said after the dialog has closed, so it lives outside it.
+  const [afterCreate, setAfterCreate] = useState('');
 
   const type = interviewType ?? data?.interview?.interviewType;
   const isCoffeeChat = type === 'COFFEE_CHAT';
@@ -364,7 +367,10 @@ export default function SessionBuilder({
     [data]
   );
   const clashes = useMemo(() => findClashes(rows, data?.sessions ?? []), [rows, data]);
-  const shared = useMemo(() => sharedRooms(rows), [rows]);
+  const shared = useMemo(
+    () => sharedRooms(rows, data?.sessions ?? [], context.location),
+    [rows, data, context.location]
+  );
   const errors = useMemo(() => validateRows(rows), [rows]);
   const totals = summarize(rows);
   const shape = fillShape(fill);
@@ -382,207 +388,225 @@ export default function SessionBuilder({
     }
     setSaving(true);
     setError('');
+    let result;
     try {
-      const result = await apiClient.post(
+      result = await apiClient.post(
         `/admin/interviews/${interviewId}/slots/generate`,
         buildPayload(rows, { interviewType: type, location: context.location })
       );
-      onCreated?.(result);
-      onClose?.();
     } catch (e) {
       setError(e.message || 'Failed to create those sessions.');
-    } finally {
       setSaving(false);
+      return;
     }
+    // The sessions exist from here on, so the dialog closes whatever the
+    // caller's refresh does. Left open, a second press of Create would make
+    // every one of them twice.
+    try {
+      await onCreated?.(result);
+    } catch {
+      setAfterCreate(
+        `Created ${plural(result?.created ?? rows.length, 'session')}, but the page could not refresh. Reload to see them.`
+      );
+    }
+    setSaving(false);
+    onClose?.();
   };
 
   return (
-    <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="lg" fullScreen={small}>
-      <DialogTitle>Build sessions</DialogTitle>
-      {loading && <LinearProgress />}
-      <DialogContent>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Draft every session for the day, including ones that run side by side in different rooms. Each
-          interviewer list puts the people free at that time first. Nothing is created until you press Create.
-        </Typography>
-
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-            {error}
-          </Alert>
-        )}
-
-        <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-          {/* The opening row stays: asking for the next session means the first one was wanted. */}
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={() =>
-              setRows((cur) => [...cur.map((r) => ({ ...r, pristine: false })), nextRow(cur, context)])
-            }
-          >
-            Add session
-          </Button>
-          <Button
-            size="small"
-            startIcon={<FillIcon />}
-            onClick={() => setFillOpen((v) => !v)}
-            aria-expanded={fillOpen}
-          >
-            Fill a time range
-          </Button>
-        </Stack>
-
-        <Collapse in={fillOpen} unmountOnExit>
-          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              Back-to-back sessions from the first start to the last end. With more than one room, each time
-              gets that many sessions at once. Give each its own location afterwards.
-            </Typography>
-            <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }} alignItems="center">
-              <TextField
-                size="small"
-                type="date"
-                label="Fill date"
-                value={fill.day ?? ''}
-                onChange={(e) => setFill({ ...fill, day: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                sx={{ width: 160 }}
-              />
-              <TextField
-                size="small"
-                type="time"
-                label="First starts"
-                value={fill.start ?? ''}
-                onChange={(e) => setFill({ ...fill, start: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                sx={{ width: 130 }}
-              />
-              <TextField
-                size="small"
-                type="time"
-                label="Last ends"
-                value={fill.end ?? ''}
-                onChange={(e) => setFill({ ...fill, end: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-                sx={{ width: 130 }}
-              />
-              <TextField
-                size="small"
-                select
-                label="Each runs"
-                value={fill.minutes ?? 60}
-                onChange={(e) => setFill({ ...fill, minutes: Number(e.target.value) })}
-                sx={{ width: 140 }}
-              >
-                {SESSION_LENGTHS.map((m) => (
-                  <MenuItem key={m} value={m}>
-                    {m} minutes
-                  </MenuItem>
-                ))}
-              </TextField>
-              <TextField
-                size="small"
-                select
-                label="Rooms at once"
-                value={fill.rooms ?? 1}
-                onChange={(e) => setFill({ ...fill, rooms: Number(e.target.value) })}
-                sx={{ width: 130 }}
-              >
-                {Array.from({ length: MAX_ROOMS }, (_, i) => i + 1).map((n) => (
-                  <MenuItem key={n} value={n}>
-                    {n}
-                  </MenuItem>
-                ))}
-              </TextField>
-              <TextField
-                size="small"
-                type="number"
-                label="Seats each"
-                value={fill.seats ?? ''}
-                onChange={(e) => setFill({ ...fill, seats: e.target.value })}
-                inputProps={{ min: 0 }}
-                sx={{ width: 110 }}
-              />
-              <Button
-                variant="contained"
-                size="small"
-                disabled={shape.total === 0}
-                onClick={() => {
-                  setRows((cur) => appendRows(cur, fillRange(fill, context)));
-                  setFillOpen(false);
-                }}
-              >
-                Add {plural(shape.total, 'session')}
-              </Button>
-            </Stack>
-            {/* Shown before the click: three rooms over a long day is a lot of
-                rows, and the server takes at most MAX_SESSIONS at once. */}
-            <Typography
-              variant="caption"
-              color={rows.length + shape.total > MAX_SESSIONS ? 'error' : 'text.secondary'}
-              display="block"
-              sx={{ mt: 1 }}
-            >
-              {shape.total === 0
-                ? 'Nothing fits between those times.'
-                : `Adds ${plural(shape.total, 'session')} (${plural(shape.times, 'time')} × ${plural(shape.rooms, 'room')})`}
-            </Typography>
-          </Paper>
-        </Collapse>
-
-        {rows.length === 0 ? (
-          <Alert severity="info">No sessions drafted. Add one, or fill a time range.</Alert>
-        ) : (
-          <Stack spacing={1.5}>
-            {rows.map((row, index) => {
-              const { start, end } = rowInstants(row);
-              return (
-                <DraftRow
-                  key={row.key}
-                  row={row}
-                  index={index}
-                  errors={showErrors ? errors[row.key] : undefined}
-                  isCoffeeChat={isCoffeeChat}
-                  options={pickerOptions(data?.staff, windowsByUser, start, end)}
-                  staffById={staffById}
-                  clashes={clashes[row.key]}
-                  sharesRoom={shared.has(row.key)}
-                  loading={loading}
-                  onChange={(changes) => updateRow(row.key, changes)}
-                  onDuplicate={() =>
-                    setRows((cur) => {
-                      const at = cur.findIndex((r) => r.key === row.key);
-                      return [...cur.slice(0, at + 1), duplicateRow(row), ...cur.slice(at + 1)];
-                    })
-                  }
-                  onDelete={() => setRows((cur) => cur.filter((r) => r.key !== row.key))}
-                />
-              );
-            })}
-          </Stack>
-        )}
-      </DialogContent>
-      <DialogActions sx={{ px: 3, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
-        <Box sx={{ mr: 'auto' }}>
-          <Typography variant="body2" color="text.secondary">
-            {plural(totals.sessions, 'session')} · {plural(totals.seats, 'seat')} ·{' '}
-            {plural(totals.placements, 'interviewer placement')}
+    <>
+      <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="lg" fullScreen={small}>
+        <DialogTitle>Build sessions</DialogTitle>
+        {loading && <LinearProgress />}
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Draft every session for the day, including ones that run side by side in different rooms. Each
+            interviewer list puts the people free at that time first. Nothing is created until you press Create.
           </Typography>
-          {tooMany && (
-            <Typography variant="body2" color="error">
-              At most {MAX_SESSIONS} sessions at once — create these in two batches
-            </Typography>
+
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+              {error}
+            </Alert>
           )}
-        </Box>
-        <Button onClick={onClose} disabled={saving}>
-          Cancel
-        </Button>
-        <Button variant="contained" onClick={submit} disabled={saving || rows.length === 0 || tooMany}>
-          {saving ? 'Creating…' : `Create ${plural(rows.length, 'session')}`}
-        </Button>
-      </DialogActions>
-    </Dialog>
+
+          <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
+            {/* The opening row stays: asking for the next session means the first one was wanted. */}
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<AddIcon />}
+              onClick={() =>
+                setRows((cur) => [...cur.map((r) => ({ ...r, pristine: false })), nextRow(cur, context)])
+              }
+            >
+              Add session
+            </Button>
+            <Button
+              size="small"
+              startIcon={<FillIcon />}
+              onClick={() => setFillOpen((v) => !v)}
+              aria-expanded={fillOpen}
+            >
+              Fill a time range
+            </Button>
+          </Stack>
+
+          <Collapse in={fillOpen} unmountOnExit>
+            <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Back-to-back sessions from the first start to the last end. With more than one room, each time
+                gets that many sessions at once. Give each its own location afterwards.
+              </Typography>
+              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }} alignItems="center">
+                <TextField
+                  size="small"
+                  type="date"
+                  label="Fill date"
+                  value={fill.day ?? ''}
+                  onChange={(e) => setFill({ ...fill, day: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ width: 160 }}
+                />
+                <TextField
+                  size="small"
+                  type="time"
+                  label="First starts"
+                  value={fill.start ?? ''}
+                  onChange={(e) => setFill({ ...fill, start: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ width: 130 }}
+                />
+                <TextField
+                  size="small"
+                  type="time"
+                  label="Last ends"
+                  value={fill.end ?? ''}
+                  onChange={(e) => setFill({ ...fill, end: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                  sx={{ width: 130 }}
+                />
+                <TextField
+                  size="small"
+                  select
+                  label="Each runs"
+                  value={fill.minutes ?? 60}
+                  onChange={(e) => setFill({ ...fill, minutes: Number(e.target.value) })}
+                  sx={{ width: 140 }}
+                >
+                  {SESSION_LENGTHS.map((m) => (
+                    <MenuItem key={m} value={m}>
+                      {m} minutes
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  size="small"
+                  select
+                  label="Rooms at once"
+                  value={fill.rooms ?? 1}
+                  onChange={(e) => setFill({ ...fill, rooms: Number(e.target.value) })}
+                  sx={{ width: 130 }}
+                >
+                  {Array.from({ length: MAX_ROOMS }, (_, i) => i + 1).map((n) => (
+                    <MenuItem key={n} value={n}>
+                      {n}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Seats each"
+                  value={fill.seats ?? ''}
+                  onChange={(e) => setFill({ ...fill, seats: e.target.value })}
+                  inputProps={{ min: 0 }}
+                  sx={{ width: 110 }}
+                />
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={shape.total === 0}
+                  onClick={() => {
+                    setRows((cur) => appendRows(cur, fillRange(fill, context)));
+                    setFillOpen(false);
+                  }}
+                >
+                  Add {plural(shape.total, 'session')}
+                </Button>
+              </Stack>
+              {/* Shown before the click: three rooms over a long day is a lot of
+                  rows, and the server takes at most MAX_SESSIONS at once. */}
+              <Typography
+                variant="caption"
+                color={rows.length + shape.total > MAX_SESSIONS ? 'error' : 'text.secondary'}
+                display="block"
+                sx={{ mt: 1 }}
+              >
+                {shape.total === 0
+                  ? 'Nothing fits between those times.'
+                  : `Adds ${plural(shape.total, 'session')} (${plural(shape.times, 'time')} × ${plural(shape.rooms, 'room')})`}
+              </Typography>
+            </Paper>
+          </Collapse>
+
+          {rows.length === 0 ? (
+            <Alert severity="info">No sessions drafted. Add one, or fill a time range.</Alert>
+          ) : (
+            <Stack spacing={1.5}>
+              {rows.map((row, index) => {
+                const { start, end } = rowInstants(row);
+                return (
+                  <DraftRow
+                    key={row.key}
+                    row={row}
+                    index={index}
+                    errors={showErrors ? errors[row.key] : undefined}
+                    isCoffeeChat={isCoffeeChat}
+                    options={pickerOptions(data?.staff, windowsByUser, start, end)}
+                    staffById={staffById}
+                    clashes={clashes[row.key]}
+                    sharesRoom={shared.has(row.key)}
+                    loading={loading}
+                    onChange={(changes) => updateRow(row.key, changes)}
+                    onDuplicate={() =>
+                      setRows((cur) => {
+                        const at = cur.findIndex((r) => r.key === row.key);
+                        return [...cur.slice(0, at + 1), duplicateRow(row), ...cur.slice(at + 1)];
+                      })
+                    }
+                    onDelete={() => setRows((cur) => cur.filter((r) => r.key !== row.key))}
+                  />
+                );
+              })}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
+          <Box sx={{ mr: 'auto' }}>
+            <Typography variant="body2" color="text.secondary">
+              {plural(totals.sessions, 'session')} · {plural(totals.seats, 'seat')} ·{' '}
+              {plural(totals.placements, 'interviewer placement')}
+            </Typography>
+            {tooMany && (
+              <Typography variant="body2" color="error">
+                At most {MAX_SESSIONS} sessions at once — create these in two batches
+              </Typography>
+            )}
+          </Box>
+          <Button onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={submit} disabled={saving || rows.length === 0 || tooMany}>
+            {saving ? 'Creating…' : `Create ${plural(rows.length, 'session')}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Snackbar open={Boolean(afterCreate)} autoHideDuration={8000} onClose={() => setAfterCreate('')}>
+        <Alert severity="warning" onClose={() => setAfterCreate('')}>
+          {afterCreate}
+        </Alert>
+      </Snackbar>
+    </>
   );
 }

@@ -45,6 +45,24 @@ export const fromMinutes = (minutes) => {
   return `${pad(Math.floor(clamped / 60))}:${pad(clamped % 60)}`;
 };
 
+const MIDNIGHT = 24 * 60;
+
+/**
+ * An end time in minutes. "00:00" as an end is midnight at the close of the
+ * row's day, so a 23:00-00:00 hour can be drafted; any other end at or before
+ * the start is still a session that runs backwards, and is refused.
+ */
+export const endMinutes = (time) => (time === '00:00' ? MIDNIGHT : toMinutes(time));
+
+/** An end in minutes as "HH:mm", with midnight written "00:00" (see endMinutes). */
+const endFromMinutes = (minutes) => (minutes >= MIDNIGHT ? '00:00' : fromMinutes(minutes));
+
+/** "YYYY-MM-DD" plus whole days, by calendar date rather than by clock. */
+const addDays = (day, days) => {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, date + days)).toISOString().slice(0, 10);
+};
+
 let keySeed = 0;
 const nextKey = () => {
   keySeed += 1;
@@ -59,7 +77,7 @@ export const makeRow = (partial = {}, { interviewType, location = '', day = '' }
     label: '',
     day,
     start,
-    end: fromMinutes((toMinutes(start) ?? 9 * 60) + defaults.minutes),
+    end: endFromMinutes((toMinutes(start) ?? 9 * 60) + defaults.minutes),
     location,
     candidateCapacity: defaults.candidateCapacity,
     groupSize: defaults.groupSize,
@@ -72,7 +90,7 @@ export const makeRow = (partial = {}, { interviewType, location = '', day = '' }
 };
 
 const lengthOf = (row, fallback) => {
-  const length = (toMinutes(row.end) ?? 0) - (toMinutes(row.start) ?? 0);
+  const length = (endMinutes(row.end) ?? 0) - (toMinutes(row.start) ?? 0);
   return length > 0 ? length : fallback;
 };
 
@@ -85,12 +103,14 @@ export const nextRow = (rows, context = {}) => {
   const defaults = typeDefaults(context.interviewType);
   const last = rows[rows.length - 1];
   if (!last) return makeRow({ start: '09:00', day: context.day ?? '' }, context);
-  const start = toMinutes(last.end) ?? 9 * 60;
+  // After a session that runs to midnight, the next one starts the next day.
+  const pastMidnight = last.end === '00:00' && last.day;
+  const start = pastMidnight ? 0 : (toMinutes(last.end) ?? 9 * 60);
   return makeRow(
     {
-      day: last.day,
+      day: pastMidnight ? addDays(last.day, 1) : last.day,
       start: fromMinutes(start),
-      end: fromMinutes(start + lengthOf(last, defaults.minutes)),
+      end: endFromMinutes(start + lengthOf(last, defaults.minutes)),
       location: last.location,
       candidateCapacity: last.candidateCapacity,
       groupSize: last.groupSize,
@@ -110,7 +130,7 @@ export const duplicateRow = (row) => makeRow({ ...row, interviewerIds: [], prist
 /** How many start times and rooms a fill covers, before any rows are made. */
 export const fillShape = ({ start, end, minutes, rooms = 1 }) => {
   const from = toMinutes(start);
-  const to = toMinutes(end);
+  const to = endMinutes(end);
   const length = Number(minutes);
   const roomCount = Math.max(1, Math.min(MAX_ROOMS, Number(rooms) || 1));
   const times = from == null || to == null || !(length > 0) || to <= from ? 0 : Math.floor((to - from) / length);
@@ -124,7 +144,7 @@ export const fillShape = ({ start, end, minutes, rooms = 1 }) => {
  */
 export const fillRange = ({ day, start, end, minutes, rooms = 1, seats }, context = {}) => {
   const from = toMinutes(start);
-  const to = toMinutes(end);
+  const to = endMinutes(end);
   const length = Number(minutes);
   const roomCount = Math.max(1, Math.min(MAX_ROOMS, Number(rooms) || 1));
   if (from == null || to == null || !(length > 0)) return [];
@@ -137,7 +157,7 @@ export const fillRange = ({ day, start, end, minutes, rooms = 1, seats }, contex
           {
             day,
             start: fromMinutes(at),
-            end: fromMinutes(at + length),
+            end: endFromMinutes(at + length),
             ...(seats !== undefined && seats !== '' ? { candidateCapacity: seats } : {}),
           },
           context
@@ -159,21 +179,45 @@ export const appendRows = (rows, added) => {
 };
 
 /** The row's start and end as instants, or null for either half that is not filled in. */
-export const rowInstants = (row) => ({
-  start: row.day && row.start ? fromPacificInput(`${row.day}T${row.start}`) : null,
-  end: row.day && row.end ? fromPacificInput(`${row.day}T${row.end}`) : null,
-});
+export const rowInstants = (row) => {
+  const endDay = row.day && row.end === '00:00' && row.start !== '00:00' ? addDays(row.day, 1) : row.day;
+  return {
+    start: row.day && row.start ? fromPacificInput(`${row.day}T${row.start}`) : null,
+    end: row.day && row.end ? fromPacificInput(`${endDay}T${row.end}`) : null,
+  };
+};
 
 /**
- * Whether someone said they are free for the whole of a session. One window has
- * to cover it end to end. Somebody free until 10:30 is not free for a 10-11
- * panel, and offering them first would put a half-present interviewer on it.
+ * One person's windows with any that overlap or touch joined into one, the
+ * rule mergeWindows in server/src/services/interviewerAvailability.js uses for
+ * the coverage grid. Somebody who said 9-10 and 10-11 is free 9-11.
+ */
+export const mergeWindows = (windows) => {
+  const sorted = (windows ?? [])
+    .map((w) => ({ startTime: new Date(w.startTime), endTime: new Date(w.endTime) }))
+    .filter((w) => w.endTime > w.startTime)
+    .sort((a, b) => a.startTime - b.startTime);
+  const merged = [];
+  for (const window of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && window.startTime <= last.endTime) {
+      last.endTime = new Date(Math.max(last.endTime, window.endTime));
+    } else {
+      merged.push(window);
+    }
+  }
+  return merged;
+};
+
+/**
+ * Whether someone said they are free for the whole of a session, once their
+ * windows are merged. Containment, not overlap, as on the server: somebody free
+ * until 10:30 is not free for a 10-11 panel, and offering them first would put
+ * a half-present interviewer on it.
  */
 export const isFreeAt = (windows, start, end) => {
   if (!start || !end) return false;
-  return (windows ?? []).some(
-    (w) => new Date(w.startTime) <= start && new Date(w.endTime) >= end
-  );
+  return mergeWindows(windows).some((w) => w.startTime <= start && w.endTime >= end);
 };
 
 /** Which heading someone sits under in a row's picker. Availability ranks the list; it never removes anyone. */
@@ -228,19 +272,27 @@ export const findClashes = (rows, existingSessions = []) => {
   return clashes;
 };
 
+const placeKey = (location, fallback) => ((location ?? '').trim() || (fallback ?? '').trim()).toLowerCase();
+
 /**
- * Rows that run at the same time in the same place as another row. Parallel
- * rooms are the point of the builder, and a fill with three rooms starts every
- * one of them in the interview's default location until somebody types
- * "YRL 1", "YRL 2". Saying so beats inventing room names nobody can find.
+ * Rows that run at the same time in the same place as another row, or as a
+ * session that already exists. A blank location is the interview's own, on
+ * either side. Parallel rooms are the point of the builder, and a fill with
+ * three rooms starts every one of them in the default location until somebody
+ * types "YRL 1", "YRL 2". Saying so beats inventing room names nobody can find.
  */
-export const sharedRooms = (rows) => {
-  const timed = rows.map((row) => ({ row, place: (row.location ?? '').trim().toLowerCase(), ...rowInstants(row) }));
+export const sharedRooms = (rows, existingSessions = [], defaultLocation = '') => {
+  const timed = rows.map((row) => ({ row, place: placeKey(row.location, defaultLocation), ...rowInstants(row) }));
+  const existing = existingSessions.map((s) => ({
+    place: placeKey(s.location, defaultLocation),
+    start: new Date(s.startTime),
+    end: new Date(s.endTime),
+  }));
   const shared = new Set();
   for (const a of timed) {
-    for (const b of timed) {
-      if (a !== b && a.place && a.place === b.place && overlaps(a, b)) shared.add(a.row.key);
-    }
+    if (!a.place) continue;
+    const clash = (b) => b !== a && a.place === b.place && overlaps(a, b);
+    if (timed.some(clash) || existing.some(clash)) shared.add(a.row.key);
   }
   return shared;
 };
@@ -254,7 +306,7 @@ export const validateRow = (row) => {
   if (!row.day) errors.day = 'Pick a day';
   if (!row.start) errors.start = 'Pick a start';
   if (!row.end) errors.end = 'Pick an end';
-  if (row.start && row.end && toMinutes(row.end) <= toMinutes(row.start)) errors.end = 'Must end after it starts';
+  if (row.start && row.end && endMinutes(row.end) <= toMinutes(row.start)) errors.end = 'Must end after it starts';
   if (!isCount(row.candidateCapacity)) errors.candidateCapacity = 'Whole number';
   if (!isCount(row.interviewerCapacity)) errors.interviewerCapacity = 'Whole number';
   if (!isCount(row.groupSize, 1)) errors.groupSize = 'Whole number';

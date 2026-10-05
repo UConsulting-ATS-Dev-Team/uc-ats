@@ -129,6 +129,31 @@ describe('InterviewerCoverage hour grid', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  it('builds a session in the last hour of the day, ending at midnight', async () => {
+    // 23:00-00:00 Pacific on October 6.
+    const late = {
+      startTime: '2026-10-07T06:00:00.000Z',
+      endTime: '2026-10-07T07:00:00.000Z',
+      availableInterviewers: 0,
+      userIds: [],
+      possibleSessions: 0,
+    };
+    apiClient.get.mockResolvedValue({ ...payload, coverage: [late] });
+    apiClient.post.mockResolvedValue({ created: 1, assigned: 0, slots: [] });
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    const hour = within((await screen.findByText('11:00 PM – 12:00 AM')).closest('.MuiPaper-root'));
+    await userEvent.click(hour.getByRole('button', { name: 'Create session at this hour' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('button', { name: 'Create 1 session' }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/i1/slots/generate', {
+        sessions: [expect.objectContaining({ startTime: late.startTime, endTime: late.endTime })],
+      })
+    );
+  });
+
   it('offers to create a session at an hour with no groups', async () => {
     render(<InterviewerCoverage interviewId="i1" />);
 

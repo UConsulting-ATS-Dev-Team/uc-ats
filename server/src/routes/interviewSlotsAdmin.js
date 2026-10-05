@@ -1073,7 +1073,7 @@ router.get('/interviews/:id/availability', async (req, res) => {
         slots: {
           orderBy: { startTime: 'asc' },
           select: {
-            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true,
+            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true, location: true,
             assignments: {
               where: { removedAt: null },
               select: { id: true, userId: true, user: { select: { id: true, fullName: true, email: true } } },
@@ -1148,6 +1148,9 @@ router.get('/interviews/:id/availability', async (req, res) => {
         startTime: slot.startTime,
         endTime: slot.endTime,
         interviewerCapacity: slot.interviewerCapacity,
+        // Null inherits the interview's. The session builder reads it to warn
+        // about a new session put in a room already in use at that time.
+        location: slot.location,
         // Who could staff this session, so an admin placing somebody is choosing
         // from people who said yes rather than from the whole roster.
         canCover: whoCanCover(windows, slot.startTime, slot.endTime),

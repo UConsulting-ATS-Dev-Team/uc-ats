@@ -201,6 +201,18 @@ describe('SessionBuilder', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
+  it('closes after creating even when the page cannot refresh, and says so', async () => {
+    const onCreated = vi.fn().mockRejectedValue(new Error('refresh failed'));
+    const { onClose } = open({ onCreated });
+    await loaded();
+    await userEvent.click(screen.getByRole('button', { name: 'Create 1 session' }));
+
+    // The sessions exist; staying open would invite a second, duplicate create.
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(await screen.findByText(/Created 1 session, but the page could not refresh/)).toBeInTheDocument();
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the server refusal and stays open', async () => {
     apiClient.post.mockRejectedValue(new Error('Session 1: that room is already booked'));
     const { onCreated, onClose } = open();

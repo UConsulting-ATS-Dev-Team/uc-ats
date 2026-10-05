@@ -120,6 +120,25 @@ describe('availability', () => {
     expect(isFreeAt([], at('09:00'), at('10:00'))).toBe(false);
   });
 
+  it('joins windows that touch or overlap, as the coverage grid does', () => {
+    const split = [
+      { startTime: at('09:00').toISOString(), endTime: at('10:00').toISOString() },
+      { startTime: at('10:00').toISOString(), endTime: at('11:00').toISOString() },
+    ];
+    expect(isFreeAt(split, at('09:00'), at('11:00'))).toBe(true);
+    const overlapping = [
+      { startTime: at('09:00').toISOString(), endTime: at('10:30').toISOString() },
+      { startTime: at('10:00').toISOString(), endTime: at('12:00').toISOString() },
+    ];
+    expect(isFreeAt(overlapping, at('09:30'), at('11:30'))).toBe(true);
+    // A real gap is still a gap.
+    const gap = [
+      { startTime: at('09:00').toISOString(), endTime: at('10:00').toISOString() },
+      { startTime: at('10:15').toISOString(), endTime: at('11:00').toISOString() },
+    ];
+    expect(isFreeAt(gap, at('09:00'), at('11:00'))).toBe(false);
+  });
+
   it('orders the picker free, then busy, then silent, and leaves nobody out', () => {
     const staff = [
       { id: 'u3', fullName: 'Cleo Silent', responded: false },
@@ -168,6 +187,63 @@ describe('findClashes', () => {
     const b = makeRow({ start: '09:00', end: '10:00' }, firstRound);
     const c = makeRow({ start: '09:00', end: '10:00', location: 'YRL 2' }, firstRound);
     expect([...sharedRooms([a, b, c])]).toEqual([a.key, b.key]);
+  });
+});
+
+describe('rooms already in use', () => {
+  const existing = (location) => ({
+    id: 's1',
+    startTime: at('09:30').toISOString(),
+    endTime: at('10:30').toISOString(),
+    location,
+    assigned: [],
+  });
+
+  it('flags a new session in the room an existing one holds at that time', () => {
+    const row = makeRow({ start: '09:00', end: '10:00', location: ' yrl 2 ' }, firstRound);
+    expect([...sharedRooms([row], [existing('YRL 2')], 'Bunche 2156')]).toEqual([row.key]);
+  });
+
+  it('reads an existing session with no location as the interview\'s room', () => {
+    const row = makeRow({ start: '09:00', end: '10:00' }, firstRound);
+    expect([...sharedRooms([row], [existing(null)], 'Bunche 2156')]).toEqual([row.key]);
+  });
+
+  it('leaves a different room, or a different time, alone', () => {
+    const elsewhere = makeRow({ start: '09:00', end: '10:00', location: 'YRL 1' }, firstRound);
+    const later = makeRow({ start: '10:30', end: '11:30' }, firstRound);
+    expect(sharedRooms([elsewhere, later], [existing(null)], 'Bunche 2156').size).toBe(0);
+  });
+});
+
+describe('sessions ending at midnight', () => {
+  // The coverage grid's last hour, 23:00-00:00, prefilled from an hour card.
+  const late = () => makeRow({ start: '23:00', end: '00:00' }, firstRound);
+
+  it('accepts 00:00 as an end, meaning midnight that night', () => {
+    expect(validateRow(late())).toEqual({});
+    expect(buildPayload([late()], firstRound).sessions[0]).toMatchObject({
+      startTime: '2026-10-07T06:00:00.000Z',
+      endTime: '2026-10-07T07:00:00.000Z',
+    });
+  });
+
+  it('still refuses any other end before the start', () => {
+    expect(validateRow(makeRow({ start: '23:00', end: '01:00' }, firstRound))).toEqual({
+      end: 'Must end after it starts',
+    });
+  });
+
+  it('starts the next session on the following day', () => {
+    expect(nextRow([late()], firstRound)).toMatchObject({ day: '2026-10-07', start: '00:00', end: '01:00' });
+  });
+
+  it('fills up to a midnight end', () => {
+    const rows = fillRange({ day: '2026-10-06', start: '22:00', end: '00:00', minutes: 60, rooms: 1 }, firstRound);
+    expect(rows.map((r) => [r.start, r.end])).toEqual([
+      ['22:00', '23:00'],
+      ['23:00', '00:00'],
+    ]);
   });
 });
 
