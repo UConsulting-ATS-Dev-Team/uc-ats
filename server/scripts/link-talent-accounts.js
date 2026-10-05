@@ -32,6 +32,7 @@ loadEnv({ path: join(__dirname, '..', '.env') });
 const { default: prisma } = await import('../src/prismaClient.js');
 const { planTalentAccountLinks, linkTalentAccountToUid, PLAN_REASONS } =
   await import('../src/services/applicantAccounts.js');
+const { emailIdentityKey } = await import('../src/utils/mailingListImport.js');
 
 const apply = process.argv.includes('--apply');
 const manual = process.argv.find((arg) => arg.startsWith('--link='))?.slice('--link='.length);
@@ -47,9 +48,11 @@ const save = (entry) => {
   fs.writeFileSync(outFile, JSON.stringify(record, null, 2));
 };
 
-const linkOne = async (account, uid) => {
+// `proof` is the address the sweep matched on, re-checked under lock; a manual
+// --link has none, because the admin is the proof.
+const linkOne = async (account, uid, proof) => {
   if (!apply) return { applied: false };
-  const updated = await linkTalentAccountToUid(account.id, uid);
+  const updated = await linkTalentAccountToUid(account.id, uid, proof ? { addressKey: emailIdentityKey(proof) } : {});
   return updated
     ? { applied: true }
     : { applied: false, skipped: 'no longer an empty talent account, or the UID was taken meanwhile' };
@@ -99,7 +102,7 @@ try {
       console.log(`  LINK ${account.email} -> UID ${decision.link}`);
       let result;
       try {
-        result = await linkOne(account, decision.link);
+        result = await linkOne(account, decision.link, account.email);
       } catch (error) {
         result = { applied: false, skipped: `failed: ${error.code ?? ''} ${error.message.split('\n').filter(Boolean).pop()}`.trim() };
       }

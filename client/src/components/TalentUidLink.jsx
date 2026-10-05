@@ -21,7 +21,6 @@ const TalentUidLink = ({ claimedUid = '', codePending = false }) => {
   const [code, setCode] = useState('');
   // 'idle' | 'code' (a code is out) | 'saved' (nobody applied under it yet)
   const [step, setStep] = useState(codePending ? 'code' : claimedUid ? 'saved' : 'idle');
-  const [sentTo, setSentTo] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -38,7 +37,6 @@ const TalentUidLink = ({ claimedUid = '', codePending = false }) => {
     try {
       const data = await apiClient.post('/talent/uid', { uid });
       if (data.status === 'LINKED') return await linked();
-      setSentTo(data.sentTo || '');
       setCode('');
       setStep(data.status === 'CODE_SENT' ? 'code' : 'saved');
     } catch (err) {
@@ -80,7 +78,7 @@ const TalentUidLink = ({ claimedUid = '', codePending = false }) => {
         {step === 'code' ? (
           <>
             <Typography variant="body2" sx={{ mb: 2 }}>
-              We emailed an 8-digit code to {sentTo || 'the address on your application'}. Enter it here.
+              We emailed an 8-digit code to the address you applied with. Enter it here.
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField

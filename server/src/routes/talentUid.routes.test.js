@@ -49,25 +49,30 @@ describe('POST /api/talent/uid', () => {
     expect(service.claimUid).not.toHaveBeenCalled();
   });
 
-  it('says where the code went, and mails it as this account', async () => {
+  it('mails the code as this account and names no address', async () => {
     service.claimUid.mockImplementation(async (_user, _uid, { sendCode }) => {
       await sendCode({ to: 'diya@g.ucla.edu', name: 'Diya', code: '12345678' });
-      return { status: 'CODE_SENT', sentTo: 'd***@g.ucla.edu' };
+      return { status: 'CODE_SENT' };
     });
 
     const res = await post('/uid', { uid: '306917258' });
 
-    expect(res).toEqual({ status: 200, body: { status: 'CODE_SENT', sentTo: 'd***@g.ucla.edu' } });
+    expect(res).toEqual({ status: 200, body: { status: 'CODE_SENT' } });
     expect(mailer.sendUidLinkCode).toHaveBeenCalledWith({
       to: 'diya@g.ucla.edu', name: 'Diya', code: '12345678', triggeredById: 'talent-1',
     });
   });
 
-  it('answers 409 with the masked address of the account that holds the UID', async () => {
-    service.claimUid.mockResolvedValue({ status: 'TAKEN', sentTo: 'd***@g.ucla.edu' });
+  it('answers 409 when another account holds the UID', async () => {
+    service.claimUid.mockResolvedValue({ status: 'TAKEN' });
     const res = await post('/uid', { uid: '306917258' });
     expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ status: 'TAKEN', sentTo: 'd***@g.ucla.edu' });
+    expect(res.body.status).toBe('TAKEN');
+  });
+
+  it('answers 429 for a second try inside a minute', async () => {
+    service.claimUid.mockResolvedValue({ status: 'TOO_SOON' });
+    expect((await post('/uid', { uid: '306917258' })).status).toBe(429);
   });
 
   it('never sends the linked user row back', async () => {

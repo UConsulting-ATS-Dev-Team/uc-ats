@@ -98,11 +98,11 @@ const YEAR_PATTERN = /^(19|20)\d{2}$/;
 const loadUidClaim = async (userId) => {
   const row = await prisma.user.findUnique({
     where: { id: userId },
-    select: { claimedStudentId: true, uidCodeExpiresAt: true }
+    select: { claimedStudentId: true, uidCodeHash: true, uidCodeExpiresAt: true }
   });
   return {
     claimedUid: row?.claimedStudentId || '',
-    codePending: Boolean(row?.uidCodeExpiresAt && row.uidCodeExpiresAt > new Date())
+    codePending: Boolean(row?.uidCodeHash && row.uidCodeExpiresAt && row.uidCodeExpiresAt > new Date())
   };
 };
 
@@ -188,9 +188,9 @@ router.patch('/profile', async (req, res) => {
 
 const UID_ANSWERS = {
   INVALID: [400, 'Enter your 9-digit UCLA UID.'],
-  TAKEN: [409, 'This UID already has an account. Sign in with that account instead.'],
+  TAKEN: [409, 'This UID already has an account. Sign in with the email you applied with, or use Forgot password.'],
   NEEDS_ADMIN: [409, 'We could not link this UID automatically. Email recruitment and we will link it for you.'],
-  TOO_SOON: [429, 'A code was just sent. Wait a minute before asking for another.'],
+  TOO_SOON: [429, 'Wait a minute before trying a UID again.'],
   SEND_FAILED: [502, 'We could not send the code. Try again in a minute.'],
   EXPIRED: [400, 'That code has expired or was used too many times. Ask for a new one.'],
 };
@@ -200,7 +200,7 @@ const answerUid = (res, result) => {
     return res.json({ status: 'LINKED' });
   }
   if (result.status === 'CODE_SENT' || result.status === 'SAVED') {
-    return res.json({ status: result.status, sentTo: result.sentTo });
+    return res.json({ status: result.status });
   }
   if (result.status === 'WRONG') {
     return res.status(400).json({
@@ -212,7 +212,7 @@ const answerUid = (res, result) => {
     });
   }
   const [status, error] = UID_ANSWERS[result.status] || [500, 'Something went wrong. Try again.'];
-  return res.status(status).json({ status: result.status, sentTo: result.sentTo, error });
+  return res.status(status).json({ status: result.status, error });
 };
 
 router.post('/uid', async (req, res) => {

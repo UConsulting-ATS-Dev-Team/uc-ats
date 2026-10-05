@@ -17,8 +17,13 @@ vi.mock('../prismaClient.js', () => {
   const client = {
     user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     candidate: { create: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+    application: { findMany: vi.fn().mockResolvedValue([{ email: 'diya@g.ucla.edu' }]) },
     externalResume: { count: vi.fn().mockResolvedValue(0) },
-    $queryRaw: vi.fn().mockResolvedValue([{ isExternalTalent: true, studentId: null }]),
+    $queryRaw: vi.fn((strings) => Promise.resolve(
+      strings.join('').includes('FROM candidates')
+        ? [{ id: 'cand-1', email: 'diya@g.ucla.edu' }]
+        : [{ isExternalTalent: true, studentId: null }]
+    )),
     $transaction: vi.fn((work) => work(client))
   };
   return { default: client };

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const prisma = vi.hoisted(() => ({
   user: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   candidate: { findMany: vi.fn() },
+  application: { findMany: vi.fn() },
   externalResume: { count: vi.fn() },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
@@ -63,7 +64,13 @@ describe('resolveGoogleUser and applicants', () => {
     prisma.user.update.mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data }));
     prisma.user.updateMany.mockResolvedValue({ count: 1 });
     prisma.externalResume.count.mockResolvedValue(0);
-    prisma.$queryRaw.mockResolvedValue([{ isExternalTalent: true, studentId: null }]);
+    // The account lock, then the candidate lock the hand-over re-checks under.
+    prisma.$queryRaw.mockImplementation((strings) => Promise.resolve(
+      strings.join('').includes('FROM candidates')
+        ? [{ id: 'cand-1', email: 'naina@ucla.edu' }]
+        : [{ isExternalTalent: true, studentId: null }]
+    ));
+    prisma.application.findMany.mockResolvedValue([{ email: 'naina@ucla.edu' }]);
     withRollback();
   });
 
@@ -140,8 +147,11 @@ describe('resolveGoogleUser and applicants', () => {
 
     const { user } = await resolveGoogleUser(profile);
 
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-    expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
+    const locks = prisma.$queryRaw.mock.calls.map(([strings]) => strings.join(''));
+    expect(locks).toHaveLength(2);
+    expect(locks[0]).toContain('FROM users');
+    expect(locks[1]).toContain('FROM candidates');
+    expect(locks.every((sql) => sql.includes('FOR UPDATE'))).toBe(true);
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u-1' },
       data: { isExternalTalent: false, studentId: UID, claimedStudentId: null },

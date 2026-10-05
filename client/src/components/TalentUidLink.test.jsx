@@ -19,19 +19,19 @@ const renderCard = (props = {}) =>
     </MemoryRouter>
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => vi.resetAllMocks());
 
 describe('TalentUidLink', () => {
   it('sends the UID, then takes the code and lands on the applicant dashboard', async () => {
     apiClient.post
-      .mockResolvedValueOnce({ status: 'CODE_SENT', sentTo: 'd***@g.ucla.edu' })
+      .mockResolvedValueOnce({ status: 'CODE_SENT' })
       .mockResolvedValueOnce({ status: 'LINKED' });
     renderCard();
 
     await userEvent.type(screen.getByLabelText('UCLA UID'), '306917258');
     await userEvent.click(screen.getByRole('button', { name: 'Find my application' }));
     expect(apiClient.post).toHaveBeenCalledWith('/talent/uid', { uid: '306917258' });
-    expect(await screen.findByText(/d\*\*\*@g\.ucla\.edu/)).toBeInTheDocument();
+    expect(await screen.findByText(/address you applied with/)).toBeInTheDocument();
 
     const link = screen.getByRole('button', { name: 'Link my application' });
     expect(link).toBeDisabled();

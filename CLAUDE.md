@@ -1222,8 +1222,14 @@ The system follows a **recruiting cycle-based workflow**:
 - The talent profile also asks for a UID ("Applied to UConsulting?"). A typed UID goes into
   `User.claimedStudentId` and **never** into `studentId`, which the candidate pages trust.
   It becomes `studentId` only once the 8-digit code mailed to the address on that
-  application is entered (`POST /api/talent/uid`, `/uid/confirm`: 15 minutes, five tries,
-  one code a minute). The code is left out of the communications log's preview.
+  application is entered (`POST /api/talent/uid`, `/uid/confirm`: 15 minutes, five tries).
+  An account may try one UID a minute whatever the answer, and no answer names an
+  address, so the endpoint is a slow way to learn which UIDs have applied. The code is
+  left out of the communications log's preview.
+- Every hand-over re-reads the addresses under the UID with the candidate row locked
+  (`FOR UPDATE`), so an application filed from another address after the proof stops it.
+- Changing the stored address (`PATCH /api/users/:id`) clears `emailVerifiedAt` and any
+  pending verification link: verification proves one address, not whatever is stored later.
 - `scripts/link-talent-accounts.js` links existing accounts by the same rule. Accounts it
   cannot link are listed with their reason, any applicant with the same name, and any
   typed UID. A name is not proof, so those are linked one at a time with `--link`.

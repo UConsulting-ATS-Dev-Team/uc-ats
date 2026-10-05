@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 const prisma = vi.hoisted(() => ({
   user: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   candidate: { findMany: vi.fn(), findUnique: vi.fn() },
+  application: { findMany: vi.fn() },
   externalResume: { count: vi.fn() },
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
@@ -14,12 +15,11 @@ vi.mock('../middleware/auth.js', () => ({ invalidateUserCache: vi.fn() }));
 const {
   resolveApplicantForEmail,
   adoptApplicantAccount,
+  linkTalentAccountToUid,
   claimUid,
   confirmUidCode,
   planTalentAccountLinks,
   normalizeUid,
-  maskEmail,
-  UID_CODE_TTL_MS,
 } = await import('./applicantAccounts.js');
 
 const UID = '306917258';
@@ -35,10 +35,18 @@ const applicant = (email = 'diya@g.ucla.edu', applicationEmails = [email]) => ({
   applications: applicationEmails.map((address) => ({ email: address })),
 });
 
+// What the hand-over transaction reads under its locks: the talent account's
+// row, then the candidate row and its applications. Defaults to `onFile`.
+let onFile;
+const givenOnFile = (candidate) => {
+  onFile = candidate;
+};
+
 const hash = (userId, code) => crypto.createHash('sha256').update(`${userId}:${code}`).digest('hex');
 
 beforeEach(() => {
   vi.resetAllMocks();
+  givenOnFile(applicant());
   prisma.user.findUnique.mockResolvedValue(null);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.user.update.mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data }));
@@ -46,7 +54,14 @@ beforeEach(() => {
   prisma.candidate.findMany.mockResolvedValue([]);
   prisma.candidate.findUnique.mockResolvedValue(null);
   prisma.externalResume.count.mockResolvedValue(0);
-  prisma.$queryRaw.mockResolvedValue([{ isExternalTalent: true, studentId: null }]);
+  prisma.$queryRaw.mockImplementation((strings) => {
+    const sql = strings.join('');
+    if (sql.includes('FROM candidates')) {
+      return Promise.resolve(onFile ? [{ id: 'cand-1', email: onFile.email }] : []);
+    }
+    return Promise.resolve([{ isExternalTalent: true, studentId: null }]);
+  });
+  prisma.application.findMany.mockImplementation(() => Promise.resolve(onFile?.applications ?? []));
   prisma.$transaction.mockImplementation((work) => work(prisma));
 });
 
@@ -68,9 +83,31 @@ describe('resolveApplicantForEmail', () => {
   });
 });
 
+describe('linkTalentAccountToUid', () => {
+  it('re-reads the addresses under the UID with the candidate row locked', async () => {
+    const user = await linkTalentAccountToUid('u-1', UID, { addressKey: 'candidate' });
+
+    expect(user).toMatchObject({ isExternalTalent: false, studentId: UID, claimedStudentId: null });
+    const candidateLock = prisma.$queryRaw.mock.calls.map(([s]) => s.join('')).find((sql) => sql.includes('candidates'));
+    expect(candidateLock).toContain('FOR UPDATE');
+  });
+
+  it('stops when an application from another address arrived after the proof', async () => {
+    givenOnFile(applicant('diya@g.ucla.edu', ['diya@g.ucla.edu', 'someone@gmail.com']));
+    expect(await linkTalentAccountToUid('u-1', UID, { addressKey: 'candidate' })).toBeNull();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('links without an address check only when no proof is named (an admin linking by hand)', async () => {
+    givenOnFile(null);
+    expect(await linkTalentAccountToUid('u-1', UID)).toMatchObject({ studentId: UID });
+  });
+});
+
 describe('adoptApplicantAccount (password sign-in and email verification)', () => {
   it('turns a verified talent account into its applicant account', async () => {
     prisma.candidate.findMany.mockResolvedValue([applicant('diyaanne9@gmail.com')]);
+    givenOnFile(applicant('diyaanne9@gmail.com'));
     const user = await adoptApplicantAccount(talent());
     expect(user).toMatchObject({ isExternalTalent: false, studentId: UID });
   });
@@ -95,6 +132,12 @@ describe('adoptApplicantAccount (password sign-in and email verification)', () =
     expect(await adoptApplicantAccount(candidate)).toBe(candidate);
     expect(prisma.candidate.findMany).not.toHaveBeenCalled();
   });
+
+  it('signs the person in as they were when the link fails', async () => {
+    prisma.candidate.findMany.mockRejectedValue(new Error('database down'));
+    const account = talent();
+    expect(await adoptApplicantAccount(account)).toBe(account);
+  });
 });
 
 describe('claimUid (the UID typed on the talent profile)', () => {
@@ -104,17 +147,18 @@ describe('claimUid (the UID typed on the talent profile)', () => {
     sendCode.mockResolvedValue({ success: true });
   });
 
-  it('refuses anything that is not nine digits, and accepts one typed with dashes', async () => {
+  it('refuses anything that is not nine digits without using up the try', async () => {
     expect(await claimUid(talent(), '12345', { sendCode })).toEqual({ status: 'INVALID' });
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
     expect(normalizeUid('306-917-258')).toBe(UID);
   });
 
-  it('sends a code to the address the applicant applied from, never to the account', async () => {
+  it('sends a code to the address the applicant applied from, and never says which', async () => {
     prisma.candidate.findUnique.mockResolvedValue(applicant('diya@g.ucla.edu'));
 
     const result = await claimUid(talent(), UID, { sendCode });
 
-    expect(result).toEqual({ status: 'CODE_SENT', sentTo: 'd***@g.ucla.edu' });
+    expect(result).toEqual({ status: 'CODE_SENT' });
     expect(sendCode).toHaveBeenCalledWith(expect.objectContaining({ to: 'diya@g.ucla.edu' }));
     const { code } = sendCode.mock.calls[0][0];
     expect(code).toMatch(/^\d{8}$/);
@@ -126,6 +170,7 @@ describe('claimUid (the UID typed on the talent profile)', () => {
 
   it('links at once when the account already verified the address the applicant used', async () => {
     prisma.candidate.findUnique.mockResolvedValue(applicant('diyaanne9@gmail.com'));
+    givenOnFile(applicant('diyaanne9@gmail.com'));
 
     const result = await claimUid(talent(), UID, { sendCode });
 
@@ -134,9 +179,9 @@ describe('claimUid (the UID typed on the talent profile)', () => {
     expect(sendCode).not.toHaveBeenCalled();
   });
 
-  it('points to the existing account when another one holds the UID', async () => {
-    prisma.user.findUnique.mockResolvedValueOnce({ id: 'other', email: 'diya@g.ucla.edu' });
-    expect(await claimUid(talent(), UID, { sendCode })).toEqual({ status: 'TAKEN', sentTo: 'd***@g.ucla.edu' });
+  it('says another account holds the UID without naming it', async () => {
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'other' });
+    expect(await claimUid(talent(), UID, { sendCode })).toEqual({ status: 'TAKEN' });
     expect(sendCode).not.toHaveBeenCalled();
   });
 
@@ -148,16 +193,19 @@ describe('claimUid (the UID typed on the talent profile)', () => {
 
   it('keeps the UID for later when nobody has applied under it', async () => {
     expect(await claimUid(talent(), UID, { sendCode })).toEqual({ status: 'SAVED' });
-    expect(prisma.user.update.mock.calls[0][0].data).toMatchObject({ claimedStudentId: UID, uidCodeHash: null });
+    expect(prisma.user.update.mock.calls[0][0].data).toEqual({ claimedStudentId: UID });
   });
 
-  it('holds back a second code within a minute', async () => {
-    prisma.candidate.findUnique.mockResolvedValue(applicant('diya@g.ucla.edu'));
-    prisma.user.findUnique.mockImplementation(({ where }) =>
-      Promise.resolve(where.id ? { uidCodeExpiresAt: new Date(Date.now() + UID_CODE_TTL_MS - 10_000) } : null));
+  it('allows one try a minute, whatever the answer, taken in one conditional write', async () => {
+    prisma.user.updateMany.mockResolvedValue({ count: 0 });
 
     expect(await claimUid(talent(), UID, { sendCode })).toEqual({ status: 'TOO_SOON' });
-    expect(sendCode).not.toHaveBeenCalled();
+
+    const { where } = prisma.user.updateMany.mock.calls[0][0];
+    expect(where.id).toBe('u-1');
+    expect(where.OR).toHaveLength(2);
+    expect(prisma.candidate.findUnique).not.toHaveBeenCalled();
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
   it('clears the code when the email could not be sent, so a retry is not held back', async () => {
@@ -186,23 +234,36 @@ describe('confirmUidCode', () => {
     });
   });
 
-  it('counts a wrong code against this code only', async () => {
+  it('spends an attempt before checking the guess, only while some are left', async () => {
     prisma.user.findUnique.mockResolvedValue(pending({ uidCodeAttempts: 3 }));
 
     expect(await confirmUidCode('u-1', '00000000')).toEqual({ status: 'WRONG', attemptsLeft: 1 });
     expect(prisma.user.updateMany).toHaveBeenCalledWith({
-      where: { id: 'u-1', uidCodeHash: hash('u-1', '12345678') },
+      where: { id: 'u-1', uidCodeHash: hash('u-1', '12345678'), uidCodeAttempts: { lt: 5 } },
       data: { uidCodeAttempts: { increment: 1 } },
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
-  it('refuses even the right code once it has expired or run out of tries', async () => {
+  it('refuses even the right code when a parallel guess spent the last attempt', async () => {
+    prisma.user.findUnique.mockResolvedValue(pending({ uidCodeAttempts: 4 }));
+    prisma.user.updateMany.mockResolvedValue({ count: 0 });
+
+    expect(await confirmUidCode('u-1', '12345678')).toEqual({ status: 'EXPIRED' });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses even the right code once it has expired', async () => {
     prisma.user.findUnique.mockResolvedValue(pending({ uidCodeExpiresAt: new Date(Date.now() - 1) }));
     expect(await confirmUidCode('u-1', '12345678')).toEqual({ status: 'EXPIRED' });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
 
-    prisma.user.findUnique.mockResolvedValue(pending({ uidCodeAttempts: 5 }));
-    expect(await confirmUidCode('u-1', '12345678')).toEqual({ status: 'EXPIRED' });
+  it('refuses the right code when an application from another address arrived after it was sent', async () => {
+    prisma.user.findUnique.mockImplementation(({ where }) => Promise.resolve(where.studentId ? null : pending()));
+    givenOnFile(applicant('diya@g.ucla.edu', ['diya@g.ucla.edu', 'someone@gmail.com']));
+
+    expect(await confirmUidCode('u-1', '12345678')).toEqual({ status: 'NEEDS_ADMIN' });
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
@@ -234,11 +295,5 @@ describe('planTalentAccountLinks (the sweep)', () => {
     expect(plan[0].decision).toEqual({ link: '111111111' });
     expect(plan[1].decision).toEqual({ reason: 'NO_APPLICANT' });
     expect(plan[1].nameMatches).toEqual([expect.objectContaining({ studentId: UID })]);
-  });
-});
-
-describe('maskEmail', () => {
-  it('keeps the first letter and the domain', () => {
-    expect(maskEmail('diyaanne9@gmail.com')).toBe('d***@gmail.com');
   });
 });

@@ -241,7 +241,8 @@ const adoptApplicant = async (user, profile) => {
   const studentId = await findApplicantStudentId(profile.email);
   if (!studentId) return user;
 
-  return (await linkTalentAccountToUid(user.id, studentId)) || user;
+  const addressKey = emailIdentityKey(profile.email);
+  return (await linkTalentAccountToUid(user.id, studentId, { addressKey })) || user;
 };
 
 /**
