@@ -17,6 +17,7 @@
 // Pure on purpose: the times are the part that goes subtly wrong, and they
 // should be provable without a database.
 
+import { randomUUID } from 'node:crypto';
 import { localInputToUTC } from '../utils/timezoneUtils.js';
 
 /**
@@ -236,6 +237,48 @@ export function planCustomSessions(sessions) {
       interviewerIds,
     };
   });
+}
+
+/**
+ * The rows to write for planned sessions: each slot with its id and interview,
+ * and one INTERVIEWER assignment per person on it.
+ *
+ * Ids are made here rather than by the database so the slots and their
+ * assignments can go in as two createMany calls in one batch transaction.
+ * Creating slots one at a time to learn their ids means an interactive
+ * transaction with a round trip per session, which at a hundred sessions from
+ * Render to Supabase is the P2028 timeout notifyInterviewersBulk's comment
+ * describes. `makeId` is a parameter so tests can predict the ids.
+ */
+export function assignIds(customSessions, interviewId, makeId = randomUUID) {
+  const slots = [];
+  const assignments = [];
+  for (const { slot, interviewerIds } of customSessions) {
+    const row = { ...slot, id: makeId(), interviewId };
+    slots.push(row);
+    for (const userId of interviewerIds) {
+      assignments.push({ slotId: row.id, interviewId, userId, role: 'INTERVIEWER' });
+    }
+  }
+  return { slots, assignments };
+}
+
+/**
+ * The interview's range grown to cover `slots`.
+ *
+ * The range is what the member availability form turns into hour ticks and
+ * what the coverage grid counts across (see the with-sessions route), so a
+ * session outside it would be invisible on the grid it was built from. It
+ * never shrinks: a range set wider than today's sessions is still the window
+ * members were asked about. `changed` says whether there is anything to write.
+ */
+export function widenRange({ startDate, endDate }, slots) {
+  if (!slots?.length) return { startDate, endDate, changed: false };
+  const earliest = Math.min(...slots.map((s) => s.startTime.getTime()));
+  const latest = Math.max(...slots.map((s) => s.endTime.getTime()));
+  const nextStart = earliest < startDate.getTime() ? new Date(earliest) : startDate;
+  const nextEnd = latest > endDate.getTime() ? new Date(latest) : endDate;
+  return { startDate: nextStart, endDate: nextEnd, changed: nextStart !== startDate || nextEnd !== endDate };
 }
 
 /** What the form should offer for a round, before anyone changes it. */

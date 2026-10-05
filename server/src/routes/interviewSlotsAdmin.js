@@ -14,14 +14,13 @@
 // four is a call a person should be allowed to make. Both are recorded rather
 // than hidden - movedById is what tells a deliberate overfill from a bug.
 
-import { randomUUID } from 'node:crypto';
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { resolveAdminCycle } from '../services/activeCycle.js';
 import { interviewTypesForRound, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 import { getRound } from '../utils/roundProgression.js';
 import { parseLegacyConfig } from '../services/interviewRoster.js';
-import { combine, planCustomSessions, planSessions } from '../services/slotPlanner.js';
+import { assignIds, combine, planCustomSessions, planSessions, widenRange } from '../services/slotPlanner.js';
 import {
   conflictsWithAvailability,
   coverageByTime,
@@ -1379,38 +1378,20 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
       }
     }
 
-    // Ids are made here rather than by the database so the slots and their
-    // assignments can go in as two createMany calls in one batch transaction.
-    // Creating slots one at a time to learn their ids means an interactive
-    // transaction with a round trip per session, which at a hundred sessions
-    // from Render to Supabase is the P2028 timeout notifyInterviewersBulk's
-    // comment describes.
-    const assignments = [];
-    for (const { slot, interviewerIds } of custom) {
-      slot.id = randomUUID();
-      slot.interviewId = id;
-      for (const userId of interviewerIds) {
-        assignments.push({ slotId: slot.id, interviewId: id, userId, role: 'INTERVIEWER' });
-      }
-    }
-
-    const writes = [prisma.interviewSlot.createMany({ data: [...rows, ...custom.map((c) => c.slot)] })];
+    // Slots and assignments go in as one batch transaction; assignIds gives
+    // the slots their ids up front so the assignments can point at them.
+    const { slots: built, assignments } = assignIds(custom, id);
+    const writes = [prisma.interviewSlot.createMany({ data: [...rows, ...built] })];
     if (assignments.length > 0) writes.push(prisma.interviewSlotAssignment.createMany({ data: assignments }));
 
-    // The interview's range is what the member availability form turns into
-    // hour ticks and what the coverage grid counts across (see with-sessions).
-    // A built session outside it would be invisible on the grid it was built
-    // from, so the range grows to cover it. It never shrinks here: a range set
-    // wider than today's sessions is still the window members were asked about.
-    // Blocks and cadence have never done this, and are left as they were.
-    if (custom.length > 0) {
-      const earliest = new Date(Math.min(...custom.map((c) => c.slot.startTime)));
-      const latest = new Date(Math.max(...custom.map((c) => c.slot.endTime)));
-      const startDate = earliest < interview.startDate ? earliest : interview.startDate;
-      const endDate = latest > interview.endDate ? latest : interview.endDate;
-      if (startDate !== interview.startDate || endDate !== interview.endDate) {
-        writes.push(prisma.interview.update({ where: { id }, data: { startDate, endDate } }));
-      }
+    // Only built sessions widen the interview's range (see widenRange for why
+    // it matters). Blocks and cadence have never done this, and are left as
+    // they were.
+    const range = widenRange(interview, built);
+    if (range.changed) {
+      writes.push(
+        prisma.interview.update({ where: { id }, data: { startDate: range.startDate, endDate: range.endDate } })
+      );
     }
 
     await prisma.$transaction(writes);

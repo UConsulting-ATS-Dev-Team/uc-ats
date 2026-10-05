@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_CUSTOM_SESSIONS,
+  assignIds,
   combine,
   defaultSpecFor,
   planBlocks,
   planCadence,
   planCustomSessions,
   planSessions,
+  widenRange,
 } from './slotPlanner.js';
 
 // Read back in Los Angeles, not in whatever zone the test runner is in. Reading
@@ -308,5 +310,97 @@ describe('planCustomSessions — sessions built from the availability grid', () 
     const many = Array.from({ length: MAX_CUSTOM_SESSIONS + 1 }, () => session());
     expect(() => planCustomSessions(many)).toThrow(/At most 100/);
     expect(planCustomSessions(many.slice(1))).toHaveLength(MAX_CUSTOM_SESSIONS);
+  });
+});
+
+describe('assignIds', () => {
+  const counter = () => {
+    let n = 0;
+    return () => `slot-${(n += 1)}`;
+  };
+  const planned = () =>
+    planCustomSessions([
+      { startTime: '2026-10-06T16:00:00Z', endTime: '2026-10-06T17:00:00Z', label: 'A', interviewerIds: ['u1', 'u2'] },
+      { startTime: '2026-10-06T17:00:00Z', endTime: '2026-10-06T18:00:00Z' },
+      { startTime: '2026-10-06T18:00:00Z', endTime: '2026-10-06T19:00:00Z', interviewerIds: ['u2'] },
+    ]);
+
+  it('gives each slot an id and its interview, and points every assignment at its slot', () => {
+    const { slots, assignments } = assignIds(planned(), 'int-1', counter());
+    expect(slots.map((s) => [s.id, s.interviewId, s.label])).toEqual([
+      ['slot-1', 'int-1', 'A'],
+      ['slot-2', 'int-1', null],
+      ['slot-3', 'int-1', null],
+    ]);
+    expect(slots[0].startTime).toEqual(new Date('2026-10-06T16:00:00Z'));
+    expect(assignments).toEqual([
+      { slotId: 'slot-1', interviewId: 'int-1', userId: 'u1', role: 'INTERVIEWER' },
+      { slotId: 'slot-1', interviewId: 'int-1', userId: 'u2', role: 'INTERVIEWER' },
+      { slotId: 'slot-3', interviewId: 'int-1', userId: 'u2', role: 'INTERVIEWER' },
+    ]);
+  });
+
+  it('leaves the planned sessions untouched', () => {
+    const input = planned();
+    const before = structuredClone(input);
+    assignIds(input, 'int-1', counter());
+    expect(input).toEqual(before);
+    expect(input[0].slot).not.toHaveProperty('id');
+  });
+
+  it('makes real ids by default', () => {
+    const { slots } = assignIds(planned(), 'int-1');
+    expect(new Set(slots.map((s) => s.id)).size).toBe(3);
+    expect(slots[0].id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('returns nothing for nothing', () => {
+    expect(assignIds([], 'int-1', counter())).toEqual({ slots: [], assignments: [] });
+  });
+});
+
+describe('widenRange', () => {
+  const range = {
+    startDate: new Date('2026-10-06T16:00:00Z'),
+    endDate: new Date('2026-10-07T00:00:00Z'),
+  };
+  const slot = (start, end) => ({ startTime: new Date(start), endTime: new Date(end) });
+
+  it('keeps the range, unchanged, when every session fits inside it', () => {
+    const result = widenRange(range, [slot('2026-10-06T17:00:00Z', '2026-10-06T18:00:00Z')]);
+    expect(result).toEqual({ ...range, changed: false });
+    expect(result.startDate).toBe(range.startDate);
+  });
+
+  it('moves the start earlier for a session that begins before it', () => {
+    expect(widenRange(range, [slot('2026-10-06T15:00:00Z', '2026-10-06T16:00:00Z')])).toEqual({
+      startDate: new Date('2026-10-06T15:00:00Z'),
+      endDate: range.endDate,
+      changed: true,
+    });
+  });
+
+  it('moves the end later for a session that runs past it, and both at once', () => {
+    expect(
+      widenRange(range, [
+        slot('2026-10-06T14:00:00Z', '2026-10-06T15:00:00Z'),
+        slot('2026-10-07T00:00:00Z', '2026-10-07T01:30:00Z'),
+      ])
+    ).toEqual({
+      startDate: new Date('2026-10-06T14:00:00Z'),
+      endDate: new Date('2026-10-07T01:30:00Z'),
+      changed: true,
+    });
+  });
+
+  it('never narrows a range wider than its sessions', () => {
+    const result = widenRange(range, [slot('2026-10-06T20:00:00Z', '2026-10-06T21:00:00Z')]);
+    expect(result.startDate).toEqual(range.startDate);
+    expect(result.endDate).toEqual(range.endDate);
+    expect(result.changed).toBe(false);
+  });
+
+  it('reports no change for no sessions', () => {
+    expect(widenRange(range, [])).toEqual({ ...range, changed: false });
   });
 });
