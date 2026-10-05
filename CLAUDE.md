@@ -375,7 +375,8 @@ The system follows a **recruiting cycle-based workflow**:
 
 **Editing an in-person session's time or place:**
 - Edit Interview's session row shows "Email the N booked candidates and M interviewers"
-  once its day, hours or location is changed and anyone is in it. It is ticked by default
+  once its day, hours or location is changed, even for a session that looked empty when
+  the dialog opened: the server reads who is in it at save time. It is ticked by default
   and sends `notify: true` with `PATCH /api/admin/interviews/slots/:slotId`. Without it,
   the edit tells nobody, as before.
 - The server emails only if the place people were told (the session's own location, else
@@ -386,8 +387,11 @@ The system follows a **recruiting cycle-based workflow**:
   an invite that updates the calendar entry they already have. Waitlisted candidates are
   not told. Behind `SCHEDULING_EMAILS` like every slot email.
 - The response's `notified` says what happened (`candidates`, `interviewers`,
-  `unchanged`, `failed`, `emailsOn`), and the dialog reports that, not the checkbox.
-  A failure to queue never fails the save.
+  `unchanged`, `emailsOn`, and `failed` naming each half that could not be queued), and
+  the dialog reports that, not the checkbox. Candidates and interviewers are queued
+  separately, through `queueInterviewerNotices` (which throws) rather than
+  `notifyInterviewersBulk` (which logs and returns `[]`), so a failure in one is reported
+  and does not hide the other. A failure to queue never fails the save.
 - The wording choice is not stored on the notification, so pressing Resend on one renders
   the ordinary "moved" wording. Same limitation as `fromSlotName`.
 - Changing the *interview's* location (Save details) still emails nobody, even for

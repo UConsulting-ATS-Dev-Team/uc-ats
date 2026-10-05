@@ -1508,7 +1508,7 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
         notified = await notifySessionChanged(slotId);
       } catch (error) {
         console.error('[interviewSlotsAdmin] session change notice failed', error);
-        notified = { candidates: 0, interviewers: 0, failed: true };
+        notified = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
       }
     }
     res.json({ ...slot, notified: { ...notified, emailsOn: config.schedulingEmailsEnabled } });

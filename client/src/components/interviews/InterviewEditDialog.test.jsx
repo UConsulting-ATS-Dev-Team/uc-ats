@@ -259,10 +259,34 @@ describe('InterviewEditDialog', () => {
       expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('notify');
     });
 
-    it('does not offer it for an empty session', async () => {
+    it('still offers it for a session that was empty when the dialog opened', async () => {
+      // Somebody may have booked since; the server reads who is in it on save.
+      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 1, interviewers: 0, emailsOn: true } });
       openDialog([slot({ location: 'Anderson 1234' })]);
       await changeRoom();
-      expect(screen.queryByRole('checkbox', { name: /email the/i })).not.toBeInTheDocument();
+
+      expect(screen.getByRole('checkbox', { name: /email anyone booked into this session/i })).toBeChecked();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      await waitFor(() => {
+        expect(apiClient.patch).toHaveBeenCalledWith(
+          '/admin/interviews/slots/slot-1',
+          expect.objectContaining({ notify: true })
+        );
+      });
+      expect(await screen.findByText(/emailing 1 candidate\./i)).toBeInTheDocument();
+    });
+
+    it('says which half could not be emailed', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({
+        notified: { candidates: 2, interviewers: 0, failed: ['interviewers'], emailsOn: true },
+      });
+      openDialog([booked()]);
+      await changeRoom();
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(
+        await screen.findByText('Session updated. Emailing 2 candidates, but the interviewers could not be emailed. Tell them yourself.')
+      ).toBeInTheDocument();
     });
 
     it('offers it for a new time too', async () => {

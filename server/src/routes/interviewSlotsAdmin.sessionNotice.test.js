@@ -138,7 +138,7 @@ describe('PATCH /interviews/slots/:slotId with notify', () => {
 
     expect(res.status).toBe(200);
     expect(prisma.interviewSlot.update).toHaveBeenCalled();
-    expect((await res.json()).notified).toMatchObject({ failed: true });
+    expect((await res.json()).notified).toMatchObject({ failed: ['candidates', 'interviewers'] });
     quiet.mockRestore();
   });
 

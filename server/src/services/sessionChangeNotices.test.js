@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { flushNotifications, queueNotificationsBulk, slotSubjectFormatter } from './interviewSlotComms.js';
-import { notifyInterviewersBulk } from './interviewerInvites.js';
+import { queueInterviewerNotices } from './interviewerInvites.js';
 import { notifySessionChanged, sessionChanged } from './sessionChangeNotices.js';
 
 vi.mock('../prismaClient.js', () => ({
@@ -19,7 +19,7 @@ vi.mock('./interviewSlotComms.js', () => ({
 }));
 
 vi.mock('./interviewerInvites.js', () => ({
-  notifyInterviewersBulk: vi.fn(async (pairs) => pairs.map((_, i) => `i-${i}`)),
+  queueInterviewerNotices: vi.fn(async (pairs) => pairs.map((_, i) => `i-${i}`)),
 }));
 
 vi.mock('./emailNotifications.js', () => ({ renderInterviewSlotEmail: vi.fn() }));
@@ -54,10 +54,10 @@ describe('notifySessionChanged', () => {
       expect.objectContaining({ signupId: 's2', type: 'MOVED_BY_ADMIN', recipient: 'b@ucla.edu' }),
     ]);
     expect(flushNotifications).toHaveBeenCalledWith(['n-0', 'n-1'], expect.any(Function));
-    expect(notifyInterviewersBulk).toHaveBeenCalledWith([{ slotId: 'slot-1', userId: 'u1' }], 'INTERVIEWER_MOVED', {
+    expect(queueInterviewerNotices).toHaveBeenCalledWith([{ slotId: 'slot-1', userId: 'u1' }], 'INTERVIEWER_MOVED', {
       sessionChanged: true,
     });
-    expect(result).toEqual({ candidates: 2, interviewers: 1 });
+    expect(result).toEqual({ candidates: 2, interviewers: 1, failed: [] });
   });
 
   it('skips a candidate with no address, and queues nothing for an empty session', async () => {
@@ -67,7 +67,30 @@ describe('notifySessionChanged', () => {
     const result = await notifySessionChanged('slot-1');
 
     expect(queueNotificationsBulk).not.toHaveBeenCalled();
-    expect(result).toEqual({ candidates: 0, interviewers: 0 });
+    expect(result).toEqual({ candidates: 0, interviewers: 0, failed: [] });
+  });
+
+  it('reports an interviewer queue failure without losing the candidates it sent', async () => {
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([signup('s1', 'a@ucla.edu')]);
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'u1' }]);
+    queueInterviewerNotices.mockRejectedValueOnce(new Error('pool timeout'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await notifySessionChanged('slot-1');
+
+    expect(result).toEqual({ candidates: 1, interviewers: 0, failed: ['interviewers'] });
+    quiet.mockRestore();
+  });
+
+  it('still tells the interviewers when the candidate queue fails', async () => {
+    prisma.interviewSlotSignup.findMany.mockRejectedValue(new Error('pool timeout'));
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }]);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await notifySessionChanged('slot-1');
+
+    expect(result).toEqual({ candidates: 0, interviewers: 2, failed: ['candidates'] });
+    quiet.mockRestore();
   });
 });
 
