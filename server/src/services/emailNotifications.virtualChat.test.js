@@ -61,3 +61,32 @@ describe('the confirmation email for a virtual coffee chat', () => {
     expect(html).toContain('View or change your time');
   });
 });
+
+describe('the email for a session whose time or place was edited', () => {
+  const inPerson = { title: 'First Round', location: 'Bunche 2150', isVirtual: false };
+
+  it('tells a candidate the session changed, not that they were moved', async () => {
+    const html = await renderInterviewSlotEmail(
+      { ...notification(inPerson), type: 'MOVED_BY_ADMIN' },
+      { ctaUrl, sessionChanged: true }
+    );
+    expect(html).toContain('Your interview details have changed');
+    expect(html).toContain('changed the time or place of your First Round session');
+    expect(html).not.toContain('has moved your');
+    expect(html).toContain('Bunche 2150');
+  });
+
+  it('tells an interviewer the same way', async () => {
+    const html = await renderInterviewSlotEmail(
+      { ...notification(inPerson), type: 'INTERVIEWER_MOVED' },
+      { ctaUrl, sessionChanged: true }
+    );
+    expect(html).toContain('changed the time or place of the First Round session you are running');
+    expect(html).not.toContain('moved which');
+  });
+
+  it('leaves an ordinary move worded as a move', async () => {
+    const html = await renderInterviewSlotEmail({ ...notification(inPerson), type: 'MOVED_BY_ADMIN' }, { ctaUrl });
+    expect(html).toContain('has moved your First Round booking');
+  });
+});

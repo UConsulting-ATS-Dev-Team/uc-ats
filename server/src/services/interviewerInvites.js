@@ -88,42 +88,53 @@ export async function notifyInterviewer(
  *
  * Takes pairs that already exist in the database; it reads the addresses and
  * titles itself so callers do not have to carry them out of their transaction.
+ * `sessionChanged` words it for a session that was retimed or moved room,
+ * rather than an interviewer moved between sessions.
  */
-export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED') {
-  const wanted = (pairs ?? []).filter((p) => p?.slotId && p?.userId);
-  if (wanted.length === 0) return [];
-
+export async function notifyInterviewersBulk(pairs, type = 'INTERVIEWER_ASSIGNED', options = {}) {
   try {
-    const [users, slots] = await Promise.all([
-      prisma.user.findMany({
-        where: { id: { in: [...new Set(wanted.map((p) => p.userId))] } },
-        select: { id: true, email: true },
-      }),
-      prisma.interviewSlot.findMany({
-        where: { id: { in: [...new Set(wanted.map((p) => p.slotId))] } },
-        select: { id: true, interview: { select: { title: true } } },
-      }),
-    ]);
-    const emailById = new Map(users.map((u) => [u.id, u.email]));
-    const titleById = new Map(slots.map((s) => [s.id, s.interview?.title]));
-
-    // One read of this type's wording, applied to every session's title.
-    const subjectFor = await slotSubjectFormatter(type);
-    const entries = wanted
-      .filter((p) => emailById.get(p.userId) && titleById.get(p.slotId))
-      .map((p) => ({
-        slotId: p.slotId,
-        type,
-        recipient: emailById.get(p.userId),
-        subject: subjectFor(titleById.get(p.slotId)),
-      }));
-    if (entries.length === 0) return [];
-
-    const ids = await queueNotificationsBulk(entries);
-    flushInBackground(ids, {}, 'notifyInterviewersBulk');
-    return ids;
+    return await queueInterviewerNotices(pairs, type, options);
   } catch (error) {
     console.error('[notifyInterviewersBulk]', error);
     return [];
   }
+}
+
+/**
+ * notifyInterviewersBulk without the safety net: a failure to queue throws.
+ * For a caller that reports to the admin who was and was not told, where an
+ * empty list would read as "nobody to tell".
+ */
+export async function queueInterviewerNotices(pairs, type = 'INTERVIEWER_ASSIGNED', { sessionChanged = false } = {}) {
+  const wanted = (pairs ?? []).filter((p) => p?.slotId && p?.userId);
+  if (wanted.length === 0) return [];
+
+  const [users, slots] = await Promise.all([
+    prisma.user.findMany({
+      where: { id: { in: [...new Set(wanted.map((p) => p.userId))] } },
+      select: { id: true, email: true },
+    }),
+    prisma.interviewSlot.findMany({
+      where: { id: { in: [...new Set(wanted.map((p) => p.slotId))] } },
+      select: { id: true, interview: { select: { title: true } } },
+    }),
+  ]);
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+  const titleById = new Map(slots.map((s) => [s.id, s.interview?.title]));
+
+  // One read of this type's wording, applied to every session's title.
+  const subjectFor = await slotSubjectFormatter(type, { sessionChanged });
+  const entries = wanted
+    .filter((p) => emailById.get(p.userId) && titleById.get(p.slotId))
+    .map((p) => ({
+      slotId: p.slotId,
+      type,
+      recipient: emailById.get(p.userId),
+      subject: subjectFor(titleById.get(p.slotId)),
+    }));
+  if (entries.length === 0) return [];
+
+  const ids = await queueNotificationsBulk(entries);
+  flushInBackground(ids, { sessionChanged }, 'notifyInterviewersBulk');
+  return ids;
 }

@@ -3,12 +3,14 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Stack,
@@ -46,6 +48,48 @@ const asInstant = (day, time) => {
   return instant.toISOString();
 };
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// Whether the edit changes what the people in a session were told: the day,
+// the hours or the room. A name or seat count is nobody's news.
+const whenOrWhereChanged = (s) =>
+  s.day !== s.savedDay || s.start !== s.savedStart || s.end !== s.savedEnd || s.location !== s.savedLocation;
+
+// Who the page last saw in a session, for the checkbox's wording only. The
+// server reads who is in it when the edit is saved, since someone may have
+// booked since this dialog opened.
+const knownPeople = (s) =>
+  [
+    s.booked ? plural(s.booked, 'booked candidate') : null,
+    s.interviewers ? plural(s.interviewers, 'interviewer') : null,
+  ]
+    .filter(Boolean)
+    .join(' and ');
+
+// What the save did about telling people, read from the server's answer rather
+// than assumed from the checkbox.
+const sessionSavedMessage = (result) => {
+  const notified = result?.notified;
+  if (!notified) return 'Session updated.';
+  if (notified.unchanged) return 'Session updated. Its time and place are as before, so nobody was emailed.';
+  const who = [
+    notified.candidates ? plural(notified.candidates, 'candidate') : null,
+    notified.interviewers ? plural(notified.interviewers, 'interviewer') : null,
+  ].filter(Boolean);
+  // Checked before the switch: with scheduling email off, notices are still
+  // recorded to send later, and a half that failed has nothing recorded.
+  const failed = notified.failed ?? [];
+  if (failed.length && !notified.emailsOn) {
+    return `Session updated. Scheduling emails are switched off, and the ${failed.join(' and ')} could not be recorded to email later. Tell them yourself.`;
+  }
+  if (!notified.emailsOn) return 'Session updated. Scheduling emails are switched off, so nobody was emailed.';
+  if (failed.length) {
+    const lead = who.length ? `Emailing ${who.join(' and ')}, but the` : 'The';
+    return `Session updated. ${lead} ${failed.join(' and ')} could not be emailed. Tell them yourself.`;
+  }
+  return who.length ? `Session updated. Emailing ${who.join(' and ')}.` : 'Session updated. Nobody in it to email.';
+};
+
 export default function InterviewEditDialog({ open, interview, onClose, onSaved }) {
   const [details, setDetails] = useState(null);
   const [sessions, setSessions] = useState([]);
@@ -80,7 +124,14 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
             interviewerCapacity: slot.interviewerCapacity ?? '',
             location: slot.location ?? '',
             savedLocation: slot.location ?? '',
+            savedDay: asDayInput(slot.startTime),
+            savedStart: asTimeInput(slot.startTime),
+            savedEnd: asTimeInput(slot.endTime),
             booked: slot.signups.filter((s) => s.status === 'CONFIRMED').length,
+            interviewers: slot.interviewers?.length ?? 0,
+            // On unless the admin unticks it: a room change nobody hears about
+            // is found out at the door.
+            notify: true,
             dirty: false,
           }))
         )
@@ -97,8 +148,9 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
     setBusy(true);
     setError('');
     try {
-      await fn();
-      if (message) setNotice(message);
+      const result = await fn();
+      const text = typeof message === 'function' ? message(result) : message;
+      if (text) setNotice(text);
       onSaved?.();
       return true;
     } catch (e) {
@@ -136,14 +188,28 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
           // virtual coffee chat (its link is edited from its own panel), so an
           // untouched field must not turn a seat change into a 409.
           ...(s.location !== s.savedLocation ? { location: s.location.trim() } : {}),
+          // The server still checks the time or place really moved before
+          // emailing anyone.
+          ...(s.notify && whenOrWhereChanged(s) ? { notify: true } : {}),
         }),
-      'Session updated.'
+      sessionSavedMessage
     ).then((saved) => {
       // Set directly rather than through update(), which marks a row dirty. A
       // failed save stays dirty, so the location is sent again on the retry.
       if (saved) {
         setSessions((current) =>
-          current.map((x, i) => (i === index ? { ...x, dirty: false, savedLocation: s.location } : x))
+          current.map((x, i) =>
+            i === index
+              ? {
+                  ...x,
+                  dirty: false,
+                  savedLocation: s.location,
+                  savedDay: s.day,
+                  savedStart: s.start,
+                  savedEnd: s.end,
+                }
+              : x
+          )
         );
       }
     });
@@ -320,6 +386,30 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
               <IconButton size="small" onClick={() => deleteSession(index)} disabled={busy}>
                 <DeleteIcon fontSize="small" />
               </IconButton>
+              {whenOrWhereChanged(session) && (
+                <Box sx={{ flexBasis: '100%', mt: -1 }}>
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={session.notify}
+                        onChange={(e) =>
+                          setSessions((current) =>
+                            current.map((x, i) => (i === index ? { ...x, notify: e.target.checked } : x))
+                          )
+                        }
+                      />
+                    }
+                    label={
+                      <Typography variant="body2">
+                        {knownPeople(session)
+                          ? `Email the ${knownPeople(session)} the new details, with an updated calendar invite`
+                          : 'Email anyone booked into this session the new details, with an updated calendar invite'}
+                      </Typography>
+                    }
+                  />
+                </Box>
+              )}
             </Stack>
           ))}
         </Stack>

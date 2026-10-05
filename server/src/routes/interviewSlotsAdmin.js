@@ -39,6 +39,7 @@ import {
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
+import { notifySessionChanged, sessionChanged } from '../services/sessionChangeNotices.js';
 import config from '../config.js';
 import { formatEmailDateTime, formatEmailTime, utcToLocalInput } from '../utils/timezoneUtils.js';
 import { mergeFieldsUsed } from '../services/emailCopyRender.js';
@@ -1430,7 +1431,7 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
   }
 });
 
-// PATCH /api/admin/interviews/slots/:slotId
+// PATCH /api/admin/interviews/slots/:slotId   { ...fields, notify }
 router.patch('/interviews/slots/:slotId', async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -1470,14 +1471,23 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
     if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;
 
+    // `notify` emails the session's confirmed candidates and interviewers, but
+    // only if the time or the place they were told actually changed. Saving the
+    // same values again, or a seat count, tells nobody anything.
+    const wantsNotice =
+      body.notify === true && Boolean(data.startTime || data.endTime || data.location !== undefined);
+
     // Checked before the write. Checking the saved row afterwards answered 400
     // with the backwards session already stored.
-    if (data.startTime || data.endTime) {
-      const current = await prisma.interviewSlot.findUnique({
+    let current = null;
+    if (data.startTime || data.endTime || wantsNotice) {
+      current = await prisma.interviewSlot.findUnique({
         where: { id: slotId },
-        select: { startTime: true, endTime: true },
+        select: { startTime: true, endTime: true, location: true, interview: { select: { location: true } } },
       });
       if (!current) return res.status(404).json({ error: 'That session no longer exists' });
+    }
+    if (data.startTime || data.endTime) {
       const startTime = data.startTime ?? current.startTime;
       const endTime = data.endTime ?? current.endTime;
       if (endTime <= startTime) {
@@ -1486,7 +1496,22 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     }
 
     const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
-    res.json(slot);
+    if (!wantsNotice) return res.json(slot);
+
+    // The edit is saved whatever happens next. A failure telling people is
+    // reported beside it, not as a failed save the admin would retry.
+    let notified;
+    if (!sessionChanged(current, { ...slot, interview: current.interview })) {
+      notified = { candidates: 0, interviewers: 0, unchanged: true };
+    } else {
+      try {
+        notified = await notifySessionChanged(slotId);
+      } catch (error) {
+        console.error('[interviewSlotsAdmin] session change notice failed', error);
+        notified = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
+      }
+    }
+    res.json({ ...slot, notified: { ...notified, emailsOn: config.schedulingEmailsEnabled } });
   } catch (error) {
     fail(res, error, 'Failed to update that time slot');
   }

@@ -570,7 +570,21 @@ const SLOT_TEMPLATES = {
   MOVED_BY_ADMIN: slotTemplate(
     'Your time has been updated - {{interviewTitle}}',
     'Your time has been updated',
-    'Recruitment has moved your {{interviewTitle}} booking. Your new time is below - please check it carefully.'
+    'Recruitment has moved your {{interviewTitle}} booking. Your new time is below - please check it carefully.',
+    [
+      line(
+        'subjectSessionChanged',
+        'Subject when the session itself changed',
+        'Your interview details have changed - {{interviewTitle}}'
+      ),
+      line('headingSessionChanged', 'Heading when the session itself changed', 'Your interview details have changed'),
+      block(
+        'bodySessionChanged',
+        'Body when the session itself changed',
+        'Recruitment has changed the time or place of your {{interviewTitle}} session. You are still booked - the details below are the ones that count, so please check them carefully.',
+        'Sent when an admin edits the time or location of a session the candidate is booked into, rather than moving them to another one.'
+      ),
+    ]
   ),
   ADMIN_OVERFLOW_ALERT: slotTemplate(
     'Action needed: a candidate could not be scheduled for {{interviewTitle}}',
@@ -604,6 +618,12 @@ const SLOT_TEMPLATES = {
         'bodyNoPrevious',
         "Body when we can't name the old session",
         'Recruitment has moved which {{interviewTitle}} session you are running. Your new session is below. Please check it and update your calendar.'
+      ),
+      block(
+        'bodySessionChanged',
+        'Body when the session itself changed',
+        'Recruitment has changed the time or place of the {{interviewTitle}} session you are running. The details below are the ones that count. Please check them and update your calendar.',
+        'Sent when an admin edits the time or location of a session the member is running, rather than moving them to another one.'
       ),
     ]
   ),
