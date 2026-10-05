@@ -87,6 +87,36 @@ describe('InterviewEditDialog', () => {
     });
   });
 
+  it('gives a session a location of its own', async () => {
+    openDialog();
+    await screen.findByText('Sessions (1)');
+    // The details form has a Location too; the session's is the second.
+    const location = screen.getAllByLabelText(/^location$/i)[1];
+    expect(location).toHaveAttribute('placeholder', 'Anderson 1234');
+    await userEvent.type(location, 'YRL 2');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(apiClient.patch).toHaveBeenCalledWith(
+        '/admin/interviews/slots/slot-1',
+        expect.objectContaining({ location: 'YRL 2' })
+      );
+    });
+  });
+
+  it('leaves location out of a save that did not touch it', async () => {
+    // The server refuses any location on a virtual coffee chat, so sending an
+    // unchanged one would turn a seat change into an error.
+    openDialog([slot({ location: 'Covel' })]);
+    const seats = await screen.findByLabelText(/^seats$/i);
+    await userEvent.clear(seats);
+    await userEvent.type(seats, '6');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(apiClient.patch).toHaveBeenCalled());
+    expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('location');
+  });
+
   it('loads session times in Pacific, whatever zone the browser is in', async () => {
     // 17:00Z on January 15 is 9 AM PST.
     openDialog();

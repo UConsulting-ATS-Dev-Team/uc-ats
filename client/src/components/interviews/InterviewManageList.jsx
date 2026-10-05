@@ -27,8 +27,8 @@ import {
 } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 import InterviewEditDialog from './InterviewEditDialog';
-import InterviewSlotSetup from './InterviewSlotSetup';
-import { formatDateTime, formatTimeRange } from '../../utils/scheduleFormat';
+import SessionBuilder from './SessionBuilder';
+import { formatDateTime, formatTimeRange, toPacificInput } from '../../utils/scheduleFormat';
 import { useTutorialGate } from '../TutorialGate';
 import { tutorialCategoryForInterviewType } from '../../utils/tutorialCategories';
 
@@ -62,7 +62,8 @@ export default function InterviewManageList({ round, onChanged }) {
   // The round's tutorials, once a cycle, before an admin runs their first session of it.
   const tutorialGate = useTutorialGate();
 
-  const [setupFor, setSetupFor] = useState(null);
+  // The interview whose sessions are being built, if any.
+  const [builderFor, setBuilderFor] = useState(null);
   const [menu, setMenu] = useState(null);
   const [editing, setEditing] = useState(null);
   const [startFor, setStartFor] = useState(null);
@@ -215,7 +216,7 @@ export default function InterviewManageList({ round, onChanged }) {
                   <Button
                     size="small"
                     startIcon={<AddIcon />}
-                    onClick={() => setSetupFor(setupFor === interview.id ? null : interview.id)}
+                    onClick={() => setBuilderFor(interview)}
                   >
                     Add sessions
                   </Button>
@@ -263,19 +264,6 @@ export default function InterviewManageList({ round, onChanged }) {
                   </IconButton>
                 </Stack>
               </Stack>
-
-              {setupFor === interview.id && (
-                <Box sx={{ mt: 2 }}>
-                  <InterviewSlotSetup
-                    interviewId={interview.id}
-                    interviewType={interview.interviewType ?? round?.interviewType}
-                    onCreated={async () => {
-                      setSetupFor(null);
-                      await changed();
-                    }}
-                  />
-                </Box>
-              )}
             </Box>
           );
         })}
@@ -294,6 +282,16 @@ export default function InterviewManageList({ round, onChanged }) {
           Delete interview
         </MenuItem>
       </Menu>
+
+      <SessionBuilder
+        open={Boolean(builderFor)}
+        onClose={() => setBuilderFor(null)}
+        interviewId={builderFor?.id}
+        interviewType={builderFor?.interviewType ?? round?.interviewType}
+        defaultLocation={builderFor?.location ?? ''}
+        defaultDay={builderFor?.startDate ? toPacificInput(builderFor.startDate).slice(0, 10) : ''}
+        onCreated={changed}
+      />
 
       <InterviewEditDialog
         open={Boolean(editing)}

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { combine, defaultSpecFor, planBlocks, planCadence, planSessions } from './slotPlanner.js';
+import {
+  MAX_CUSTOM_SESSIONS,
+  combine,
+  defaultSpecFor,
+  planBlocks,
+  planCadence,
+  planCustomSessions,
+  planSessions,
+} from './slotPlanner.js';
 
 // Read back in Los Angeles, not in whatever zone the test runner is in. Reading
 // with getHours() passed on a laptop in Pacific time and hid that the server,
@@ -212,5 +220,93 @@ describe('planCadence — more than one interview at a time', () => {
   it('treats a nonsense room count as one', () => {
     expect(planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 0 })).toHaveLength(1);
     expect(planCadence(DAY, { start: '09:00', end: '10:00', minutes: 60, parallel: 'lots' })).toHaveLength(1);
+  });
+});
+
+describe('planCustomSessions — sessions built from the availability grid', () => {
+  const session = (overrides = {}) => ({
+    startTime: '2026-10-06T16:00:00.000Z',
+    endTime: '2026-10-06T17:00:00.000Z',
+    ...overrides,
+  });
+
+  it('normalises each row into a slot and its interviewers', () => {
+    const [row] = planCustomSessions([
+      session({
+        label: '  Panel A  ',
+        location: ' Kerckhoff 133 ',
+        candidateCapacity: '4',
+        groupSize: 2,
+        interviewerCapacity: 3,
+        interviewerIds: ['u1', 'u2'],
+      }),
+    ]);
+    expect(row.slot).toEqual({
+      label: 'Panel A',
+      startTime: new Date('2026-10-06T16:00:00.000Z'),
+      endTime: new Date('2026-10-06T17:00:00.000Z'),
+      location: 'Kerckhoff 133',
+      candidateCapacity: 4,
+      groupSize: 2,
+      interviewerCapacity: 3,
+    });
+    expect(row.interviewerIds).toEqual(['u1', 'u2']);
+  });
+
+  it('reads empty strings and missing fields as unset', () => {
+    const [row] = planCustomSessions([
+      session({ label: '   ', location: '', candidateCapacity: '', groupSize: '', interviewerCapacity: null }),
+    ]);
+    expect(row.slot).toMatchObject({
+      label: null,
+      location: null,
+      candidateCapacity: null,
+      groupSize: null,
+      interviewerCapacity: null,
+    });
+    expect(row.interviewerIds).toEqual([]);
+  });
+
+  it('keeps zero seats, which closes a session to self-signup rather than unsetting it', () => {
+    const [row] = planCustomSessions([session({ candidateCapacity: 0 })]);
+    expect(row.slot.candidateCapacity).toBe(0);
+  });
+
+  it('names the row whose end is not after its start', () => {
+    expect(() =>
+      planCustomSessions([session(), session(), session({ endTime: '2026-10-06T16:00:00.000Z' })])
+    ).toThrow('Session 3: the end time must be after the start time');
+  });
+
+  it('names the row with an unreadable time', () => {
+    expect(() => planCustomSessions([session({ startTime: 'nine-ish' })])).toThrow(/^Session 1: a valid start/);
+    expect(() => planCustomSessions([session({ endTime: undefined })])).toThrow(/^Session 1:/);
+  });
+
+  it('refuses a capacity that is not a whole number, by row', () => {
+    expect(() => planCustomSessions([session(), session({ candidateCapacity: 2.5 })])).toThrow(/^Session 2: seats/);
+    expect(() => planCustomSessions([session({ candidateCapacity: -1 })])).toThrow(/^Session 1: seats/);
+    expect(() => planCustomSessions([session({ interviewerCapacity: 'four' })])).toThrow(/interviewers wanted/);
+  });
+
+  it('refuses a group size of zero, which is not the same as no grouping', () => {
+    expect(() => planCustomSessions([session({ groupSize: 0 })])).toThrow(/^Session 1: group size/);
+  });
+
+  it('dedupes interviewers and drops anything that is not an id', () => {
+    const [row] = planCustomSessions([session({ interviewerIds: ['u1', 'u1', 7, null, '', 'u2', 'u2'] })]);
+    expect(row.interviewerIds).toEqual(['u1', 'u2']);
+  });
+
+  it('requires at least one session', () => {
+    expect(() => planCustomSessions([])).toThrow(/at least one session/);
+    expect(() => planCustomSessions(undefined)).toThrow(/at least one session/);
+    expect(() => planCustomSessions({ startTime: 'x' })).toThrow(/at least one session/);
+  });
+
+  it(`refuses more than ${MAX_CUSTOM_SESSIONS} sessions at once`, () => {
+    const many = Array.from({ length: MAX_CUSTOM_SESSIONS + 1 }, () => session());
+    expect(() => planCustomSessions(many)).toThrow(/At most 100/);
+    expect(planCustomSessions(many.slice(1))).toHaveLength(MAX_CUSTOM_SESSIONS);
   });
 });
