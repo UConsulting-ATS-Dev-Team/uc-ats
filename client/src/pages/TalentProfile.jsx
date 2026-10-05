@@ -24,6 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import apiClient from '../utils/api';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import UConsultingLogo from '../components/UConsultingLogo';
+import TalentUidLink from '../components/TalentUidLink';
 
 // The whole external talent portal in one page: who you are, your resume, and
 // whether partner organizations may see it.
@@ -251,6 +252,8 @@ const TalentProfile = () => {
             One thing missing: add your graduation year below so partners can filter by class.
           </Alert>
         )}
+
+        <TalentUidLink claimedUid={profile?.claimedUid} codePending={profile?.codePending} />
 
         {/* ----------------------------------------------------------------- */}
         <Card variant="outlined" sx={{ mb: 3 }}>

@@ -19,6 +19,8 @@ import prisma from '../prismaClient.js';
 import { putResume, getResume, storageErrorResponse } from '../services/resumeStorage.js';
 import { requireAuth, invalidateUserCache } from '../middleware/auth.js';
 import { lockTalentAccount } from '../services/talentAccountLock.js';
+import { claimUid, confirmUidCode } from '../services/applicantAccounts.js';
+import { sendUidLinkCode } from '../services/emailNotifications.js';
 import {
   EXTERNAL_GENDERS,
   FULL_NAME_MAX_LENGTH,
@@ -91,10 +93,24 @@ const countLiveAssignments = (resumeId) =>
 
 const YEAR_PATTERN = /^(19|20)\d{2}$/;
 
+// The typed UID and whether a code for it is live. Not in the auth cache, which
+// holds only what every request needs.
+const loadUidClaim = async (userId) => {
+  const row = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { claimedStudentId: true, uidCodeExpiresAt: true }
+  });
+  return {
+    claimedUid: row?.claimedStudentId || '',
+    codePending: Boolean(row?.uidCodeExpiresAt && row.uidCodeExpiresAt > new Date())
+  };
+};
+
 router.get('/me', async (req, res) => {
   try {
     const resume = await loadOwnResume(req.user.id);
     const assignedCount = await countLiveAssignments(resume?.id);
+    const uidClaim = await loadUidClaim(req.user.id);
 
     res.json({
       profile: {
@@ -104,7 +120,8 @@ router.get('/me', async (req, res) => {
         // form can prefill from it directly.
         graduationYear: req.user.graduationClass || '',
         emailVerified: Boolean(req.user.emailVerifiedAt),
-        emailVerifiedAt: req.user.emailVerifiedAt
+        emailVerifiedAt: req.user.emailVerifiedAt,
+        ...uidClaim
       },
       resume: serializeExternalResume(resume, assignedCount),
       genders: EXTERNAL_GENDERS
@@ -157,6 +174,65 @@ router.patch('/profile', async (req, res) => {
   } catch (error) {
     console.error('[PATCH /api/talent/profile]', error);
     res.status(500).json({ error: 'Failed to update your profile' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// UID: link this account to an application filed under it
+// ---------------------------------------------------------------------------
+//
+// A talent account is sent to /talent/profile from every page, so an applicant
+// holding one cannot reach their interview sign-up. Typing a UID here links it
+// once the code sent to the applicant's own address is entered; the rules are
+// claimUid / confirmUidCode in services/applicantAccounts.js.
+
+const UID_ANSWERS = {
+  INVALID: [400, 'Enter your 9-digit UCLA UID.'],
+  TAKEN: [409, 'This UID already has an account. Sign in with that account instead.'],
+  NEEDS_ADMIN: [409, 'We could not link this UID automatically. Email recruitment and we will link it for you.'],
+  TOO_SOON: [429, 'A code was just sent. Wait a minute before asking for another.'],
+  SEND_FAILED: [502, 'We could not send the code. Try again in a minute.'],
+  EXPIRED: [400, 'That code has expired or was used too many times. Ask for a new one.'],
+};
+
+const answerUid = (res, result) => {
+  if (result.status === 'LINKED') {
+    return res.json({ status: 'LINKED' });
+  }
+  if (result.status === 'CODE_SENT' || result.status === 'SAVED') {
+    return res.json({ status: result.status, sentTo: result.sentTo });
+  }
+  if (result.status === 'WRONG') {
+    return res.status(400).json({
+      status: 'WRONG',
+      attemptsLeft: result.attemptsLeft,
+      error: result.attemptsLeft > 0
+        ? `That code is not right. ${result.attemptsLeft} ${result.attemptsLeft === 1 ? 'try' : 'tries'} left.`
+        : 'That code is not right. Ask for a new one.'
+    });
+  }
+  const [status, error] = UID_ANSWERS[result.status] || [500, 'Something went wrong. Try again.'];
+  return res.status(status).json({ status: result.status, sentTo: result.sentTo, error });
+};
+
+router.post('/uid', async (req, res) => {
+  try {
+    const result = await claimUid(req.user, req.body?.uid, {
+      sendCode: ({ to, name, code }) => sendUidLinkCode({ to, name, code, triggeredById: req.user.id })
+    });
+    answerUid(res, result);
+  } catch (error) {
+    console.error('[POST /api/talent/uid]', error);
+    res.status(500).json({ error: 'Failed to save your UID' });
+  }
+});
+
+router.post('/uid/confirm', async (req, res) => {
+  try {
+    answerUid(res, await confirmUidCode(req.user.id, req.body?.code));
+  } catch (error) {
+    console.error('[POST /api/talent/uid/confirm]', error);
+    res.status(500).json({ error: 'Failed to check the code' });
   }
 });
 

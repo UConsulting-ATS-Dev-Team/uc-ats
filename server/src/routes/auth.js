@@ -13,6 +13,7 @@ import {
 } from '../services/emailNotifications.js';
 import { signInWithGoogle, GoogleAuthError } from '../services/googleAuth.js';
 import { findAccountForSignIn } from '../services/uclaTwinAccounts.js';
+import { adoptApplicantAccount } from '../services/applicantAccounts.js';
 import { recordLoginFailed, recordLoginOk } from '../services/analytics/securityEvents.js';
 import { limitConcurrency } from '../utils/limitConcurrency.js';
 import {
@@ -237,7 +238,7 @@ router.post('/login', async (req, res) => {
     // address exactly as it was typed, and somebody who signed up as
     // `Joe@ucla.edu` types `joe@ucla.edu` soon enough. Either UCLA spelling
     // reaches the person's active account (see findAccountForSignIn).
-    const user = await findAccountForSignIn(normalizeEmail(email));
+    let user = await findAccountForSignIn(normalizeEmail(email));
 
     // Every refusal below is reported for Site Analytics' brute-force detection.
     // Fire-and-forget: it can neither fail nor slow the answer.
@@ -271,6 +272,12 @@ router.post('/login', async (req, res) => {
       refused('deactivated');
       return res.status(401).json({ error: 'Account deactivated' });
     }
+
+    // A talent account whose verified address is an applicant's becomes that
+    // applicant's account here, as it does on Google sign-in. Without this a
+    // talent account made with a password stayed one for good, and every
+    // candidate page, interview sign-up included, sent it to /talent/profile.
+    user = await adoptApplicantAccount(user);
 
     recordLoginOk({ user, ip: req.ip });
 
@@ -707,11 +714,16 @@ router.post('/verify-email', async (req, res) => {
       }
     });
 
-    const verified = await prisma.user.findUnique({ where: { id: user.id } });
+    const found = await prisma.user.findUnique({ where: { id: user.id } });
 
-    if (!verified) {
+    if (!found) {
       return res.status(400).json({ error: 'That verification link is invalid or has already been used.' });
     }
+
+    // The address is proven from this moment, so an applicant who signed up on
+    // the talent form gets their applicant account now rather than at their
+    // next sign-in.
+    const verified = await adoptApplicantAccount(found);
 
     invalidateUserCache(verified.id);
 

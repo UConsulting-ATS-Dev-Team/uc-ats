@@ -39,6 +39,17 @@ const AUDIENCES = {
     resendPrompt:
       'Links expire after 24 hours and can only be used once. Enter your UCLA email to get a new one.'
   },
+  // A talent signup whose address turns out to be an applicant's: the server
+  // linked the account to their application, so it is a candidate account now.
+  linkedApplicant: {
+    verifiedMessage: 'Your email is verified and linked to your application.',
+    nextStep: 'Your applicant dashboard has your application and interview sign-up.',
+    buttonLabel: 'Go to my dashboard',
+    destination: '/',
+    emailPlaceholder: 'you@g.ucla.edu',
+    resendPrompt:
+      'Links expire after 24 hours and can only be used once. Enter your UCLA email to get a new one.'
+  },
   candidate: {
     verifiedMessage: 'Your email is verified.',
     nextStep: 'You can now finish setting up your applicant profile.',
@@ -51,7 +62,8 @@ const AUDIENCES = {
 };
 
 const VerifyEmail = ({ audience = 'talent' }) => {
-  const copy = AUDIENCES[audience] ?? AUDIENCES.talent;
+  const [linked, setLinked] = useState(false);
+  const copy = (linked ? AUDIENCES.linkedApplicant : AUDIENCES[audience]) ?? AUDIENCES.talent;
   const [params] = useSearchParams();
   const token = params.get('token');
   const navigate = useNavigate();
@@ -76,6 +88,7 @@ const VerifyEmail = ({ audience = 'talent' }) => {
         const data = await apiClient.post('/auth/verify-email', { token });
         localStorage.setItem('token', data.token);
         apiClient.setToken(data.token);
+        setLinked(audience === 'talent' && data.user?.isExternalTalent === false);
         setState('done');
         // Pull the freshly verified user into context if a session was already
         // open in this browser, so the profile page does not render its
@@ -88,7 +101,7 @@ const VerifyEmail = ({ audience = 'talent' }) => {
     };
 
     verify();
-  }, [token, sessionToken, refreshUser]);
+  }, [token, sessionToken, refreshUser, audience]);
 
   const resend = async () => {
     setError('');

@@ -47,6 +47,14 @@ model User {
   googleLinkedAt             DateTime?
   profileImage               String?
   studentId                  String?                         @unique
+  // A UID a talent-portal account typed and has not proved. Never read as
+  // studentId: candidate pages trust studentId, and a typed UID could be
+  // anyone's. It becomes studentId once the code sent to the applicant's own
+  // address is entered (services/applicantAccounts.js).
+  claimedStudentId           String?
+  uidCodeHash                String?
+  uidCodeExpiresAt           DateTime?
+  uidCodeAttempts            Int                             @default(0)
   // E.164 (+13105551234), for Master Communications iMessage to members. Filled
   // from the roster CSV by scripts/import-member-phones-from-csv.js - applicants'
   // numbers live on Application.phoneNumber and are never copied here.

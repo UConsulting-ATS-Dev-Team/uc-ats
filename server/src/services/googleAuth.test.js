@@ -144,7 +144,7 @@ describe('resolveGoogleUser and applicants', () => {
     expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u-1' },
-      data: { isExternalTalent: false, studentId: UID },
+      data: { isExternalTalent: false, studentId: UID, claimedStudentId: null },
     });
     expect(user.isExternalTalent).toBe(false);
   });

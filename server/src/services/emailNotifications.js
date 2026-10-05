@@ -1189,6 +1189,42 @@ export const sendEmailVerification = async (email, fullName, verifyLink) => {
   }
 };
 
+/**
+ * The code that links a talent-portal account to the application filed under
+ * the UID it typed. Sent to the address the applicant applied from, which is
+ * the proof, so it names no account and no other address. No editable copy:
+ * it is a security code, and wording an admin changed could hide what it is.
+ */
+export const sendUidLinkCode = async ({ to, name, code, triggeredById }) => {
+  try {
+    const emailContent = await composeEmail('uid-link-code', {
+      // The code stays out of the subject: subjects land in communication_logs,
+      // which every admin can read.
+      subject: 'Your UConsulting account code',
+      parts: [
+        part.heading('Link your account to your application'),
+        part.greeting(name ? `Hi ${name},` : 'Hi,'),
+        part.copy('Someone entered your UCLA UID on a UConsulting account to link it to your application. If that was you, enter this code on your profile:'),
+        part.card({ tone: 'info', rows: [{ label: 'Code', value: code }] }),
+        part.copy('It works for 15 minutes. If this was not you, ignore this email: nothing is linked without the code.'),
+      ],
+    });
+    const result = await sendEmail(to, emailContent.subject, emailContent.html, [], {
+      category: 'ACCOUNT',
+      recipientName: name,
+      triggeredById,
+      // Logs are readable by every admin, and the code links an account to this
+      // person's application, so the log says what was sent without it.
+      bodyPreview: 'Code to link a UConsulting account to this applicant\'s UID. [code withheld from the log]',
+    });
+    if (!result.success) console.error(`Failed to send UID link code to ${to}:`, result.error);
+    return result;
+  } catch (error) {
+    console.error('Error in sendUidLinkCode:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Message an Admin
 // ---------------------------------------------------------------------------
