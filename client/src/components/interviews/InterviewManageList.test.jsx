@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import InterviewManageList from './InterviewManageList';
@@ -86,6 +86,32 @@ describe('InterviewManageList', () => {
     expect(screen.getByText('Session s1')).toBeInTheDocument();
     expect(screen.getByText('Session s2')).toBeInTheDocument();
     expect(screen.queryByText('Session x')).not.toBeInTheDocument();
+  });
+
+  it('opens the session builder on the interview\'s place and day', async () => {
+    const onChanged = vi.fn();
+    apiClient.post = vi.fn().mockResolvedValue({ created: 1, assigned: 0, slots: [] });
+    render(
+      <MemoryRouter>
+        <InterviewManageList
+          round={round([{ id: 'iv1', title: 'W27 First Round', startDate: '2027-01-10T17:00:00Z' }])}
+          onChanged={onChanged}
+        />
+      </MemoryRouter>
+    );
+    // The builder takes its default location from the full record.
+    await screen.findByText(/Bunche 2156/);
+    await userEvent.click(screen.getByRole('button', { name: /add sessions/i }));
+
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText('Build sessions')).toBeInTheDocument();
+    expect(dialog.getByLabelText('Location')).toHaveValue('Bunche 2156');
+    // 17:00Z on January 10 is 9 AM PST, the day it opens on.
+    expect(dialog.getByLabelText('Date')).toHaveValue('2027-01-10');
+
+    await userEvent.click(dialog.getByRole('button', { name: 'Create 1 session' }));
+    expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/iv1/slots/generate', expect.any(Object));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it('holds Edit until the full record has loaded', async () => {

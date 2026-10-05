@@ -78,6 +78,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
             end: asTimeInput(slot.endTime),
             candidateCapacity: slot.candidateCapacity ?? '',
             interviewerCapacity: slot.interviewerCapacity ?? '',
+            location: slot.location ?? '',
+            savedLocation: slot.location ?? '',
             booked: slot.signups.filter((s) => s.status === 'CONFIRMED').length,
             dirty: false,
           }))
@@ -98,8 +100,10 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       await fn();
       if (message) setNotice(message);
       onSaved?.();
+      return true;
     } catch (e) {
       setError(e.message || 'That did not save.');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -128,9 +132,21 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
           endTime: asInstant(s.day, s.end),
           candidateCapacity: s.candidateCapacity === '' ? null : Number(s.candidateCapacity),
           interviewerCapacity: s.interviewerCapacity === '' ? null : Number(s.interviewerCapacity),
+          // Sent only when it changed. The server refuses any location on a
+          // virtual coffee chat (its link is edited from its own panel), so an
+          // untouched field must not turn a seat change into a 409.
+          ...(s.location !== s.savedLocation ? { location: s.location.trim() } : {}),
         }),
       'Session updated.'
-    ).then(() => update(index, { dirty: false }));
+    ).then((saved) => {
+      // Set directly rather than through update(), which marks a row dirty. A
+      // failed save stays dirty, so the location is sent again on the retry.
+      if (saved) {
+        setSessions((current) =>
+          current.map((x, i) => (i === index ? { ...x, dirty: false, savedLocation: s.location } : x))
+        );
+      }
+    });
   };
 
   const deleteSession = (index) => {
@@ -269,6 +285,17 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
                 value={session.end}
                 onChange={(e) => update(index, { end: e.target.value })}
                 InputLabelProps={{ shrink: true }}
+              />
+              {/* Blank inherits the interview's location; a room of its own is
+                  how two sessions at the same hour tell candidates apart. */}
+              <TextField
+                size="small"
+                label="Location"
+                placeholder={details.location || 'Same as interview'}
+                value={session.location}
+                onChange={(e) => update(index, { location: e.target.value })}
+                InputLabelProps={{ shrink: true }}
+                sx={{ width: 170 }}
               />
               <TextField
                 size="small"

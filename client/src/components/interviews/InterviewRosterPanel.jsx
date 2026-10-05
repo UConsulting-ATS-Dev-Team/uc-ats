@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Snackbar, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Paper, Snackbar, Stack, Typography } from '@mui/material';
 import apiClient from '../../utils/api';
 import InterviewRosterGallery from './InterviewRosterGallery';
-import InterviewSlotSetup from './InterviewSlotSetup';
+import SessionBuilder from './SessionBuilder';
 
 /**
  * The roster for one interview: fetch, render, and write back.
@@ -11,13 +11,19 @@ import InterviewSlotSetup from './InterviewSlotSetup';
  * but the server is the authority, so any non-2xx reverts and refetches rather
  * than leaving the gallery showing something the database does not agree with.
  */
-export default function InterviewRosterPanel({ interviewId, interviewType, onRosterChanged }) {
+export default function InterviewRosterPanel({
+  interviewId,
+  interviewType,
+  defaultLocation,
+  defaultDay,
+  onRosterChanged,
+}) {
   const [roster, setRoster] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const [setupOpen, setSetupOpen] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -135,31 +141,33 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
         </Alert>
       )}
 
-      {/* Always reachable, not just on an empty interview. A cycle that was
-          backfilled from the old group config already has slots - historical
-          pairings with no capacity - and hiding this behind "no slots yet" left
-          an admin with no way to add the sessions candidates actually book. */}
-      {(!hasSlots || setupOpen) && (
-        <InterviewSlotSetup
-          interviewId={interviewId}
-          interviewType={interviewType}
-          onCreated={() => {
-            setSetupOpen(false);
-            load();
-            onRosterChanged?.();
-          }}
-        />
+      {!hasSlots && (
+        <Paper variant="outlined" sx={{ p: 3 }}>
+          <Typography variant="h6" gutterBottom>
+            No sessions yet
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Candidates pick from these. Nothing is bookable until you create them.
+          </Typography>
+          <Button variant="contained" onClick={() => setBuilderOpen(true)}>
+            Build sessions
+          </Button>
+        </Paper>
       )}
 
       {hasSlots && (
         <>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1, mt: setupOpen ? 3 : 0 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="subtitle2" color="text.secondary">
               Drag a candidate between sessions, or use the menu on their card.
             </Typography>
             <Stack direction="row" spacing={1}>
-              <Button size="small" onClick={() => setSetupOpen((open) => !open)} disabled={busy}>
-                {setupOpen ? 'Close' : 'Add sessions'}
+              {/* Not only on an empty interview. A cycle backfilled from the old
+                  group config already has slots - historical pairings with no
+                  capacity - and offering this only at "no slots yet" left an
+                  admin no way to add the sessions candidates actually book. */}
+              <Button size="small" onClick={() => setBuilderOpen(true)} disabled={busy}>
+                Add sessions
               </Button>
               <Button size="small" onClick={load} disabled={busy}>
                 Refresh
@@ -175,6 +183,19 @@ export default function InterviewRosterPanel({ interviewId, interviewType, onRos
           />
         </>
       )}
+
+      <SessionBuilder
+        open={builderOpen}
+        onClose={() => setBuilderOpen(false)}
+        interviewId={interviewId}
+        interviewType={interviewType}
+        defaultLocation={defaultLocation}
+        defaultDay={defaultDay}
+        onCreated={() => {
+          load();
+          onRosterChanged?.();
+        }}
+      />
 
       <Snackbar
         open={Boolean(toast)}

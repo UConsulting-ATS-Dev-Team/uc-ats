@@ -14,13 +14,14 @@
 // four is a call a person should be allowed to make. Both are recorded rather
 // than hidden - movedById is what tells a deliberate overfill from a bug.
 
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { resolveAdminCycle } from '../services/activeCycle.js';
 import { interviewTypesForRound, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 import { getRound } from '../utils/roundProgression.js';
 import { parseLegacyConfig } from '../services/interviewRoster.js';
-import { combine, planSessions } from '../services/slotPlanner.js';
+import { combine, planCustomSessions, planSessions } from '../services/slotPlanner.js';
 import {
   conflictsWithAvailability,
   coverageByTime,
@@ -1068,10 +1069,11 @@ router.get('/interviews/:id/availability', async (req, res) => {
       where: { id: req.params.id },
       select: {
         id: true, title: true, interviewType: true, startDate: true, endDate: true, cycleId: true,
+        location: true,
         slots: {
           orderBy: { startTime: 'asc' },
           select: {
-            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true,
+            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true, location: true,
             assignments: {
               where: { removedAt: null },
               select: { id: true, userId: true, user: { select: { id: true, fullName: true, email: true } } },
@@ -1132,6 +1134,8 @@ router.get('/interviews/:id/availability', async (req, res) => {
       interview: {
         id: interview.id, title: interview.title, interviewType: interview.interviewType,
         startDate: interview.startDate, endDate: interview.endDate, cycleId: interview.cycleId,
+        // The default room for sessions built from this grid.
+        location: interview.location,
       },
       cadence: { minutes, interviewersPerSession: perSession },
       coverage: grid,
@@ -1144,6 +1148,9 @@ router.get('/interviews/:id/availability', async (req, res) => {
         startTime: slot.startTime,
         endTime: slot.endTime,
         interviewerCapacity: slot.interviewerCapacity,
+        // Null inherits the interview's. The session builder reads it to warn
+        // about a new session put in a room already in use at that time.
+        location: slot.location,
         // Who could staff this session, so an admin placing somebody is choosing
         // from people who said yes rather than from the whole roster.
         canCover: whoCanCover(windows, slot.startTime, slot.endTime),
@@ -1279,11 +1286,13 @@ router.post('/interviews/:id/slots', async (req, res) => {
 });
 
 // POST /api/admin/interviews/:id/slots/generate
-// Two named blocks for a coffee chat day, or a cadence of group interviews.
+// Two named blocks for a coffee chat day, a cadence of group interviews, or
+// `sessions`: fully specified sessions with their interviewers, which is what
+// an admin builds from the availability grid once members have answered.
 router.post('/interviews/:id/slots/generate', async (req, res) => {
   try {
     const { id } = req.params;
-    const { blocks, cadence } = req.body ?? {};
+    const { blocks, cadence, sessions } = req.body ?? {};
 
     const interview = await prisma.interview.findUnique({
       where: { id },
@@ -1338,14 +1347,84 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
       }
     }
 
-    if (rows.length === 0) return res.status(400).json({ error: 'Nothing to generate' });
+    // Built sessions: each with its own time, room, seats and interviewers.
+    let custom = [];
+    if (sessions != null) {
+      try {
+        custom = planCustomSessions(sessions);
+      } catch (planError) {
+        // Names the row, which is the only way to find it in a long list.
+        return res.status(400).json({ error: planError.message });
+      }
+    }
 
-    await prisma.interviewSlot.createMany({ data: rows });
+    if (rows.length === 0 && custom.length === 0) return res.status(400).json({ error: 'Nothing to generate' });
+
+    // Checked before anything is written. The single-assign route lets any
+    // active member be placed, availability or not, and this follows it; what
+    // it refuses is an id that is nobody, or somebody deactivated since the
+    // page loaded, because that row would hand a session to a person who will
+    // never see it.
+    const wantedIds = [...new Set(custom.flatMap((c) => c.interviewerIds))];
+    if (wantedIds.length > 0) {
+      const staff = await prisma.user.findMany({
+        where: { id: { in: wantedIds }, isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true },
+      });
+      const unknown = wantedIds.length - staff.length;
+      if (unknown > 0) {
+        return res.status(400).json({
+          error: `${unknown} of the chosen interviewers ${unknown === 1 ? 'is not an active member' : 'are not active members'}. Reload and pick again.`,
+        });
+      }
+    }
+
+    // Ids are made here rather than by the database so the slots and their
+    // assignments can go in as two createMany calls in one batch transaction.
+    // Creating slots one at a time to learn their ids means an interactive
+    // transaction with a round trip per session, which at a hundred sessions
+    // from Render to Supabase is the P2028 timeout notifyInterviewersBulk's
+    // comment describes.
+    const assignments = [];
+    for (const { slot, interviewerIds } of custom) {
+      slot.id = randomUUID();
+      slot.interviewId = id;
+      for (const userId of interviewerIds) {
+        assignments.push({ slotId: slot.id, interviewId: id, userId, role: 'INTERVIEWER' });
+      }
+    }
+
+    const writes = [prisma.interviewSlot.createMany({ data: [...rows, ...custom.map((c) => c.slot)] })];
+    if (assignments.length > 0) writes.push(prisma.interviewSlotAssignment.createMany({ data: assignments }));
+
+    // The interview's range is what the member availability form turns into
+    // hour ticks and what the coverage grid counts across (see with-sessions).
+    // A built session outside it would be invisible on the grid it was built
+    // from, so the range grows to cover it. It never shrinks here: a range set
+    // wider than today's sessions is still the window members were asked about.
+    // Blocks and cadence have never done this, and are left as they were.
+    if (custom.length > 0) {
+      const earliest = new Date(Math.min(...custom.map((c) => c.slot.startTime)));
+      const latest = new Date(Math.max(...custom.map((c) => c.slot.endTime)));
+      const startDate = earliest < interview.startDate ? earliest : interview.startDate;
+      const endDate = latest > interview.endDate ? latest : interview.endDate;
+      if (startDate !== interview.startDate || endDate !== interview.endDate) {
+        writes.push(prisma.interview.update({ where: { id }, data: { startDate, endDate } }));
+      }
+    }
+
+    await prisma.$transaction(writes);
+
+    // After the commit, never inside it: an email for a session that rolled
+    // back is worse than none. notifyInterviewersBulk swallows its own errors,
+    // so a mail outage cannot turn a saved schedule into a 500.
+    await notifyInterviewersBulk(assignments.map(({ slotId, userId }) => ({ slotId, userId })));
+
     const slots = await prisma.interviewSlot.findMany({
       where: { interviewId: id },
       orderBy: { startTime: 'asc' },
     });
-    res.status(201).json({ created: rows.length, slots });
+    res.status(201).json({ created: rows.length + custom.length, assigned: assignments.length, slots });
   } catch (error) {
     fail(res, error, 'Failed to generate time slots');
   }

@@ -101,6 +101,68 @@ describe('InterviewerCoverage hour grid', () => {
     );
   });
 
+  it('builds a second session at an hour with the free people not already on one', async () => {
+    const onChanged = vi.fn();
+    apiClient.post.mockResolvedValue({ created: 1, assigned: 1, slots: [] });
+    render(<InterviewerCoverage interviewId="i1" onChanged={onChanged} />);
+
+    const hour = within((await screen.findByText('9:00 AM – 10:00 AM')).closest('.MuiPaper-root'));
+    await userEvent.click(hour.getByRole('button', { name: 'Add another session at this hour' }));
+
+    // Ada is already in Group 1A at 9:00, so only Ben starts on the new one.
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByLabelText('Start')).toHaveValue('09:00');
+    await userEvent.click(dialog.getByRole('button', { name: 'Create 1 session' }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/i1/slots/generate', {
+        sessions: [
+          expect.objectContaining({
+            startTime: '2026-10-06T16:00:00.000Z',
+            endTime: '2026-10-06T17:00:00.000Z',
+            interviewerCapacity: 2,
+            interviewerIds: ['u2'],
+          }),
+        ],
+      })
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('builds a session in the last hour of the day, ending at midnight', async () => {
+    // 23:00-00:00 Pacific on October 6.
+    const late = {
+      startTime: '2026-10-07T06:00:00.000Z',
+      endTime: '2026-10-07T07:00:00.000Z',
+      availableInterviewers: 0,
+      userIds: [],
+      possibleSessions: 0,
+    };
+    apiClient.get.mockResolvedValue({ ...payload, coverage: [late] });
+    apiClient.post.mockResolvedValue({ created: 1, assigned: 0, slots: [] });
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    const hour = within((await screen.findByText('11:00 PM – 12:00 AM')).closest('.MuiPaper-root'));
+    await userEvent.click(hour.getByRole('button', { name: 'Create session at this hour' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('button', { name: 'Create 1 session' }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/i1/slots/generate', {
+        sessions: [expect.objectContaining({ startTime: late.startTime, endTime: late.endTime })],
+      })
+    );
+  });
+
+  it('offers to create a session at an hour with no groups', async () => {
+    render(<InterviewerCoverage interviewId="i1" />);
+
+    const hour = within((await screen.findByText('11:00 AM – 12:00 PM')).closest('.MuiPaper-root'));
+    expect(hour.getByRole('button', { name: 'Create session at this hour' })).toBeInTheDocument();
+    // And the builder is reachable without picking an hour at all.
+    expect(screen.getByRole('button', { name: 'Create sessions' })).toBeInTheDocument();
+  });
+
   it('says so when an hour has nobody in it', async () => {
     render(<InterviewerCoverage interviewId="i1" />);
 

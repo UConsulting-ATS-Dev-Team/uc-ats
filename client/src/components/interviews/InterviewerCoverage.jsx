@@ -15,11 +15,12 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Sms as SmsIcon, Warning as WarningIcon } from '@mui/icons-material';
+import { Add as AddIcon, Sms as SmsIcon, Warning as WarningIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { formatTime, formatTimeRange } from '../../utils/scheduleFormat';
+import { formatTime, formatTimeRange, toPacificInput } from '../../utils/scheduleFormat';
 import ImessageSendDialog from '../communications/ImessageSendDialog';
+import SessionBuilder from './SessionBuilder';
 
 /**
  * Who can interview when, and what that means for the day.
@@ -58,6 +59,10 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   const [moving, setMoving] = useState(null);
   // The session whose interviewers are being messaged, if any.
   const [texting, setTexting] = useState(null);
+  // The session builder, open with these rows to start from. Kept in state so
+  // the rows stay the same object while it is open; rebuilt per render, the
+  // builder would read every re-render as a fresh open and drop the draft.
+  const [building, setBuilding] = useState(null);
   // /admin/interviews is reachable by MEMBER, but both iMessage endpoints are
   // requireAdmin. Without this the button opens a dialog that 403s.
   const { user } = useAuth();
@@ -137,6 +142,25 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
     }
   };
 
+  // One draft session over an hour, with the people free then already on it -
+  // up to the panel size the grid is sized by. Anyone already sitting on a group
+  // that hour is left off, since this is for a second panel alongside it.
+  const buildAtHour = (row, groupsHere, free) => {
+    const busyHere = new Set(groupsHere.flatMap((session) => session.assigned.map((a) => a.id)));
+    const start = toPacificInput(row.startTime);
+    setBuilding({
+      initialRows: [
+        {
+          day: start.slice(0, 10),
+          start: start.slice(11),
+          end: toPacificInput(row.endTime).slice(11),
+          interviewerCapacity: per,
+          interviewerIds: free.filter((u) => !busyHere.has(u.id)).slice(0, per).map((u) => u.id),
+        },
+      ],
+    });
+  };
+
   const remove = async (assignmentId) => {
     setBusy(true);
     try {
@@ -186,6 +210,9 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
             Ask everyone again
           </Button>
         )}
+        <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => setBuilding({ initialRows: null })}>
+          Create sessions
+        </Button>
         {asked && (
           <Typography variant="caption" color="text.secondary">
             {asked}
@@ -281,13 +308,23 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                   variant="outlined"
                   sx={{ p: 1.5, borderColor: `${tone.color}.main`, borderWidth: tone.color === 'success' ? 1 : 2 }}
                 >
-                  <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
                     <Typography variant="body2" fontWeight={700}>
                       {formatTime(row.startTime)} – {formatTime(row.endTime)}
                     </Typography>
                     <Typography variant="caption" color={`${tone.color}.main`}>
                       {row.availableInterviewers} free · {tone.label}
                     </Typography>
+                    <Box sx={{ flex: 1 }} />
+                    {groupsHere.length === 0 ? (
+                      <Button size="small" variant="outlined" onClick={() => buildAtHour(row, groupsHere, free)}>
+                        Create session at this hour
+                      </Button>
+                    ) : (
+                      <Button size="small" sx={{ fontSize: 12 }} onClick={() => buildAtHour(row, groupsHere, free)}>
+                        Add another session at this hour
+                      </Button>
+                    )}
                   </Stack>
 
                   {free.length === 0 ? (
@@ -302,7 +339,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                         ))}
                       </Stack>
                       <Typography variant="caption" color="text.secondary">
-                        No groups at this hour yet — add one under Sessions, then place these people into it.
+                        No groups at this hour yet. Create one here and these people start on it.
                       </Typography>
                     </>
                   ) : (
@@ -534,6 +571,20 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
           Take off this session
         </MenuItem>
       </Menu>
+
+      <SessionBuilder
+        open={Boolean(building)}
+        onClose={() => setBuilding(null)}
+        interviewId={interviewId}
+        interviewType={data.interview.interviewType}
+        defaultLocation={data.interview.location ?? ''}
+        defaultDay={data.interview.startDate ? toPacificInput(data.interview.startDate).slice(0, 10) : ''}
+        initialRows={building?.initialRows ?? undefined}
+        onCreated={async () => {
+          await load();
+          onChanged?.();
+        }}
+      />
 
       <ImessageSendDialog
         open={Boolean(texting)}

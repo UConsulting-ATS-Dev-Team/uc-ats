@@ -151,6 +151,93 @@ export function planSessions(spec = {}) {
   return [];
 }
 
+/**
+ * Sessions an admin built one by one, usually off the availability grid.
+ *
+ * The third shape, and the one the other two cannot express: once members have
+ * said when they are free, each session ends up with its own time, room, seat
+ * count and the people running it. Times arrive as instants rather than
+ * day-plus-wall-clock, because the client already resolved them against the
+ * grid and re-deriving them here would be a second chance to get the zone
+ * wrong.
+ *
+ * Bounded at 100. A day of first-round panels in several rooms is a few dozen;
+ * a request for more is a client stuck in a loop, not a schedule.
+ */
+export const MAX_CUSTOM_SESSIONS = 100;
+
+const blankToNull = (value) => (value === '' || value === undefined ? null : value);
+
+const trimmedOrNull = (value) => {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text || null;
+};
+
+// A count that is either unset or a whole number at least `min`. Numeric
+// strings are accepted because form inputs hand them over that way; "2.5" and
+// "four" are not quietly rounded or dropped, since either would build a session
+// that differs from what the admin typed without telling them.
+const countOrNull = (value, min, row, what) => {
+  const raw = blankToNull(value);
+  if (raw == null) return null;
+  const n = typeof raw === 'string' ? Number(raw.trim()) : raw;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < min) {
+    const floor = min === 0 ? 'zero or more' : `at least ${min}`;
+    throw new Error(`Session ${row}: ${what} must be a whole number, ${floor}.`);
+  }
+  return n;
+};
+
+const instant = (value) => {
+  if (value == null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+export function planCustomSessions(sessions) {
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    throw new Error('Add at least one session.');
+  }
+  if (sessions.length > MAX_CUSTOM_SESSIONS) {
+    throw new Error(`At most ${MAX_CUSTOM_SESSIONS} sessions can be created at once.`);
+  }
+
+  return sessions.map((session, index) => {
+    const row = index + 1;
+    if (!session || typeof session !== 'object') throw new Error(`Session ${row} is empty.`);
+
+    const startTime = instant(session.startTime);
+    const endTime = instant(session.endTime);
+    if (!startTime || !endTime) throw new Error(`Session ${row}: a valid start and end time are required`);
+    if (endTime <= startTime) throw new Error(`Session ${row}: the end time must be after the start time`);
+
+    // Deduped because the unique thing about an assignment is the person: the
+    // same id twice would put one member on a session twice and email them twice.
+    const interviewerIds = [
+      ...new Set((Array.isArray(session.interviewerIds) ? session.interviewerIds : []).filter(
+        (id) => typeof id === 'string' && id.trim() !== ''
+      )),
+    ];
+
+    return {
+      slot: {
+        label: trimmedOrNull(session.label),
+        startTime,
+        endTime,
+        // Null inherits the interview's location, which is what most sessions want.
+        location: trimmedOrNull(session.location),
+        candidateCapacity: countOrNull(session.candidateCapacity, 0, row, 'seats'),
+        // A group of zero is not "no grouping"; null is. Zero would make the
+        // labeller divide every booking into nothing.
+        groupSize: countOrNull(session.groupSize, 1, row, 'group size'),
+        interviewerCapacity: countOrNull(session.interviewerCapacity, 0, row, 'interviewers wanted'),
+      },
+      interviewerIds,
+    };
+  });
+}
+
 /** What the form should offer for a round, before anyone changes it. */
 export function defaultSpecFor(interviewType) {
   if (interviewType === 'COFFEE_CHAT') {
