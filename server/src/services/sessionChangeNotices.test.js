@@ -3,12 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { flushNotifications, queueNotificationsBulk, slotSubjectFormatter } from './interviewSlotComms.js';
 import { queueInterviewerNotices } from './interviewerInvites.js';
-import { notifySessionChanged, sessionChanged } from './sessionChangeNotices.js';
+import {
+  SEND_CLAIM_TTL_MS,
+  SessionUpdateRefused,
+  notifySessionChanged,
+  sendSessionUpdate,
+  sessionChanged,
+} from './sessionChangeNotices.js';
 
 vi.mock('../prismaClient.js', () => ({
   default: {
     interviewSlotSignup: { findMany: vi.fn() },
     interviewSlotAssignment: { findMany: vi.fn() },
+    interviewSlot: { findUnique: vi.fn(), updateMany: vi.fn() },
   },
 }));
 
@@ -110,5 +117,100 @@ describe('sessionChanged', () => {
 
   it('sees a new start time', () => {
     expect(sessionChanged(at(null), at(null, 'Ackerman', '2026-10-08T15:00:00Z'))).toBe(true);
+  });
+});
+
+describe('sendSessionUpdate', () => {
+  const PENDING = new Date('2026-10-01T00:00:00Z');
+
+  beforeEach(() => {
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING });
+    prisma.interviewSlot.updateMany.mockResolvedValue({ count: 1 });
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([signup('s1', 'a@ucla.edu')]);
+    prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'u1' }]);
+  });
+
+  const writes = () => prisma.interviewSlot.updateMany.mock.calls.map(([arg]) => arg);
+
+  it('claims the session, queues the notices, then clears the mark it read and the claim', async () => {
+    const result = await sendSessionUpdate('slot-1');
+
+    expect(result).toMatchObject({ candidates: 1, interviewers: 1, pending: false });
+    const [claim, clear, release] = writes();
+    expect(claim.where).toMatchObject({ id: 'slot-1', updatePendingSince: { not: null } });
+    expect(claim.data.updateSendingSince).toBeInstanceOf(Date);
+    // The claim lands before anything is queued.
+    expect(prisma.interviewSlot.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      queueNotificationsBulk.mock.invocationCallOrder[0]
+    );
+    expect(clear).toEqual({ where: { id: 'slot-1', updatePendingSince: PENDING }, data: { updatePendingSince: null } });
+    expect(release).toEqual({
+      where: { id: 'slot-1', updateSendingSince: claim.data.updateSendingSince },
+      data: { updateSendingSince: null },
+    });
+  });
+
+  it('lets a stale claim from a dead server be taken over', async () => {
+    await sendSessionUpdate('slot-1');
+
+    const { OR } = writes()[0].where;
+    expect(OR[0]).toEqual({ updateSendingSince: null });
+    const cutoff = OR[1].updateSendingSince.lt.getTime();
+    expect(Date.now() - cutoff).toBeGreaterThanOrEqual(SEND_CLAIM_TTL_MS - 1000);
+  });
+
+  it('refuses while another send holds the claim, and sends nothing', async () => {
+    prisma.interviewSlot.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(sendSessionUpdate('slot-1')).rejects.toMatchObject({ status: 409, code: 'SEND_IN_PROGRESS' });
+    expect(queueNotificationsBulk).not.toHaveBeenCalled();
+    expect(queueInterviewerNotices).not.toHaveBeenCalled();
+  });
+
+  it('refuses a session with nothing waiting', async () => {
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: null });
+
+    await expect(sendSessionUpdate('slot-1')).rejects.toMatchObject({ status: 409, code: 'NO_PENDING_UPDATE' });
+    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing session', async () => {
+    prisma.interviewSlot.findUnique.mockResolvedValue(null);
+
+    await expect(sendSessionUpdate('slot-1')).rejects.toBeInstanceOf(SessionUpdateRefused);
+  });
+
+  it('keeps the mark when the only half with anyone in it failed', async () => {
+    prisma.interviewSlotSignup.findMany.mockResolvedValue([]);
+    queueInterviewerNotices.mockRejectedValueOnce(new Error('pool exhausted'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await sendSessionUpdate('slot-1');
+
+    expect(result).toMatchObject({ candidates: 0, interviewers: 0, failed: ['interviewers'], pending: true });
+    // Only the claim and its release: the mark is left for another press.
+    expect(writes().map((w) => Object.keys(w.data)[0])).toEqual(['updateSendingSince', 'updateSendingSince']);
+    quiet.mockRestore();
+  });
+
+  it('clears the mark when one half went out, so that half is not sent twice', async () => {
+    queueInterviewerNotices.mockRejectedValueOnce(new Error('pool exhausted'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await sendSessionUpdate('slot-1');
+
+    expect(result).toMatchObject({ candidates: 1, failed: ['interviewers'], pending: false });
+    expect(writes()[1].data).toEqual({ updatePendingSince: null });
+    quiet.mockRestore();
+  });
+
+  it('does not fail once the notices are queued, even if clearing the mark does', async () => {
+    prisma.interviewSlot.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockRejectedValueOnce(new Error('connection reset'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, pending: false });
+    quiet.mockRestore();
   });
 });

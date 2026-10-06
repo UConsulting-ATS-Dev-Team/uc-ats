@@ -384,13 +384,15 @@ The system follows a **recruiting cycle-based workflow**:
 - A stamped session shows **Send update** in Edit Interview until someone presses it,
   across closing and reopening the dialog; the interview card shows "Update not sent".
   It is disabled while that row has unsaved edits.
-- `POST /api/admin/interviews/slots/:slotId/send-update` holds
-  `pg_try_advisory_xact_lock` on the session (`409 SEND_IN_PROGRESS` if another send has
-  it), refuses an unstamped session (`409 NO_PENDING_UPDATE`), queues the notices, and
-  only then clears the stamp, and only if it is still the one it read: a save landing
-  mid-send restamps it, so its details get a button of their own. A server dying
-  mid-send leaves the button up; pressing it again may email some people twice, which is
-  preferred to nobody being told.
+- `POST /api/admin/interviews/slots/:slotId/send-update` runs `sendSessionUpdate`. It
+  refuses an unstamped session (`409 NO_PENDING_UPDATE`), claims the send with a
+  conditional write to `updateSendingSince` (`409 SEND_IN_PROGRESS` while another send
+  holds it), queues the notices, and only then clears the stamp, and only if it is still
+  the one it read: a save landing mid-send restamps it, so its details get a button of
+  their own. No transaction is held around the queueing (`interviewSlotComms.js` forbids
+  it). A server dying mid-send leaves the stamp and a claim that stops blocking after 10
+  minutes; pressing again may email some people twice, which is preferred to nobody
+  being told.
 - Confirmed candidates get `MOVED_BY_ADMIN` and current interviewers `INTERVIEWER_MOVED`,
   both with `sessionChanged` wording (the `*SessionChanged` fields on those templates), and
   an invite that updates the calendar entry they already have. Waitlisted candidates are

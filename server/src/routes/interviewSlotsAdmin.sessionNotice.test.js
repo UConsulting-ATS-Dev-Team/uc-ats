@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import prisma from '../prismaClient.js';
-import { notifySessionChanged } from '../services/sessionChangeNotices.js';
+import { SessionUpdateRefused, notifySessionChanged, sendSessionUpdate } from '../services/sessionChangeNotices.js';
 import interviewSlotsAdminRoutes from './interviewSlotsAdmin.js';
 
 vi.mock('../prismaClient.js', () => ({
@@ -11,7 +11,6 @@ vi.mock('../prismaClient.js', () => ({
     interviewSlot: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     // The virtual coffee chat guard asks first; these are in-person interviews.
     interview: { findUnique: vi.fn(async () => ({ isVirtual: false })), update: vi.fn() },
-    $queryRaw: vi.fn(),
     // Interactive transactions run against the same mocks; arrays as a batch.
     $transaction: vi.fn(async (arg) => (typeof arg === 'function' ? arg(mockPrisma()) : Promise.all(arg))),
   },
@@ -22,6 +21,7 @@ const mockPrisma = () => prisma;
 vi.mock('../services/sessionChangeNotices.js', async (importOriginal) => ({
   ...(await importOriginal()),
   notifySessionChanged: vi.fn(),
+  sendSessionUpdate: vi.fn(),
 }));
 
 let server;
@@ -71,7 +71,6 @@ beforeEach(() => {
   });
   prisma.interviewSlot.update.mockImplementation(async ({ data }) => ({ id: 'slot-1', ...data }));
   prisma.interviewSlot.updateMany.mockResolvedValue({ count: 1 });
-  prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
   notifySessionChanged.mockResolvedValue({ candidates: 4, interviewers: 2 });
 });
 
@@ -136,86 +135,28 @@ describe('PATCH /interviews/slots/:slotId', () => {
 });
 
 describe('POST /interviews/slots/:slotId/send-update', () => {
-  beforeEach(() => {
-    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING });
-  });
+  // The claim, the clearing and when the button stays are sendSessionUpdate's,
+  // tested in sessionChangeNotices.test.js. The route passes its answer on.
+  it('sends the update and says whether the button stays', async () => {
+    sendSessionUpdate.mockResolvedValue({ candidates: 4, interviewers: 2, failed: [], pending: false });
 
-  it('emails the session, then clears the stamp it read', async () => {
     const res = await sendUpdate();
 
     expect(res.status).toBe(200);
-    expect(notifySessionChanged).toHaveBeenCalledWith('slot-1');
-    expect(prisma.interviewSlot.updateMany).toHaveBeenCalledWith({
-      where: { id: 'slot-1', updatePendingSince: PENDING },
-      data: { updatePendingSince: null },
-    });
-    expect(prisma.interviewSlot.updateMany.mock.invocationCallOrder[0]).toBeGreaterThan(
-      notifySessionChanged.mock.invocationCallOrder[0]
-    );
+    expect(sendSessionUpdate).toHaveBeenCalledWith('slot-1');
     const body = await res.json();
     expect(body.notified).toMatchObject({ candidates: 4, interviewers: 2 });
+    expect(body.notified).toHaveProperty('emailsOn');
     expect(body.pending).toBe(false);
   });
 
-  it('sends nothing when there is no update waiting', async () => {
-    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: null });
+  it('answers a refusal with its status and code', async () => {
+    sendSessionUpdate.mockRejectedValue(new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending'));
 
     const res = await sendUpdate();
 
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe('NO_PENDING_UPDATE');
-    expect(notifySessionChanged).not.toHaveBeenCalled();
-  });
-
-  it('sends nothing while another send holds the session', async () => {
-    prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
-
-    const res = await sendUpdate();
-
-    expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe('SEND_IN_PROGRESS');
-    expect(notifySessionChanged).not.toHaveBeenCalled();
-  });
-
-  it('keeps the stamp when nothing could be sent', async () => {
-    notifySessionChanged.mockRejectedValue(new Error('database went away'));
-    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const res = await sendUpdate();
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.notified).toMatchObject({ failed: ['candidates', 'interviewers'] });
-    expect(body.pending).toBe(true);
-    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
-    quiet.mockRestore();
-  });
-
-  it('keeps the stamp when the only half with anyone in it failed', async () => {
-    notifySessionChanged.mockResolvedValue({ candidates: 0, interviewers: 0, failed: ['interviewers'] });
-
-    const body = await (await sendUpdate()).json();
-
-    expect(body.pending).toBe(true);
-    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
-  });
-
-  it('clears it when one half went out, so that half is not sent twice', async () => {
-    notifySessionChanged.mockResolvedValue({ candidates: 4, interviewers: 0, failed: ['interviewers'] });
-
-    const body = await (await sendUpdate()).json();
-
-    expect(body.pending).toBe(false);
-    expect(prisma.interviewSlot.updateMany).toHaveBeenCalled();
-  });
-
-  it('refuses a missing session', async () => {
-    prisma.interviewSlot.findUnique.mockResolvedValue(null);
-
-    const res = await sendUpdate();
-
-    expect(res.status).toBe(404);
-    expect(notifySessionChanged).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({ error: 'Someone is sending', code: 'SEND_IN_PROGRESS' });
   });
 
   it('refuses a virtual coffee chat, which emails from its own panel', async () => {
@@ -224,7 +165,7 @@ describe('POST /interviews/slots/:slotId/send-update', () => {
     const res = await sendUpdate();
 
     expect(res.status).toBe(409);
-    expect(notifySessionChanged).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).not.toHaveBeenCalled();
   });
 });
 

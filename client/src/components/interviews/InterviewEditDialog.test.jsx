@@ -311,6 +311,17 @@ describe('InterviewEditDialog', () => {
     });
   });
 
+  it('drops a Send update another admin already used, when details are saved', async () => {
+    const pending = slot({ updatePendingSince: '2027-01-10T00:00:00Z' });
+    openDialog([pending]);
+    expect(await screen.findByRole('button', { name: /send update/i })).toBeInTheDocument();
+
+    apiClient.get = vi.fn().mockResolvedValue({ slots: [{ ...pending, updatePendingSince: null }], unassigned: [] });
+    await userEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /send update/i })).not.toBeInTheDocument());
+  });
+
   it('will not move the day over a session with unsaved edits', async () => {
     // The move reloads every session, which would throw the edits away.
     openDialog();

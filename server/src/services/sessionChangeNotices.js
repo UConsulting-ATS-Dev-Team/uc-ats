@@ -83,6 +83,83 @@ export async function notifySessionChanged(slotId) {
   return result;
 }
 
+/** A claim older than this is a send whose server died; it no longer blocks. */
+export const SEND_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+export class SessionUpdateRefused extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Send update: tell a session's people its current time and place, once.
+ *
+ * Claimed first (`updateSendingSince`, a conditional write) so two admins
+ * pressing it at once send once. No transaction is held around the queueing,
+ * which this file's senders forbid. The mark is cleared afterwards only if it
+ * is still the one read here: a save landing mid-send restamps it, and those
+ * details keep a button of their own.
+ *
+ * The mark stays when nothing was queued and something failed, so the button
+ * can be pressed again. A half that did go out is not re-armed, or pressing
+ * again would send it twice. A server dying mid-send leaves the mark and a
+ * stale claim; after SEND_CLAIM_TTL_MS the button works again, and pressing it
+ * may email some people twice, which beats nobody being told.
+ *
+ * Returns notifySessionChanged's result plus `pending`.
+ */
+export async function sendSessionUpdate(slotId) {
+  const row = await prisma.interviewSlot.findUnique({
+    where: { id: slotId },
+    select: { updatePendingSince: true },
+  });
+  if (!row) throw new SessionUpdateRefused(404, 'NOT_FOUND', 'That session no longer exists');
+  if (!row.updatePendingSince) {
+    throw new SessionUpdateRefused(409, 'NO_PENDING_UPDATE', 'This update has already been sent');
+  }
+
+  const claimedAt = new Date();
+  const { count } = await prisma.interviewSlot.updateMany({
+    where: {
+      id: slotId,
+      updatePendingSince: { not: null },
+      OR: [{ updateSendingSince: null }, { updateSendingSince: { lt: new Date(claimedAt - SEND_CLAIM_TTL_MS) } }],
+    },
+    data: { updateSendingSince: claimedAt },
+  });
+  if (count === 0) {
+    throw new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending this update right now');
+  }
+
+  let result;
+  try {
+    result = await notifySessionChanged(slotId);
+  } catch (error) {
+    console.error('[sessionChangeNotices] session update failed', error);
+    result = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
+  }
+  const pending = Boolean(result.failed?.length) && result.candidates + result.interviewers === 0;
+
+  // The emails are queued by now, so neither write may fail the request: an
+  // answer of "failed" would get them sent again. A mark left behind only
+  // means the button stays up.
+  if (!pending) {
+    await prisma.interviewSlot
+      .updateMany({
+        where: { id: slotId, updatePendingSince: row.updatePendingSince },
+        data: { updatePendingSince: null },
+      })
+      .catch((error) => console.error('[sessionChangeNotices] could not clear the pending update', error));
+  }
+  await prisma.interviewSlot
+    .updateMany({ where: { id: slotId, updateSendingSince: claimedAt }, data: { updateSendingSince: null } })
+    .catch((error) => console.error('[sessionChangeNotices] could not release the send claim', error));
+  return { ...result, pending };
+}
+
 async function queueCandidateNotices(slotId) {
   const signups = await prisma.interviewSlotSignup.findMany({
     where: { slotId, status: 'CONFIRMED' },

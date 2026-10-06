@@ -118,16 +118,24 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       .catch(() => setSessions([]));
 
   // A change to the interview's location or day marks sessions on the server.
-  // Only the flag is taken, so edits not yet saved in other rows survive, and
-  // only ever turned on: this read may be older than a session save that
-  // marked a row, and only Send update in this dialog turns one off.
-  const refreshPending = () =>
-    fetchSlots()
+  // Only the flag is taken, so edits not yet saved in other rows survive. It
+  // turns a button on, and off when another admin already sent it, but never
+  // off for a row this dialog marked after the read went out: that read is
+  // older than the save.
+  const refreshPending = () => {
+    const readAt = Date.now();
+    return fetchSlots()
       .then((slots) => {
         const pending = new Set(slots.filter((slot) => slot.updatePendingSince).map((slot) => slot.id));
-        setSessions((current) => current.map((s) => (pending.has(s.id) ? { ...s, pending: true } : s)));
+        setSessions((current) =>
+          current.map((s) => {
+            if (pending.has(s.id)) return { ...s, pending: true };
+            return (s.markedAt ?? 0) < readAt ? { ...s, pending: false } : s;
+          })
+        );
       })
       .catch(() => {});
+  };
 
   useEffect(() => {
     if (!open || !interview) return;
@@ -211,6 +219,7 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
                   dirty: false,
                   savedLocation: s.location,
                   pending: Boolean(saved.updatePendingSince),
+                  markedAt: Date.now(),
                 }
               : x
           )

@@ -1046,6 +1046,9 @@ model InterviewSlot {
   /// Set when the session's time or place changed and the people in it have
   /// not been told yet; cleared by Send update. Saving never emails anyone.
   updatePendingSince  DateTime?
+  /// A Send update in progress. Claimed before the emails are queued and
+  /// released after; one older than 10 minutes is an interrupted send.
+  updateSendingSince  DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
