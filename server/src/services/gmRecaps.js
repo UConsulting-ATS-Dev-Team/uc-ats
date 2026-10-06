@@ -69,7 +69,12 @@ const SEASONS = [
   { name: 'Fall', months: [8, 9, 10, 11] },
 ];
 
-export const seasonOf = (date) => SEASONS.find((s) => s.months.includes(date.getMonth())).name;
+const seasonFor = (date) => SEASONS.find((s) => s.months.includes(date.getMonth()));
+
+export const seasonOf = (date) => seasonFor(date).name;
+
+/** Midnight on the first day of the season `date` falls in, so last year's Fall is not this year's. */
+export const seasonStart = (date) => new Date(date.getFullYear(), seasonFor(date).months[0], 1);
 
 /**
  * The next week's title: one past the latest recap of the same season, or
@@ -293,22 +298,29 @@ export async function recapAudience() {
 // ---------------------------------------------------------------------------
 
 /**
- * A new draft from the template. The logo and photo carry over from the latest
- * recap, so they are uploaded once and not every week.
+ * A new draft from the template. The logo and photo are the latest recap's, so
+ * they are uploaded once and not every week, and an image removed from it stays
+ * removed. The theme's logo is used only for the very first recap. The week
+ * counts this season's recaps only.
  */
 export async function createRecap({ userId, now = new Date() }) {
-  const previous = await prisma.gmRecap.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 30,
-    select: { title: true, headerImageUrl: true, photoUrl: true },
-  });
-  const theme = await resolveEmailTheme().catch(() => ({}));
-  const template = templateFor(nextRecapWeek(previous.map((r) => r.title), now));
+  const [latest, thisSeason, theme] = await Promise.all([
+    prisma.gmRecap.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { headerImageUrl: true, photoUrl: true },
+    }),
+    prisma.gmRecap.findMany({
+      where: { createdAt: { gte: seasonStart(now) } },
+      select: { title: true },
+    }),
+    resolveEmailTheme().catch(() => ({})),
+  ]);
+  const template = templateFor(nextRecapWeek(thisSeason.map((r) => r.title), now));
   const recap = await prisma.gmRecap.create({
     data: {
       ...template,
-      headerImageUrl: previous.find((r) => r.headerImageUrl)?.headerImageUrl ?? theme.logoUrl ?? null,
-      photoUrl: previous.find((r) => r.photoUrl)?.photoUrl ?? null,
+      headerImageUrl: latest ? latest.headerImageUrl : theme.logoUrl ?? null,
+      photoUrl: latest?.photoUrl ?? null,
       status: RECAP_STATUS.DRAFT,
       createdById: userId,
       updatedById: userId,
@@ -319,15 +331,32 @@ export async function createRecap({ userId, now = new Date() }) {
 
 const EDITABLE = [RECAP_STATUS.DRAFT, RECAP_STATUS.SCHEDULED];
 
+/**
+ * Edit a draft or a scheduled recap. A scheduled one must stay sendable: it
+ * can go out at any minute, so blanking its subject, title or body is refused
+ * rather than saved (cancel the schedule to rewrite it from scratch). The write
+ * is conditional on the status that check saw, so a recap scheduled or claimed
+ * in between is never edited under the wrong rule.
+ */
 export async function updateRecap({ id, userId, input }) {
   const fields = recapFields(input);
+  const current = await getRecap(id);
+  if (!EDITABLE.includes(current.status)) {
+    throw fail(409, 'This recap has already been sent and can no longer be edited.', 'NOT_EDITABLE');
+  }
+  if (current.status === RECAP_STATUS.SCHEDULED) {
+    try {
+      assertSendable({ ...current, ...fields });
+    } catch {
+      throw fail(400, 'A scheduled recap needs a subject, banner title and message. Cancel the schedule to start over.', 'INCOMPLETE');
+    }
+  }
   const { count } = await prisma.gmRecap.updateMany({
-    where: { id, status: { in: EDITABLE } },
+    where: { id, status: current.status },
     data: { ...fields, updatedById: userId },
   });
   if (count === 0) {
-    await getRecap(id); // 404 if it is gone
-    throw fail(409, 'This recap has already been sent and can no longer be edited.', 'NOT_EDITABLE');
+    throw fail(409, 'This recap was scheduled or sent while you were editing. Reload to see it.', 'CHANGED');
   }
   return getRecap(id);
 }
@@ -503,8 +532,19 @@ export function processDueRecaps({ now = () => new Date() } = {}) {
           data: { status: RECAP_STATUS.SENDING },
         });
         if (count === 0) continue; // another server, a cancel, or a reschedule got there first
-        // Read after the claim, so the last edit before it is what goes out.
+        // Read after the claim, so the last edit before it is what goes out,
+        // and checked again: nothing should leave as an empty banner.
         const recap = await prisma.gmRecap.findUnique({ where: { id } });
+        try {
+          assertSendable(recap);
+        } catch {
+          console.error(`[gmRecaps] ${id} was due but is missing content; returned to draft, nothing sent`);
+          await prisma.gmRecap.updateMany({
+            where: { id, status: RECAP_STATUS.SENDING },
+            data: { status: RECAP_STATUS.DRAFT, scheduledAt: null, scheduledById: null },
+          });
+          continue;
+        }
         processed += 1;
         await sendClaimed(recap);
       }

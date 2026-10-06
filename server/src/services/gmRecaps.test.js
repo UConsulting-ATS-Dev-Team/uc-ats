@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import prisma from '../prismaClient.js';
 import { sendMasterCommunication } from './masterCommunications.js';
 import { sendEmail } from './emailNotifications.js';
+import { resolveEmailTheme } from './emailTheme.js';
 import {
   RECAP_SENDER,
   RECAP_STATUS,
   STUCK_SENDING_MS,
+  createRecap,
   markRecapFailed,
   nextRecapWeek,
   processDueRecaps,
@@ -20,6 +22,7 @@ vi.mock('../prismaClient.js', () => ({
   default: {
     gmRecap: {
       findMany: vi.fn(),
+      findFirst: vi.fn(),
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -126,13 +129,70 @@ describe('recapFields', () => {
 
 describe('updateRecap', () => {
   it('refuses once the recap has been sent', async () => {
-    prisma.gmRecap.updateMany.mockResolvedValue({ count: 0 });
     prisma.gmRecap.findUnique.mockResolvedValue(recapRow({ status: RECAP_STATUS.SENT }));
     await expect(updateRecap({ id: 'recap-1', userId: 'exec-1', input: { subject: 'x' } }))
-      .rejects.toMatchObject({ status: 409 });
-    expect(prisma.gmRecap.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'recap-1', status: { in: [RECAP_STATUS.DRAFT, RECAP_STATUS.SCHEDULED] } },
-    }));
+      .rejects.toMatchObject({ status: 409, code: 'NOT_EDITABLE' });
+    expect(prisma.gmRecap.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lets a draft be emptied while it is rewritten', async () => {
+    prisma.gmRecap.findUnique.mockResolvedValue(recapRow());
+    prisma.gmRecap.updateMany.mockResolvedValue({ count: 1 });
+    await updateRecap({ id: 'recap-1', userId: 'exec-1', input: { body: '' } });
+    expect(prisma.gmRecap.updateMany).toHaveBeenCalledWith({
+      where: { id: 'recap-1', status: RECAP_STATUS.DRAFT },
+      data: { body: '', updatedById: 'exec-1' },
+    });
+  });
+
+  it('refuses to empty a scheduled recap, which could go out at any minute', async () => {
+    prisma.gmRecap.findUnique.mockResolvedValue(recapRow({ status: RECAP_STATUS.SCHEDULED }));
+    await expect(updateRecap({ id: 'recap-1', userId: 'exec-1', input: { body: '  ' } }))
+      .rejects.toMatchObject({ status: 400, code: 'INCOMPLETE' });
+    expect(prisma.gmRecap.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the recap was scheduled or claimed since it was read', async () => {
+    prisma.gmRecap.findUnique.mockResolvedValue(recapRow());
+    prisma.gmRecap.updateMany.mockResolvedValue({ count: 0 });
+    await expect(updateRecap({ id: 'recap-1', userId: 'exec-1', input: { body: '' } }))
+      .rejects.toMatchObject({ status: 409, code: 'CHANGED' });
+  });
+});
+
+describe('createRecap', () => {
+  beforeEach(() => {
+    prisma.gmRecap.create.mockImplementation(async ({ data }) => ({ id: 'new', ...data }));
+    prisma.gmRecap.findUnique.mockImplementation(async () => prisma.gmRecap.create.mock.calls.at(-1)[0].data);
+  });
+
+  it('numbers the week from this season only and keeps the latest recap\'s images, removals included', async () => {
+    prisma.gmRecap.findFirst.mockResolvedValue({ headerImageUrl: 'https://cdn.example.com/logo.png', photoUrl: null });
+    prisma.gmRecap.findMany.mockResolvedValue([{ title: 'RECAP: FALL WEEK 3' }]);
+
+    await createRecap({ userId: 'exec-1', now: NOW });
+
+    expect(prisma.gmRecap.findMany).toHaveBeenCalledWith({
+      where: { createdAt: { gte: new Date(2026, 8, 1) } },
+      select: { title: true },
+    });
+    expect(prisma.gmRecap.create.mock.calls[0][0].data).toMatchObject({
+      title: 'RECAP: FALL WEEK 4',
+      subject: 'GM Recap: Fall Week 4',
+      headerImageUrl: 'https://cdn.example.com/logo.png',
+      photoUrl: null,
+    });
+  });
+
+  it('uses the theme logo for the very first recap', async () => {
+    resolveEmailTheme.mockResolvedValueOnce({ logoUrl: 'https://cdn.example.com/theme.png' });
+    prisma.gmRecap.findFirst.mockResolvedValue(null);
+    prisma.gmRecap.findMany.mockResolvedValue([]);
+    await createRecap({ userId: 'exec-1', now: NOW });
+    expect(prisma.gmRecap.create.mock.calls[0][0].data).toMatchObject({
+      title: 'RECAP: FALL WEEK 1',
+      headerImageUrl: 'https://cdn.example.com/theme.png',
+    });
   });
 });
 
@@ -221,6 +281,18 @@ describe('processDueRecaps', () => {
     finish({ sent: 1, failed: 0, total: 1, logId: 'log-1' });
     await first;
     expect(sendMasterCommunication).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing and returns it to draft if it was emptied before its time', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    prisma.gmRecap.findUnique.mockResolvedValue({ ...due, body: '' });
+    prisma.gmRecap.updateMany.mockResolvedValue({ count: 1 });
+    expect(await processDueRecaps()).toBe(0);
+    expect(sendMasterCommunication).not.toHaveBeenCalled();
+    expect(prisma.gmRecap.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'recap-1', status: RECAP_STATUS.SENDING },
+      data: { status: RECAP_STATUS.DRAFT, scheduledAt: null, scheduledById: null },
+    });
   });
 
   it('marks it failed when nobody got it', async () => {

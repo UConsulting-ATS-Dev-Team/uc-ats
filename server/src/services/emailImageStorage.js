@@ -63,7 +63,7 @@ export const normalizeEmailImage = async (buffer) => {
 export const storeEmailImage = async (buffer) => {
   if (!isSupabaseAvailable()) {
     throw tagged(
-      'Image storage is not configured, so images cannot be uploaded. Paste an image link instead.',
+      'Image storage is not configured, so images cannot be uploaded.',
       'STORAGE_NOT_CONFIGURED',
       503
     );

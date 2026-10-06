@@ -30,6 +30,9 @@ export const GUARD_TABLE = Object.freeze([
   { prefix: '/api/candidate/onboarding', allowed: ['CANDIDATE'], severity: 'CRITICAL' },
   // routes/candidateInterviewSignups.js L41 router.use(requireAuth, requireCandidate)
   { prefix: '/api/my-interview-signups', allowed: ['CANDIDATE'], severity: 'CRITICAL' },
+  // routes/gmRecaps.js router.use(requireAuth, requireAdmin, exec unlock).
+  // Above /api/exec-access, which also lets members in.
+  { prefix: '/api/exec-access/gm-recaps', allowed: ['ADMIN'], severity: 'CRITICAL' },
   // routes/execAccess.js L25 router.use(requireAuth, requireAdminOrMember)
   { prefix: '/api/exec-access', allowed: STAFF, severity: 'CRITICAL' },
   // routes/liveVotes.js L27 router.use(requireAuth, requireAdminOrMember)

@@ -223,6 +223,16 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
     return () => clearTimeout(timer);
   }, [form, saveState, unlocked, save]);
 
+  // Opening another recap unmounts this editor, which would cancel the pending
+  // autosave and drop the form. Send what is unsaved on the way out instead.
+  const pendingRef = useRef(false);
+  pendingRef.current = editable && unlocked && (saveState === 'dirty' || saveState === 'error');
+  useEffect(() => () => {
+    if (!pendingRef.current) return;
+    const send = () => apiClient.patch(`${API}/${recap.id}`, formRef.current).then(onChanged);
+    (savingRef.current ? savingRef.current.then(send) : send()).catch(() => {});
+  }, [recap.id, onChanged]);
+
   // Live preview, rendered by the server from the unsaved fields.
   useEffect(() => {
     if (!unlocked) return undefined;
