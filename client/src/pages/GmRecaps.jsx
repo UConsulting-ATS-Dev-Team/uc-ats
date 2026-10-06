@@ -169,7 +169,7 @@ function ImageField({ label, help, value, onChange, disabled }) {
 function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
   const editable = recap.status === 'DRAFT' || recap.status === 'SCHEDULED';
   const [form, setForm] = useState(() => pickFields(recap));
-  const [saveState, setSaveState] = useState('saved'); // saved | dirty | saving | error
+  const [saveState, setSaveStateValue] = useState('saved'); // saved | dirty | saving | error
   const [saveError, setSaveError] = useState('');
   const [preview, setPreview] = useState({ subject: '', html: '' });
   const [busy, setBusy] = useState('');
@@ -180,6 +180,13 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
   const [scheduleAt, setScheduleAt] = useState(() => toLocalInput(nextHour()));
   const formRef = useRef(form);
   formRef.current = form;
+  // Kept in step with every change, not just each render, so code awaiting a
+  // save reads its outcome straight away.
+  const saveStateRef = useRef(saveState);
+  const setSaveState = useCallback((state) => {
+    saveStateRef.current = state;
+    setSaveStateValue(state);
+  }, []);
   const savingRef = useRef(null);
 
   const setField = (field) => (value) => {
@@ -213,7 +220,7 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
       });
     savingRef.current = run;
     return run;
-  }, [editable, recap.id, onChanged]);
+  }, [editable, recap.id, onChanged, setSaveState]);
 
   // Autosave. Paused while executive access is closed, so the edits stay on
   // the page and are saved once the password is entered again.
@@ -291,12 +298,15 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
 
   const unschedule = () =>
     act('unschedule', async () => {
+      // Read before the cancel: was anything of ours unsaved or on its way?
+      const inFlight = savingRef.current;
       onChanged(await apiClient.post(`${API}/${recap.id}/unschedule`, {}));
       setNotice({ severity: 'info', text: 'Schedule cancelled. It is a draft again.' });
       // Whatever the schedule refused, or a save racing the cancel lost, is
-      // allowed on a draft. save() waits for any save in flight, then sends
-      // the form as it stands, so autosave is never left on a stale error.
-      await save();
+      // allowed on a draft, so send it again. Only then: with nothing of ours
+      // pending, a save would put this tab's copy over newer edits made elsewhere.
+      if (inFlight) await inFlight;
+      if (saveStateRef.current !== 'saved') await save();
     }, { saveFirst: false });
 
   const markFailed = () =>
