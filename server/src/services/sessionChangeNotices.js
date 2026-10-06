@@ -146,20 +146,23 @@ export class SessionUpdateRefused extends Error {
 export async function sendSessionUpdate(slotId) {
   const row = await prisma.interviewSlot.findUnique({
     where: { id: slotId },
-    select: { updatePendingSince: true },
+    select: { updatePendingSince: true, updateSendingSince: true },
   });
   if (!row) throw new SessionUpdateRefused(404, 'NOT_FOUND', 'That session no longer exists');
   if (!row.updatePendingSince) {
     throw new SessionUpdateRefused(409, 'NO_PENDING_UPDATE', 'This update has already been sent');
   }
 
+  // A claim blocks only the details it is sending. It yields once stale, and
+  // at once to a stamp newer than itself: those are details no send has read.
   const claimedAt = new Date();
+  const held = row.updateSendingSince;
+  if (held && held > new Date(claimedAt - SEND_CLAIM_TTL_MS) && row.updatePendingSince <= held) {
+    throw new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending this update right now');
+  }
+  // Compare-and-swap on what was read, so two presses racing claim once.
   const { count } = await prisma.interviewSlot.updateMany({
-    where: {
-      id: slotId,
-      updatePendingSince: { not: null },
-      OR: [{ updateSendingSince: null }, { updateSendingSince: { lt: new Date(claimedAt - SEND_CLAIM_TTL_MS) } }],
-    },
+    where: { id: slotId, updatePendingSince: row.updatePendingSince, updateSendingSince: held },
     data: { updateSendingSince: claimedAt },
   });
   if (count === 0) {
@@ -186,8 +189,8 @@ export async function sendSessionUpdate(slotId) {
       });
     } catch (error) {
       // The mark could not be cleared, though this send did go out. The claim
-      // is kept, so the button refuses another press until it goes stale
-      // rather than inviting the same emails again at once.
+      // is kept, so sending these same details again is refused until it goes
+      // stale; a newer save stamps past the claim and can be sent at once.
       console.error('[sessionChangeNotices] could not clear the pending update', error);
       return { ...result, pending: false };
     }

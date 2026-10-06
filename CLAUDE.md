@@ -386,8 +386,9 @@ The system follows a **recruiting cycle-based workflow**:
   It is disabled while that row has unsaved edits.
 - `POST /api/admin/interviews/slots/:slotId/send-update` runs `sendSessionUpdate`. It
   refuses an unstamped session (`409 NO_PENDING_UPDATE`), claims the send with a
-  conditional write to `updateSendingSince` (`409 SEND_IN_PROGRESS` while another send
-  holds it), queues the notices, and only then clears the stamp, and only if it is still
+  compare-and-swap on `updateSendingSince` (`409 SEND_IN_PROGRESS` while another send
+  holds it for the same stamp; a stamp newer than the claim is never held back), queues
+  the notices, and only then clears the stamp, and only if it is still
   the one it read: a save landing mid-send restamps it, so its details get a button of
   their own. No transaction is held around the queueing (`interviewSlotComms.js` forbids
   it). A server dying mid-send leaves the stamp and a claim that stops blocking after 10

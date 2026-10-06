@@ -124,7 +124,7 @@ describe('sendSessionUpdate', () => {
   const PENDING = new Date('2026-10-01T00:00:00Z');
 
   beforeEach(() => {
-    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING });
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING, updateSendingSince: null });
     prisma.interviewSlot.updateMany.mockResolvedValue({ count: 1 });
     prisma.interviewSlotSignup.findMany.mockResolvedValue([signup('s1', 'a@ucla.edu')]);
     prisma.interviewSlotAssignment.findMany.mockResolvedValue([{ userId: 'u1' }]);
@@ -137,7 +137,8 @@ describe('sendSessionUpdate', () => {
 
     expect(result).toMatchObject({ candidates: 1, interviewers: 1, pending: false });
     const [claim, clear, release] = writes();
-    expect(claim.where).toMatchObject({ id: 'slot-1', updatePendingSince: { not: null } });
+    // Compare-and-swap on exactly what was read.
+    expect(claim.where).toEqual({ id: 'slot-1', updatePendingSince: PENDING, updateSendingSince: null });
     expect(claim.data.updateSendingSince).toBeInstanceOf(Date);
     // The claim lands before anything is queued.
     expect(prisma.interviewSlot.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
@@ -151,15 +152,32 @@ describe('sendSessionUpdate', () => {
   });
 
   it('lets a stale claim from a dead server be taken over', async () => {
-    await sendSessionUpdate('slot-1');
+    const stale = new Date(Date.now() - SEND_CLAIM_TTL_MS - 1000);
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING, updateSendingSince: stale });
 
-    const { OR } = writes()[0].where;
-    expect(OR[0]).toEqual({ updateSendingSince: null });
-    const cutoff = OR[1].updateSendingSince.lt.getTime();
-    expect(Date.now() - cutoff).toBeGreaterThanOrEqual(SEND_CLAIM_TTL_MS - 1000);
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ pending: false });
+    expect(writes()[0].where.updateSendingSince).toBe(stale);
   });
 
-  it('refuses while another send holds the claim, and sends nothing', async () => {
+  it('refuses while a live claim is sending these same details', async () => {
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING, updateSendingSince: new Date() });
+
+    await expect(sendSessionUpdate('slot-1')).rejects.toMatchObject({ status: 409, code: 'SEND_IN_PROGRESS' });
+    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
+    expect(queueNotificationsBulk).not.toHaveBeenCalled();
+  });
+
+  it('lets newer details through a live claim at once', async () => {
+    // Saved after the claim was taken: no send has read these details yet.
+    const claim = new Date(Date.now() - 60 * 1000);
+    const newer = new Date(Date.now() - 1000);
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: newer, updateSendingSince: claim });
+
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1 });
+    expect(writes()[0].where).toEqual({ id: 'slot-1', updatePendingSince: newer, updateSendingSince: claim });
+  });
+
+  it('refuses when another press claims it first, and sends nothing', async () => {
     prisma.interviewSlot.updateMany.mockResolvedValueOnce({ count: 0 });
 
     await expect(sendSessionUpdate('slot-1')).rejects.toMatchObject({ status: 409, code: 'SEND_IN_PROGRESS' });
