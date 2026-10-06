@@ -210,8 +210,10 @@ describe('sendSessionUpdate', () => {
       .mockRejectedValueOnce(new Error('connection reset'));
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    // The mark is still there, so the button honestly stays.
-    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, pending: true });
+    // This send went out, so it does not invite another press, and the claim
+    // is kept so one is refused until it goes stale.
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, pending: false });
+    expect(prisma.interviewSlot.updateMany).toHaveBeenCalledTimes(2);
     quiet.mockRestore();
   });
 

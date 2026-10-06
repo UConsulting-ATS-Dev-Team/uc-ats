@@ -39,7 +39,12 @@ import {
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
-import { SessionUpdateRefused, sendSessionUpdate, sessionChanged } from '../services/sessionChangeNotices.js';
+import {
+  SessionUpdateRefused,
+  pendingUpdateStamp,
+  sendSessionUpdate,
+  updateInterviewMarkingSessions,
+} from '../services/sessionChangeNotices.js';
 import config from '../config.js';
 import { formatEmailDateTime, formatEmailTime, utcToLocalInput } from '../utils/timezoneUtils.js';
 import { mergeFieldsUsed } from '../services/emailCopyRender.js';
@@ -914,26 +919,8 @@ router.patch('/interviews/:id', async (req, res) => {
       return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     }
 
-    // A session with no room of its own told its people the interview's, so a
-    // new interview location is their news too. Marked, not emailed, and in
-    // the same transaction, so the location never changes without the mark.
-    const interview =
-      data.location === undefined
-        ? await prisma.interview.update({ where: { id: req.params.id }, data })
-        : await prisma.$transaction(async (tx) => {
-            const before = await tx.interview.findUnique({
-              where: { id: req.params.id },
-              select: { location: true },
-            });
-            const saved = await tx.interview.update({ where: { id: req.params.id }, data });
-            if (before && (before.location || null) !== (saved.location || null)) {
-              await tx.interviewSlot.updateMany({
-                where: { interviewId: saved.id, OR: [{ location: null }, { location: '' }] },
-                data: { updatePendingSince: new Date() },
-              });
-            }
-            return saved;
-          });
+    // Sessions that inherit a changed location are marked for Send update.
+    const interview = await updateInterviewMarkingSessions(req.params.id, data);
 
     // Moving the interview does not move its sessions: those carry their own
     // times and are what candidates actually booked. Say so rather than
@@ -972,12 +959,11 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
       const startTime = shift(slot.startTime);
       const endTime = shift(slot.endTime);
       if (!startTime || !endTime) return res.status(400).json({ error: 'That day is not valid' });
-      const moves = startTime.getTime() !== slot.startTime.getTime() || endTime.getTime() !== slot.endTime.getTime();
       updates.push(
         prisma.interviewSlot.update({
           where: { id: slot.id },
           // Nobody is emailed here either; each moved session gets Send update.
-          data: { startTime, endTime, ...(moves ? { updatePendingSince: new Date() } : {}) },
+          data: { startTime, endTime, ...pendingUpdateStamp(slot, { ...slot, startTime, endTime }) },
         })
       );
     }
@@ -1522,11 +1508,8 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
         return res.status(400).json({ error: 'The end time must be after the start time' });
       }
     }
-    // Stamped fresh on every such save, never kept from an earlier one. A send
-    // in progress clears the mark only if it is still the one it read, so an
-    // edit landing mid-send leaves the button for the details it missed.
-    if (movesWhenOrWhere && sessionChanged(current, { ...current, ...data, interview: current.interview })) {
-      data.updatePendingSince = new Date();
+    if (movesWhenOrWhere) {
+      Object.assign(data, pendingUpdateStamp(current, { ...current, ...data, interview: current.interview }));
     }
 
     const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });

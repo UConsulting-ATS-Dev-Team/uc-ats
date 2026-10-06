@@ -83,6 +83,38 @@ export async function notifySessionChanged(slotId) {
   return result;
 }
 
+/**
+ * The write that marks a session as having an update to send, or nothing when
+ * the edit leaves its time and place as its people were told.
+ *
+ * Stamped fresh on every such edit, never kept from an earlier one: a send in
+ * progress clears the mark only if it is still the one it read, so an edit
+ * landing mid-send keeps a button for the details that send missed.
+ */
+export function pendingUpdateStamp(before, after) {
+  return sessionChanged(before, after) ? { updatePendingSince: new Date() } : {};
+}
+
+/**
+ * Save an interview, marking the sessions that inherit its location when that
+ * changes: they told their people the interview's room, so it is their news
+ * too. One transaction, so the location never changes without the marks.
+ */
+export async function updateInterviewMarkingSessions(interviewId, data) {
+  if (data.location === undefined) return prisma.interview.update({ where: { id: interviewId }, data });
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.interview.findUnique({ where: { id: interviewId }, select: { location: true } });
+    const saved = await tx.interview.update({ where: { id: interviewId }, data });
+    if (before && (before.location || null) !== (saved.location || null)) {
+      await tx.interviewSlot.updateMany({
+        where: { interviewId, OR: [{ location: null }, { location: '' }] },
+        data: { updatePendingSince: new Date() },
+      });
+    }
+    return saved;
+  });
+}
+
 /** A claim older than this is a send whose server died; it no longer blocks. */
 export const SEND_CLAIM_TTL_MS = 10 * 60 * 1000;
 
@@ -144,18 +176,21 @@ export async function sendSessionUpdate(slotId) {
   let pending = Boolean(result.failed?.length) && result.candidates + result.interviewers === 0;
 
   // The emails are queued by now, so neither write may fail the request: an
-  // answer of "failed" would get them sent again. A mark left behind only
-  // means the button stays up, and the answer says so.
+  // answer of "failed" would get them sent again.
   if (!pending) {
-    const cleared = await prisma.interviewSlot
-      .updateMany({
+    let cleared;
+    try {
+      cleared = await prisma.interviewSlot.updateMany({
         where: { id: slotId, updatePendingSince: row.updatePendingSince },
         data: { updatePendingSince: null },
-      })
-      .catch((error) => {
-        console.error('[sessionChangeNotices] could not clear the pending update', error);
-        return { count: 0 };
       });
+    } catch (error) {
+      // The mark could not be cleared, though this send did go out. The claim
+      // is kept, so the button refuses another press until it goes stale
+      // rather than inviting the same emails again at once.
+      console.error('[sessionChangeNotices] could not clear the pending update', error);
+      return { ...result, pending: false };
+    }
     // Nothing cleared: a save restamped it mid-send, and those newer details
     // still need sending.
     pending = cleared.count === 0;
