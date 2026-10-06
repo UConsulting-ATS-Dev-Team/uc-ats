@@ -87,6 +87,13 @@ const addressesOf = (to) => {
   return raw.map((a) => a.trim()).filter(Boolean);
 };
 
+export const DEFAULT_FROM_NAME = 'UConsulting ATS';
+
+const displayName = (name) => {
+  const cleaned = String(name ?? '').replace(/["\\\r\n]/g, '').trim();
+  return cleaned || DEFAULT_FROM_NAME;
+};
+
 /**
  * The one place mail leaves this server, and therefore the one place it is
  * recorded. Every send - the automated ones and the ones an admin typed - lands
@@ -98,10 +105,13 @@ const addressesOf = (to) => {
  * button and to the campaign it belonged to. Leaving `meta` off still logs the
  * send, just as an automated OTHER - no caller has to be updated for the log to
  * be complete.
+ *
+ * `fromName` and `replyTo` change who the mail appears to be from and where a
+ * reply goes; the From address itself is always EMAIL_FROM.
  */
 const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
   const hasAttachments = Boolean(attachments && attachments.length > 0);
-  const { recipientName = null, attemptKey = null, listUnsubscribeUrl = null, replyTo = null, ...context } = meta || {};
+  const { recipientName = null, attemptKey = null, listUnsubscribeUrl = null, replyTo = null, fromName = null, ...context } = meta || {};
 
   // Never rejects. recordCommunication already swallows its own write failures,
   // but the mail is gone by the time this runs: if logging could throw here, a
@@ -133,7 +143,9 @@ const sendEmail = async (to, subject, html, attachments = [], meta = {}) => {
     const transporter = createTransporter();
 
     const mailOptions = {
-      from: `"UConsulting ATS" <${process.env.EMAIL_FROM}>`,
+      // Only the display name changes; the address is always EMAIL_FROM, the
+      // one SES has verified. Quotes and line breaks would break the header.
+      from: `"${displayName(fromName)}" <${process.env.EMAIL_FROM}>`,
       replyTo: replyTo || process.env.EMAIL_REPLY_TO,
       to: to,
       subject: subject,

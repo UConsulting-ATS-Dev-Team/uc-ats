@@ -29,6 +29,7 @@ import {
   QuestionMarkCircleIcon,
   ClockIcon,
   ShieldCheckIcon,
+  MegaphoneIcon,
 } from '@heroicons/react/24/outline';
 import UConsultingLogo from './UConsultingLogo';
 import MessageAdminModal from './MessageAdminModal';
@@ -89,6 +90,7 @@ const ADMIN_NAV_SECTIONS = [
       { name: 'Cycle Management', href: '/cycles', icon: ClipboardDocumentListIcon },
       { name: 'User Management', href: '/user-management', icon: UserIcon },
       { name: 'Master Communications', href: '/master-communications', icon: EnvelopeIcon },
+      { name: 'GM Recaps', href: '/admin/gm-recaps', icon: MegaphoneIcon },
       { name: 'Automatic Emails', href: '/admin/email-templates', icon: EnvelopeOpenIcon },
       { name: 'Email Deliverability', href: '/admin/email-health', icon: ShieldCheckIcon },
       { name: 'Site Analytics', href: '/admin/analytics', icon: ChartBarIcon },

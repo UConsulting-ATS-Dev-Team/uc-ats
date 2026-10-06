@@ -69,6 +69,7 @@ import AdminQuestionBank from './pages/AdminQuestionBank';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import MasterCommunications from './pages/MasterCommunications';
+import GmRecaps from './pages/GmRecaps';
 import AdminAnalytics from './pages/AdminAnalytics';
 import { trackRouteChange } from './analytics';
 import Profile from './pages/Profile';
@@ -732,6 +733,16 @@ export const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MasterCommunications />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* GM Recaps (admin + executive access; the page gates itself) */}
+      <Route
+        path="/admin/gm-recaps"
+        element={
+          <ProtectedRoute>
+            <GmRecaps />
           </ProtectedRoute>
         }
       />

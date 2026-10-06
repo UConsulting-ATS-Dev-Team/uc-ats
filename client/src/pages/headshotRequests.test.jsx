@@ -93,6 +93,7 @@ const REVIEWED_BARE_IMAGES = {
   'components/UConsultingLogo.jsx': ['logoSrc'], // a bundled asset
   'components/case/CasePageImage.jsx': ['imageUrl'], // a blob: URL it fetched with the session
   'pages/ReviewTeams.jsx': ['application.avatar'], // a member's public profile image, or null
+  'pages/GmRecaps.jsx': ['value'], // a public email image (https), which every inbox loads without a session
 };
 
 const sourceFiles = () => {

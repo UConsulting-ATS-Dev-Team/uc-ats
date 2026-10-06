@@ -25,6 +25,7 @@ import applicationDocumentsRoutes from './routes/applicationDocuments.js';
 import applicantInfoRoutes from './routes/applicantInfo.js';
 import conversationsRoutes from './routes/conversations.js';
 import execAccessRoutes from './routes/execAccess.js';
+import gmRecapRoutes from './routes/gmRecaps.js';
 import liveVoteRoutes from './routes/liveVotes.js';
 import reviewDelibRoutes from './routes/reviewDelibs.js';
 import decisionGuideRoutes from './routes/decisionGuides.js';
@@ -32,6 +33,7 @@ import documentRubricRoutes from './routes/documentRubrics.js';
 import masterCommunicationsRoutes from './routes/masterCommunications.js';
 import { processScheduledMessages } from './services/masterCommunications.js';
 import { drainDecisionQueue } from './services/decisionSendQueue.js';
+import { processDueRecaps } from './services/gmRecaps.js';
 import { sendDueHostReminders } from './services/meetingHostReminders.js';
 import { sendDueAttendanceReminders } from './services/meetingAttendanceReminders.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
@@ -145,6 +147,7 @@ app.use('/api/talent', talentRoutes);
 app.use('/api/candidate/onboarding', candidateOnboardingRoutes);
 app.use('/api/my-interview-signups', candidateInterviewSignupRoutes);
 app.use('/api/conversations', conversationsRoutes);
+app.use('/api/exec-access/gm-recaps', gmRecapRoutes);
 app.use('/api/exec-access', execAccessRoutes);
 app.use('/api/live-votes', liveVoteRoutes);
 app.use('/api/review-delibs', reviewDelibRoutes);
@@ -242,6 +245,12 @@ if (config.runCrons) {
   // still going from the last tick (or from an approval) is not doubled.
   cron.schedule('* * * * *', () => {
     drainDecisionQueue();
+  });
+
+  // Send GM recaps whose scheduled time has come (and "Send now" ones whose
+  // immediate start was lost to a restart).
+  cron.schedule('* * * * *', () => {
+    processDueRecaps();
   });
 
   // Remind Get to Know UC hosts of a slot about 24 hours ahead. A slow run is

@@ -182,6 +182,36 @@ model ExecAccessLog {
   @@map("exec_access_logs")
 }
 
+/// A weekly general meeting recap, written by the executive committee and sent
+/// to every active member and admin as "UConsulting Executive Team". status is
+/// one of RECAP_STATUS in server/src/services/gmRecaps.js. "Send now" is a
+/// schedule for now: the cron claims SCHEDULED -> SENDING, so a send outlives
+/// the request and no server mails the list twice.
+model GmRecap {
+  id             String    @id @default(uuid())
+  subject        String
+  title          String
+  body           String
+  headerImageUrl String?
+  photoUrl       String?
+  status         String    @default("DRAFT")
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  messageLogId   String?
+  recipientCount Int?
+  sentCount      Int?
+  failedCount    Int?
+  createdById    String
+  updatedById    String?
+  scheduledById  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([createdAt])
+  @@map("gm_recaps")
+}
+
 /// What decision processing did to one application, and so which email it gets.
 enum DecisionOutcome {
   ADVANCED

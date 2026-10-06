@@ -82,7 +82,7 @@ const MERGE_FIELDS = {
   },
 };
 
-function renderMessage(text, recipient) {
+export function renderMessage(text, recipient) {
   if (!text) return text;
   const fields = MERGE_FIELDS[recipient.audience] || MERGE_FIELDS.user;
   return text.replace(/\{\{(\w+)\}\}/g, (match, key) => {
@@ -91,12 +91,12 @@ function renderMessage(text, recipient) {
   });
 }
 
-function markdownToHtml(text) {
+export function markdownToHtml(text) {
   if (!text) return text;
   return marked.parse(text, { breaks: true });
 }
 
-async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2, meta = {}, onProgress = null }) {
+async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency = 5, retries = 2, meta = {}, onProgress = null, wrapHtml = null }) {
   const sendTo = async (r) => {
     const subject = renderMessage(baseSubject, r);
     const body = renderMessage(baseBody, r);
@@ -104,7 +104,8 @@ async function sendBulkEmails({ recipients, baseSubject, baseBody, concurrency =
     // an unsubscribe link in the footer and in the headers. applySuppressions
     // has already held back whoever used one.
     const unsubscribe = r.marketing ? unsubscribeUrls(r.email) : null;
-    const htmlBody = markdownToHtml(body) + (unsubscribe ? unsubscribeFooterHtml(unsubscribe.page) : '');
+    const content = wrapHtml ? wrapHtml(markdownToHtml(body)) : markdownToHtml(body);
+    const htmlBody = content + (unsubscribe ? unsubscribeFooterHtml(unsubscribe.page) : '');
     let lastError = 'Unknown error';
 
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -463,6 +464,10 @@ export async function sendMasterCommunication({
   savedAudienceId,
   onCampaignLogged = null,
   onProgress = null,
+  // { fromName, replyTo } for mail that should not come from "UConsulting ATS".
+  sender = null,
+  // Wraps each recipient's rendered Markdown in a layout (GM recaps).
+  wrapHtml = null,
 }) {
   assertServerSentChannel(channel);
 
@@ -523,12 +528,15 @@ export async function sendMasterCommunication({
     concurrency: 5,
     retries: 2,
     onProgress,
+    wrapHtml,
     meta: {
       category: 'MASTER_COMMUNICATION',
       trigger: 'MANUAL',
       triggeredById: sentBy,
       cycleId: cycleId || null,
       messageLogId: logId,
+      ...(sender?.fromName ? { fromName: sender.fromName } : {}),
+      ...(sender?.replyTo ? { replyTo: sender.replyTo } : {}),
     },
   });
 

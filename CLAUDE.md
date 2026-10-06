@@ -241,6 +241,8 @@ The system follows a **recruiting cycle-based workflow**:
 - `/api/interview-resources` - Interview prep materials
 - `/api/exec-access` - Executive-committee unlock for sealed records, manual seal/unseal,
   password rotation and the access log
+- `/api/exec-access/gm-recaps` - Weekly general meeting recap emails (admin + live
+  executive unlock)
 - `/api/master-communications/decision-batches` - Decision emails queued by Staging's
   Process All Decisions, reviewed and sent by an admin
 - `/api/master-communications/mailing-list/dedupe` - One-time import of the retiring
@@ -339,6 +341,27 @@ The system follows a **recruiting cycle-based workflow**:
   from `POST /api/exec-access/unlock`) sees everything. Any new route that returns scores,
   evaluations, comments or application content must go through these helpers.
 - The first executive password is set with `node scripts/set-exec-password.js`.
+
+**GM recaps:**
+- Administration → GM Recaps (`/admin/gm-recaps`). The executive team's weekly general
+  meeting recap: started from a template, edited, then sent now or scheduled to every
+  active `MEMBER` and `ADMIN`, from "UConsulting Executive Team" <`EMAIL_FROM`> with
+  replies to uconsultingla@gmail.com. Every route needs the admin role **and** a live
+  executive unlock.
+- Rules live in [server/src/services/gmRecaps.js](server/src/services/gmRecaps.js): the
+  template, the email's look (logo, coloured banner with the title, Markdown body, photo,
+  address), and the lifecycle `DRAFT → SCHEDULED → SENDING → SENT | FAILED`. A new recap
+  numbers its week one past the latest of the season and carries the logo and photo over.
+- The send is Master Communications' bulk email (`sendMasterCommunication` with `sender`
+  and `wrapHtml`), so it has a campaign row in Logs → Bulk sends and a log row per person.
+  `sendEmail` takes `fromName` in `meta`; the address never changes.
+- "Send now" is a schedule for now. The request only queues it; the cron every minute
+  (and a kick straight after the request) claims `SCHEDULED → SENDING`, so one server
+  sends it and it outlives the proxy. An interrupted send is never resent: after 15 minutes
+  without a heartbeat it shows as Interrupted and an exec marks it failed.
+- Images are uploaded to the public Supabase bucket `email-images`
+  ([emailImageStorage.js](server/src/services/emailImageStorage.js)); without Supabase the
+  upload answers 503, since a local URL in a sent email is broken for everyone.
 
 **Virtual coffee chats:**
 - Interviews → Coffee Chats → Virtual coffee chats. An admin creates a call (day, Pacific
