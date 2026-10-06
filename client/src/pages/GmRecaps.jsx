@@ -293,8 +293,10 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
     act('unschedule', async () => {
       onChanged(await apiClient.post(`${API}/${recap.id}/unschedule`, {}));
       setNotice({ severity: 'info', text: 'Schedule cancelled. It is a draft again.' });
-      // An edit the schedule refused is allowed on a draft: save it now.
-      setSaveState((state) => (state === 'error' ? 'dirty' : state));
+      // Whatever the schedule refused, or a save racing the cancel lost, is
+      // allowed on a draft. save() waits for any save in flight, then sends
+      // the form as it stands, so autosave is never left on a stale error.
+      await save();
     }, { saveFirst: false });
 
   const markFailed = () =>
