@@ -407,11 +407,14 @@ The system follows a **recruiting cycle-based workflow**:
   towards the coverage grid, the suggestions and the session builder.
 - Taking someone off (`DELETE /interviews/:id/availability-invites/:userId`) hides the form
   and stops their answer counting, but keeps it, so asking them again brings it back. It
-  sends nothing and leaves any session they are already on alone.
+  cancels their unsent requests (status `CANCELLED`, which the sender never claims) and
+  leaves any session they are already on alone.
 - Placement is not gated: an admin can still put anyone on a session; the picker lists the
   uninvited under "Not asked for this round".
 - Which rounds are invite-only is `INVITE_ONLY_TYPES` in
-  [server/src/services/availabilityInvites.js](server/src/services/availabilityInvites.js).
+  [server/src/services/availabilityInvites.js](server/src/services/availabilityInvites.js):
+  every type that runs final round, the legacy `ROUND_TWO` included. The migration invited
+  whoever had already answered on an existing final round, so nobody's answer was lost.
 
 **Saving interview evaluations:**
 - One evaluation per (interview, application, evaluator), unique on both tables

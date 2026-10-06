@@ -10,7 +10,7 @@ import { queueNotificationsBulk } from '../services/interviewSlotComms.js';
 import adminRoutes from './interviewSlotsAdmin.js';
 import memberRoutes from './interviewSlotsMember.js';
 
-const db = vi.hoisted(() => ({ interviews: [], users: [], invites: [], windows: [] }));
+const db = vi.hoisted(() => ({ interviews: [], users: [], invites: [], windows: [], notifications: [] }));
 
 vi.mock('../prismaClient.js', () => {
   const pick = (row, select) =>
@@ -28,7 +28,23 @@ vi.mock('../prismaClient.js', () => {
         }),
         findMany: vi.fn(async () => db.interviews),
       },
-      user: { findMany: vi.fn(async ({ where }) => db.users.filter((u) => userMatches(u, where))) },
+      user: {
+        findMany: vi.fn(async ({ where }) => db.users.filter((u) => userMatches(u, where))),
+        findUnique: vi.fn(async ({ where }) => db.users.find((u) => u.id === where.id) ?? null),
+      },
+      interviewSlotNotification: {
+        updateMany: vi.fn(async ({ where, data }) => {
+          const hit = db.notifications.filter(
+            (n) =>
+              n.interviewId === where.interviewId &&
+              n.type === where.type &&
+              n.recipient === where.recipient &&
+              where.status.in.includes(n.status)
+          );
+          for (const n of hit) Object.assign(n, data);
+          return { count: hit.length };
+        }),
+      },
       availabilityInvite: {
         findMany: vi.fn(async ({ where }) => db.invites.filter((i) => windowMatches(i, where))),
         findUnique: vi.fn(async ({ where }) => {
@@ -122,7 +138,10 @@ beforeEach(() => {
   db.interviews = [
     { id: 'final', title: 'Final Round', interviewType: 'FINAL_ROUND', location: 'Room', ...day },
     { id: 'first', title: 'First Round', interviewType: 'ROUND_ONE', location: 'Room', ...day },
+    // The legacy alias of final round.
+    { id: 'legacy', title: 'Round Two', interviewType: 'ROUND_TWO', location: 'Room', ...day },
   ];
+  db.notifications = [];
   db.users = [
     { id: 'admin-1', email: 'admin@ucla.edu', fullName: 'Admin', role: 'ADMIN', isActive: true },
     { id: 'm1', email: 'm1@ucla.edu', fullName: 'Member One', role: 'MEMBER', isActive: true },
@@ -200,6 +219,32 @@ describe('the coverage read on final round', () => {
     const res = await call('GET', '/admin/interviews/final/availability');
     expect(res.body.interviewers).toEqual([]);
     expect(db.windows).toHaveLength(1);
+  });
+
+  it('uninviting cancels their unsent request, and only theirs', async () => {
+    db.invites = [{ interviewId: 'final', userId: 'm1' }];
+    const request = (recipient, status) => ({
+      interviewId: 'final', type: 'AVAILABILITY_REQUEST', recipient, status,
+    });
+    db.notifications = [
+      request('m1@ucla.edu', 'QUEUED'),
+      request('m1@ucla.edu', 'FAILED'),
+      request('m1@ucla.edu', 'SENT'),
+      request('m2@ucla.edu', 'QUEUED'),
+    ];
+    await call('DELETE', '/admin/interviews/final/availability-invites/m1');
+    expect(db.notifications.map((n) => n.status)).toEqual(['CANCELLED', 'CANCELLED', 'SENT', 'QUEUED']);
+  });
+});
+
+describe('the legacy ROUND_TWO final round', () => {
+  it('is invite-only too', async () => {
+    const ask = await call('POST', '/admin/interviews/legacy/request-availability', {});
+    expect(ask.status).toBe(400);
+    const list = await call('GET', '/member/interviews/open-for-availability', undefined, 'm1');
+    expect(list.body.map((i) => i.id)).not.toContain('legacy');
+    const save = await call('PUT', '/member/interviews/legacy/availability', { windows: [window] }, 'm1');
+    expect(save.status).toBe(403);
   });
 });
 

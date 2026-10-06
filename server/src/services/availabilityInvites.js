@@ -15,9 +15,13 @@
 // whose answers count.
 
 import prisma from '../prismaClient.js';
+import { interviewTypesForRound, roundNumberForInterviewType } from '../utils/interviewRounds.js';
 
-/** Rounds whose availability is asked of picked members, not everyone. */
-export const INVITE_ONLY_TYPES = new Set(['FINAL_ROUND']);
+/**
+ * Interview types whose availability is asked of picked members, not everyone:
+ * every type that runs final round, so the legacy ROUND_TWO alias is included.
+ */
+export const INVITE_ONLY_TYPES = new Set(interviewTypesForRound(roundNumberForInterviewType('FINAL_ROUND')));
 
 export const isInviteOnly = (interviewType) => INVITE_ONLY_TYPES.has(interviewType);
 
@@ -95,9 +99,33 @@ export async function inviteToAvailability(interviewId, userIds, invitedById, db
   return ids;
 }
 
-/** Stop asking this member. What they already said is kept, but not counted. */
+/**
+ * Stop asking this member. What they already said is kept, but not counted.
+ *
+ * Their unsent requests are cancelled in the same transaction: the email goes
+ * out after the request returns, and a failed one can be resent later, so
+ * without this a member just taken off could still be asked to fill in a form
+ * that now refuses them. The sender only claims QUEUED, FAILED and SUPPRESSED
+ * rows, so a CANCELLED one is never sent. One already being sent still goes.
+ */
 export async function removeAvailabilityInvite(interviewId, userId, db = prisma) {
-  const { count } = await db.availabilityInvite.deleteMany({ where: { interviewId, userId } });
+  const user = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
+  const [{ count }] = await db.$transaction([
+    db.availabilityInvite.deleteMany({ where: { interviewId, userId } }),
+    ...(user?.email
+      ? [
+          db.interviewSlotNotification.updateMany({
+            where: {
+              interviewId,
+              type: 'AVAILABILITY_REQUEST',
+              recipient: user.email,
+              status: { in: ['QUEUED', 'FAILED', 'SUPPRESSED'] },
+            },
+            data: { status: 'CANCELLED', error: 'No longer asked for availability' },
+          }),
+        ]
+      : []),
+  ]);
   return count > 0;
 }
 
