@@ -1,10 +1,11 @@
 // Telling the people in an in-person session that its time or place changed.
 //
 // Editing a session used to save and say nothing: candidates and interviewers
-// kept the old room on their calendars and found out at the door. The admin
-// now opts in from Edit Interview, and this sends it.
+// kept the old room on their calendars and found out at the door. Saving still
+// says nothing, but marks the session (`updatePendingSince`), and the admin
+// sends it with Send update in Edit Interview whenever they are ready.
 //
-// The route decides whether to tell anyone; this decides who and how. It goes
+// The route decides when to tell anyone; this decides who and how. It goes
 // through the same queue as every slot email, so each send is recorded first,
 // carries a calendar invite that updates the existing entry, and is held back
 // like the rest when SCHEDULING_EMAILS is off.

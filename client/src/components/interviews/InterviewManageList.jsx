@@ -200,6 +200,11 @@ export default function InterviewManageList({ round, onChanged }) {
                     </Typography>
                     {interview.status && <Chip size="small" variant="outlined" label={interview.status} />}
                     {sessions.length === 0 && <Chip size="small" color="warning" label="No sessions yet" />}
+                    {/* Saving a session emails nobody; this is the reminder that
+                        somebody still has to press Send update in Edit. */}
+                    {sessions.some((s) => s.updatePendingSince) && (
+                      <Chip size="small" color="warning" variant="outlined" label="Update not sent" />
+                    )}
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
                     {[

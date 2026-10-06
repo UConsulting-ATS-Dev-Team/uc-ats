@@ -169,6 +169,7 @@ router.get('/interviews/:id/roster', async (req, res) => {
         signupOpensAt: slot.signupOpensAt,
         signupClosesAt: slot.signupClosesAt,
         notes: slot.notes,
+        updatePendingSince: slot.updatePendingSince,
         confirmedCount: confirmed.length,
         // Surfaced rather than inferred: an admin who forced a move past
         // capacity should see the consequence every time they open the page.
@@ -319,6 +320,7 @@ router.get('/scheduling/overview', async (req, res) => {
             isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
             isBookable: slot.candidateCapacity != null,
             isVirtual: interview.isVirtual,
+            updatePendingSince: slot.updatePendingSince,
             signups: slot.signups.map((signup) => ({
               id: signup.id,
               status: signup.status,
@@ -912,7 +914,20 @@ router.patch('/interviews/:id', async (req, res) => {
       return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     }
 
+    const before =
+      data.location !== undefined
+        ? await prisma.interview.findUnique({ where: { id: req.params.id }, select: { location: true } })
+        : null;
     const interview = await prisma.interview.update({ where: { id: req.params.id }, data });
+
+    // A session with no room of its own told its people the interview's, so a
+    // new interview location is their news too. Marked, not emailed.
+    if (before && (before.location || null) !== (interview.location || null)) {
+      await prisma.interviewSlot.updateMany({
+        where: { interviewId: interview.id, OR: [{ location: null }, { location: '' }], updatePendingSince: null },
+        data: { updatePendingSince: new Date() },
+      });
+    }
 
     // Moving the interview does not move its sessions: those carry their own
     // times and are what candidates actually booked. Say so rather than
@@ -951,7 +966,14 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
       const startTime = shift(slot.startTime);
       const endTime = shift(slot.endTime);
       if (!startTime || !endTime) return res.status(400).json({ error: 'That day is not valid' });
-      updates.push(prisma.interviewSlot.update({ where: { id: slot.id }, data: { startTime, endTime } }));
+      const moves = startTime.getTime() !== slot.startTime.getTime() || endTime.getTime() !== slot.endTime.getTime();
+      updates.push(
+        prisma.interviewSlot.update({
+          where: { id: slot.id },
+          // Nobody is emailed here either; each moved session gets Send update.
+          data: { startTime, endTime, ...(moves && !slot.updatePendingSince ? { updatePendingSince: new Date() } : {}) },
+        })
+      );
     }
     await prisma.$transaction(updates);
 
@@ -1431,7 +1453,7 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
   }
 });
 
-// PATCH /api/admin/interviews/slots/:slotId   { ...fields, notify }
+// PATCH /api/admin/interviews/slots/:slotId
 router.patch('/interviews/slots/:slotId', async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -1471,19 +1493,25 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
     if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;
 
-    // `notify` emails the session's confirmed candidates and interviewers, but
-    // only if the time or the place they were told actually changed. Saving the
-    // same values again, or a seat count, tells nobody anything.
-    const wantsNotice =
-      body.notify === true && Boolean(data.startTime || data.endTime || data.location !== undefined);
+    // Saving never emails anyone. A save that moves the time or the place the
+    // people in the session were told marks it as having an update to send,
+    // and the admin sends it with Send update when they are ready - after the
+    // last of several edits, say, so people get one email rather than three.
+    const movesWhenOrWhere = Boolean(data.startTime || data.endTime || data.location !== undefined);
 
     // Checked before the write. Checking the saved row afterwards answered 400
     // with the backwards session already stored.
     let current = null;
-    if (data.startTime || data.endTime || wantsNotice) {
+    if (movesWhenOrWhere) {
       current = await prisma.interviewSlot.findUnique({
         where: { id: slotId },
-        select: { startTime: true, endTime: true, location: true, interview: { select: { location: true } } },
+        select: {
+          startTime: true,
+          endTime: true,
+          location: true,
+          updatePendingSince: true,
+          interview: { select: { location: true } },
+        },
       });
       if (!current) return res.status(404).json({ error: 'That session no longer exists' });
     }
@@ -1494,26 +1522,61 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
         return res.status(400).json({ error: 'The end time must be after the start time' });
       }
     }
+    if (
+      movesWhenOrWhere &&
+      !current.updatePendingSince &&
+      sessionChanged(current, { ...current, ...data, interview: current.interview })
+    ) {
+      data.updatePendingSince = new Date();
+    }
 
     const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
-    if (!wantsNotice) return res.json(slot);
-
-    // The edit is saved whatever happens next. A failure telling people is
-    // reported beside it, not as a failed save the admin would retry.
-    let notified;
-    if (!sessionChanged(current, { ...slot, interview: current.interview })) {
-      notified = { candidates: 0, interviewers: 0, unchanged: true };
-    } else {
-      try {
-        notified = await notifySessionChanged(slotId);
-      } catch (error) {
-        console.error('[interviewSlotsAdmin] session change notice failed', error);
-        notified = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
-      }
-    }
-    res.json({ ...slot, notified: { ...notified, emailsOn: config.schedulingEmailsEnabled } });
+    res.json(slot);
   } catch (error) {
     fail(res, error, 'Failed to update that time slot');
+  }
+});
+
+// POST /api/admin/interviews/slots/:slotId/send-update
+// Email the session's confirmed candidates and interviewers its current time
+// and place, with an updated calendar invite. Only a session with an unsent
+// change has anything to send.
+router.post('/interviews/slots/:slotId/send-update', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (await isVirtualChat({ slotId })) return res.status(409).json({ error: VIRTUAL_USE_PANEL });
+
+    const pending = await prisma.interviewSlot.findUnique({
+      where: { id: slotId },
+      select: { updatePendingSince: true },
+    });
+    if (!pending) return res.status(404).json({ error: 'That session no longer exists' });
+    // Claimed before sending, so two admins pressing it at once send it once.
+    const { count } = await prisma.interviewSlot.updateMany({
+      where: { id: slotId, updatePendingSince: { not: null } },
+      data: { updatePendingSince: null },
+    });
+    if (count === 0) {
+      return res.status(409).json({ error: 'This update has already been sent', code: 'NO_PENDING_UPDATE' });
+    }
+
+    let notified;
+    try {
+      notified = await notifySessionChanged(slotId);
+    } catch (error) {
+      console.error('[interviewSlotsAdmin] session update failed', error);
+      notified = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
+    }
+    // Nothing went out at all: put the button back so it can be pressed again.
+    // A half that did go out is not re-armed, or pressing again would send it twice.
+    if (notified.failed?.length === 2) {
+      await prisma.interviewSlot
+        .update({ where: { id: slotId }, data: { updatePendingSince: pending.updatePendingSince } })
+        .catch((error) => console.error('[interviewSlotsAdmin] could not restore pending update', error));
+    }
+    res.json({ notified: { ...notified, emailsOn: config.schedulingEmailsEnabled } });
+  } catch (error) {
+    fail(res, error, 'Failed to send that update');
   }
 });
 

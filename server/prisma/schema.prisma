@@ -1043,6 +1043,9 @@ model InterviewSlot {
   /// ?groupIds= URLs resolving after the roster moves into real tables.
   legacyGroupId       String?
   notes               String?
+  /// Set when the session's time or place changed and the people in it have
+  /// not been told yet; cleared by Send update. Saving never emails anyone.
+  updatePendingSince  DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

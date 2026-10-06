@@ -3,21 +3,19 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
-  FormControlLabel,
   IconButton,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
-import { Add as AddIcon, DeleteOutline as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, DeleteOutline as DeleteIcon, Send as SendIcon } from '@mui/icons-material';
 import apiClient from '../../utils/api';
 import { formatDay, formatTimeRange, fromPacificInput, toPacificInput } from '../../utils/scheduleFormat';
 
@@ -32,6 +30,10 @@ import { formatDay, formatTimeRange, fromPacificInput, toPacificInput } from '..
  * Moving the interview does not move its sessions: those carry their own times
  * and are what candidates booked. Shifting the whole day is its own button, so
  * it is never a side effect of fixing a title.
+ *
+ * Saving emails nobody. A save that moves a session's time or place leaves it
+ * with Send update, which stays until somebody presses it, here or after
+ * reopening the dialog, so several edits can go out as one email.
  */
 
 // Read and written in Pacific, as the pages show them, not in the browser's
@@ -50,13 +52,8 @@ const asInstant = (day, time) => {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// Whether the edit changes what the people in a session were told: the day,
-// the hours or the room. A name or seat count is nobody's news.
-const whenOrWhereChanged = (s) =>
-  s.day !== s.savedDay || s.start !== s.savedStart || s.end !== s.savedEnd || s.location !== s.savedLocation;
-
-// Who the page last saw in a session, for the checkbox's wording only. The
-// server reads who is in it when the edit is saved, since someone may have
+// Who the page last saw in a session, for the pending line's wording only. The
+// server reads who is in it when the update is sent, since someone may have
 // booked since this dialog opened.
 const knownPeople = (s) =>
   [
@@ -66,12 +63,9 @@ const knownPeople = (s) =>
     .filter(Boolean)
     .join(' and ');
 
-// What the save did about telling people, read from the server's answer rather
-// than assumed from the checkbox.
-const sessionSavedMessage = (result) => {
-  const notified = result?.notified;
-  if (!notified) return 'Session updated.';
-  if (notified.unchanged) return 'Session updated. Its time and place are as before, so nobody was emailed.';
+// What Send update did, read from the server's answer.
+const updateSentMessage = (result) => {
+  const notified = result?.notified ?? {};
   const who = [
     notified.candidates ? plural(notified.candidates, 'candidate') : null,
     notified.interviewers ? plural(notified.interviewers, 'interviewer') : null,
@@ -80,15 +74,32 @@ const sessionSavedMessage = (result) => {
   // recorded to send later, and a half that failed has nothing recorded.
   const failed = notified.failed ?? [];
   if (failed.length && !notified.emailsOn) {
-    return `Session updated. Scheduling emails are switched off, and the ${failed.join(' and ')} could not be recorded to email later. Tell them yourself.`;
+    return `Scheduling emails are switched off, and the ${failed.join(' and ')} could not be recorded to email later. Tell them yourself.`;
   }
-  if (!notified.emailsOn) return 'Session updated. Scheduling emails are switched off, so nobody was emailed.';
+  if (!notified.emailsOn) return 'Scheduling emails are switched off, so nobody was emailed.';
+  if (failed.length === 2) return 'The update could not be sent. Try Send update again.';
   if (failed.length) {
     const lead = who.length ? `Emailing ${who.join(' and ')}, but the` : 'The';
-    return `Session updated. ${lead} ${failed.join(' and ')} could not be emailed. Tell them yourself.`;
+    return `${lead} ${failed.join(' and ')} could not be emailed. Tell them yourself.`;
   }
-  return who.length ? `Session updated. Emailing ${who.join(' and ')}.` : 'Session updated. Nobody in it to email.';
+  return who.length ? `Update sent to ${who.join(' and ')}.` : 'Nobody is in that session to email.';
 };
+
+const toSession = (slot) => ({
+  id: slot.id,
+  label: slot.label ?? '',
+  day: asDayInput(slot.startTime),
+  start: asTimeInput(slot.startTime),
+  end: asTimeInput(slot.endTime),
+  candidateCapacity: slot.candidateCapacity ?? '',
+  interviewerCapacity: slot.interviewerCapacity ?? '',
+  location: slot.location ?? '',
+  savedLocation: slot.location ?? '',
+  booked: slot.signups.filter((s) => s.status === 'CONFIRMED').length,
+  interviewers: slot.interviewers?.length ?? 0,
+  pending: Boolean(slot.updatePendingSince),
+  dirty: false,
+});
 
 export default function InterviewEditDialog({ open, interview, onClose, onSaved }) {
   const [details, setDetails] = useState(null);
@@ -97,6 +108,24 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
+  const fetchSlots = () =>
+    apiClient.get(`/admin/interviews/${interview.id}/roster`).then((roster) => roster.slots ?? []);
+
+  const loadSessions = () =>
+    fetchSlots()
+      .then((slots) => setSessions(slots.map(toSession)))
+      .catch(() => setSessions([]));
+
+  // A change to the interview's location or day marks sessions on the server.
+  // Only the flag is taken, so edits not yet saved in other rows survive.
+  const refreshPending = () =>
+    fetchSlots()
+      .then((slots) => {
+        const pending = new Map(slots.map((slot) => [slot.id, Boolean(slot.updatePendingSince)]));
+        setSessions((current) => current.map((s) => ({ ...s, pending: pending.get(s.id) ?? s.pending })));
+      })
+      .catch(() => {});
 
   useEffect(() => {
     if (!open || !interview) return;
@@ -110,33 +139,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       startDate: asLocalInput(interview.startDate),
       endDate: asLocalInput(interview.endDate),
     });
-    apiClient
-      .get(`/admin/interviews/${interview.id}/roster`)
-      .then((roster) =>
-        setSessions(
-          (roster.slots ?? []).map((slot) => ({
-            id: slot.id,
-            label: slot.label ?? '',
-            day: asDayInput(slot.startTime),
-            start: asTimeInput(slot.startTime),
-            end: asTimeInput(slot.endTime),
-            candidateCapacity: slot.candidateCapacity ?? '',
-            interviewerCapacity: slot.interviewerCapacity ?? '',
-            location: slot.location ?? '',
-            savedLocation: slot.location ?? '',
-            savedDay: asDayInput(slot.startTime),
-            savedStart: asTimeInput(slot.startTime),
-            savedEnd: asTimeInput(slot.endTime),
-            booked: slot.signups.filter((s) => s.status === 'CONFIRMED').length,
-            interviewers: slot.interviewers?.length ?? 0,
-            // On unless the admin unticks it: a room change nobody hears about
-            // is found out at the door.
-            notify: true,
-            dirty: false,
-          }))
-        )
-      )
-      .catch(() => setSessions([]));
+    loadSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, interview]);
 
   const update = (index, changes) =>
@@ -152,10 +156,10 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       const text = typeof message === 'function' ? message(result) : message;
       if (text) setNotice(text);
       onSaved?.();
-      return true;
+      return result ?? true;
     } catch (e) {
       setError(e.message || 'That did not save.');
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
@@ -172,7 +176,7 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
           endDate: details.endDate ? fromPacificInput(details.endDate)?.toISOString() : undefined,
         }),
       'Interview updated.'
-    );
+    ).then((saved) => saved && refreshPending());
 
   const saveSession = (index) => {
     const s = sessions[index];
@@ -188,11 +192,11 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
           // virtual coffee chat (its link is edited from its own panel), so an
           // untouched field must not turn a seat change into a 409.
           ...(s.location !== s.savedLocation ? { location: s.location.trim() } : {}),
-          // The server still checks the time or place really moved before
-          // emailing anyone.
-          ...(s.notify && whenOrWhereChanged(s) ? { notify: true } : {}),
         }),
-      sessionSavedMessage
+      (slot) =>
+        slot?.updatePendingSince
+          ? 'Session saved. Nobody has been emailed — press Send update when you are ready.'
+          : 'Session saved.'
     ).then((saved) => {
       // Set directly rather than through update(), which marks a row dirty. A
       // failed save stays dirty, so the location is sent again on the retry.
@@ -204,14 +208,29 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
                   ...x,
                   dirty: false,
                   savedLocation: s.location,
-                  savedDay: s.day,
-                  savedStart: s.start,
-                  savedEnd: s.end,
+                  pending: Boolean(saved.updatePendingSince),
                 }
               : x
           )
         );
       }
+    });
+  };
+
+  const sendUpdate = (index) => {
+    const s = sessions[index];
+    return run(
+      () =>
+        apiClient.post(`/admin/interviews/slots/${s.id}/send-update`, {}).catch((e) => {
+          // Somebody else pressed it first: nothing is left to send from here.
+          if (e.code === 'NO_PENDING_UPDATE') return { alreadySent: true };
+          throw e;
+        }),
+      (result) => (result?.alreadySent ? 'That update had already been sent.' : updateSentMessage(result))
+    ).then((result) => {
+      if (!result) return;
+      const stillPending = result.notified?.failed?.length === 2;
+      setSessions((current) => current.map((x) => (x.id === s.id ? { ...x, pending: stillPending } : x)));
     });
   };
 
@@ -245,8 +264,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
   const shiftDay = () =>
     run(
       () => apiClient.post(`/admin/interviews/${interview.id}/reschedule`, { day: moveTo }),
-      'Every session moved, keeping its time of day.'
-    );
+      'Every session moved, keeping its time of day. Nobody has been emailed — send each session its update below.'
+    ).then((moved) => moved && loadSessions());
 
   if (!interview || !details) return null;
 
@@ -386,29 +405,30 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
               <IconButton size="small" onClick={() => deleteSession(index)} disabled={busy}>
                 <DeleteIcon fontSize="small" />
               </IconButton>
-              {whenOrWhereChanged(session) && (
-                <Box sx={{ flexBasis: '100%', mt: -1 }}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={session.notify}
-                        onChange={(e) =>
-                          setSessions((current) =>
-                            current.map((x, i) => (i === index ? { ...x, notify: e.target.checked } : x))
-                          )
-                        }
-                      />
-                    }
-                    label={
-                      <Typography variant="body2">
-                        {knownPeople(session)
-                          ? `Email the ${knownPeople(session)} the new details, with an updated calendar invite`
-                          : 'Email anyone booked into this session the new details, with an updated calendar invite'}
-                      </Typography>
-                    }
-                  />
-                </Box>
+              {session.pending && (
+                <Alert
+                  severity="warning"
+                  sx={{ flexBasis: '100%', mt: -0.5, py: 0 }}
+                  action={
+                    <Button
+                      size="small"
+                      color="inherit"
+                      startIcon={<SendIcon fontSize="small" />}
+                      disabled={busy || session.dirty}
+                      onClick={() => sendUpdate(index)}
+                    >
+                      Send update
+                    </Button>
+                  }
+                >
+                  {session.dirty
+                    ? 'Save your changes first, then send the update.'
+                    : `Time or place changed. ${
+                        knownPeople(session)
+                          ? `The ${knownPeople(session)} have not been told yet.`
+                          : 'Nobody booked into it has been told yet.'
+                      } Send update emails them the new details with an updated calendar invite.`}
+                </Alert>
               )}
             </Stack>
           ))}
