@@ -118,12 +118,14 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       .catch(() => setSessions([]));
 
   // A change to the interview's location or day marks sessions on the server.
-  // Only the flag is taken, so edits not yet saved in other rows survive.
+  // Only the flag is taken, so edits not yet saved in other rows survive, and
+  // only ever turned on: this read may be older than a session save that
+  // marked a row, and only Send update in this dialog turns one off.
   const refreshPending = () =>
     fetchSlots()
       .then((slots) => {
-        const pending = new Map(slots.map((slot) => [slot.id, Boolean(slot.updatePendingSince)]));
-        setSessions((current) => current.map((s) => ({ ...s, pending: pending.get(s.id) ?? s.pending })));
+        const pending = new Set(slots.filter((slot) => slot.updatePendingSince).map((slot) => slot.id));
+        setSessions((current) => current.map((s) => (pending.has(s.id) ? { ...s, pending: true } : s)));
       })
       .catch(() => {});
 
@@ -229,8 +231,8 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
       (result) => (result?.alreadySent ? 'That update had already been sent.' : updateSentMessage(result))
     ).then((result) => {
       if (!result) return;
-      const stillPending = result.notified?.failed?.length === 2;
-      setSessions((current) => current.map((x) => (x.id === s.id ? { ...x, pending: stillPending } : x)));
+      // The server says whether the button stays: when nothing could be queued.
+      setSessions((current) => current.map((x) => (x.id === s.id ? { ...x, pending: Boolean(result.pending) } : x)));
     });
   };
 
@@ -458,11 +460,19 @@ export default function InterviewEditDialog({ open, interview, onClose, onSaved 
             InputLabelProps={{ shrink: true }}
             sx={{ width: 180 }}
           />
-          <Button variant="outlined" disabled={!moveTo || busy || sessions.length === 0} onClick={shiftDay}>
+          {/* Refused with unsaved rows: the move reloads every session, which
+              would throw those edits away. */}
+          <Button
+            variant="outlined"
+            disabled={!moveTo || busy || sessions.length === 0 || sessions.some((s) => s.dirty)}
+            onClick={shiftDay}
+          >
             Move every session
           </Button>
           <Typography variant="caption" color="text.secondary">
-            Keeps each session at the same time of day.
+            {sessions.some((s) => s.dirty)
+              ? 'Save the session you changed first.'
+              : 'Keeps each session at the same time of day.'}
           </Typography>
         </Stack>
         {sessions.length > 0 && (

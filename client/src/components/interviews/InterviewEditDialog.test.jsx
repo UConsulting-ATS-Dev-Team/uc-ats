@@ -272,6 +272,7 @@ describe('InterviewEditDialog', () => {
     it('keeps the button when nothing could be sent', async () => {
       apiClient.post = vi.fn().mockResolvedValue({
         notified: { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'], emailsOn: true },
+        pending: true,
       });
       openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
       await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
@@ -308,6 +309,18 @@ describe('InterviewEditDialog', () => {
       expect(await screen.findByText(/had already been sent/i)).toBeInTheDocument();
       expect(sendButton()).not.toBeInTheDocument();
     });
+  });
+
+  it('will not move the day over a session with unsaved edits', async () => {
+    // The move reloads every session, which would throw the edits away.
+    openDialog();
+    const seats = await screen.findByLabelText(/^seats$/i);
+    await userEvent.clear(seats);
+    await userEvent.type(seats, '6');
+    setValue(screen.getByLabelText(/new day/i), '2027-02-01');
+
+    expect(screen.getByRole('button', { name: /move every session/i })).toBeDisabled();
+    expect(screen.getByText(/save the session you changed first/i)).toBeInTheDocument();
   });
 
   it('will not offer to move a day that has no sessions', async () => {

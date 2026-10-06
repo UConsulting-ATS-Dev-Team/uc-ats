@@ -914,20 +914,26 @@ router.patch('/interviews/:id', async (req, res) => {
       return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     }
 
-    const before =
-      data.location !== undefined
-        ? await prisma.interview.findUnique({ where: { id: req.params.id }, select: { location: true } })
-        : null;
-    const interview = await prisma.interview.update({ where: { id: req.params.id }, data });
-
     // A session with no room of its own told its people the interview's, so a
-    // new interview location is their news too. Marked, not emailed.
-    if (before && (before.location || null) !== (interview.location || null)) {
-      await prisma.interviewSlot.updateMany({
-        where: { interviewId: interview.id, OR: [{ location: null }, { location: '' }], updatePendingSince: null },
-        data: { updatePendingSince: new Date() },
-      });
-    }
+    // new interview location is their news too. Marked, not emailed, and in
+    // the same transaction, so the location never changes without the mark.
+    const interview =
+      data.location === undefined
+        ? await prisma.interview.update({ where: { id: req.params.id }, data })
+        : await prisma.$transaction(async (tx) => {
+            const before = await tx.interview.findUnique({
+              where: { id: req.params.id },
+              select: { location: true },
+            });
+            const saved = await tx.interview.update({ where: { id: req.params.id }, data });
+            if (before && (before.location || null) !== (saved.location || null)) {
+              await tx.interviewSlot.updateMany({
+                where: { interviewId: saved.id, OR: [{ location: null }, { location: '' }] },
+                data: { updatePendingSince: new Date() },
+              });
+            }
+            return saved;
+          });
 
     // Moving the interview does not move its sessions: those carry their own
     // times and are what candidates actually booked. Say so rather than
@@ -971,7 +977,7 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
         prisma.interviewSlot.update({
           where: { id: slot.id },
           // Nobody is emailed here either; each moved session gets Send update.
-          data: { startTime, endTime, ...(moves && !slot.updatePendingSince ? { updatePendingSince: new Date() } : {}) },
+          data: { startTime, endTime, ...(moves ? { updatePendingSince: new Date() } : {}) },
         })
       );
     }
@@ -1063,6 +1069,541 @@ router.patch('/interviews/slot-signups/:signupId/group', async (req, res) => {
     res.json(signup);
   } catch (error) {
     fail(res, error, 'Failed to change that group');
+  }
+});
+
+// DELETE /api/admin/interviews/slots/:slotId/groups
+router.delete('/interviews/slots/:slotId/groups', async (req, res) => {
+  try {
+    const { count } = await prisma.interviewSlotSignup.updateMany({
+      where: { slotId: req.params.slotId },
+      data: { groupLabel: null },
+    });
+    res.json({ cleared: count });
+  } catch (error) {
+    fail(res, error, 'Failed to clear those groups');
+  }
+});
+
+// GET /api/admin/interviews/:id/availability?minutes=60&per=2
+//
+// Who said they can interview, and what that means for the day.
+//
+// The coverage grid is the point: it answers "how many panels can we run at
+// 10:00" before anybody builds the schedule, which is the question that decides
+// whether first round needs one room at a time or four.
+router.get('/interviews/:id/availability', async (req, res) => {
+  try {
+    const interview = await prisma.interview.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, title: true, interviewType: true, startDate: true, endDate: true, cycleId: true,
+        location: true,
+        slots: {
+          orderBy: { startTime: 'asc' },
+          select: {
+            id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true, location: true,
+            assignments: {
+              where: { removedAt: null },
+              select: { id: true, userId: true, user: { select: { id: true, fullName: true, email: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const [windows, staff] = await Promise.all([
+      prisma.interviewerAvailability.findMany({
+        where: { interviewId: interview.id },
+        include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
+        orderBy: [{ userId: 'asc' }, { startTime: 'asc' }],
+      }),
+      prisma.user.findMany({
+        where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true, fullName: true, email: true, role: true },
+        orderBy: { fullName: 'asc' },
+      }),
+    ]);
+    const answeredIds = new Set(windows.map((w) => w.userId));
+
+    const minutes = Number(req.query.minutes) || 60;
+    const perSession = Number(req.query.per) || 2;
+    const grid = coverageByTime(windows, {
+      start: interview.startDate,
+      end: interview.endDate,
+      minutes,
+      interviewersPerSession: perSession,
+    });
+
+    const byUser = new Map();
+    for (const window of windows) {
+      const entry = byUser.get(window.userId) ?? { user: window.user, windows: [] };
+      entry.windows.push({ id: window.id, startTime: window.startTime, endTime: window.endTime, note: window.note });
+      byUser.set(window.userId, entry);
+    }
+
+    // Who is already placed where, and whether that contradicts what they said.
+    // Reported rather than blocked: an admin may know something the form does
+    // not, and somebody who can suddenly make 4pm should not have to re-submit
+    // a form before being put there.
+    const placements = interview.slots.flatMap((slot) =>
+      slot.assignments.map((assignment) => ({
+        assignmentId: assignment.id,
+        slotId: slot.id,
+        slotLabel: slot.label,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        user: assignment.user,
+        conflict: conflictsWithAvailability(windows, assignment.userId, slot.startTime, slot.endTime),
+      }))
+    );
+
+    res.json({
+      interview: {
+        id: interview.id, title: interview.title, interviewType: interview.interviewType,
+        startDate: interview.startDate, endDate: interview.endDate, cycleId: interview.cycleId,
+        // The default room for sessions built from this grid.
+        location: interview.location,
+      },
+      cadence: { minutes, interviewersPerSession: perSession },
+      coverage: grid,
+      interviewers: [...byUser.values()].sort((a, b) =>
+        (a.user.fullName ?? '').localeCompare(b.user.fullName ?? '')
+      ),
+      sessions: interview.slots.map((slot) => ({
+        id: slot.id,
+        label: slot.label,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        interviewerCapacity: slot.interviewerCapacity,
+        // Null inherits the interview's. The session builder reads it to warn
+        // about a new session put in a room already in use at that time.
+        location: slot.location,
+        // Who could staff this session, so an admin placing somebody is choosing
+        // from people who said yes rather than from the whole roster.
+        canCover: whoCanCover(windows, slot.startTime, slot.endTime),
+        assigned: slot.assignments.map((a) => a.user),
+      })),
+      placements,
+      // Everybody who could be put on a session, not just the people who
+      // answered. Availability ranks the list; it does not decide who is on it.
+      // Recruitment routinely places somebody who never filled the form in -
+      // they said yes in a meeting, or they are exec and were always going to
+      // be there - and a picker that cannot express that sends admins back to
+      // the spreadsheet this feature exists to replace.
+      staff: staff.map((user) => ({ ...user, responded: answeredIds.has(user.id) })),
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to load interviewer availability');
+  }
+});
+
+// POST /api/admin/interviews/:id/request-availability
+//
+// Ask the people who might interview when they are free. Sent before the
+// schedule exists, because it is what the schedule is built from.
+//
+// Defaults to everybody who has not answered yet, so pressing it twice chases
+// the stragglers rather than nagging the people who already did their bit.
+router.post('/interviews/:id/request-availability', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const interview = await prisma.interview.findUnique({
+      where: { id },
+      select: { id: true, title: true, startDate: true, location: true },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+
+    const staff = await prisma.user.findMany({
+      where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+      select: { id: true, email: true, fullName: true },
+    });
+
+    const answered = new Set(
+      (
+        await prisma.interviewerAvailability.findMany({
+          where: { interviewId: id },
+          select: { userId: true },
+          distinct: ['userId'],
+        })
+      ).map((row) => row.userId)
+    );
+
+    const everyone = req.body?.everyone === true;
+    const recipients = staff.filter((user) => user.email && (everyone || !answered.has(user.id)));
+
+    if (recipients.length === 0) {
+      return res.json({
+        queued: 0,
+        alreadyAnswered: answered.size,
+        message: everyone ? 'Nobody to email.' : 'Everybody has already sent their availability.',
+      });
+    }
+
+    const subject = await slotNotificationSubject('AVAILABILITY_REQUEST', interview.title);
+    const entries = recipients.map((user) => ({
+      interviewId: id,
+      type: 'AVAILABILITY_REQUEST',
+      recipient: user.email,
+      subject,
+    }));
+    const ids = await queueNotificationsBulk(entries);
+    flushNotifications(ids, (n) =>
+      renderInterviewSlotEmail(n, {
+        ctaUrl: `${config.clientUrl}/assigned-interviews`,
+        ctaLabel: 'Add my availability',
+      })
+    ).catch((e) => console.error('[request-availability] flush failed', e));
+
+    res.json({
+      queued: ids.length,
+      alreadyAnswered: answered.size,
+      emailsEnabled: config.schedulingEmailsEnabled,
+    });
+  } catch (error) {
+    fail(res, error, 'Failed to ask for availability');
+  }
+});
+
+// GET /api/admin/interviews/staff
+// Members and admins who can be put on a session.
+router.get('/interviews/staff', async (req, res) => {
+  try {
+    const staff = await prisma.user.findMany({
+      where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+      select: { id: true, fullName: true, email: true, role: true },
+      orderBy: { fullName: 'asc' },
+    });
+    res.json(staff);
+  } catch (error) {
+    fail(res, error, 'Failed to load members');
+  }
+});
+
+// POST /api/admin/interviews/:id/slots
+router.post('/interviews/:id/slots', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { label, startTime, endTime, location, candidateCapacity, interviewerCapacity, notes } = req.body ?? {};
+
+    const start = parseTime(startTime);
+    const end = parseTime(endTime);
+    if (!start || !end) return res.status(400).json({ error: 'A valid start and end time are required' });
+    if (end <= start) return res.status(400).json({ error: 'The end time must be after the start time' });
+
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true, isVirtual: true } });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
+
+    const slot = await prisma.interviewSlot.create({
+      data: {
+        interviewId: id,
+        label: label || null,
+        startTime: start,
+        endTime: end,
+        location: location || null,
+        candidateCapacity: candidateCapacity == null ? null : Number(candidateCapacity),
+        interviewerCapacity: interviewerCapacity == null ? null : Number(interviewerCapacity),
+        notes: notes || null,
+      },
+    });
+    res.status(201).json(slot);
+  } catch (error) {
+    fail(res, error, 'Failed to create that time slot');
+  }
+});
+
+// POST /api/admin/interviews/:id/slots/generate
+// Two named blocks for a coffee chat day, a cadence of group interviews, or
+// `sessions`: fully specified sessions with their interviewers, which is what
+// an admin builds from the availability grid once members have answered.
+router.post('/interviews/:id/slots/generate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { blocks, cadence, sessions } = req.body ?? {};
+
+    const interview = await prisma.interview.findUnique({
+      where: { id },
+      select: { id: true, interviewType: true, startDate: true, endDate: true, isVirtual: true },
+    });
+    if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (interview.isVirtual) return res.status(400).json({ error: VIRTUAL_HAS_ONE_SESSION });
+
+    const rows = [];
+
+    // Named blocks: the coffee chat shape, where the block is the unit.
+    for (const block of blocks ?? []) {
+      const start = parseTime(block.startTime);
+      const end = parseTime(block.endTime);
+      if (!start || !end || end <= start) {
+        return res.status(400).json({ error: `Block "${block.label ?? ''}" has an invalid time range` });
+      }
+      rows.push({
+        interviewId: id,
+        label: block.label || null,
+        startTime: start,
+        endTime: end,
+        candidateCapacity: block.candidateCapacity == null ? null : Number(block.candidateCapacity),
+      });
+    }
+
+    // Cadence: the first round shape - back-to-back sittings of N minutes.
+    if (cadence) {
+      const start = parseTime(cadence.startTime);
+      const end = parseTime(cadence.endTime);
+      const minutes = Number(cadence.minutes);
+      const capacity = cadence.candidateCapacity == null ? null : Number(cadence.candidateCapacity);
+      if (!start || !end || end <= start) {
+        return res.status(400).json({ error: 'The cadence needs a valid time range' });
+      }
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        return res.status(400).json({ error: 'The cadence needs a positive length in minutes' });
+      }
+      // Bounded so a typo in the range cannot ask for ten thousand rows.
+      const maxSlots = 200;
+      for (let cursor = start; cursor < end && rows.length < maxSlots; ) {
+        const next = new Date(cursor.getTime() + minutes * 60000);
+        if (next > end) break;
+        rows.push({
+          interviewId: id,
+          label: null,
+          startTime: cursor,
+          endTime: next,
+          candidateCapacity: capacity,
+        });
+        cursor = next;
+      }
+    }
+
+    // Built sessions: each with its own time, room, seats and interviewers.
+    let custom = [];
+    if (sessions != null) {
+      try {
+        custom = planCustomSessions(sessions);
+      } catch (planError) {
+        // Names the row, which is the only way to find it in a long list.
+        return res.status(400).json({ error: planError.message });
+      }
+    }
+
+    if (rows.length === 0 && custom.length === 0) return res.status(400).json({ error: 'Nothing to generate' });
+
+    // Checked before anything is written. The single-assign route lets any
+    // active member be placed, availability or not, and this follows it; what
+    // it refuses is an id that is nobody, or somebody deactivated since the
+    // page loaded, because that row would hand a session to a person who will
+    // never see it.
+    const wantedIds = [...new Set(custom.flatMap((c) => c.interviewerIds))];
+    if (wantedIds.length > 0) {
+      const staff = await prisma.user.findMany({
+        where: { id: { in: wantedIds }, isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true },
+      });
+      const unknown = wantedIds.length - staff.length;
+      if (unknown > 0) {
+        return res.status(400).json({
+          error: `${unknown} of the chosen interviewers ${unknown === 1 ? 'is not an active member' : 'are not active members'}. Reload and pick again.`,
+        });
+      }
+    }
+
+    // Ids are made here rather than by the database so the slots and their
+    // assignments can go in as two createMany calls in one batch transaction.
+    // Creating slots one at a time to learn their ids means an interactive
+    // transaction with a round trip per session, which at a hundred sessions
+    // from Render to Supabase is the P2028 timeout notifyInterviewersBulk's
+    // comment describes.
+    const assignments = [];
+    for (const { slot, interviewerIds } of custom) {
+      slot.id = randomUUID();
+      slot.interviewId = id;
+      for (const userId of interviewerIds) {
+        assignments.push({ slotId: slot.id, interviewId: id, userId, role: 'INTERVIEWER' });
+      }
+    }
+
+    const writes = [prisma.interviewSlot.createMany({ data: [...rows, ...custom.map((c) => c.slot)] })];
+    if (assignments.length > 0) writes.push(prisma.interviewSlotAssignment.createMany({ data: assignments }));
+
+    // The interview's range is what the member availability form turns into
+    // hour ticks and what the coverage grid counts across (see with-sessions).
+    // A built session outside it would be invisible on the grid it was built
+    // from, so the range grows to cover it. It never shrinks here: a range set
+    // wider than today's sessions is still the window members were asked about.
+    // Blocks and cadence have never done this, and are left as they were.
+    if (custom.length > 0) {
+      const earliest = new Date(Math.min(...custom.map((c) => c.slot.startTime)));
+      const latest = new Date(Math.max(...custom.map((c) => c.slot.endTime)));
+      const startDate = earliest < interview.startDate ? earliest : interview.startDate;
+      const endDate = latest > interview.endDate ? latest : interview.endDate;
+      if (startDate !== interview.startDate || endDate !== interview.endDate) {
+        writes.push(prisma.interview.update({ where: { id }, data: { startDate, endDate } }));
+      }
+    }
+
+    await prisma.$transaction(writes);
+
+    // After the commit, never inside it: an email for a session that rolled
+    // back is worse than none. notifyInterviewersBulk swallows its own errors,
+    // so a mail outage cannot turn a saved schedule into a 500.
+    await notifyInterviewersBulk(assignments.map(({ slotId, userId }) => ({ slotId, userId })));
+
+    const slots = await prisma.interviewSlot.findMany({
+      where: { interviewId: id },
+      orderBy: { startTime: 'asc' },
+    });
+    res.status(201).json({ created: rows.length + custom.length, assigned: assignments.length, slots });
+  } catch (error) {
+    fail(res, error, 'Failed to generate time slots');
+  }
+});
+
+// PATCH /api/admin/interviews/slots/:slotId
+router.patch('/interviews/slots/:slotId', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const body = req.body ?? {};
+    const data = {};
+
+    for (const [field, value] of Object.entries({ startTime: body.startTime, endTime: body.endTime })) {
+      if (value === undefined) continue;
+      const parsed = parseTime(value);
+      // A malformed timestamp is rejected rather than quietly ignored - silently
+      // keeping the old value looks like a successful edit that did nothing.
+      if (parsed === undefined) return res.status(400).json({ error: `${field} is not a valid date` });
+      data[field] = parsed;
+    }
+    if (body.label !== undefined) data.label = body.label || null;
+    if (body.location !== undefined) data.location = body.location || null;
+    if (body.notes !== undefined) data.notes = body.notes || null;
+    if (body.candidateCapacity !== undefined) {
+      data.candidateCapacity = body.candidateCapacity == null ? null : Number(body.candidateCapacity);
+    }
+    // A virtual chat's time and link are changed from its own panel, which
+    // emails everyone in it and keeps the interview's dates in step. A seat
+    // count would open it to self-signup, which nobody gets.
+    const touchesVirtual =
+      data.startTime || data.endTime || data.location !== undefined || data.candidateCapacity != null;
+    if (touchesVirtual && (await isVirtualChat({ slotId }))) {
+      return res.status(409).json({
+        error: data.candidateCapacity != null ? 'A virtual coffee chat cannot be opened to candidate signup' : VIRTUAL_USE_PANEL,
+      });
+    }
+    if (body.interviewerCapacity !== undefined) {
+      data.interviewerCapacity = body.interviewerCapacity == null ? null : Number(body.interviewerCapacity);
+    }
+    if (body.groupSize !== undefined) {
+      data.groupSize = body.groupSize == null || body.groupSize === '' ? null : Number(body.groupSize);
+    }
+    if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
+    if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;
+
+    // Saving never emails anyone. A save that moves the time or the place the
+    // people in the session were told marks it as having an update to send,
+    // and the admin sends it with Send update when they are ready - after the
+    // last of several edits, say, so people get one email rather than three.
+    const movesWhenOrWhere = Boolean(data.startTime || data.endTime || data.location !== undefined);
+
+    // Checked before the write. Checking the saved row afterwards answered 400
+    // with the backwards session already stored.
+    let current = null;
+    if (movesWhenOrWhere) {
+      current = await prisma.interviewSlot.findUnique({
+        where: { id: slotId },
+        select: { startTime: true, endTime: true, location: true, interview: { select: { location: true } } },
+      });
+      if (!current) return res.status(404).json({ error: 'That session no longer exists' });
+    }
+    if (data.startTime || data.endTime) {
+      const startTime = data.startTime ?? current.startTime;
+      const endTime = data.endTime ?? current.endTime;
+      if (endTime <= startTime) {
+        return res.status(400).json({ error: 'The end time must be after the start time' });
+      }
+    }
+    // Stamped fresh on every such save, never kept from an earlier one. A send
+    // in progress clears the mark only if it is still the one it read, so an
+    // edit landing mid-send leaves the button for the details it missed.
+    if (movesWhenOrWhere && sessionChanged(current, { ...current, ...data, interview: current.interview })) {
+      data.updatePendingSince = new Date();
+    }
+
+    const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
+    res.json(slot);
+  } catch (error) {
+    fail(res, error, 'Failed to update that time slot');
+  }
+});
+
+class SendUpdateRefused extends Error {
+  constructor(status, body) {
+    super(body.error);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+// POST /api/admin/interviews/slots/:slotId/send-update
+// Email the session's confirmed candidates and interviewers its current time
+// and place, with an updated calendar invite. Only a session with an unsent
+// change has anything to send.
+//
+// One send per session at a time, under an advisory lock, so two admins
+// pressing it at once send once. The mark is cleared only after the notices
+// are queued: a server that dies mid-send leaves the button up, and pressing
+// it again may email some people twice, which beats nobody being told.
+router.post('/interviews/slots/:slotId/send-update', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (await isVirtualChat({ slotId })) return res.status(409).json({ error: VIRTUAL_USE_PANEL });
+
+    const notified = await prisma.$transaction(
+      async (tx) => {
+        const [{ locked }] =
+          await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${`session-update:${slotId}`})) AS locked`;
+        if (!locked) {
+          throw new SendUpdateRefused(409, {
+            error: 'Someone is sending this update right now',
+            code: 'SEND_IN_PROGRESS',
+          });
+        }
+        const row = await tx.interviewSlot.findUnique({
+          where: { id: slotId },
+          select: { updatePendingSince: true },
+        });
+        if (!row) throw new SendUpdateRefused(404, { error: 'That session no longer exists' });
+        if (!row.updatePendingSince) {
+          throw new SendUpdateRefused(409, { error: 'This update has already been sent', code: 'NO_PENDING_UPDATE' });
+        }
+
+        let result;
+        try {
+          result = await notifySessionChanged(slotId);
+        } catch (error) {
+          console.error('[interviewSlotsAdmin] session update failed', error);
+          result = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
+        }
+        // Nothing queued and something failed (both halves, or the only half
+        // with anyone in it): the button stays so it can be pressed again. A
+        // half that did go out is not re-armed, or pressing again would send
+        // it twice.
+        const queued = result.candidates + result.interviewers;
+        const pending = Boolean(result.failed?.length) && queued === 0;
+        if (!pending) {
+          await tx.interviewSlot.updateMany({
+            where: { id: slotId, updatePendingSince: row.updatePendingSince },
+            data: { updatePendingSince: null },
+          });
+        }
+        return { ...result, pending };
+      },
+      { timeout: 30000 }
+    );
+    res.json({ notified: { ...notified, emailsOn: config.schedulingEmailsEnabled }, pending: notified.pending });
+  } catch (error) {
+    if (error instanceof SendUpdateRefused) return res.status(error.status).json(error.body);
+    fail(res, error, 'Failed to send that update');
   }
 });
 

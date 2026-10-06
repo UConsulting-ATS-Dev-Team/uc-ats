@@ -374,28 +374,37 @@ The system follows a **recruiting cycle-based workflow**:
   already written are kept.
 
 **Editing an in-person session's time or place:**
-- Edit Interview's session row shows "Email the N booked candidates and M interviewers"
-  once its day, hours or location is changed, even for a session that looked empty when
-  the dialog opened: the server reads who is in it at save time. It is ticked by default
-  and sends `notify: true` with `PATCH /api/admin/interviews/slots/:slotId`. Without it,
-  the edit tells nobody, as before.
-- The server emails only if the place people were told (the session's own location, else
-  the interview's) or the time actually changed (`sessionChanged` in
-  [server/src/services/sessionChangeNotices.js](server/src/services/sessionChangeNotices.js)).
-  Confirmed candidates get `MOVED_BY_ADMIN` and current interviewers `INTERVIEWER_MOVED`,
+- Saving a session in Edit Interview never emails anyone. A save that changes the time,
+  or the place people were told (the session's own location, else the interview's;
+  `sessionChanged` in
+  [server/src/services/sessionChangeNotices.js](server/src/services/sessionChangeNotices.js)),
+  stamps `InterviewSlot.updatePendingSince`. So do Move every session
+  (`POST /:id/reschedule`) for each session it shifts, and a change to the interview's
+  location for each session that inherits it (in the same transaction as the location).
+- A stamped session shows **Send update** in Edit Interview until someone presses it,
+  across closing and reopening the dialog; the interview card shows "Update not sent".
+  It is disabled while that row has unsaved edits.
+- `POST /api/admin/interviews/slots/:slotId/send-update` holds
+  `pg_try_advisory_xact_lock` on the session (`409 SEND_IN_PROGRESS` if another send has
+  it), refuses an unstamped session (`409 NO_PENDING_UPDATE`), queues the notices, and
+  only then clears the stamp, and only if it is still the one it read: a save landing
+  mid-send restamps it, so its details get a button of their own. A server dying
+  mid-send leaves the button up; pressing it again may email some people twice, which is
+  preferred to nobody being told.
+- Confirmed candidates get `MOVED_BY_ADMIN` and current interviewers `INTERVIEWER_MOVED`,
   both with `sessionChanged` wording (the `*SessionChanged` fields on those templates), and
   an invite that updates the calendar entry they already have. Waitlisted candidates are
-  not told. Behind `SCHEDULING_EMAILS` like every slot email.
-- The response's `notified` says what happened (`candidates`, `interviewers`,
-  `unchanged`, `emailsOn`, and `failed` naming each half that could not be queued), and
-  the dialog reports that, not the checkbox. Candidates and interviewers are queued
-  separately, through `queueInterviewerNotices` (which throws) rather than
+  not told. Who is in the session is read at send time. Behind `SCHEDULING_EMAILS` like
+  every slot email.
+- The response's `notified` says what happened (`candidates`, `interviewers`, `emailsOn`,
+  and `failed` naming each half that could not be queued), and `pending` whether the
+  button stays: only when nothing was queued and something failed. A half that did go out
+  is not re-armed, or pressing again would send it twice. Candidates and interviewers are
+  queued separately, through `queueInterviewerNotices` (which throws) rather than
   `notifyInterviewersBulk` (which logs and returns `[]`), so a failure in one is reported
-  and does not hide the other. A failure to queue never fails the save.
+  and does not hide the other.
 - The wording choice is not stored on the notification, so pressing Resend on one renders
   the ordinary "moved" wording. Same limitation as `fromSlotName`.
-- Changing the *interview's* location (Save details) still emails nobody, even for
-  sessions that inherit it.
 
 **Saving interview evaluations:**
 - One evaluation per (interview, application, evaluator), unique on both tables

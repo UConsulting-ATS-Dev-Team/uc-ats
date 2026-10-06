@@ -11,9 +11,13 @@ vi.mock('../prismaClient.js', () => ({
     interviewSlot: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     // The virtual coffee chat guard asks first; these are in-person interviews.
     interview: { findUnique: vi.fn(async () => ({ isVirtual: false })), update: vi.fn() },
-    $transaction: vi.fn(async (ops) => Promise.all(ops)),
+    $queryRaw: vi.fn(),
+    // Interactive transactions run against the same mocks; arrays as a batch.
+    $transaction: vi.fn(async (arg) => (typeof arg === 'function' ? arg(mockPrisma()) : Promise.all(arg))),
   },
 }));
+
+const mockPrisma = () => prisma;
 
 vi.mock('../services/sessionChangeNotices.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -67,6 +71,7 @@ beforeEach(() => {
   });
   prisma.interviewSlot.update.mockImplementation(async ({ data }) => ({ id: 'slot-1', ...data }));
   prisma.interviewSlot.updateMany.mockResolvedValue({ count: 1 });
+  prisma.$queryRaw.mockResolvedValue([{ locked: true }]);
   notifySessionChanged.mockResolvedValue({ candidates: 4, interviewers: 2 });
 });
 
@@ -106,18 +111,12 @@ describe('PATCH /interviews/slots/:slotId', () => {
     expect(writtenData()).not.toHaveProperty('updatePendingSince');
   });
 
-  it('keeps the first pending time across further edits', async () => {
-    prisma.interviewSlot.findUnique.mockResolvedValue({
-      startTime: START,
-      endTime: END,
-      location: 'Bunche 2150',
-      updatePendingSince: PENDING,
-      interview: { location: 'Ackerman' },
-    });
-
+  it('restamps a session that already had an update waiting', async () => {
+    // A send in progress clears only the stamp it read, so a fresh one keeps
+    // the button for details that send did not include.
     await patch({ location: 'Kerckhoff 131' });
 
-    expect(writtenData()).not.toHaveProperty('updatePendingSince');
+    expect(writtenData().updatePendingSince.getTime()).toBeGreaterThan(PENDING.getTime());
   });
 
   it('marks nothing for a seat change', async () => {
@@ -141,20 +140,25 @@ describe('POST /interviews/slots/:slotId/send-update', () => {
     prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: PENDING });
   });
 
-  it('claims the pending update, then emails the session', async () => {
+  it('emails the session, then clears the stamp it read', async () => {
     const res = await sendUpdate();
 
     expect(res.status).toBe(200);
+    expect(notifySessionChanged).toHaveBeenCalledWith('slot-1');
     expect(prisma.interviewSlot.updateMany).toHaveBeenCalledWith({
-      where: { id: 'slot-1', updatePendingSince: { not: null } },
+      where: { id: 'slot-1', updatePendingSince: PENDING },
       data: { updatePendingSince: null },
     });
-    expect(notifySessionChanged).toHaveBeenCalledWith('slot-1');
-    expect((await res.json()).notified).toMatchObject({ candidates: 4, interviewers: 2 });
+    expect(prisma.interviewSlot.updateMany.mock.invocationCallOrder[0]).toBeGreaterThan(
+      notifySessionChanged.mock.invocationCallOrder[0]
+    );
+    const body = await res.json();
+    expect(body.notified).toMatchObject({ candidates: 4, interviewers: 2 });
+    expect(body.pending).toBe(false);
   });
 
-  it('sends nothing when somebody else already sent it', async () => {
-    prisma.interviewSlot.updateMany.mockResolvedValue({ count: 0 });
+  it('sends nothing when there is no update waiting', async () => {
+    prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: null });
 
     const res = await sendUpdate();
 
@@ -163,27 +167,46 @@ describe('POST /interviews/slots/:slotId/send-update', () => {
     expect(notifySessionChanged).not.toHaveBeenCalled();
   });
 
-  it('puts the update back when nothing could be sent', async () => {
+  it('sends nothing while another send holds the session', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ locked: false }]);
+
+    const res = await sendUpdate();
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('SEND_IN_PROGRESS');
+    expect(notifySessionChanged).not.toHaveBeenCalled();
+  });
+
+  it('keeps the stamp when nothing could be sent', async () => {
     notifySessionChanged.mockRejectedValue(new Error('database went away'));
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const res = await sendUpdate();
 
     expect(res.status).toBe(200);
-    expect((await res.json()).notified).toMatchObject({ failed: ['candidates', 'interviewers'] });
-    expect(prisma.interviewSlot.update).toHaveBeenCalledWith({
-      where: { id: 'slot-1' },
-      data: { updatePendingSince: PENDING },
-    });
+    const body = await res.json();
+    expect(body.notified).toMatchObject({ failed: ['candidates', 'interviewers'] });
+    expect(body.pending).toBe(true);
+    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
     quiet.mockRestore();
   });
 
-  it('does not put it back when one half went out', async () => {
+  it('keeps the stamp when the only half with anyone in it failed', async () => {
+    notifySessionChanged.mockResolvedValue({ candidates: 0, interviewers: 0, failed: ['interviewers'] });
+
+    const body = await (await sendUpdate()).json();
+
+    expect(body.pending).toBe(true);
+    expect(prisma.interviewSlot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('clears it when one half went out, so that half is not sent twice', async () => {
     notifySessionChanged.mockResolvedValue({ candidates: 4, interviewers: 0, failed: ['interviewers'] });
 
-    await sendUpdate();
+    const body = await (await sendUpdate()).json();
 
-    expect(prisma.interviewSlot.update).not.toHaveBeenCalled();
+    expect(body.pending).toBe(false);
+    expect(prisma.interviewSlot.updateMany).toHaveBeenCalled();
   });
 
   it('refuses a missing session', async () => {
@@ -219,7 +242,8 @@ describe('changes made elsewhere in Edit Interview', () => {
     expect(res.status).toBe(200);
     const [first, second] = prisma.interviewSlot.update.mock.calls.map(([arg]) => arg.data);
     expect(first.updatePendingSince).toBeInstanceOf(Date);
-    expect(second).not.toHaveProperty('updatePendingSince');
+    // Restamped, as a session save would.
+    expect(second.updatePendingSince.getTime()).toBeGreaterThan(PENDING.getTime());
     expect(notifySessionChanged).not.toHaveBeenCalled();
   });
 
@@ -233,7 +257,7 @@ describe('changes made elsewhere in Edit Interview', () => {
     await call('PATCH', '/interviews/iv1', { location: 'Kerckhoff' });
 
     expect(prisma.interviewSlot.updateMany).toHaveBeenCalledWith({
-      where: { interviewId: 'iv1', OR: [{ location: null }, { location: '' }], updatePendingSince: null },
+      where: { interviewId: 'iv1', OR: [{ location: null }, { location: '' }] },
       data: { updatePendingSince: expect.any(Date) },
     });
   });
