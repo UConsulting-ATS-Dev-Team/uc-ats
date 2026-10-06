@@ -80,6 +80,15 @@ describe('evaluateGuardBypass', () => {
     expect(ok('ANON', '/api/membership')).toBeNull();
   });
 
+  it('answers GM recaps from their own admin-only row, not the staff /api/exec-access row', () => {
+    expect(ok('MEMBER', '/api/exec-access/gm-recaps')).toMatchObject({
+      severity: 'CRITICAL',
+      detail: { prefix: '/api/exec-access/gm-recaps' },
+    });
+    expect(ok('ADMIN', '/api/exec-access/gm-recaps/:id/schedule')).toBeNull();
+    expect(ok('MEMBER', '/api/exec-access/status')).toBeNull();
+  });
+
   it('answers the email-health router from its own row, not /api/admin', () => {
     expect(ok('MEMBER', '/api/admin/email-health/test').detail.prefix).toBe('/api/admin/email-health');
   });
