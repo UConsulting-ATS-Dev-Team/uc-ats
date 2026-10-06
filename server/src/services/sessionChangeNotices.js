@@ -141,18 +141,24 @@ export async function sendSessionUpdate(slotId) {
     console.error('[sessionChangeNotices] session update failed', error);
     result = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
   }
-  const pending = Boolean(result.failed?.length) && result.candidates + result.interviewers === 0;
+  let pending = Boolean(result.failed?.length) && result.candidates + result.interviewers === 0;
 
   // The emails are queued by now, so neither write may fail the request: an
   // answer of "failed" would get them sent again. A mark left behind only
-  // means the button stays up.
+  // means the button stays up, and the answer says so.
   if (!pending) {
-    await prisma.interviewSlot
+    const cleared = await prisma.interviewSlot
       .updateMany({
         where: { id: slotId, updatePendingSince: row.updatePendingSince },
         data: { updatePendingSince: null },
       })
-      .catch((error) => console.error('[sessionChangeNotices] could not clear the pending update', error));
+      .catch((error) => {
+        console.error('[sessionChangeNotices] could not clear the pending update', error);
+        return { count: 0 };
+      });
+    // Nothing cleared: a save restamped it mid-send, and those newer details
+    // still need sending.
+    pending = cleared.count === 0;
   }
   await prisma.interviewSlot
     .updateMany({ where: { id: slotId, updateSendingSince: claimedAt }, data: { updateSendingSince: null } })

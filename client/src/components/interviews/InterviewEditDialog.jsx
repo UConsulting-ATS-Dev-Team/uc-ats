@@ -82,7 +82,9 @@ const updateSentMessage = (result) => {
     const lead = who.length ? `Emailing ${who.join(' and ')}, but the` : 'The';
     return `${lead} ${failed.join(' and ')} could not be emailed. Tell them yourself.`;
   }
-  return who.length ? `Update sent to ${who.join(' and ')}.` : 'Nobody is in that session to email.';
+  const sent = who.length ? `Update sent to ${who.join(' and ')}.` : 'Nobody is in that session to email.';
+  // Somebody saved new details while it was sending; those still need sending.
+  return result?.pending ? `${sent} The session changed again while it sent, so send the newer details too.` : sent;
 };
 
 const toSession = (slot) => ({

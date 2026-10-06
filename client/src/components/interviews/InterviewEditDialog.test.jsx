@@ -245,6 +245,18 @@ describe('InterviewEditDialog', () => {
       expect(sendButton()).not.toBeInTheDocument();
     });
 
+    it('keeps Send update when the session changed again while it sent', async () => {
+      apiClient.post = vi.fn().mockResolvedValue({
+        notified: { candidates: 2, interviewers: 1, failed: [], emailsOn: true },
+        pending: true,
+      });
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
+
+      expect(await screen.findByText(/changed again while it sent/i)).toBeInTheDocument();
+      expect(sendButton()).toBeEnabled();
+    });
+
     it('shows Send update for a change saved earlier, after reopening', async () => {
       openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
       expect(await screen.findByRole('button', { name: /send update/i })).toBeEnabled();

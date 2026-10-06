@@ -210,7 +210,15 @@ describe('sendSessionUpdate', () => {
       .mockRejectedValueOnce(new Error('connection reset'));
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, pending: false });
+    // The mark is still there, so the button honestly stays.
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, pending: true });
     quiet.mockRestore();
+  });
+
+  it('says the button stays when a save restamped the session mid-send', async () => {
+    // The conditional clear finds a newer stamp than the one read, and leaves it.
+    prisma.interviewSlot.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1, failed: [], pending: true });
   });
 });
