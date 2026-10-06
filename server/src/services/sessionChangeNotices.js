@@ -153,11 +153,12 @@ export async function sendSessionUpdate(slotId) {
     throw new SessionUpdateRefused(409, 'NO_PENDING_UPDATE', 'This update has already been sent');
   }
 
-  // A claim blocks only the details it is sending. It yields once stale, and
-  // at once to a stamp newer than itself: those are details no send has read.
+  // A live claim blocks every send, newer details included: two sends
+  // overlapping would both email everyone. Newer details wait for the claim to
+  // be released (normally seconds) and go out with the next press.
   const claimedAt = new Date();
   const held = row.updateSendingSince;
-  if (held && held > new Date(claimedAt - SEND_CLAIM_TTL_MS) && row.updatePendingSince <= held) {
+  if (held && held > new Date(claimedAt - SEND_CLAIM_TTL_MS)) {
     throw new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending this update right now');
   }
   // Compare-and-swap on what was read, so two presses racing claim once.
@@ -189,8 +190,9 @@ export async function sendSessionUpdate(slotId) {
       });
     } catch (error) {
       // The mark could not be cleared, though this send did go out. The claim
-      // is kept, so sending these same details again is refused until it goes
-      // stale; a newer save stamps past the claim and can be sent at once.
+      // is kept, so another send is refused until it goes stale rather than
+      // emailing everyone the same details again. Only a database failing
+      // mid-send gets here, and then a short wait beats a duplicate.
       console.error('[sessionChangeNotices] could not clear the pending update', error);
       return { ...result, pending: false };
     }

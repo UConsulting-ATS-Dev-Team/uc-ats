@@ -167,14 +167,15 @@ describe('sendSessionUpdate', () => {
     expect(queueNotificationsBulk).not.toHaveBeenCalled();
   });
 
-  it('lets newer details through a live claim at once', async () => {
-    // Saved after the claim was taken: no send has read these details yet.
+  it('holds newer details back while a live claim sends, so nobody is emailed twice', async () => {
+    // Saved after the claim was taken. Sending now would overlap the send in
+    // flight; they go out with the next press once it is released.
     const claim = new Date(Date.now() - 60 * 1000);
     const newer = new Date(Date.now() - 1000);
     prisma.interviewSlot.findUnique.mockResolvedValue({ updatePendingSince: newer, updateSendingSince: claim });
 
-    await expect(sendSessionUpdate('slot-1')).resolves.toMatchObject({ candidates: 1 });
-    expect(writes()[0].where).toEqual({ id: 'slot-1', updatePendingSince: newer, updateSendingSince: claim });
+    await expect(sendSessionUpdate('slot-1')).rejects.toMatchObject({ code: 'SEND_IN_PROGRESS' });
+    expect(queueNotificationsBulk).not.toHaveBeenCalled();
   });
 
   it('refuses when another press claims it first, and sends nothing', async () => {
