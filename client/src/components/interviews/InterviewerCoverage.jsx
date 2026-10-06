@@ -21,6 +21,7 @@ import { useAuth } from '../../context/AuthContext';
 import { formatTime, formatTimeRange, toPacificInput } from '../../utils/scheduleFormat';
 import ImessageSendDialog from '../communications/ImessageSendDialog';
 import SessionBuilder from './SessionBuilder';
+import AvailabilityInviteDialog from './AvailabilityInviteDialog';
 
 /**
  * Who can interview when, and what that means for the day.
@@ -63,6 +64,7 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   // the rows stay the same object while it is open; rebuilt per render, the
   // builder would read every re-render as a fresh open and drop the draft.
   const [building, setBuilding] = useState(null);
+  const [inviting, setInviting] = useState(false);
   // /admin/interviews is reachable by MEMBER, but both iMessage endpoints are
   // requireAdmin. Without this the button opens a dialog that 403s.
   const { user } = useAuth();
@@ -83,23 +85,41 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
     load();
   }, [load]);
 
+  const reportAsked = (result) =>
+    setAsked(
+      result.queued === 0
+        ? result.message || 'Nobody to email.'
+        : `Asked ${result.queued} ${result.queued === 1 ? 'person' : 'people'}.` +
+          (result.emailsEnabled === false ? ' Scheduling emails are switched off, so these are being held.' : '')
+    );
+
   // Defaults to chasing only the people who have not answered, so pressing it
-  // twice does not nag everybody who already did their bit.
+  // twice does not nag everybody who already did their bit. On final round that
+  // means the invited who have not answered.
   const askForAvailability = async (everyone) => {
     setBusy(true);
     setError('');
     setAsked('');
     try {
-      const result = await apiClient.post(`/admin/interviews/${interviewId}/request-availability`, { everyone });
-      setAsked(
-        result.queued === 0
-          ? result.message || 'Nobody to email.'
-          : `Asked ${result.queued} ${result.queued === 1 ? 'person' : 'people'}.` +
-            (result.emailsEnabled === false ? ' Scheduling emails are switched off, so these are being held.' : '')
-      );
+      reportAsked(await apiClient.post(`/admin/interviews/${interviewId}/request-availability`, { everyone }));
       await load();
     } catch (e) {
       setError(e.message || 'Failed to send that request.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Stop asking somebody about an invite-only round. What they said is kept
+  // server-side, so asking them again brings it back.
+  const uninvite = async (userId) => {
+    setBusy(true);
+    setError('');
+    try {
+      await apiClient.delete(`/admin/interviews/${interviewId}/availability-invites/${userId}`);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to remove that member.');
     } finally {
       setBusy(false);
     }
@@ -192,6 +212,9 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
   // than a find() per person per hour.
   const byId = new Map((data.staff ?? []).map((u) => [u.id, u]));
   const conflicts = (data.placements ?? []).filter((p) => p.conflict === 'OUTSIDE_AVAILABILITY');
+  // Final round asks only the members an admin picks.
+  const inviteOnly = Boolean(data.interview.inviteOnly);
+  const invitedStaff = inviteOnly ? (data.staff ?? []).filter((u) => u.invited) : [];
 
   return (
     <Box>
@@ -202,13 +225,28 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
       )}
 
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-        <Button variant="contained" size="small" disabled={busy} onClick={() => askForAvailability(false)}>
-          Ask members for availability
-        </Button>
-        {data.interviewers.length > 0 && (
-          <Button size="small" disabled={busy} onClick={() => askForAvailability(true)}>
-            Ask everyone again
-          </Button>
+        {inviteOnly ? (
+          <>
+            <Button variant="contained" size="small" disabled={busy} onClick={() => setInviting(true)}>
+              Choose members to ask
+            </Button>
+            {invitedStaff.some((u) => !u.responded) && (
+              <Button size="small" disabled={busy} onClick={() => askForAvailability(false)}>
+                Remind those who have not answered
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <Button variant="contained" size="small" disabled={busy} onClick={() => askForAvailability(false)}>
+              Ask members for availability
+            </Button>
+            {data.interviewers.length > 0 && (
+              <Button size="small" disabled={busy} onClick={() => askForAvailability(true)}>
+                Ask everyone again
+              </Button>
+            )}
+          </>
         )}
         <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => setBuilding({ initialRows: null })}>
           Create sessions
@@ -220,7 +258,34 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
         )}
       </Stack>
 
-      {nobodyYet && (
+      {inviteOnly && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="overline" color="text.secondary">
+            Asked for availability ({invitedStaff.length})
+          </Typography>
+          {invitedStaff.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Final round only asks the members you choose. Nobody sees this round on My Interviews
+              until you ask them.
+            </Typography>
+          ) : (
+            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+              {invitedStaff.map((u) => (
+                <Chip
+                  key={u.id}
+                  size="small"
+                  color={u.responded ? 'success' : 'default'}
+                  variant="outlined"
+                  label={`${fullName(u)} · ${u.responded ? 'answered' : 'waiting'}`}
+                  onDelete={busy ? undefined : () => uninvite(u.id)}
+                />
+              ))}
+            </Stack>
+          )}
+        </Paper>
+      )}
+
+      {nobodyYet && !(inviteOnly && invitedStaff.length === 0) && (
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Nobody has said when they are free yet.</strong> Send the request above; members fill it
           in from My Interviews. You can still place anyone onto a session in the meantime — availability
@@ -515,7 +580,9 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
                         ? 'Free at this time'
                         : u.responded
                           ? 'Said they are busy then'
-                          : 'Never sent availability'
+                          : inviteOnly && !u.invited
+                            ? 'Not asked for this round'
+                            : 'Never sent availability'
                     }
                     value={null}
                     blurOnSelect
@@ -583,6 +650,17 @@ export default function InterviewerCoverage({ interviewId, onChanged }) {
         onCreated={async () => {
           await load();
           onChanged?.();
+        }}
+      />
+
+      <AvailabilityInviteDialog
+        open={inviting}
+        onClose={() => setInviting(false)}
+        interviewId={interviewId}
+        staff={data.staff}
+        onSent={async (result) => {
+          reportAsked(result);
+          await load();
         }}
       />
 

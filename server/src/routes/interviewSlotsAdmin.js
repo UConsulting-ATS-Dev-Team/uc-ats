@@ -27,6 +27,14 @@ import {
   coverageByTime,
   whoCanCover,
 } from '../services/interviewerAvailability.js';
+import {
+  availabilityRecipients,
+  countedWindows,
+  invitedUserIds,
+  inviteToAvailability,
+  isInviteOnly,
+  removeAvailabilityInvite,
+} from '../services/availabilityInvites.js';
 import { SlotTransactionError } from '../utils/withSerializableTransaction.js';
 import { moveSignup, cancelSignup, placeCandidate, promoteFromWaitlist } from '../services/interviewSignups.js';
 import { isSelfBookableNow, sameTimeAndPlace } from '../services/interviewSignupPolicy.js';
@@ -1085,7 +1093,8 @@ router.get('/interviews/:id/availability', async (req, res) => {
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
 
-    const [windows, staff] = await Promise.all([
+    const inviteOnly = isInviteOnly(interview.interviewType);
+    const [allWindows, staff, invited] = await Promise.all([
       prisma.interviewerAvailability.findMany({
         where: { interviewId: interview.id },
         include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
@@ -1096,7 +1105,11 @@ router.get('/interviews/:id/availability', async (req, res) => {
         select: { id: true, fullName: true, email: true, role: true },
         orderBy: { fullName: 'asc' },
       }),
+      inviteOnly ? invitedUserIds(interview.id) : new Set(),
     ]);
+    // On final round only the invited are counted, so the grid, the suggestions
+    // and "what people said" all describe the people recruitment chose.
+    const windows = countedWindows(interview.interviewType, allWindows, invited);
     const answeredIds = new Set(windows.map((w) => w.userId));
 
     const minutes = Number(req.query.minutes) || 60;
@@ -1137,6 +1150,8 @@ router.get('/interviews/:id/availability', async (req, res) => {
         startDate: interview.startDate, endDate: interview.endDate, cycleId: interview.cycleId,
         // The default room for sessions built from this grid.
         location: interview.location,
+        // Only invited members are asked, and only their answers are counted.
+        inviteOnly,
       },
       cadence: { minutes, interviewersPerSession: perSession },
       coverage: grid,
@@ -1164,7 +1179,11 @@ router.get('/interviews/:id/availability', async (req, res) => {
       // they said yes in a meeting, or they are exec and were always going to
       // be there - and a picker that cannot express that sends admins back to
       // the spreadsheet this feature exists to replace.
-      staff: staff.map((user) => ({ ...user, responded: answeredIds.has(user.id) })),
+      staff: staff.map((user) => ({
+        ...user,
+        responded: answeredIds.has(user.id),
+        ...(inviteOnly ? { invited: invited.has(user.id) } : {}),
+      })),
     });
   } catch (error) {
     fail(res, error, 'Failed to load interviewer availability');
@@ -1178,38 +1197,64 @@ router.get('/interviews/:id/availability', async (req, res) => {
 //
 // Defaults to everybody who has not answered yet, so pressing it twice chases
 // the stragglers rather than nagging the people who already did their bit.
+//
+// Final round is invite-only (services/availabilityInvites.js). There the body
+// may carry `userIds`: those members are invited and emailed. Without it, the
+// press chases the members already invited.
 router.post('/interviews/:id/request-availability', async (req, res) => {
   try {
     const { id } = req.params;
     const interview = await prisma.interview.findUnique({
       where: { id },
-      select: { id: true, title: true, startDate: true, location: true },
+      select: { id: true, title: true, interviewType: true, startDate: true, location: true },
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
 
-    const staff = await prisma.user.findMany({
-      where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
-      select: { id: true, email: true, fullName: true },
-    });
+    const inviteOnly = isInviteOnly(interview.interviewType);
+    let picked = null;
+    if (inviteOnly && req.body?.userIds !== undefined) {
+      const { userIds } = req.body;
+      if (!Array.isArray(userIds) || userIds.length === 0 || userIds.some((u) => typeof u !== 'string')) {
+        return res.status(400).json({ error: 'Pick at least one member to ask' });
+      }
+      picked = await inviteToAvailability(id, userIds, req.user?.id ?? null);
+    }
 
+    const [staff, invited, answerRows] = await Promise.all([
+      prisma.user.findMany({
+        where: { isActive: true, role: { in: ['MEMBER', 'ADMIN'] } },
+        select: { id: true, email: true, fullName: true },
+      }),
+      inviteOnly ? invitedUserIds(id) : new Set(),
+      prisma.interviewerAvailability.findMany({
+        where: { interviewId: id },
+        select: { userId: true },
+        distinct: ['userId'],
+      }),
+    ]);
     const answered = new Set(
-      (
-        await prisma.interviewerAvailability.findMany({
-          where: { interviewId: id },
-          select: { userId: true },
-          distinct: ['userId'],
-        })
-      ).map((row) => row.userId)
+      countedWindows(interview.interviewType, answerRows, invited).map((row) => row.userId)
     );
 
+    if (inviteOnly && invited.size === 0) {
+      return res.status(400).json({ error: 'Final round only asks the members you pick. Pick who to ask first.' });
+    }
+
     const everyone = req.body?.everyone === true;
-    const recipients = staff.filter((user) => user.email && (everyone || !answered.has(user.id)));
+    const recipients = availabilityRecipients({
+      interviewType: interview.interviewType,
+      staff,
+      invited,
+      answered,
+      picked,
+      everyone,
+    });
 
     if (recipients.length === 0) {
       return res.json({
         queued: 0,
         alreadyAnswered: answered.size,
-        message: everyone ? 'Nobody to email.' : 'Everybody has already sent their availability.',
+        message: everyone ? 'Nobody to email.' : 'Everybody asked has already sent their availability.',
       });
     }
 
@@ -1235,6 +1280,22 @@ router.post('/interviews/:id/request-availability', async (req, res) => {
     });
   } catch (error) {
     fail(res, error, 'Failed to ask for availability');
+  }
+});
+
+// DELETE /api/admin/interviews/:id/availability-invites/:userId
+//
+// Stop asking a member about an invite-only round. Their form disappears and
+// their answer stops counting, but it is kept, so inviting them again restores
+// it. Nobody is emailed, and a session they are already on is left alone.
+router.delete('/interviews/:id/availability-invites/:userId', async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const removed = await removeAvailabilityInvite(id, userId);
+    if (!removed) return res.status(404).json({ error: 'They were not invited' });
+    res.json({ removed: true });
+  } catch (error) {
+    fail(res, error, 'Failed to remove that invite');
   }
 });
 

@@ -397,6 +397,25 @@ The system follows a **recruiting cycle-based workflow**:
 - Changing the *interview's* location (Save details) still emails nobody, even for
   sessions that inherit it.
 
+**Final round availability (invite-only):**
+- First round asks every member when they are free. Final round asks only the members an
+  admin picks: Interviews → the round's coverage panel → **Choose members to ask** invites
+  and emails them (`POST /api/admin/interviews/:id/request-availability` with `userIds`).
+  The same button without `userIds` reminds the invited who have not answered.
+- An `AvailabilityInvite` row is what lets a member see the round on My Interviews and
+  read or save its form (`403 NOT_INVITED` otherwise). Only invited members' answers count
+  towards the coverage grid, the suggestions and the session builder.
+- Taking someone off (`DELETE /interviews/:id/availability-invites/:userId`) hides the form
+  and stops their answer counting, but keeps it, so asking them again brings it back. It
+  cancels their unsent requests (status `CANCELLED`, which the sender never claims) and
+  leaves any session they are already on alone.
+- Placement is not gated: an admin can still put anyone on a session; the picker lists the
+  uninvited under "Not asked for this round".
+- Which rounds are invite-only is `INVITE_ONLY_TYPES` in
+  [server/src/services/availabilityInvites.js](server/src/services/availabilityInvites.js):
+  every type that runs final round, the legacy `ROUND_TWO` included. The migration invited
+  whoever had already answered on an existing final round, so nobody's answer was lost.
+
 **Saving interview evaluations:**
 - One evaluation per (interview, application, evaluator), unique on both tables
   (`interview_evaluations`, `first_round_interview_evaluations`). Both save routes
