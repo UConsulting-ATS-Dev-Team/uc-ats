@@ -147,7 +147,7 @@ describe('InterviewEditDialog', () => {
 
     expect(await screen.findByText(/give the session a day, a start time and an end time/i)).toBeInTheDocument();
     expect(apiClient.patch).not.toHaveBeenCalled();
-    expect(screen.queryByText(/session updated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/session saved/i)).not.toBeInTheDocument();
   });
 
   it('will not save a session until something changes', async () => {
@@ -219,103 +219,131 @@ describe('InterviewEditDialog', () => {
       await userEvent.type(location, room);
     };
 
-    it('offers, ticked, to email them when the room changes, and sends notify', async () => {
-      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: true } });
+    const sendButton = () => screen.queryByRole('button', { name: /send update/i });
+
+    it('saves a room change without emailing anyone, then offers Send update', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({ updatePendingSince: '2027-01-10T00:00:00Z' });
       openDialog([booked()]);
       await changeRoom();
-
-      const box = screen.getByRole('checkbox', { name: /email the 2 booked candidates and 1 interviewer/i });
-      expect(box).toBeChecked();
-      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-
-      await waitFor(() => {
-        expect(apiClient.patch).toHaveBeenCalledWith(
-          '/admin/interviews/slots/slot-1',
-          expect.objectContaining({ location: 'YRL 2', notify: true })
-        );
-      });
-      expect(await screen.findByText(/emailing 2 candidates and 1 interviewer/i)).toBeInTheDocument();
-    });
-
-    it('sends no notify when the box is unticked', async () => {
-      openDialog([booked()]);
-      await changeRoom();
-      await userEvent.click(screen.getByRole('checkbox', { name: /email the/i }));
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() => expect(apiClient.patch).toHaveBeenCalled());
       expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('notify');
+      expect(apiClient.post).not.toHaveBeenCalled();
+      expect(await screen.findByText(/nobody has been emailed/i)).toBeInTheDocument();
+      expect(screen.getByText(/the 2 booked candidates and 1 interviewer have not been told yet/i)).toBeInTheDocument();
+      expect(sendButton()).toBeEnabled();
     });
 
-    it('does not offer it for a seat change', async () => {
+    it('sends the update when pressed, and the button goes away', async () => {
+      apiClient.post = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: true } });
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
+
+      expect(apiClient.post).toHaveBeenCalledWith('/admin/interviews/slots/slot-1/send-update', {});
+      expect(await screen.findByText('Update sent to 2 candidates and 1 interviewer.')).toBeInTheDocument();
+      expect(sendButton()).not.toBeInTheDocument();
+    });
+
+    it('keeps Send update when the session changed again while it sent', async () => {
+      apiClient.post = vi.fn().mockResolvedValue({
+        notified: { candidates: 2, interviewers: 1, failed: [], emailsOn: true },
+        pending: true,
+      });
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
+
+      expect(await screen.findByText(/changed again while it sent/i)).toBeInTheDocument();
+      expect(sendButton()).toBeEnabled();
+    });
+
+    it('shows Send update for a change saved earlier, after reopening', async () => {
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      expect(await screen.findByRole('button', { name: /send update/i })).toBeEnabled();
+    });
+
+    it('offers nothing for a seat change', async () => {
+      apiClient.patch = vi.fn().mockResolvedValue({ updatePendingSince: null });
       openDialog([booked()]);
       const seats = await screen.findByLabelText(/^seats$/i);
       await userEvent.clear(seats);
       await userEvent.type(seats, '6');
-
-      expect(screen.queryByRole('checkbox', { name: /email the/i })).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      await waitFor(() => expect(apiClient.patch).toHaveBeenCalled());
-      expect(apiClient.patch.mock.calls[0][1]).not.toHaveProperty('notify');
+
+      expect(await screen.findByText('Session saved.')).toBeInTheDocument();
+      expect(sendButton()).not.toBeInTheDocument();
     });
 
-    it('still offers it for a session that was empty when the dialog opened', async () => {
-      // Somebody may have booked since; the server reads who is in it on save.
-      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 1, interviewers: 0, emailsOn: true } });
-      openDialog([slot({ location: 'Anderson 1234' })]);
-      await changeRoom();
+    it('asks for unsaved edits to be saved before sending', async () => {
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await changeRoom('Kerckhoff 131');
+      expect(sendButton()).toBeDisabled();
+      expect(screen.getByText(/save your changes first/i)).toBeInTheDocument();
+    });
 
-      expect(screen.getByRole('checkbox', { name: /email anyone booked into this session/i })).toBeChecked();
-      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      await waitFor(() => {
-        expect(apiClient.patch).toHaveBeenCalledWith(
-          '/admin/interviews/slots/slot-1',
-          expect.objectContaining({ notify: true })
-        );
+    it('keeps the button when nothing could be sent', async () => {
+      apiClient.post = vi.fn().mockResolvedValue({
+        notified: { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'], emailsOn: true },
+        pending: true,
       });
-      expect(await screen.findByText(/emailing 1 candidate\./i)).toBeInTheDocument();
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
+
+      expect(await screen.findByText(/could not be sent. try send update again/i)).toBeInTheDocument();
+      expect(sendButton()).toBeEnabled();
     });
 
     it('says which half could not be emailed', async () => {
-      apiClient.patch = vi.fn().mockResolvedValue({
+      apiClient.post = vi.fn().mockResolvedValue({
         notified: { candidates: 2, interviewers: 0, failed: ['interviewers'], emailsOn: true },
       });
-      openDialog([booked()]);
-      await changeRoom();
-      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
 
       expect(
-        await screen.findByText('Session updated. Emailing 2 candidates, but the interviewers could not be emailed. Tell them yourself.')
+        await screen.findByText('Emailing 2 candidates, but the interviewers could not be emailed. Tell them yourself.')
       ).toBeInTheDocument();
     });
 
-    it('offers it for a new time too', async () => {
-      openDialog([booked()]);
-      setValue(await screen.findByLabelText(/^start$/i), '08:30');
-      expect(await screen.findByRole('checkbox', { name: /email the/i })).toBeChecked();
-    });
-
     it('says so when scheduling emails are switched off', async () => {
-      apiClient.patch = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: false } });
-      openDialog([booked()]);
-      await changeRoom();
-      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      apiClient.post = vi.fn().mockResolvedValue({ notified: { candidates: 2, interviewers: 1, emailsOn: false } });
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
 
       expect(await screen.findByText(/scheduling emails are switched off, so nobody was emailed/i)).toBeInTheDocument();
     });
 
-    it('still reports a queue failure when scheduling emails are switched off', async () => {
-      apiClient.patch = vi.fn().mockResolvedValue({
-        notified: { candidates: 2, interviewers: 0, failed: ['interviewers'], emailsOn: false },
-      });
-      openDialog([booked()]);
-      await changeRoom();
-      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    it('treats an update another admin already sent as done', async () => {
+      apiClient.post = vi.fn().mockRejectedValue(Object.assign(new Error('sent'), { code: 'NO_PENDING_UPDATE' }));
+      openDialog([{ ...booked(), updatePendingSince: '2027-01-10T00:00:00Z' }]);
+      await userEvent.click(await screen.findByRole('button', { name: /send update/i }));
 
-      expect(
-        await screen.findByText(/switched off, and the interviewers could not be recorded to email later/i)
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/had already been sent/i)).toBeInTheDocument();
+      expect(sendButton()).not.toBeInTheDocument();
     });
+  });
+
+  it('drops a Send update another admin already used, when details are saved', async () => {
+    const pending = slot({ updatePendingSince: '2027-01-10T00:00:00Z' });
+    openDialog([pending]);
+    expect(await screen.findByRole('button', { name: /send update/i })).toBeInTheDocument();
+
+    apiClient.get = vi.fn().mockResolvedValue({ slots: [{ ...pending, updatePendingSince: null }], unassigned: [] });
+    await userEvent.click(screen.getByRole('button', { name: /save details/i }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /send update/i })).not.toBeInTheDocument());
+  });
+
+  it('will not move the day over a session with unsaved edits', async () => {
+    // The move reloads every session, which would throw the edits away.
+    openDialog();
+    const seats = await screen.findByLabelText(/^seats$/i);
+    await userEvent.clear(seats);
+    await userEvent.type(seats, '6');
+    setValue(screen.getByLabelText(/new day/i), '2027-02-01');
+
+    expect(screen.getByRole('button', { name: /move every session/i })).toBeDisabled();
+    expect(screen.getByText(/save the session you changed first/i)).toBeInTheDocument();
   });
 
   it('will not offer to move a day that has no sessions', async () => {

@@ -47,7 +47,12 @@ import {
 } from '../services/interviewSlotComms.js';
 import { renderInterviewSlotEmail } from '../services/emailNotifications.js';
 import { notifyInterviewer, notifyInterviewersBulk } from '../services/interviewerInvites.js';
-import { notifySessionChanged, sessionChanged } from '../services/sessionChangeNotices.js';
+import {
+  SessionUpdateRefused,
+  pendingUpdateStamp,
+  sendSessionUpdate,
+  updateInterviewMarkingSessions,
+} from '../services/sessionChangeNotices.js';
 import config from '../config.js';
 import { formatEmailDateTime, formatEmailTime, utcToLocalInput } from '../utils/timezoneUtils.js';
 import { mergeFieldsUsed } from '../services/emailCopyRender.js';
@@ -177,6 +182,7 @@ router.get('/interviews/:id/roster', async (req, res) => {
         signupOpensAt: slot.signupOpensAt,
         signupClosesAt: slot.signupClosesAt,
         notes: slot.notes,
+        updatePendingSince: slot.updatePendingSince,
         confirmedCount: confirmed.length,
         // Surfaced rather than inferred: an admin who forced a move past
         // capacity should see the consequence every time they open the page.
@@ -327,6 +333,7 @@ router.get('/scheduling/overview', async (req, res) => {
             isOverCapacity: slot.candidateCapacity != null && confirmed.length > slot.candidateCapacity,
             isBookable: slot.candidateCapacity != null,
             isVirtual: interview.isVirtual,
+            updatePendingSince: slot.updatePendingSince,
             signups: slot.signups.map((signup) => ({
               id: signup.id,
               status: signup.status,
@@ -920,7 +927,8 @@ router.patch('/interviews/:id', async (req, res) => {
       return res.status(409).json({ error: VIRTUAL_USE_PANEL });
     }
 
-    const interview = await prisma.interview.update({ where: { id: req.params.id }, data });
+    // Sessions that inherit a changed location are marked for Send update.
+    const interview = await updateInterviewMarkingSessions(req.params.id, data);
 
     // Moving the interview does not move its sessions: those carry their own
     // times and are what candidates actually booked. Say so rather than
@@ -959,7 +967,13 @@ router.post('/interviews/:id/reschedule', async (req, res) => {
       const startTime = shift(slot.startTime);
       const endTime = shift(slot.endTime);
       if (!startTime || !endTime) return res.status(400).json({ error: 'That day is not valid' });
-      updates.push(prisma.interviewSlot.update({ where: { id: slot.id }, data: { startTime, endTime } }));
+      updates.push(
+        prisma.interviewSlot.update({
+          where: { id: slot.id },
+          // Nobody is emailed here either; each moved session gets Send update.
+          data: { startTime, endTime, ...pendingUpdateStamp(slot, { ...slot, startTime, endTime }) },
+        })
+      );
     }
     await prisma.$transaction(updates);
 
@@ -1492,7 +1506,7 @@ router.post('/interviews/:id/slots/generate', async (req, res) => {
   }
 });
 
-// PATCH /api/admin/interviews/slots/:slotId   { ...fields, notify }
+// PATCH /api/admin/interviews/slots/:slotId
 router.patch('/interviews/slots/:slotId', async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -1532,16 +1546,16 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
     if (body.signupOpensAt !== undefined) data.signupOpensAt = parseTime(body.signupOpensAt) ?? null;
     if (body.signupClosesAt !== undefined) data.signupClosesAt = parseTime(body.signupClosesAt) ?? null;
 
-    // `notify` emails the session's confirmed candidates and interviewers, but
-    // only if the time or the place they were told actually changed. Saving the
-    // same values again, or a seat count, tells nobody anything.
-    const wantsNotice =
-      body.notify === true && Boolean(data.startTime || data.endTime || data.location !== undefined);
+    // Saving never emails anyone. A save that moves the time or the place the
+    // people in the session were told marks it as having an update to send,
+    // and the admin sends it with Send update when they are ready - after the
+    // last of several edits, say, so people get one email rather than three.
+    const movesWhenOrWhere = Boolean(data.startTime || data.endTime || data.location !== undefined);
 
     // Checked before the write. Checking the saved row afterwards answered 400
     // with the backwards session already stored.
     let current = null;
-    if (data.startTime || data.endTime || wantsNotice) {
+    if (movesWhenOrWhere) {
       current = await prisma.interviewSlot.findUnique({
         where: { id: slotId },
         select: { startTime: true, endTime: true, location: true, interview: { select: { location: true } } },
@@ -1555,26 +1569,32 @@ router.patch('/interviews/slots/:slotId', async (req, res) => {
         return res.status(400).json({ error: 'The end time must be after the start time' });
       }
     }
+    if (movesWhenOrWhere) {
+      Object.assign(data, pendingUpdateStamp(current, { ...current, ...data, interview: current.interview }));
+    }
 
     const slot = await prisma.interviewSlot.update({ where: { id: slotId }, data });
-    if (!wantsNotice) return res.json(slot);
-
-    // The edit is saved whatever happens next. A failure telling people is
-    // reported beside it, not as a failed save the admin would retry.
-    let notified;
-    if (!sessionChanged(current, { ...slot, interview: current.interview })) {
-      notified = { candidates: 0, interviewers: 0, unchanged: true };
-    } else {
-      try {
-        notified = await notifySessionChanged(slotId);
-      } catch (error) {
-        console.error('[interviewSlotsAdmin] session change notice failed', error);
-        notified = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
-      }
-    }
-    res.json({ ...slot, notified: { ...notified, emailsOn: config.schedulingEmailsEnabled } });
+    res.json(slot);
   } catch (error) {
     fail(res, error, 'Failed to update that time slot');
+  }
+});
+
+// POST /api/admin/interviews/slots/:slotId/send-update
+// Email the session's confirmed candidates and interviewers its current time
+// and place, with an updated calendar invite. Only a session with an unsent
+// change has anything to send; sendSessionUpdate owns the rest.
+router.post('/interviews/slots/:slotId/send-update', async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (await isVirtualChat({ slotId })) return res.status(409).json({ error: VIRTUAL_USE_PANEL });
+    const notified = await sendSessionUpdate(slotId);
+    res.json({ notified: { ...notified, emailsOn: config.schedulingEmailsEnabled }, pending: notified.pending });
+  } catch (error) {
+    if (error instanceof SessionUpdateRefused) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    fail(res, error, 'Failed to send that update');
   }
 });
 

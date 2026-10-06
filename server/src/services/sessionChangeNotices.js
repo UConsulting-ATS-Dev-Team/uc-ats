@@ -1,10 +1,11 @@
 // Telling the people in an in-person session that its time or place changed.
 //
 // Editing a session used to save and say nothing: candidates and interviewers
-// kept the old room on their calendars and found out at the door. The admin
-// now opts in from Edit Interview, and this sends it.
+// kept the old room on their calendars and found out at the door. Saving still
+// says nothing, but marks the session (`updatePendingSince`), and the admin
+// sends it with Send update in Edit Interview whenever they are ready.
 //
-// The route decides whether to tell anyone; this decides who and how. It goes
+// The route decides when to tell anyone; this decides who and how. It goes
 // through the same queue as every slot email, so each send is recorded first,
 // carries a calendar invite that updates the existing entry, and is held back
 // like the rest when SCHEDULING_EMAILS is off.
@@ -80,6 +81,129 @@ export async function notifySessionChanged(slotId) {
   }
 
   return result;
+}
+
+/**
+ * The write that marks a session as having an update to send, or nothing when
+ * the edit leaves its time and place as its people were told.
+ *
+ * Stamped fresh on every such edit, never kept from an earlier one: a send in
+ * progress clears the mark only if it is still the one it read, so an edit
+ * landing mid-send keeps a button for the details that send missed.
+ */
+export function pendingUpdateStamp(before, after) {
+  return sessionChanged(before, after) ? { updatePendingSince: new Date() } : {};
+}
+
+/**
+ * Save an interview, marking the sessions that inherit its location when that
+ * changes: they told their people the interview's room, so it is their news
+ * too. One transaction, so the location never changes without the marks.
+ */
+export async function updateInterviewMarkingSessions(interviewId, data) {
+  if (data.location === undefined) return prisma.interview.update({ where: { id: interviewId }, data });
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.interview.findUnique({ where: { id: interviewId }, select: { location: true } });
+    const saved = await tx.interview.update({ where: { id: interviewId }, data });
+    if (before && (before.location || null) !== (saved.location || null)) {
+      await tx.interviewSlot.updateMany({
+        where: { interviewId, OR: [{ location: null }, { location: '' }] },
+        data: { updatePendingSince: new Date() },
+      });
+    }
+    return saved;
+  });
+}
+
+/** A claim older than this is a send whose server died; it no longer blocks. */
+export const SEND_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+export class SessionUpdateRefused extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Send update: tell a session's people its current time and place, once.
+ *
+ * Claimed first (`updateSendingSince`, a conditional write) so two admins
+ * pressing it at once send once. No transaction is held around the queueing,
+ * which this file's senders forbid. The mark is cleared afterwards only if it
+ * is still the one read here: a save landing mid-send restamps it, and those
+ * details keep a button of their own.
+ *
+ * The mark stays when nothing was queued and something failed, so the button
+ * can be pressed again. A half that did go out is not re-armed, or pressing
+ * again would send it twice. A server dying mid-send leaves the mark and a
+ * stale claim; after SEND_CLAIM_TTL_MS the button works again, and pressing it
+ * may email some people twice, which beats nobody being told.
+ *
+ * Returns notifySessionChanged's result plus `pending`.
+ */
+export async function sendSessionUpdate(slotId) {
+  const row = await prisma.interviewSlot.findUnique({
+    where: { id: slotId },
+    select: { updatePendingSince: true, updateSendingSince: true },
+  });
+  if (!row) throw new SessionUpdateRefused(404, 'NOT_FOUND', 'That session no longer exists');
+  if (!row.updatePendingSince) {
+    throw new SessionUpdateRefused(409, 'NO_PENDING_UPDATE', 'This update has already been sent');
+  }
+
+  // A live claim blocks every send, newer details included: two sends
+  // overlapping would both email everyone. Newer details wait for the claim to
+  // be released (normally seconds) and go out with the next press.
+  const claimedAt = new Date();
+  const held = row.updateSendingSince;
+  if (held && held > new Date(claimedAt - SEND_CLAIM_TTL_MS)) {
+    throw new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending this update right now');
+  }
+  // Compare-and-swap on what was read, so two presses racing claim once.
+  const { count } = await prisma.interviewSlot.updateMany({
+    where: { id: slotId, updatePendingSince: row.updatePendingSince, updateSendingSince: held },
+    data: { updateSendingSince: claimedAt },
+  });
+  if (count === 0) {
+    throw new SessionUpdateRefused(409, 'SEND_IN_PROGRESS', 'Someone is sending this update right now');
+  }
+
+  let result;
+  try {
+    result = await notifySessionChanged(slotId);
+  } catch (error) {
+    console.error('[sessionChangeNotices] session update failed', error);
+    result = { candidates: 0, interviewers: 0, failed: ['candidates', 'interviewers'] };
+  }
+  let pending = Boolean(result.failed?.length) && result.candidates + result.interviewers === 0;
+
+  // The emails are queued by now, so neither write may fail the request: an
+  // answer of "failed" would get them sent again.
+  if (!pending) {
+    let cleared;
+    try {
+      cleared = await prisma.interviewSlot.updateMany({
+        where: { id: slotId, updatePendingSince: row.updatePendingSince },
+        data: { updatePendingSince: null },
+      });
+    } catch (error) {
+      // The mark could not be cleared, though this send did go out. The claim
+      // is kept, so another send is refused until it goes stale rather than
+      // emailing everyone the same details again. Only a database failing
+      // mid-send gets here, and then a short wait beats a duplicate.
+      console.error('[sessionChangeNotices] could not clear the pending update', error);
+      return { ...result, pending: false };
+    }
+    // Nothing cleared: a save restamped it mid-send, and those newer details
+    // still need sending.
+    pending = cleared.count === 0;
+  }
+  await prisma.interviewSlot
+    .updateMany({ where: { id: slotId, updateSendingSince: claimedAt }, data: { updateSendingSince: null } })
+    .catch((error) => console.error('[sessionChangeNotices] could not release the send claim', error));
+  return { ...result, pending };
 }
 
 async function queueCandidateNotices(slotId) {
