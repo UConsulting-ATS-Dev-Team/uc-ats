@@ -18,6 +18,7 @@
 import express from 'express';
 import prisma from '../prismaClient.js';
 import { resolveAdminCycle } from '../services/activeCycle.js';
+import { canAnswerAvailability, filterAnswerable } from '../services/availabilityInvites.js';
 import {
   SlotTransactionError,
   withSerializableTransaction,
@@ -27,6 +28,7 @@ import { notifyInterviewer } from '../services/interviewerInvites.js';
 const router = express.Router();
 
 const STAFF_ROLES = new Set(['MEMBER', 'ADMIN']);
+const NOT_INVITED = 'Recruitment has not asked you for availability for this round';
 
 const fail = (res, error, fallback) => {
   if (error instanceof SlotTransactionError || (error?.status && error?.message)) {
@@ -49,6 +51,9 @@ const fail = (res, error, fallback) => {
 //
 // Coffee chats are excluded. Their sittings already exist and members claim
 // them outright, so availability would be the same question asked twice.
+//
+// Final round is the exception to "everyone": it is invite-only, and shows
+// only to the members recruitment asked (services/availabilityInvites.js).
 router.get('/interviews/open-for-availability', async (req, res) => {
   try {
     if (!STAFF_ROLES.has(req.user.role)) {
@@ -66,7 +71,7 @@ router.get('/interviews/open-for-availability', async (req, res) => {
       select: { id: true, title: true, interviewType: true, startDate: true, endDate: true },
       orderBy: { startDate: 'asc' },
     });
-    res.json(interviews);
+    res.json(await filterAnswerable(interviews, req.user.id));
   } catch (error) {
     fail(res, error, 'Failed to load interviews to give availability for');
   }
@@ -276,6 +281,9 @@ router.get('/interviews/:id/availability', async (req, res) => {
       },
     });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (!(await canAnswerAvailability(interview, req.user.id))) {
+      return res.status(403).json({ error: NOT_INVITED, code: 'NOT_INVITED' });
+    }
 
     const windows = await prisma.interviewerAvailability.findMany({
       where: { interviewId: interview.id, userId: req.user.id },
@@ -303,8 +311,11 @@ router.put('/interviews/:id/availability', async (req, res) => {
       return res.status(403).json({ error: 'Member access required' });
     }
     const { id } = req.params;
-    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true } });
+    const interview = await prisma.interview.findUnique({ where: { id }, select: { id: true, interviewType: true } });
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
+    if (!(await canAnswerAvailability(interview, req.user.id))) {
+      return res.status(403).json({ error: NOT_INVITED, code: 'NOT_INVITED' });
+    }
 
     const rows = [];
     for (const [index, window] of (req.body?.windows ?? []).entries()) {

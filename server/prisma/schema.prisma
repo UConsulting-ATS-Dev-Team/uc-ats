@@ -74,6 +74,8 @@ model User {
   interviewAssignments       InterviewAssignment[]           @relation("InterviewAssignment")
   interviewSlotAssignments   InterviewSlotAssignment[]       @relation("InterviewSlotAssignment")
   interviewerAvailability    InterviewerAvailability[]       @relation("InterviewerAvailability")
+  availabilityInvites        AvailabilityInvite[]            @relation("AvailabilityInvitee")
+  availabilityInvitesSent    AvailabilityInvite[]            @relation("AvailabilityInviter")
   interviewEvaluations       InterviewEvaluation[]           @relation("InterviewEvaluator")
   interviewResources         InterviewResource[]
   createdInterviews          Interview[]                     @relation("InterviewCreator")
@@ -955,6 +957,7 @@ model Interview {
   caseAssignments       CaseAssignment[]
   slots                 InterviewSlot[]
   availability          InterviewerAvailability[]
+  availabilityInvites   AvailabilityInvite[]
   notifications         InterviewSlotNotification[]
 
   @@map("interviews")
@@ -992,6 +995,29 @@ model InterviewerAvailability {
   @@index([interviewId, startTime])
   @@index([userId])
   @@map("interviewer_availability")
+}
+
+/// A member recruitment asked for their availability on an invite-only round.
+///
+/// Final round is staffed by a chosen few, not the whole roster, so only the
+/// people listed here see its availability form, and only their answers count
+/// towards its coverage grid. Removing a row hides the form from them but keeps
+/// what they already said, so inviting them again brings it back.
+/// Which rounds are invite-only lives in services/availabilityInvites.js.
+model AvailabilityInvite {
+  id          String   @id @default(uuid())
+  interviewId String
+  userId      String
+  invitedById String?
+  createdAt   DateTime @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  user      User      @relation("AvailabilityInvitee", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation("AvailabilityInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([interviewId, userId])
+  @@index([userId])
+  @@map("availability_invites")
 }
 
 /// One bookable sitting of an interview.
