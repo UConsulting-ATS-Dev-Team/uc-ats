@@ -251,11 +251,14 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
     };
   }, [form, unlocked]);
 
-  const act = async (label, fn) => {
+  // Sends and tests save first, so what goes out is what is on screen.
+  // Cancelling does not: an edit a scheduled recap refuses (an emptied
+  // message) must never stand in the way of taking it off the schedule.
+  const act = async (label, fn, { saveFirst = true } = {}) => {
     setBusy(label);
     setNotice(null);
     try {
-      if (!(await save())) return;
+      if (saveFirst && !(await save())) return;
       await fn();
     } catch (err) {
       setNotice({ severity: 'error', text: errorText(err) });
@@ -290,12 +293,14 @@ function RecapEditor({ recap, audience, unlocked, onChanged, onDeleted }) {
     act('unschedule', async () => {
       onChanged(await apiClient.post(`${API}/${recap.id}/unschedule`, {}));
       setNotice({ severity: 'info', text: 'Schedule cancelled. It is a draft again.' });
-    });
+      // An edit the schedule refused is allowed on a draft: save it now.
+      setSaveState((state) => (state === 'error' ? 'dirty' : state));
+    }, { saveFirst: false });
 
   const markFailed = () =>
     act('markFailed', async () => {
       onChanged(await apiClient.post(`${API}/${recap.id}/mark-failed`, {}));
-    });
+    }, { saveFirst: false });
 
   const remove = () =>
     act('delete', async () => {
