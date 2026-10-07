@@ -51,6 +51,8 @@ const fail = (res, error, fallback) => {
 //
 // Coffee chats are excluded. Their sittings already exist and members claim
 // them outright, so availability would be the same question asked twice.
+// An interview whose last day has ended is excluded too: nobody can be free for
+// it any more, and recruitment rarely marks one COMPLETED.
 //
 // Final round is the exception to "everyone": it is invite-only, and shows
 // only to the members recruitment asked (services/availabilityInvites.js).
@@ -67,6 +69,7 @@ router.get('/interviews/open-for-availability', async (req, res) => {
         cycleId: cycle.id,
         interviewType: { in: ['ROUND_ONE', 'ROUND_TWO', 'FINAL_ROUND'] },
         status: { notIn: ['CANCELLED', 'COMPLETED'] },
+        endDate: { gt: new Date() },
       },
       select: { id: true, title: true, interviewType: true, startDate: true, endDate: true },
       orderBy: { startDate: 'asc' },
@@ -79,6 +82,8 @@ router.get('/interviews/open-for-availability', async (req, res) => {
 
 // GET /api/member/interview-slots
 // Sessions in the active cycle, with who is staffing them and whether the caller is.
+// Sessions that have already ended are left out, and so is an interview left
+// with none: there is nothing to sign up for or drop once it is over.
 router.get('/interview-slots', async (req, res) => {
   try {
     if (!STAFF_ROLES.has(req.user.role)) {
@@ -87,11 +92,13 @@ router.get('/interview-slots', async (req, res) => {
     const cycle = await resolveAdminCycle(prisma);
     if (!cycle) return res.json({ interviews: [] });
 
+    const now = new Date();
     const interviews = await prisma.interview.findMany({
       where: { cycleId: cycle.id, status: { notIn: ['CANCELLED', 'COMPLETED'] } },
       orderBy: { startDate: 'asc' },
       include: {
         slots: {
+          where: { endTime: { gt: now } },
           orderBy: { startTime: 'asc' },
           include: {
             assignments: {
@@ -275,6 +282,7 @@ router.get('/interviews/:id/availability', async (req, res) => {
       select: {
         id: true, title: true, interviewType: true, location: true, startDate: true, endDate: true,
         slots: {
+          where: { endTime: { gt: now } },
           orderBy: { startTime: 'asc' },
           select: { id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true },
         },
