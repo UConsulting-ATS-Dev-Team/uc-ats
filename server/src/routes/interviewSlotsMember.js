@@ -282,7 +282,6 @@ router.get('/interviews/:id/availability', async (req, res) => {
       select: {
         id: true, title: true, interviewType: true, location: true, startDate: true, endDate: true,
         slots: {
-          where: { endTime: { gt: now } },
           orderBy: { startTime: 'asc' },
           select: { id: true, label: true, startTime: true, endTime: true, interviewerCapacity: true },
         },
