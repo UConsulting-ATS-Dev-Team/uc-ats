@@ -11,6 +11,7 @@ vi.mock('../supabaseClient.js', () => ({
 
 import {
   DEFAULT_TEMPLATE,
+  formatLetterDate,
   generateOfferLetterPdf,
   getOfferLetterTemplate,
   saveOfferLetterTemplate,
@@ -66,6 +67,12 @@ describe('offerLetter', () => {
     const pdfBuffer = await generateOfferLetterPdf(application, cycle, template, offerDetails, null);
     expect(pdfBuffer.length).toBeGreaterThan(0);
     expect(pdfBuffer.toString('utf8', 0, 4)).toBe('%PDF');
+  });
+
+  it('dates the letter in Los Angeles, not in the server time zone', () => {
+    // 9:30 PM Pacific on October 9 is already October 10 in UTC, where Render runs.
+    expect(formatLetterDate(new Date('2026-10-10T04:30:00Z'))).toBe('October 9th, 2026');
+    expect(formatLetterDate(new Date('2026-01-02T07:59:00Z'))).toBe('January 1st, 2026');
   });
 
   it('returns the default template when Supabase is not configured', async () => {

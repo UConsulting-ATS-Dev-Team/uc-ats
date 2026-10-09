@@ -342,18 +342,25 @@ function getLogoSvg() {
   return { text: 'UC', color: '#ffffff', bold: true, fontSize: 28 };
 }
 
-function formatLetterDate(date = new Date()) {
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  const d = new Date(date);
-  const day = d.getDate();
+// The letter carries the date in Los Angeles. The server runs in UTC, where an
+// evening send is already tomorrow.
+export function formatLetterDate(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })
+      .formatToParts(new Date(date))
+      .map((p) => [p.type, p.value])
+  );
+  const day = Number(parts.day);
   let suffix = 'th';
   if (day === 1 || day === 21 || day === 31) suffix = 'st';
   else if (day === 2 || day === 22) suffix = 'nd';
   else if (day === 3 || day === 23) suffix = 'rd';
-  return `${months[d.getMonth()]} ${day}${suffix}, ${d.getFullYear()}`;
+  return `${parts.month} ${day}${suffix}, ${parts.year}`;
 }
 
 function colorUConsulting(text) {
