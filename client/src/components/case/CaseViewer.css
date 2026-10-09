@@ -9,7 +9,6 @@
   border-radius: var(--border-radius, 0.5rem);
   padding: 12px;
   outline: none;
-  min-height: 620px;
 }
 
 .case-viewer:focus-visible {
@@ -102,12 +101,31 @@
   color: var(--text-on-primary, #fff);
 }
 
+/* Guides as one numbered group: "Guides 2 3 4 6 8". */
+.case-viewer__jump-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.case-viewer__jump-group-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #b45309;
+  margin: 0 2px 0 4px;
+}
+.case-viewer__jump--num {
+  min-width: 28px;
+  padding: 4px 6px;
+  text-align: center;
+}
+
 /* Main stage */
 .case-viewer__stage {
   position: relative;
-  flex: 1;
-  min-height: 520px;
-  max-height: 82vh;
+  width: 100%;
+  min-height: 200px;
+  max-height: 78vh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,9 +218,10 @@
 }
 
 .case-viewer__thumb {
+  position: relative;
   flex: 0 0 auto;
-  width: 46px;
-  height: 60px;
+  height: 48px;
+  min-width: 36px;
   border: 2px solid transparent;
   border-radius: 4px;
   overflow: hidden;
@@ -216,6 +235,21 @@
 .case-viewer__thumb.is-io {
   outline: 2px solid #f59e0b;
   outline-offset: -2px;
+}
+.case-viewer__thumb-num {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 14px;
+  padding: 0 3px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  background: rgba(4, 39, 66, 0.8);
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 /* Buttons */
@@ -248,6 +282,7 @@
 
 /* Empty state */
 .case-viewer--empty {
+  min-height: 320px;
   align-items: center;
   justify-content: center;
   text-align: center;
@@ -499,4 +534,124 @@
 .case-preview-overlay__exit:hover {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Interviewer full-screen view (Expand)                                      */
+/* -------------------------------------------------------------------------- */
+
+/* Every page, guides included, as large as the screen allows. Unlike the
+   candidate view it keeps its controls visible: the interviewer is reading. */
+.case-expand-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: rgba(10, 14, 20, 0.94);
+  display: flex;
+  flex-direction: column;
+}
+
+.case-expand-overlay__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-white, #fff);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.case-expand-overlay__title {
+  font-family: var(--font-family, 'Montserrat', sans-serif);
+  font-weight: 700;
+  color: var(--primary-dark, #042742);
+  white-space: nowrap;
+}
+
+.case-expand-overlay__jumps {
+  flex: 1;
+  min-width: 0;
+}
+
+.case-expand-overlay__indicator {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary, #64748b);
+  white-space: nowrap;
+}
+
+/* Case on the left, notes on the right when the page passes them in. */
+.case-expand-overlay__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.case-expand-overlay__body.has-notes {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+}
+
+.case-expand-overlay__notes {
+  overflow-y: auto;
+  background: var(--bg-white, #fff);
+  border-left: 1px solid var(--border-color, #e5e7eb);
+  padding: 12px;
+}
+
+.case-expand-overlay__stage {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 88px;
+}
+
+/* Fits the screen whichever way is tighter, keeping the page's shape. */
+.case-expand-overlay__page {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  height: 100%;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
+}
+.case-expand-overlay__page.is-interviewer-only {
+  outline: 3px solid #f59e0b;
+}
+
+@media (max-width: 700px) {
+  .case-expand-overlay__bar {
+    flex-wrap: wrap;
+  }
+  .case-expand-overlay__stage {
+    padding: 8px;
+  }
+}
+
+/* Too narrow for both side by side: case on top, notes below it. */
+@media (max-width: 900px) {
+  .case-expand-overlay__body.has-notes {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  }
+  .case-expand-overlay__notes {
+    border-left: none;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+  }
+}
+
+/* Rubric rows in a narrow column (beside the case, or in focus view): the
+   label sits above a full-width notes box instead of taking half the row. */
+.case-split__rubric .casing-section-row,
+.case-expand-overlay__notes .casing-section-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+.case-split__rubric .casing-sections,
+.case-expand-overlay__notes .casing-sections {
+  gap: 0.75rem;
 }

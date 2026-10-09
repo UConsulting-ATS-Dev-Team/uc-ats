@@ -7,7 +7,9 @@ import ImageCache from '../../utils/imageCache';
 // image endpoint is auth-gated. Only requests the given `src`, so the caller
 // controls exactly which page URLs enter the DOM (important for candidate
 // preview mode, where interviewer-only pages must never be requested).
-const CasePageImage = ({ src, alt, style, className, onLoaded }) => {
+// `errorLabel` replaces the default "Page unavailable" (a thumbnail has room for
+// a word, the main stage for a sentence on how to fix it).
+const CasePageImage = ({ src, alt, style, className, onLoaded, errorLabel = 'Page unavailable' }) => {
   const [imageUrl, setImageUrl] = useState(() => ImageCache.getCachedImage(src) || null);
   const [status, setStatus] = useState(src ? 'loading' : 'error');
 
@@ -72,9 +74,11 @@ const CasePageImage = ({ src, alt, style, className, onLoaded }) => {
           color: 'var(--text-secondary)',
           fontSize: '0.85rem',
           border: '1px dashed var(--border-light)',
+          textAlign: 'center',
+          padding: '4px',
         }}
       >
-        Page unavailable
+        {errorLabel}
       </div>
     );
   }

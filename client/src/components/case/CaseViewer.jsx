@@ -37,10 +37,63 @@ function nearestVisibleId(visible, fromPageNumber) {
   return best.id;
 }
 
+// The page's own shape, so the stage hugs the slide instead of padding it out.
+// Pages uploaded without dimensions fall back to a slide's 16:9.
+function pageAspect(page) {
+  return page?.width && page?.height ? `${page.width} / ${page.height}` : '16 / 9';
+}
+
+const MISSING_PAGE_TEXT =
+  'This page’s image is missing. An admin can restore it with “Re-upload page images” on the Cases page.';
+
+// Arrow keys turn pages, except while the interviewer is typing a note.
+function isTypingTarget(el) {
+  return Boolean(el) && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.isContentEditable);
+}
+
+// Exhibits by name, then interviewer guides as one numbered group, so a deck
+// with many guides still fits on one line.
+function JumpBar({ exhibits, guides, currentPageId, onJump, className = '' }) {
+  if (!exhibits.length && !guides.length) return null;
+  return (
+    <div className={`case-viewer__jumpbar ${className}`}>
+      {exhibits.map((p) => (
+        <button
+          key={p.id}
+          className={`case-viewer__jump ${currentPageId === p.id ? 'is-active' : ''}`}
+          onClick={() => onJump(p.id)}
+        >
+          {p.exhibitLabel || `Exhibit (p.${p.pageNumber})`}
+        </button>
+      ))}
+      {guides.length > 0 && (
+        <span className="case-viewer__jump-group">
+          <span className="case-viewer__jump-group-label">Guides</span>
+          {guides.map((p) => (
+            <button
+              key={p.id}
+              className={`case-viewer__jump case-viewer__jump--guide ${
+                p.exhibitLabel ? '' : 'case-viewer__jump--num'
+              } ${currentPageId === p.id ? 'is-active' : ''}`}
+              onClick={() => onJump(p.id)}
+              aria-label={p.exhibitLabel || `Guide, page ${p.pageNumber}`}
+            >
+              {p.exhibitLabel || p.pageNumber}
+            </button>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // Live case viewer for the interviewer screen. Renders the assigned case's pages
 // large with prev/next + keyboard nav, a thumbnail strip, an exhibit quick-jump
 // bar, a case override control (lead/admin), and a full-screen candidate preview
 // mode. If no case is assigned, shows an inline picker instead of a dead-end.
+//
+// `renderNotes` draws the interviewer's notes beside the case in focus view, so
+// on a laptop the slide can be read full size without losing the rubric.
 export default function CaseViewer({
   interviewId,
   applicationId,
@@ -48,6 +101,7 @@ export default function CaseViewer({
   canManage = false,
   activeCases = [],
   onAssignmentChange,
+  renderNotes,
 }) {
   const [caseData, setCaseData] = useState(null);
   const [pages, setPages] = useState([]);
@@ -62,6 +116,8 @@ export default function CaseViewer({
   const [confirmSwitch, setConfirmSwitch] = useState(null);
   const [previewActive, setPreviewActive] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  // Focus view: the interviewer's full-screen case (guides included) and notes.
+  const [expanded, setExpanded] = useState(false);
   // Bumped on every load so a slow response for a case the user has already
   // switched away from cannot overwrite the current one.
   const loadSeqRef = useRef(0);
@@ -184,7 +240,12 @@ export default function CaseViewer({
     }
   }, []);
 
-  const togglePreview = () => (previewActive ? exitPreview() : enterPreview());
+  const togglePreview = () => {
+    if (previewActive) return exitPreview();
+    // The candidate view replaces the interviewer one; never both on screen.
+    setExpanded(false);
+    return enterPreview();
+  };
 
   // Focus the overlay once mounted (fullscreen itself is requested in the click
   // gesture inside enterPreview).
@@ -208,9 +269,24 @@ export default function CaseViewer({
   }, [previewActive, exitPreview]);
 
   // Hotkeys: Cmd/Ctrl+Shift+P toggles (enter only when this viewer is focused, so
-  // stacked viewers don't all fire); Esc + arrows while in preview.
+  // stacked viewers don't all fire); Esc + arrows while in preview or expanded.
   useEffect(() => {
     const onKey = (e) => {
+      if (expanded && !previewActive) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setExpanded(false);
+        } else if (isTypingTarget(document.activeElement)) {
+          // Arrows move the cursor in a note, not the page.
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          next();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          prev();
+        }
+        return;
+      }
       const toggle = (e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'P' || e.key === 'p');
       if (toggle) {
         if (previewActive) {
@@ -419,6 +495,83 @@ export default function CaseViewer({
       )
     : null;
 
+  const expandOverlay =
+    expanded && !previewActive
+      ? createPortal(
+          <div className="case-expand-overlay" role="dialog" aria-label={`${caseData?.title || 'Case'}, focus view`}>
+            <div className="case-expand-overlay__bar">
+              <span className="case-expand-overlay__title">{caseData?.title || 'Case'}</span>
+              <JumpBar
+                exhibits={exhibits}
+                guides={guides}
+                currentPageId={currentPage?.id}
+                onJump={jumpToPage}
+                className="case-expand-overlay__jumps"
+              />
+              <span className="case-expand-overlay__indicator">
+                Page {currentPage ? currentIndex + 1 : 0} / {visiblePages.length}
+              </span>
+              <button className="case-viewer__btn" onClick={() => setExpanded(false)} title="Close (Esc)">
+                Close
+              </button>
+            </div>
+
+            <div className={`case-expand-overlay__body ${renderNotes ? 'has-notes' : ''}`}>
+              <div className="case-expand-overlay__stage">
+                {currentPage ? (
+                  <div
+                    className={`case-expand-overlay__page ${
+                      currentPage.pageType === 'INTERVIEWER_ONLY' ? 'is-interviewer-only' : ''
+                    }`}
+                    style={{ aspectRatio: pageAspect(currentPage) }}
+                  >
+                    {currentPage.pageType === 'INTERVIEWER_ONLY' && (
+                      <div className="case-viewer__io-badge">Interviewer only — hidden from candidate view</div>
+                    )}
+                    <CasePageImage
+                      key={currentPage.id}
+                      src={`/api/cases/${caseId}/pages/${currentPage.id}/image`}
+                      alt={`Page ${currentPage.pageNumber}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      errorLabel={MISSING_PAGE_TEXT}
+                    />
+                  </div>
+                ) : (
+                  <div style={{ color: '#fff' }}>No page to display.</div>
+                )}
+
+                {visiblePages.length > 1 && (
+                  <>
+                    <button
+                      className="case-preview-overlay__nav case-preview-overlay__nav--prev"
+                      onClick={prev}
+                      disabled={currentIndex === 0}
+                      aria-label="Previous page"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      className="case-preview-overlay__nav case-preview-overlay__nav--next"
+                      onClick={next}
+                      disabled={currentIndex === visiblePages.length - 1}
+                      aria-label="Next page"
+                    >
+                      ›
+                    </button>
+                  </>
+                )}
+              </div>
+              {renderNotes && (
+                <aside className="case-expand-overlay__notes" aria-label="Interviewer notes">
+                  {renderNotes()}
+                </aside>
+              )}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
   return (
     <div className="case-viewer" ref={containerRef} tabIndex={0}>
       {/* Header: case title + candidate-view toggle + override control */}
@@ -428,6 +581,15 @@ export default function CaseViewer({
           {assignment?.overriddenAt && <span className="case-viewer__badge-overridden">overridden</span>}
         </div>
         <div className="case-viewer__header-actions">
+          {!previewActive && pages.length > 0 && (
+            <button
+              className="case-viewer__btn case-viewer__preview-btn"
+              onClick={() => setExpanded(true)}
+              title="The case full screen, guides included, beside your notes (Esc to close)"
+            >
+              Focus view
+            </button>
+          )}
           <button
             className="case-viewer__btn case-viewer__btn--primary case-viewer__preview-btn"
             onClick={togglePreview}
@@ -470,37 +632,14 @@ export default function CaseViewer({
         </div>
       ) : (
         <>
-          {/* Exhibit / guide quick-jump bar */}
-          {(exhibits.length > 0 || guides.length > 0) && (
-            <div className="case-viewer__jumpbar">
-              {exhibits.map((p) => (
-                <button
-                  key={p.id}
-                  className={`case-viewer__jump ${currentPage?.id === p.id ? 'is-active' : ''}`}
-                  onClick={() => jumpToPage(p.id)}
-                >
-                  {p.exhibitLabel || `Exhibit (p.${p.pageNumber})`}
-                </button>
-              ))}
-              {guides.map((p) => (
-                <button
-                  key={p.id}
-                  className={`case-viewer__jump case-viewer__jump--guide ${
-                    currentPage?.id === p.id ? 'is-active' : ''
-                  }`}
-                  onClick={() => jumpToPage(p.id)}
-                >
-                  {p.exhibitLabel || `Guide (p.${p.pageNumber})`}
-                </button>
-              ))}
-            </div>
-          )}
+          <JumpBar exhibits={exhibits} guides={guides} currentPageId={currentPage?.id} onJump={jumpToPage} />
 
           {/* Main page */}
           <div
             className={`case-viewer__stage ${
               currentPage?.pageType === 'INTERVIEWER_ONLY' ? 'is-interviewer-only' : ''
             }`}
+            style={currentPage && !loading ? { aspectRatio: pageAspect(currentPage) } : undefined}
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.key === 'ArrowRight') {
@@ -524,7 +663,8 @@ export default function CaseViewer({
                   src={`/api/cases/${caseId}/pages/${currentPage.id}/image`}
                   alt={`Page ${currentPage.pageNumber}`}
                   className="case-viewer__img"
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  errorLabel={MISSING_PAGE_TEXT}
                 />
               </>
             ) : (
@@ -567,12 +707,15 @@ export default function CaseViewer({
                   }`}
                   onClick={() => setCurrentPageId(p.id)}
                   title={p.exhibitLabel || `Page ${p.pageNumber}`}
+                  style={{ aspectRatio: pageAspect(p) }}
                 >
                   <CasePageImage
                     src={`/api/cases/${caseId}/pages/${p.id}/image`}
                     alt={`Thumb ${p.pageNumber}`}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    errorLabel="Missing"
                   />
+                  <span className="case-viewer__thumb-num">{i + 1}</span>
                 </button>
               ))}
             </div>
@@ -605,6 +748,7 @@ export default function CaseViewer({
       )}
 
       {previewOverlay}
+      {expandOverlay}
     </div>
   );
 }
