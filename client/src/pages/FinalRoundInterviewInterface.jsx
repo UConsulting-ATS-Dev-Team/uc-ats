@@ -869,7 +869,7 @@ export default function FinalRoundInterviewInterface() {
                             checked={evaluation.candidateDetails?.accelerator || false}
                             onChange={(e) => updateCandidateDetails(application.id, 'accelerator', e.target.checked)}
                           />
-                          Weekly Accelerator Mondays 6:00 - 7:00 during the rest of Winter Quarter
+                          Weekly Accelerator Mondays 6:00 - 7:00 during the rest of Fall Quarter
                         </label>
                       </div>
                       
@@ -891,7 +891,7 @@ export default function FinalRoundInterviewInterface() {
                             checked={evaluation.candidateDetails?.dues || false}
                             onChange={(e) => updateCandidateDetails(application.id, 'dues', e.target.checked)}
                           />
-                          One time membership fee of $230
+                          One time membership fee of $270
                         </label>
                       </div>
                     </div>
