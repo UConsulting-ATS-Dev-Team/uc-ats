@@ -109,7 +109,10 @@ class ImageCache {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Failed to load image: ${response.status} ${response.statusText} - ${errorText}`);
+      const error = new Error(`Failed to load image: ${response.status} ${response.statusText} - ${errorText}`);
+      // Kept so a caller can tell "not there" (404) from "could not load".
+      error.status = response.status;
+      throw error;
     }
 
     const contentType = response.headers.get('content-type') || '';

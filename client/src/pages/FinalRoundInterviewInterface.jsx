@@ -525,7 +525,62 @@ export default function FinalRoundInterviewInterface() {
         <div className="applications-grid">
           {applications.map(application => {
             const evaluation = getEvaluation(application.id);
-            
+
+            // The five casing note boxes. Drawn in the rubric column and again in
+            // the case viewer's focus view; both write the same notes.
+            const renderCasingNotes = () => (
+              <div className="casing-sections">
+                {casingSections.map((section) => {
+                  const IconComponent = section.icon;
+                  return (
+                    <div key={section.id} className="casing-section-row">
+                      <div className="section-cell">
+                        <h5 className="section-text">
+                          <IconComponent className="section-icon-small" />
+                          {section.title}
+                        </h5>
+                      </div>
+                      <div className="interviewer-notes-cell">
+                        <textarea
+                          className="notes-textarea"
+                          value={evaluation.casingNotes?.[section.id] || ''}
+                          onChange={(e) => updateCasingNotes(application.id, section.id, e.target.value)}
+                          placeholder="Your notes..."
+                          aria-label={`${section.title} notes`}
+                          rows={5}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+
+            // Focus view covers the header, so it carries its own save status
+            // and Save button: a failed autosave must not go unseen there.
+            const renderFocusNotes = () => (
+              <>
+                <div className="case-focus-notes__header">
+                  <span className="case-focus-notes__title">Casing notes</span>
+                  {saveStatus[application.id]?.type === 'error' && (
+                    <span className="save-status error" role="alert">
+                      {saveStatus[application.id].message}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="save-btn"
+                    onClick={() => saveEvaluation(application.id)}
+                    disabled={saving}
+                  >
+                    <CheckIcon className="btn-icon" />
+                    Save
+                  </button>
+                </div>
+                {renderCasingNotes()}
+              </>
+            );
+
             return (
               <div key={application.id} className="application-card">
                 {/* Application Header */}
@@ -757,6 +812,7 @@ export default function FinalRoundInterviewInterface() {
                           canManage={canManageCase}
                           activeCases={activeCases}
                           onAssignmentChange={handleAssignmentChange}
+                          renderNotes={renderFocusNotes}
                         />
                       </div>
 
@@ -776,32 +832,7 @@ export default function FinalRoundInterviewInterface() {
                               Hide ▸
                             </button>
                           </div>
-                          <div className="casing-sections">
-                            {casingSections.map((section) => {
-                              const IconComponent = section.icon;
-                              return (
-                                <div key={section.id} className="casing-section-row">
-                                  <div className="section-cell">
-                                    <h5 className="section-text">
-                                      <IconComponent className="section-icon-small" />
-                                      {section.title}
-                                    </h5>
-                                  </div>
-                                  <div className="interviewer-notes-cell">
-                                    <textarea
-                                      className="notes-textarea"
-                                      value={evaluation.casingNotes?.[section.id] || ''}
-                                      onChange={(e) =>
-                                        updateCasingNotes(application.id, section.id, e.target.value)
-                                      }
-                                      placeholder="Your notes..."
-                                      rows={5}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
+                          {renderCasingNotes()}
                         </div>
                       )}
                     </div>
