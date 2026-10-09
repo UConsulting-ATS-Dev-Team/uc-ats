@@ -655,3 +655,17 @@
 .case-expand-overlay__notes .casing-sections {
   gap: 0.75rem;
 }
+
+/* Header of the notes column in focus view: save status and Save. */
+.case-focus-notes__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.case-focus-notes__title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text-primary, #042742);
+  margin-right: auto;
+}

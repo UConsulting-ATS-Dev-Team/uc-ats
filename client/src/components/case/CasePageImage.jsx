@@ -7,11 +7,22 @@ import ImageCache from '../../utils/imageCache';
 // image endpoint is auth-gated. Only requests the given `src`, so the caller
 // controls exactly which page URLs enter the DOM (important for candidate
 // preview mode, where interviewer-only pages must never be requested).
-// `errorLabel` replaces the default "Page unavailable" (a thumbnail has room for
-// a word, the main stage for a sentence on how to fix it).
-const CasePageImage = ({ src, alt, style, className, onLoaded, errorLabel = 'Page unavailable' }) => {
+// `errorLabel` replaces the default "Page unavailable" for any failure, and
+// `missingLabel` for the server saying the file is gone (404), which is the one
+// failure re-uploading fixes. A thumbnail has room for a word, the main stage
+// for a sentence.
+const CasePageImage = ({
+  src,
+  alt,
+  style,
+  className,
+  onLoaded,
+  errorLabel = 'Page unavailable',
+  missingLabel = errorLabel,
+}) => {
   const [imageUrl, setImageUrl] = useState(() => ImageCache.getCachedImage(src) || null);
   const [status, setStatus] = useState(src ? 'loading' : 'error');
+  const [missing, setMissing] = useState(false);
 
   useEffect(() => {
     if (!src) {
@@ -27,6 +38,7 @@ const CasePageImage = ({ src, alt, style, className, onLoaded, errorLabel = 'Pag
       return;
     }
     setStatus('loading');
+    setMissing(false);
     ImageCache.loadImage(src, apiClient.token)
       .then((url) => {
         if (!mounted) return;
@@ -34,8 +46,10 @@ const CasePageImage = ({ src, alt, style, className, onLoaded, errorLabel = 'Pag
         setStatus('ready');
         onLoaded?.();
       })
-      .catch(() => {
-        if (mounted) setStatus('error');
+      .catch((error) => {
+        if (!mounted) return;
+        setMissing(error?.status === 404);
+        setStatus('error');
       });
     return () => {
       mounted = false;
@@ -78,7 +92,7 @@ const CasePageImage = ({ src, alt, style, className, onLoaded, errorLabel = 'Pag
           padding: '4px',
         }}
       >
-        {errorLabel}
+        {missing ? missingLabel : errorLabel}
       </div>
     );
   }

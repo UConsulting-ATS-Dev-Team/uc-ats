@@ -45,6 +45,7 @@ function pageAspect(page) {
 
 const MISSING_PAGE_TEXT =
   'This page’s image is missing. An admin can restore it with “Re-upload page images” on the Cases page.';
+const FAILED_PAGE_TEXT = 'This page could not be loaded. Check your connection, then open the page again.';
 
 // Arrow keys turn pages, except while the interviewer is typing a note.
 function isTypingTarget(el) {
@@ -127,6 +128,8 @@ export default function CaseViewer({
   const hideTimerRef = useRef(null);
   const enteredFullscreenRef = useRef(false);
   const enterTimeRef = useRef(0);
+  const focusDialogRef = useRef(null);
+  const focusButtonRef = useRef(null);
 
   const caseId = assignment?.caseId || null;
 
@@ -240,6 +243,35 @@ export default function CaseViewer({
     }
   }, []);
 
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const dialog = focusDialogRef.current;
+    dialog?.focus();
+    const trapTab = (e) => {
+      if (e.key !== 'Tab' || !dialog) return;
+      const focusable = dialog.querySelectorAll(
+        'button:not([disabled]), textarea, input, select, [href], [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    dialog?.addEventListener('keydown', trapTab);
+    const opener = focusButtonRef.current;
+    return () => {
+      dialog?.removeEventListener('keydown', trapTab);
+      // Back to where the interviewer was, unless the candidate view took over.
+      if (opener && document.contains(opener)) opener.focus();
+    };
+  }, [expanded]);
+
   const togglePreview = () => {
     if (previewActive) return exitPreview();
     // The candidate view replaces the interviewer one; never both on screen.
@@ -272,8 +304,13 @@ export default function CaseViewer({
   // stacked viewers don't all fire); Esc + arrows while in preview or expanded.
   useEffect(() => {
     const onKey = (e) => {
+      const toggleCombo = (e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'P' || e.key === 'p');
       if (expanded && !previewActive) {
-        if (e.key === 'Escape') {
+        if (toggleCombo) {
+          // Straight to the candidate view; togglePreview closes this one first.
+          e.preventDefault();
+          togglePreview();
+        } else if (e.key === 'Escape') {
           e.preventDefault();
           setExpanded(false);
         } else if (isTypingTarget(document.activeElement)) {
@@ -498,7 +535,14 @@ export default function CaseViewer({
   const expandOverlay =
     expanded && !previewActive
       ? createPortal(
-          <div className="case-expand-overlay" role="dialog" aria-label={`${caseData?.title || 'Case'}, focus view`}>
+          <div
+            className="case-expand-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${caseData?.title || 'Case'}, focus view`}
+            ref={focusDialogRef}
+            tabIndex={-1}
+          >
             <div className="case-expand-overlay__bar">
               <span className="case-expand-overlay__title">{caseData?.title || 'Case'}</span>
               <JumpBar
@@ -533,7 +577,8 @@ export default function CaseViewer({
                       src={`/api/cases/${caseId}/pages/${currentPage.id}/image`}
                       alt={`Page ${currentPage.pageNumber}`}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                      errorLabel={MISSING_PAGE_TEXT}
+                      errorLabel={FAILED_PAGE_TEXT}
+                      missingLabel={MISSING_PAGE_TEXT}
                     />
                   </div>
                 ) : (
@@ -583,6 +628,7 @@ export default function CaseViewer({
         <div className="case-viewer__header-actions">
           {!previewActive && pages.length > 0 && (
             <button
+              ref={focusButtonRef}
               className="case-viewer__btn case-viewer__preview-btn"
               onClick={() => setExpanded(true)}
               title="The case full screen, guides included, beside your notes (Esc to close)"
@@ -664,7 +710,8 @@ export default function CaseViewer({
                   alt={`Page ${currentPage.pageNumber}`}
                   className="case-viewer__img"
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  errorLabel={MISSING_PAGE_TEXT}
+                  errorLabel={FAILED_PAGE_TEXT}
+                  missingLabel={MISSING_PAGE_TEXT}
                 />
               </>
             ) : (
@@ -713,7 +760,8 @@ export default function CaseViewer({
                     src={`/api/cases/${caseId}/pages/${p.id}/image`}
                     alt={`Thumb ${p.pageNumber}`}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    errorLabel="Missing"
+                    errorLabel="Error"
+                    missingLabel="Missing"
                   />
                   <span className="case-viewer__thumb-num">{i + 1}</span>
                 </button>

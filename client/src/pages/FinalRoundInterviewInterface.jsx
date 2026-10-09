@@ -556,6 +556,31 @@ export default function FinalRoundInterviewInterface() {
               </div>
             );
 
+            // Focus view covers the header, so it carries its own save status
+            // and Save button: a failed autosave must not go unseen there.
+            const renderFocusNotes = () => (
+              <>
+                <div className="case-focus-notes__header">
+                  <span className="case-focus-notes__title">Casing notes</span>
+                  {saveStatus[application.id]?.type === 'error' && (
+                    <span className="save-status error" role="alert">
+                      {saveStatus[application.id].message}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="save-btn"
+                    onClick={() => saveEvaluation(application.id)}
+                    disabled={saving}
+                  >
+                    <CheckIcon className="btn-icon" />
+                    Save
+                  </button>
+                </div>
+                {renderCasingNotes()}
+              </>
+            );
+
             return (
               <div key={application.id} className="application-card">
                 {/* Application Header */}
@@ -787,7 +812,7 @@ export default function FinalRoundInterviewInterface() {
                           canManage={canManageCase}
                           activeCases={activeCases}
                           onAssignmentChange={handleAssignmentChange}
-                          renderNotes={renderCasingNotes}
+                          renderNotes={renderFocusNotes}
                         />
                       </div>
 

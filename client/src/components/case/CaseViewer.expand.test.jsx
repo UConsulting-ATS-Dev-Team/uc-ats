@@ -99,12 +99,31 @@ describe('focus view', () => {
     expect(within(dialog).getByText('Page 1 / 3')).toBeInTheDocument();
   });
 
-  it('closes when the candidate view opens, so guides are never left on screen', async () => {
-    await renderViewer();
-    openFocus();
-    fireEvent.click(screen.getByRole('button', { name: 'Candidate View' }));
+  it('switches to the candidate view on its shortcut, closing itself so guides are never left on screen', async () => {
+    await renderViewer({ renderNotes: () => <textarea aria-label="Framework notes" defaultValue="" /> });
+    const dialog = openFocus();
+    within(dialog).getByLabelText('Framework notes').focus();
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'P', metaKey: true, shiftKey: true });
+
+    expect(screen.queryByRole('dialog', { name: /focus view/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Exit candidate view', { selector: '.case-preview-overlay__exit' })).toBeInTheDocument();
     expect(screen.queryByText(/Interviewer only/)).not.toBeInTheDocument();
+  });
+
+  it('takes keyboard focus, keeps Tab inside, and gives focus back on close', async () => {
+    await renderViewer();
+    const opener = screen.getByRole('button', { name: 'Focus view' });
+    opener.focus();
+    const dialog = openFocus();
+
+    expect(document.activeElement).toBe(dialog);
+    const buttons = within(dialog).getAllByRole('button').filter((b) => !b.disabled);
+    buttons[buttons.length - 1].focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(buttons[0]);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.activeElement).toBe(opener);
   });
 });
