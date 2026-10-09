@@ -1,5 +1,5 @@
 import express from 'express';
-import { allApplicationIdsForInterview } from '../services/interviewRoster.js';
+import { allApplicationIdsForInterview, getRosterForInterview } from '../services/interviewRoster.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -511,7 +511,7 @@ router.get('/assignments/for-interview', requireAdminOrMember, async (req, res) 
     const appIds = await applicationIdsForInterview(interview);
     if (appIds.length === 0) return res.json([]);
 
-    const [applications, assignments] = await Promise.all([
+    const [applications, assignments, roster] = await Promise.all([
       prisma.application.findMany({
         where: { id: { in: appIds } },
         select: { id: true, firstName: true, lastName: true, major1: true, graduationYear: true },
@@ -520,7 +520,34 @@ router.get('/assignments/for-interview', requireAdminOrMember, async (req, res) 
         where: { interviewId },
         include: { case: { select: { id: true, title: true, status: true } } },
       }),
+      getRosterForInterview(interviewId),
     ]);
+
+    // Interviewers per candidate: the member groups assigned to whichever
+    // application group the candidate sits in.
+    const memberIdsByGroup = new Map();
+    for (const group of roster?.memberGroups ?? []) {
+      for (const appGroupId of roster.groupAssignments?.[group.id] ?? []) {
+        const ids = memberIdsByGroup.get(appGroupId) ?? new Set();
+        for (const id of group.memberIds ?? []) ids.add(id);
+        memberIdsByGroup.set(appGroupId, ids);
+      }
+    }
+    const interviewerIdsByApp = new Map();
+    for (const group of roster?.applicationGroups ?? []) {
+      const memberIds = memberIdsByGroup.get(group.id);
+      if (!memberIds) continue;
+      for (const applicationId of group.applicationIds ?? []) {
+        const ids = interviewerIdsByApp.get(applicationId) ?? new Set();
+        for (const id of memberIds) ids.add(id);
+        interviewerIdsByApp.set(applicationId, ids);
+      }
+    }
+    const interviewerUsers = await prisma.user.findMany({
+      where: { id: { in: [...new Set([...interviewerIdsByApp.values()].flatMap((ids) => [...ids]))] } },
+      select: { id: true, fullName: true, email: true },
+    });
+    const userName = new Map(interviewerUsers.map((u) => [u.id, u.fullName || u.email]));
 
     const byApp = new Map(assignments.map((a) => [a.applicationId, a]));
     const result = applications.map((app) => {
@@ -530,6 +557,10 @@ router.get('/assignments/for-interview', requireAdminOrMember, async (req, res) 
         name: `${app.firstName} ${app.lastName}`,
         major: app.major1,
         year: app.graduationYear,
+        interviewers: [...(interviewerIdsByApp.get(app.id) ?? [])]
+          .map((id) => userName.get(id))
+          .filter(Boolean)
+          .sort((x, y) => x.localeCompare(y)),
         assignment: a
           ? {
               id: a.id,

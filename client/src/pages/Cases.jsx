@@ -567,7 +567,9 @@ function AssignmentsTab() {
             <TableHead>
               <TableRow>
                 <TableCell>Candidate</TableCell>
-                <TableCell>Major / Year</TableCell>
+                <TableCell>Major</TableCell>
+                <TableCell>Grad Year</TableCell>
+                <TableCell>Interviewers</TableCell>
                 <TableCell>Assigned Case</TableCell>
                 <TableCell>Status</TableCell>
               </TableRow>
@@ -575,7 +577,7 @@ function AssignmentsTab() {
             <TableBody>
               {candidates.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} align="center" sx={{ color: 'text.secondary', py: 4 }}>
+                  <TableCell colSpan={6} align="center" sx={{ color: 'text.secondary', py: 4 }}>
                     No candidates found for this interview.
                   </TableCell>
                 </TableRow>
@@ -585,8 +587,10 @@ function AssignmentsTab() {
                   <TableCell data-label="Candidate">
                     <Typography sx={{ fontWeight: 600 }}>{c.name}</Typography>
                   </TableCell>
-                  <TableCell data-label="Major / Year">
-                    {c.major || '—'} {c.year ? `· ${c.year}` : ''}
+                  <TableCell data-label="Major">{c.major || '—'}</TableCell>
+                  <TableCell data-label="Grad Year">{c.year || '—'}</TableCell>
+                  <TableCell data-label="Interviewers">
+                    {c.interviewers?.length ? c.interviewers.join(', ') : '—'}
                   </TableCell>
                   <TableCell data-label="Assigned Case">
                     <FormControl size="small" sx={{ minWidth: 220 }}>
