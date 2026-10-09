@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import apiClient from '../utils/api';
 import stagingCache from '../utils/stagingCache';
 import Staging from './Staging';
+import { stagingMax } from '../utils/documentRubrics';
 
 vi.mock('../components/AccessControl', () => ({
   default: ({ children }) => children,
@@ -64,6 +65,7 @@ function snapshot(options) {
   const {
     candidates,
     snapshotVersion,
+    applications = [],
     perRoundDecisions = { resume: {}, coffee: {}, firstRound: {}, final: {} },
   } = options;
   // `in`, not `??`: an explicitly null token is a case worth testing and must not be
@@ -78,7 +80,7 @@ function snapshot(options) {
         snapshotVersion,
         candidates,
         activeCycle: { id: 'cycle-1', name: 'Fall 2026' },
-        applications: [],
+        applications,
         events: [],
         reviewTeams: [],
         perRoundDecisions,
@@ -557,5 +559,82 @@ describe('Staging coffee chat session filter', () => {
     await waitFor(() => expect(screen.queryByText('Cara Example')).not.toBeInTheDocument());
     expect(screen.getByText('Alice Example')).toBeInTheDocument();
     expect(screen.getByText('Bea Example')).toBeInTheDocument();
+  });
+});
+
+describe('Staging score bar', () => {
+  const inRound = (id, firstName, currentRound, overall) => ({
+    ...candidate(id, firstName), currentRound, scores: overall == null ? {} : { overall },
+  });
+  const evaluation = (interviewType, fields) => ({ interview: { interviewType }, ...fields });
+  const yes = (interviewType) => evaluation(interviewType, { decision: 'YES' });
+  const maybeNo = (interviewType) => evaluation(interviewType, { decision: 'MAYBE_NO' });
+  const rubric = (behavioralTotal, marketSizingTotal) =>
+    evaluation('ROUND_ONE', { decision: 'YES', behavioralTotal, marketSizingTotal });
+
+  const candidates = [
+    inRound('c1', 'Alice', 1, stagingMax(null) / 2),
+    inRound('c2', 'Bea', 2), inRound('c3', 'Cara', 2),
+    inRound('c4', 'Dina', 3), inRound('c5', 'Eve', 3),
+    inRound('c6', 'Fay', 4), inRound('c7', 'Gia', 4),
+  ];
+  const summaries = {
+    c2: { evaluations: [yes('COFFEE_CHAT'), yes('COFFEE_CHAT')] },
+    c3: { evaluations: [maybeNo('COFFEE_CHAT')] },
+    c4: { evaluations: [rubric(15, 15), rubric(15, 15)] },
+    c5: { evaluations: [rubric(6, 9)] },
+    c6: { evaluations: [yes('FINAL_ROUND'), yes('FINAL_ROUND')] },
+    c7: { evaluations: [maybeNo('FINAL_ROUND')] },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stagingCache.invalidate();
+    apiClient.get.mockImplementation(snapshot({
+      candidates,
+      applications: candidates.map(({ id, currentRound }) => ({ id, candidateId: id, currentRound })),
+      snapshotVersion: 300,
+    }));
+    apiClient.post.mockImplementation((endpoint) => Promise.resolve(
+      endpoint === '/admin/applications/evaluation-summaries' ? summaries : {}
+    ));
+  });
+
+  afterEach(() => {
+    cleanup();
+    stagingCache.invalidate();
+  });
+
+  const barOf = (name) => screen.getByText(name).closest('tr').querySelector('.staging-score-fill');
+  const openTab = async (tab, name) => {
+    await renderStaging();
+    await screen.findByText('Alice Example');
+    if (tab) fireEvent.click(screen.getByRole('tab', { name: tab }));
+    await waitFor(() => expect(barOf(name)).not.toBeNull());
+  };
+
+  it('fills the Final Round bar for a unanimous YES', async () => {
+    await openTab(/final round/i, 'Fay Example');
+    expect(barOf('Fay Example').style.width).toBe('100%');
+    expect(barOf('Fay Example')).toHaveClass('staging-score-fill--high');
+    expect(barOf('Gia Example').style.width).toBe('25%');
+  });
+
+  it('fills the Coffee Chats bar for a unanimous YES', async () => {
+    await openTab(/coffee chat/i, 'Bea Example');
+    expect(barOf('Bea Example').style.width).toBe('100%');
+    expect(barOf('Bea Example')).toHaveClass('staging-score-fill--high');
+    expect(barOf('Cara Example').style.width).toBe('25%');
+  });
+
+  it('keeps First Round out of 10', async () => {
+    await openTab(/first round/i, 'Dina Example');
+    expect(barOf('Dina Example').style.width).toBe('100%');
+    expect(barOf('Eve Example').style.width).toBe('50%');
+  });
+
+  it('keeps Resume Review out of the rubric total', async () => {
+    await openTab(null, 'Alice Example');
+    expect(barOf('Alice Example').style.width).toBe('50%');
   });
 });
