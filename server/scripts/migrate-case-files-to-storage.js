@@ -10,9 +10,9 @@
 // files: each one is uploaded under the key its row already names, so the row,
 // and the page's tags, stay as they are.
 //
-// A file already in the bucket is left alone, which makes the script safe to
-// re-run. A row whose file is in neither place is listed at the end: that case
-// needs "Re-upload page images" on the Cases page.
+// A file already in the bucket is never replaced, which makes the script safe
+// to re-run; a storage error other than "not there" stops it. A row whose file
+// is in neither place is listed at the end with what to do about it.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname } from 'node:path';
@@ -24,7 +24,7 @@ loadEnv({ path: join(__dirname, '..', '.env') });
 
 const { default: prisma } = await import('../src/prismaClient.js');
 const { default: supabase, isSupabaseAvailable } = await import('../src/supabaseClient.js');
-const { CASE_BUCKET, putCaseFile } = await import('../src/services/caseStorage.js');
+const { CASE_BUCKET, putCaseFile, isMissingObjectError } = await import('../src/services/caseStorage.js');
 const { LOCAL_STORAGE_ROOT } = await import('../src/services/resumeStorage.js');
 
 const apply = process.argv.includes('--apply');
@@ -42,9 +42,12 @@ if (!isSupabaseAvailable()) {
   process.exit(1);
 }
 
+// Throws on anything but a clear yes or no: an outage read as "absent" would
+// upload an older disk copy over what is there.
 const inBucket = async (key) => {
-  const { data, error } = await supabase.storage.from(CASE_BUCKET).download(key);
-  return !error && Boolean(data);
+  const { data, error } = await supabase.storage.from(CASE_BUCKET).exists(key);
+  if (error && !isMissingObjectError(error)) throw error;
+  return data === true;
 };
 
 const cases = await prisma.case.findMany({
@@ -82,7 +85,7 @@ for (const c of cases) {
     }
     if (apply) {
       const contentType = CONTENT_TYPES[extname(file.key).toLowerCase()] || 'application/octet-stream';
-      await putCaseFile(file.key, fs.readFileSync(absolute), contentType);
+      await putCaseFile(file.key, fs.readFileSync(absolute), contentType, { overwrite: false });
     }
     caseCopied++;
   }
@@ -97,13 +100,21 @@ for (const c of cases) {
 }
 
 console.log(`\n${apply ? 'Copied' : 'Would copy'} ${copied}; ${already} already in storage.`);
-if (missing.length) {
-  console.log('\nFiles found nowhere. Re-upload page images for these cases from the Cases page:');
-  for (const m of missing) {
-    const pages = m.labels.filter((l) => l !== 'original PDF').length;
-    const pdf = m.labels.includes('original PDF') ? ' and the original PDF' : '';
-    console.log(`  ${m.title} (${m.id}): ${pages} page image(s)${pdf}`);
-  }
+const missingPages = missing
+  .map((m) => ({ ...m, pages: m.labels.filter((l) => l !== 'original PDF').length }))
+  .filter((m) => m.pages > 0);
+const missingPdfs = missing.filter((m) => m.labels.includes('original PDF'));
+if (missingPages.length) {
+  console.log('\nPage images found nowhere. On the Cases page, use "Re-upload page images..." (keeps tags):');
+  for (const m of missingPages) console.log(`  ${m.title} (${m.id}): ${m.pages} page image(s)`);
+}
+if (missingPdfs.length) {
+  // Nothing displays the original PDF; the pages are what interviewers see.
+  console.log(
+    '\nOriginal PDF found nowhere. It is kept for reference only and nothing shows it. ' +
+      '"Replace PDF..." stores it again but clears every page tag:'
+  );
+  for (const m of missingPdfs) console.log(`  ${m.title} (${m.id})`);
 }
 if (!apply) console.log('\nDry run. Nothing was uploaded; add --apply to copy.');
 

@@ -33,7 +33,10 @@ const ensureBucket = async () => {
   try {
     const { data } = await supabase.storage.getBucket(CASE_BUCKET);
     if (!data) {
-      await supabase.storage.createBucket(CASE_BUCKET, { public: false });
+      const { error } = await supabase.storage.createBucket(CASE_BUCKET, { public: false });
+      // Another server may have created it in between; anything else is a real
+      // failure, and leaving bucketReady unset makes the next upload try again.
+      if (error && !/already exists/i.test(error.message || '')) throw error;
     }
     bucketReady = true;
   } catch (error) {
@@ -41,6 +44,13 @@ const ensureBucket = async () => {
     // reported by the upload itself.
     console.warn('[caseStorage] ensureBucket:', error.message);
   }
+};
+
+// Supabase answers 400 or 404 for an object that is not there (the same rule
+// its own exists() uses). Any other error means storage could not be asked.
+export const isMissingObjectError = (error) => {
+  const status = error?.status ?? error?.originalError?.status;
+  return status === 400 || status === 404;
 };
 
 // A key read back out of the database, resolved against the disk. Null when it
@@ -63,8 +73,9 @@ export const casePdfKey = (caseId) => path.posix.join('cases', caseId, 'original
 /**
  * Store a case file. Refused in production without Supabase, because a local
  * write there is the original bug: accepted now, gone at the next deploy.
+ * `overwrite: false` fails rather than replace an object already stored.
  */
-export const putCaseFile = async (key, buffer, contentType) => {
+export const putCaseFile = async (key, buffer, contentType, { overwrite = true } = {}) => {
   if (!isSupabaseAvailable()) {
     if (isProduction()) {
       console.error(
@@ -85,25 +96,29 @@ export const putCaseFile = async (key, buffer, contentType) => {
   await ensureBucket();
   const { error } = await supabase.storage
     .from(CASE_BUCKET)
-    .upload(key, buffer, { contentType, upsert: true });
+    .upload(key, buffer, { contentType, upsert: overwrite });
   if (error) throw new Error(`Failed to store case file: ${error.message}`);
 };
 
 /**
  * Read a case file back. Falls through to the local disk, which is where every
- * file written before this change is (if it survived). Null when neither has it.
+ * file written before this change is (if it survived). Null only when neither
+ * has it; a storage outage throws, so it is never reported as a lost file.
  *
  * @returns {Promise<Buffer|null>}
  */
 export const getCaseFile = async (key) => {
+  let storageError = null;
   if (isSupabaseAvailable()) {
     const { data, error } = await supabase.storage.from(CASE_BUCKET).download(key);
     if (!error && data) return Buffer.from(await data.arrayBuffer());
+    if (error && !isMissingObjectError(error)) storageError = error;
   }
 
   const absolute = localPath(key);
-  if (!absolute || !fs.existsSync(absolute)) return null;
-  return fsPromises.readFile(absolute);
+  if (absolute && fs.existsSync(absolute)) return fsPromises.readFile(absolute);
+  if (storageError) throw new Error(`Failed to read case file: ${storageError.message}`);
+  return null;
 };
 
 /**
@@ -116,7 +131,8 @@ export const removeCaseFiles = async (keys) => {
 
   if (isSupabaseAvailable()) {
     try {
-      await supabase.storage.from(CASE_BUCKET).remove(list);
+      const { error } = await supabase.storage.from(CASE_BUCKET).remove(list);
+      if (error) console.warn('[caseStorage] remove:', error.message);
     } catch (error) {
       console.warn('[caseStorage] remove:', error.message);
     }

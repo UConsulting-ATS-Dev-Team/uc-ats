@@ -328,27 +328,34 @@ router.post('/:id/pages', requireAdmin, imageUpload.single('image'), async (req,
     const relPath = casePageKey(id, ext);
     await putCaseFile(relPath, req.file.buffer, req.file.mimetype);
 
-    // Re-uploading a page keeps its row (and so its tags) and swaps the image.
-    const previous = await prisma.casePage.findUnique({
-      where: { caseId_pageNumber: { caseId: id, pageNumber } },
-      select: { imageStoragePath: true },
-    });
-
-    const page = await prisma.casePage.upsert({
-      where: { caseId_pageNumber: { caseId: id, pageNumber } },
-      create: {
-        caseId: id,
-        pageNumber,
-        imageStoragePath: relPath,
-        width,
-        height,
-      },
-      update: {
-        imageStoragePath: relPath,
-        width,
-        height,
-      },
-    });
+    let previous;
+    let page;
+    try {
+      // Re-uploading a page keeps its row (and so its tags) and swaps the image.
+      previous = await prisma.casePage.findUnique({
+        where: { caseId_pageNumber: { caseId: id, pageNumber } },
+        select: { imageStoragePath: true },
+      });
+      page = await prisma.casePage.upsert({
+        where: { caseId_pageNumber: { caseId: id, pageNumber } },
+        create: {
+          caseId: id,
+          pageNumber,
+          imageStoragePath: relPath,
+          width,
+          height,
+        },
+        update: {
+          imageStoragePath: relPath,
+          width,
+          height,
+        },
+      });
+    } catch (error) {
+      // No row names the new object; the client's retry uploads another.
+      await removeCaseFiles([relPath]);
+      throw error;
+    }
 
     if (previous && previous.imageStoragePath !== relPath) {
       await removeCaseFiles([previous.imageStoragePath]);

@@ -292,8 +292,9 @@ function CaseLibraryTab({ onChanged }) {
       </Menu>
 
       {/* Hidden input for Replace PDF and Re-upload page images. Re-upload sends
-          the same deck again page by page, so each page keeps its tags; Replace
-          clears the pages first and the deck has to be tagged again. */}
+          the same deck again page by page, so each page keeps its tags (and is
+          refused when the page counts differ); Replace clears the pages first
+          and the deck has to be tagged again. */}
       <input
         ref={replaceInputRef}
         type="file"
@@ -310,6 +311,7 @@ function CaseLibraryTab({ onChanged }) {
           try {
             await runRender(file, c.id, {
               replace,
+              expectPages: replace ? undefined : c.pagesUploaded,
               onProgress: (p) => setRendering({ title: c.title, ...p }),
             });
             navigate(`/cases/${c.id}/tags`);
@@ -336,9 +338,19 @@ function CaseLibraryTab({ onChanged }) {
 }
 
 // Render all pages of `file` and upload them to caseId. Supports per-page retry.
-async function runRender(file, caseId, { replace = false, onProgress } = {}) {
+// `expectPages` is for re-uploading into existing pages: images land on rows by
+// page number, so a deck whose length differs from the case (a page was deleted
+// or added since) would put images under another page's tags. Refused, then.
+async function runRender(file, caseId, { replace = false, expectPages, onProgress } = {}) {
   const pdfDoc = await loadPdfDocument(file);
   const numPages = pdfDoc.numPages;
+
+  if (expectPages !== undefined && numPages !== expectPages) {
+    throw new Error(
+      `This PDF has ${numPages} pages and the case has ${expectPages}, so its pages cannot be matched ` +
+        'to the existing ones. Use Replace PDF instead (the pages will need tagging again).'
+    );
+  }
 
   if (replace) {
     // Replace endpoint clears existing pages first; send the new PDF.

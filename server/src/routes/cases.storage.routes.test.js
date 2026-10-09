@@ -10,8 +10,10 @@ import jwt from 'jsonwebtoken';
 import prisma from '../prismaClient.js';
 import routes from './cases.js';
 
-// An in-memory bucket standing in for Supabase Storage.
+// An in-memory bucket standing in for Supabase Storage. `outage` makes every
+// download fail the way an unreachable storage service does.
 const bucket = vi.hoisted(() => new Map());
+const storageState = vi.hoisted(() => ({ outage: false }));
 
 vi.mock('../supabaseClient.js', () => {
   const storage = {
@@ -23,8 +25,12 @@ vi.mock('../supabaseClient.js', () => {
         return { error: null };
       },
       download: async (key) => {
+        if (storageState.outage) return { data: null, error: { message: 'fetch failed', status: 503 } };
         const body = bucket.get(`${name}/${key}`);
-        return body ? { data: new Blob([body]), error: null } : { data: null, error: { message: 'not found' } };
+        // Supabase answers a missing object with 400 "Object not found".
+        return body
+          ? { data: new Blob([body]), error: null }
+          : { data: null, error: { message: 'Object not found', status: 400 } };
       },
       remove: async (keys) => {
         keys.forEach((key) => bucket.delete(`${name}/${key}`));
@@ -90,6 +96,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   bucket.clear();
+  storageState.outage = false;
   rows = new Map();
   prisma.user.findUnique.mockResolvedValue(admin);
   prisma.case.findUnique.mockResolvedValue({ id: 'case-1' });
@@ -150,6 +157,23 @@ describe('page images', () => {
     const res = await getImage('page-1');
     expect(res.status).toBe(404);
     expect((await res.json()).code).toBe('CASE_PAGE_FILE_MISSING');
+  });
+
+  it('answer 500, not "missing", when storage cannot be reached', async () => {
+    await uploadPage(1, 'first page');
+    storageState.outage = true;
+
+    const res = await getImage('page-1');
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBeUndefined();
+  });
+
+  it('leave no stray object behind when the row cannot be saved', async () => {
+    prisma.casePage.upsert.mockRejectedValueOnce(new Error('database unavailable'));
+
+    const res = await uploadPage(1, 'first page');
+    expect(res.status).toBe(500);
+    expect(bucket.size).toBe(0);
   });
 
   it('are removed from the bucket when the page is deleted', async () => {
