@@ -293,7 +293,7 @@ function CaseLibraryTab({ onChanged }) {
 
       {/* Hidden input for Replace PDF and Re-upload page images. Re-upload sends
           the same deck again page by page, so each page keeps its tags (and is
-          refused when the page counts differ); Replace clears the pages first
+          checked against the case's page count); Replace clears the pages first
           and the deck has to be tagged again. */}
       <input
         ref={replaceInputRef}
@@ -316,7 +316,7 @@ function CaseLibraryTab({ onChanged }) {
             });
             navigate(`/cases/${c.id}/tags`);
           } catch (err) {
-            setError(err.message || (replace ? 'Replace failed' : 'Re-upload failed'));
+            if (!err.cancelled) setError(err.message || (replace ? 'Replace failed' : 'Re-upload failed'));
           } finally {
             setRendering(null);
           }
@@ -338,18 +338,34 @@ function CaseLibraryTab({ onChanged }) {
 }
 
 // Render all pages of `file` and upload them to caseId. Supports per-page retry.
-// `expectPages` is for re-uploading into existing pages: images land on rows by
-// page number, so a deck whose length differs from the case (a page was deleted
-// or added since) would put images under another page's tags. Refused, then.
+// `expectPages` is for re-uploading into existing pages. Images land on rows by
+// page number, so they only line up if the case still has the deck's pages in
+// order. Fewer pages in the PDF than the case can never line up. More can mean
+// an upload that stopped partway (rows 1..n are the deck's first n pages) or a
+// page deleted since (everything after it shifted); nothing records which, so
+// the admin is asked.
 async function runRender(file, caseId, { replace = false, expectPages, onProgress } = {}) {
   const pdfDoc = await loadPdfDocument(file);
   const numPages = pdfDoc.numPages;
 
-  if (expectPages !== undefined && numPages !== expectPages) {
+  if (expectPages !== undefined && numPages < expectPages) {
     throw new Error(
       `This PDF has ${numPages} pages and the case has ${expectPages}, so its pages cannot be matched ` +
         'to the existing ones. Use Replace PDF instead (the pages will need tagging again).'
     );
+  }
+  if (
+    expectPages !== undefined &&
+    numPages > expectPages &&
+    !window.confirm(
+      `This PDF has ${numPages} pages and the case has ${expectPages}.\n\n` +
+        'Continue only if the earlier upload stopped partway. If pages were deleted from this case, ' +
+        'images will land under the wrong tags; use Replace PDF instead.'
+    )
+  ) {
+    const cancelled = new Error('Re-upload cancelled.');
+    cancelled.cancelled = true;
+    throw cancelled;
   }
 
   if (replace) {
