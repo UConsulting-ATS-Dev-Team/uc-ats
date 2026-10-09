@@ -523,6 +523,10 @@ function AssignmentsTab() {
   };
 
   const unassignedCount = candidates.filter((c) => !c.assignment).length;
+  const useCounts = new Map();
+  for (const c of candidates) {
+    if (c.assignment) useCounts.set(c.assignment.caseId, (useCounts.get(c.assignment.caseId) || 0) + 1);
+  }
 
   return (
     <Box>
@@ -555,6 +559,19 @@ function AssignmentsTab() {
         <Alert severity="warning" sx={{ mb: 2 }}>
           {unassignedCount} candidate{unassignedCount === 1 ? '' : 's'} with no case assigned.
         </Alert>
+      )}
+
+      {interviewId && !loading && candidates.length > 0 && activeCases.length > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+          {activeCases.map((ac) => (
+            <Chip
+              key={ac.id}
+              size="small"
+              variant="outlined"
+              label={`${ac.title}: ${useCounts.get(ac.id) || 0}`}
+            />
+          ))}
+        </Box>
       )}
 
       {loading ? (
@@ -597,6 +614,13 @@ function AssignmentsTab() {
                       <Select
                         displayEmpty
                         value={c.assignment?.caseId || ''}
+                        renderValue={(value) =>
+                          value ? (
+                            activeCases.find((ac) => ac.id === value)?.title || c.assignment?.caseTitle || ''
+                          ) : (
+                            <em>Select a case…</em>
+                          )
+                        }
                         onChange={(e) => assign(c.applicationId, e.target.value)}
                         disabled={savingApp === c.applicationId}
                       >
@@ -605,7 +629,7 @@ function AssignmentsTab() {
                         </MenuItem>
                         {activeCases.map((ac) => (
                           <MenuItem key={ac.id} value={ac.id}>
-                            {ac.title}
+                            {ac.title} ({useCounts.get(ac.id) || 0})
                           </MenuItem>
                         ))}
                       </Select>
