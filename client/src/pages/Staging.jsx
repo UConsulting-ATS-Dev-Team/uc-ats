@@ -229,6 +229,9 @@ const ordinal = (n) => {
 const initials = (candidate) =>
   `${candidate.firstName?.[0] || ''}${candidate.lastName?.[0] || ''}`.toUpperCase() || '?';
 
+// What a YES is worth when an interview round is scored by averaging decisions.
+const DECISION_SCORE_MAX = 4;
+
 const ScoreDisplay = ({ score, maxScore = 10 }) => {
   if (score == null) {
     return <span className="staging-zero">—</span>;
@@ -824,7 +827,7 @@ export default function Staging() {
     if (!evaluations || evaluations.length === 0) return null;
     
     const decisionScores = {
-      'YES': 4,
+      'YES': DECISION_SCORE_MAX,
       'MAYBE_YES': 3,
       'UNSURE': 2,
       'MAYBE_NO': 1,
@@ -926,6 +929,14 @@ export default function Staging() {
       return null;
     }
     return candidate.scores?.overall || null;
+  };
+
+  // The top of each tab's scale, for the score bar. Coffee chat and final round
+  // average decisions (YES is 4), so a unanimous YES must fill the bar.
+  const maxScoreForTab = (tab) => {
+    if (tab === 0) return stagingMax(rubricData);
+    if (tab === 2) return 10;
+    return DECISION_SCORE_MAX;
   };
 
   // Coffee chat sessions with who holds a seat in each, from the same overview
@@ -2004,7 +2015,7 @@ export default function Staging() {
                         </div>
                       </td>
                       <td data-label="Score">
-                        <ScoreDisplay score={scoreOf(candidate)} maxScore={currentTab === 0 ? stagingMax(rubricData) : 10} />
+                        <ScoreDisplay score={scoreOf(candidate)} maxScore={maxScoreForTab(currentTab)} />
                       </td>
                       <td data-label="Events">
                         <AttendanceDisplay attendance={candidate.attendance} events={events} />
