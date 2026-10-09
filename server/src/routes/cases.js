@@ -2,10 +2,6 @@ import express from 'express';
 import { allApplicationIdsForInterview } from '../services/interviewRoster.js';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
-import fsPromises from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import prisma from '../prismaClient.js';
 import { requireAuth, requireAdmin, requireAdminOrMember } from '../middleware/auth.js';
 import {
@@ -15,16 +11,20 @@ import {
   CASE_LOCKED_CODE,
   MAX_LEAD_TIME_HOURS,
 } from '../services/caseVisibility.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import {
+  putCaseFile,
+  getCaseFile,
+  removeCaseFiles,
+  casePageKey,
+  casePdfKey,
+} from '../services/caseStorage.js';
+import { storageErrorResponse } from '../services/resumeStorage.js';
 
 const router = express.Router();
 
-// Case files live OUTSIDE the statically-served `uploads/` directory so they are
-// only reachable through the authorized proxy endpoints below (interviewer-only
-// pages must never be publicly fetchable).
-const STORAGE_DIR = path.join(__dirname, '../../storage');
+// Case files live in a private bucket (services/caseStorage.js) and are only
+// reachable through the authorized proxy endpoints below: interviewer-only
+// pages must never be publicly fetchable.
 
 const MAX_TITLE = 200;
 const MAX_DESCRIPTION = 10000;
@@ -61,12 +61,12 @@ const imageUpload = multer({
   },
 });
 
-function caseDir(caseId) {
-  return path.join(STORAGE_DIR, 'cases', caseId);
-}
-
-async function ensureDir(dir) {
-  await fsPromises.mkdir(dir, { recursive: true });
+// A storage misconfiguration is a 503 with its own code, not a generic 500.
+function sendStorageFault(res, error) {
+  const fault = storageErrorResponse(error);
+  if (!fault) return false;
+  res.status(fault.status).json(fault.body);
+  return true;
 }
 
 // Who may read a case, and when, lives in services/caseVisibility.js. This turns
@@ -209,17 +209,23 @@ router.post('/', requireAdmin, pdfUpload.single('pdf'), async (req, res) => {
     });
 
     if (req.file) {
-      const dir = caseDir(created.id);
-      await ensureDir(dir);
-      await fsPromises.writeFile(path.join(dir, 'original.pdf'), req.file.buffer);
+      const key = casePdfKey(created.id);
+      try {
+        await putCaseFile(key, req.file.buffer, 'application/pdf');
+      } catch (error) {
+        // Nothing usable was made; do not leave an empty case in the library.
+        await prisma.case.delete({ where: { id: created.id } }).catch(() => {});
+        throw error;
+      }
       await prisma.case.update({
         where: { id: created.id },
-        data: { pdfStoragePath: `cases/${created.id}/original.pdf` },
+        data: { pdfStoragePath: key },
       });
     }
 
     res.status(201).json({ id: created.id, title: created.title, status: created.status });
   } catch (error) {
+    if (sendStorageFault(res, error)) return;
     console.error('[POST /api/cases]', error);
     res.status(500).json({ error: 'Failed to create case' });
   }
@@ -319,10 +325,14 @@ router.post('/:id/pages', requireAdmin, imageUpload.single('image'), async (req,
     if (!existingCase) return res.status(404).json({ error: 'Case not found' });
 
     const ext = IMAGE_EXT_FOR_MIME[req.file.mimetype] || '.webp';
-    const relPath = `cases/${id}/page-${pageNumber}${ext}`;
-    const dir = caseDir(id);
-    await ensureDir(dir);
-    await fsPromises.writeFile(path.join(STORAGE_DIR, relPath), req.file.buffer);
+    const relPath = casePageKey(id, ext);
+    await putCaseFile(relPath, req.file.buffer, req.file.mimetype);
+
+    // Re-uploading a page keeps its row (and so its tags) and swaps the image.
+    const previous = await prisma.casePage.findUnique({
+      where: { caseId_pageNumber: { caseId: id, pageNumber } },
+      select: { imageStoragePath: true },
+    });
 
     const page = await prisma.casePage.upsert({
       where: { caseId_pageNumber: { caseId: id, pageNumber } },
@@ -340,6 +350,10 @@ router.post('/:id/pages', requireAdmin, imageUpload.single('image'), async (req,
       },
     });
 
+    if (previous && previous.imageStoragePath !== relPath) {
+      await removeCaseFiles([previous.imageStoragePath]);
+    }
+
     // Keep pageCount in sync with the number of uploaded pages.
     const count = await prisma.casePage.count({ where: { caseId: id } });
     await prisma.case.update({ where: { id }, data: { pageCount: count } });
@@ -351,6 +365,7 @@ router.post('/:id/pages', requireAdmin, imageUpload.single('image'), async (req,
       exhibitLabel: page.exhibitLabel,
     });
   } catch (error) {
+    if (sendStorageFault(res, error)) return;
     console.error('[POST /api/cases/:id/pages]', error);
     res.status(500).json({ error: 'Failed to upload page' });
   }
@@ -400,8 +415,8 @@ router.delete('/:id/pages/:pageId', requireAdmin, async (req, res) => {
     const page = await prisma.casePage.findFirst({ where: { id: pageId, caseId: id } });
     if (!page) return res.status(404).json({ error: 'Page not found' });
 
-    await fsPromises.unlink(path.join(STORAGE_DIR, page.imageStoragePath)).catch(() => {});
     await prisma.casePage.delete({ where: { id: pageId } });
+    await removeCaseFiles([page.imageStoragePath]);
 
     // Shift every later page down by one to keep numbering gap-free.
     await prisma.$executeRaw`
@@ -433,18 +448,18 @@ router.get('/:id/pages/:pageId/image', async (req, res) => {
     });
     if (!page) return res.status(404).json({ error: 'Page not found' });
 
-    const absPath = path.join(STORAGE_DIR, page.imageStoragePath);
-    // Guard against path escaping the storage root (defensive; path is DB-sourced).
-    if (!absPath.startsWith(path.join(STORAGE_DIR, 'cases'))) {
-      return res.status(400).json({ error: 'Invalid path' });
+    const image = await getCaseFile(page.imageStoragePath);
+    if (!image) {
+      // The row outlived its file: uploaded to an instance disk before case
+      // files moved to storage. "Re-upload page images" on the Cases page fixes it.
+      return res.status(404).json({ error: 'Image not found', code: 'CASE_PAGE_FILE_MISSING' });
     }
-    if (!fs.existsSync(absPath)) return res.status(404).json({ error: 'Image not found' });
 
-    const ext = path.extname(absPath).toLowerCase();
+    const ext = path.extname(page.imageStoragePath).toLowerCase();
     res.setHeader('Content-Type', CONTENT_TYPE_FOR_EXT[ext] || 'image/webp');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    fs.createReadStream(absPath).pipe(res);
+    res.send(image);
   } catch (error) {
     console.error('[GET /api/cases/:id/pages/:pageId/image]', error);
     res.status(500).json({ error: 'Failed to serve page image' });
@@ -460,24 +475,24 @@ router.post('/:id/replace-pdf', requireAdmin, pdfUpload.single('pdf'), async (re
     const existingCase = await prisma.case.findUnique({ where: { id }, select: { id: true } });
     if (!existingCase) return res.status(404).json({ error: 'Case not found' });
 
+    // Store the new PDF first, so a storage failure leaves the old pages alone.
+    const pdfKey = casePdfKey(id);
+    await putCaseFile(pdfKey, req.file.buffer, 'application/pdf');
+
+    const oldPages = await prisma.casePage.findMany({
+      where: { caseId: id },
+      select: { imageStoragePath: true },
+    });
     await prisma.casePage.deleteMany({ where: { caseId: id } });
-    const dir = caseDir(id);
-    await ensureDir(dir);
-    // Remove old page image files, keep the directory.
-    const entries = await fsPromises.readdir(dir).catch(() => []);
-    await Promise.all(
-      entries
-        .filter((f) => f.startsWith('page-'))
-        .map((f) => fsPromises.unlink(path.join(dir, f)).catch(() => {}))
-    );
-    await fsPromises.writeFile(path.join(dir, 'original.pdf'), req.file.buffer);
+    await removeCaseFiles(oldPages.map((p) => p.imageStoragePath));
     await prisma.case.update({
       where: { id },
-      data: { pdfStoragePath: `cases/${id}/original.pdf`, pageCount: 0 },
+      data: { pdfStoragePath: pdfKey, pageCount: 0 },
     });
 
     res.json({ id, pageCount: 0 });
   } catch (error) {
+    if (sendStorageFault(res, error)) return;
     console.error('[POST /api/cases/:id/replace-pdf]', error);
     res.status(500).json({ error: 'Failed to replace PDF' });
   }

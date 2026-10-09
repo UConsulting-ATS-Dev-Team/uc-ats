@@ -141,6 +141,8 @@ function CaseLibraryTab({ onChanged }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuCase, setMenuCase] = useState(null);
   const replaceInputRef = useRef(null);
+  // { title, pageNumber, numPages } while a PDF is being re-rendered from the menu.
+  const [rendering, setRendering] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -185,6 +187,12 @@ function CaseLibraryTab({ onChanged }) {
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
+        </Alert>
+      )}
+
+      {rendering && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {rendering.title}: uploading page {rendering.pageNumber ?? 1} of {rendering.numPages ?? '…'}. Keep this tab open.
         </Alert>
       )}
 
@@ -264,6 +272,18 @@ function CaseLibraryTab({ onChanged }) {
             const c = menuCase;
             closeMenu();
             replaceInputRef.current._case = c;
+            replaceInputRef.current._replace = false;
+            replaceInputRef.current.click();
+          }}
+        >
+          Re-upload page images…
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            const c = menuCase;
+            closeMenu();
+            replaceInputRef.current._case = c;
+            replaceInputRef.current._replace = true;
             replaceInputRef.current.click();
           }}
         >
@@ -271,7 +291,9 @@ function CaseLibraryTab({ onChanged }) {
         </MenuItem>
       </Menu>
 
-      {/* Hidden input for Replace PDF */}
+      {/* Hidden input for Replace PDF and Re-upload page images. Re-upload sends
+          the same deck again page by page, so each page keeps its tags; Replace
+          clears the pages first and the deck has to be tagged again. */}
       <input
         ref={replaceInputRef}
         type="file"
@@ -280,14 +302,21 @@ function CaseLibraryTab({ onChanged }) {
         onChange={async (e) => {
           const file = e.target.files?.[0];
           const c = replaceInputRef.current._case;
+          const replace = replaceInputRef.current._replace;
           e.target.value = '';
           if (!file || !c) return;
           setUploadOpen(false);
+          setRendering({ title: c.title });
           try {
-            await runRender(file, c.id, { replace: true, onError: setError });
+            await runRender(file, c.id, {
+              replace,
+              onProgress: (p) => setRendering({ title: c.title, ...p }),
+            });
             navigate(`/cases/${c.id}/tags`);
           } catch (err) {
-            setError(err.message || 'Replace failed');
+            setError(err.message || (replace ? 'Replace failed' : 'Re-upload failed'));
+          } finally {
+            setRendering(null);
           }
         }}
       />
