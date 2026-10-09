@@ -111,6 +111,17 @@ describe('focus view', () => {
     expect(screen.queryByText(/Interviewer only/)).not.toBeInTheDocument();
   });
 
+  it('has its own Candidate View button, which closes focus view first', async () => {
+    await renderViewer();
+    const dialog = openFocus();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Candidate View' }));
+
+    expect(screen.queryByRole('dialog', { name: /focus view/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Exit candidate view', { selector: '.case-preview-overlay__exit' })).toBeInTheDocument();
+    expect(screen.queryByText(/Interviewer only/)).not.toBeInTheDocument();
+  });
+
   it('takes keyboard focus, keeps Tab inside, and gives focus back on close', async () => {
     await renderViewer();
     const opener = screen.getByRole('button', { name: 'Focus view' });

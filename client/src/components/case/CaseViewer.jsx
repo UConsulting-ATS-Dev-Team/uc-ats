@@ -555,6 +555,14 @@ export default function CaseViewer({
               <span className="case-expand-overlay__indicator">
                 Page {currentPage ? currentIndex + 1 : 0} / {visiblePages.length}
               </span>
+              {/* Same as the shortcut: togglePreview closes focus view first. */}
+              <button
+                className="case-viewer__btn case-viewer__btn--primary"
+                onClick={togglePreview}
+                title="Full-screen candidate-safe view (Cmd/Ctrl+Shift+P)"
+              >
+                Candidate View
+              </button>
               <button className="case-viewer__btn" onClick={() => setExpanded(false)} title="Close (Esc)">
                 Close
               </button>
