@@ -19,7 +19,8 @@
     "sync-member-linkedin": "node scripts/syncMemberLinkedin.js",
     "import-mailing-list": "node scripts/import-mailing-list-csv.js",
     "merge-duplicate-applications": "node scripts/merge-duplicate-applications.js",
-    "transcode-videos": "node scripts/transcode-videos.js"
+    "transcode-videos": "node scripts/transcode-videos.js",
+    "migrate-case-files": "node scripts/migrate-case-files-to-storage.js"
   },
   "keywords": [],
   "author": "",

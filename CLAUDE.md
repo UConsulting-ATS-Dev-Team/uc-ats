@@ -330,6 +330,21 @@ The system follows a **recruiting cycle-based workflow**:
 - `scripts/transcode-videos.js` only understands `/api/files/<id>` URLs, so it reports an
   uploaded video as unparsed and leaves it alone.
 
+**Case book files:**
+- Case page images and the original PDF live in the private Supabase bucket `cases`
+  ([server/src/services/caseStorage.js](server/src/services/caseStorage.js)), read only
+  through `GET /api/cases/:id/pages/:pageId/image`. They used to go to `server/storage/`,
+  which Render wipes on deploy and does not share between instances, so pages showed
+  "Page unavailable" depending on which instance answered. Production refuses an upload
+  without Supabase (503 `STORAGE_NOT_CONFIGURED`); development falls back to disk.
+- Each upload gets its own key (`cases/<caseId>/pages/<uuid>.<ext>`). Deleting a page
+  renumbers the rest without renaming files, so a key per page number could be shared.
+- A row whose file is gone answers 404 `CASE_PAGE_FILE_MISSING`. Cases page ->
+  **Re-upload page images...** sends the same deck again by page number, which keeps each
+  page's row and tags; **Replace PDF...** clears the pages and they must be tagged again.
+- `npm run migrate-case-files` (dry run; `--apply` uploads) copies files still on a
+  local disk into the bucket under the key their row already names.
+
 **Sealed recruiting records:**
 - `Candidate.recordsLockedAt` seals a person's scores, evaluations, comments and
   application. Set automatically when final-round processing makes them a member (they
